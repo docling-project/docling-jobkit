@@ -23,10 +23,10 @@ def print_runtime(input_data):
 
 
 # This is executed on ray-worker
-@ray.remote() # Here we must set how many GPUs in ray terms we expect, the value can be fractional
+@ray.remote
 def convert_doc(index, db_ref):
     converter = DocumentConverter()
-    result = converter.convert(db_ref)
+    result = converter.convert(db_ref[index])
     outputs = result.document.export_to_markdown()  # output: "## Docling Technical Report[...]"
     return index, outputs
 

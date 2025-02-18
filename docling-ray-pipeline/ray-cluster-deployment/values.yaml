@@ -52,10 +52,10 @@ head:
   # in the headGroupSpec. See https://github.com/ray-project/kuberay/pull/1128 for more details.
   serviceAccountName: "ds-ray-cluster-runner"
   restartPolicy: ""
-  #lifecycle: #https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/config.html#pod-and-container-lifecyle-prestophook
-  #  preStop:
-  #    exec:
-  #      command: [ "/bin/sh","-c","ray stop" ]
+  lifecycle: #https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/config.html#pod-and-container-lifecyle-prestophook
+    preStop:
+      exec:
+        command: [ "/bin/sh","-c","ray stop" ]
   rayStartParams:
     dashboard-host: '0.0.0.0'
     num-cpus: "0"
@@ -131,7 +131,7 @@ worker:
   groupName: workergroup
   replicas: 0
   minReplicas: 0
-  maxReplicas: 1
+  maxReplicas: 4
   rayStartParams:
     block: 'true'
     num-gpus: '0'
@@ -140,10 +140,10 @@ worker:
       value: "1"
     - name: OPENBLAS_NUM_THREADS
       value: "1"
-  #lifecycle: #https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/config.html#pod-and-container-lifecyle-prestophook
-  #  preStop:
-  #    exec:
-  #      command: [ "/bin/sh","-c","ray stop" ]
+  lifecycle: #https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/config.html#pod-and-container-lifecyle-prestophook
+    preStop:
+      exec:
+        command: [ "/bin/sh","-c","ray stop" ]
   labels:
     kueue.x-k8s.io/queue-name: user-queue
     kueue.x-k8s.io/priority-class: dev-priority
@@ -174,7 +174,7 @@ worker:
       #nvidia.com/gpu: 1
     requests:
       cpu: "1"
-      memory: "16G"
+      memory: "8G"
       #nvidia.com/gpu: 1
   annotations: {}
   #nodeSelector:

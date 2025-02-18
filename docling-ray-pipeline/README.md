@@ -1,7 +1,7 @@
 ## Deploy ray cluster using helm
 
 Follow guideline in the Helm folder to deploy ray cluster.
-`deepsearch-vllm-image/vllm-ray/helm/README.md`
+`docling-ray-pipeline/ray-cluster-deployment/README.md`
 
 
 
@@ -20,7 +20,7 @@ Assimung that ray cluster is already configured and deployed:
 
 1. Open an oc port-forward to the deployed ray cluster:
 ```
-oc port-forward --address 0.0.0.0 service/raycluster-raycluster-vllm-deepsearch-gpu-head-svc 8265:8265
+oc port-forward --address 0.0.0.0 service/raycluster-raycluster-docling-head-svc 8265:8265
 ```
 2. Visit http://localhost:8265/#/jobs
 
@@ -32,7 +32,7 @@ export RAY_ADDRESS=http://localhost:8265
 To run an example ray-app use provided bash script:
 
 ```sh
-./submit-vllm.sh
+./submit-docling-basic.sh
 ```
 
 
