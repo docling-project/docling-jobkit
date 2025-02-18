@@ -1,0 +1,17 @@
+working_dir: "./"
+#conda:
+#  dependencies:
+#    - pip:
+env_vars:
+  TORCH_HOME: "/tmp"
+  OMP_NUM_THREADS: "4"
+  HUGGING_FACE_HUB_TOKEN: "this is hugging face token for VLLM if it needs to download model"
+  VLLM_API_KEY: "this is the api key that VLLM will expect when api is called"
+
+#pip:
+#  - boto3
+#  - vllm
+#  - docling
+#  - pillow
+#  - datasets
+#  - pycurl
