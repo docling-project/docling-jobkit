@@ -12,15 +12,8 @@ import yaml
 import boto3
 from botocore.exceptions import ClientError
 from docling.document_converter import DocumentConverter
+from docling.datamodel.base_models import ConversionStatus
 
-
-# Simple set of inputs that we want to process
-input_docs = [
-#    "https://arxiv.org/pdf/2501.17887",
-#    "https://arxiv.org/pdf/2408.09869",
-#    "https://arxiv.org/pdf/2501.17887",
-#    "https://arxiv.org/pdf/2408.09869"
-]
 
 # Load credentials
 s3_source_access_key = os.environ['S3_SOURCE_ACCESS_KEY']
@@ -103,8 +96,12 @@ def convert_doc(index, db_ref):
                 data = conv_res.document.export_to_markdown(strict_text=True)
                 s3_target.Object(s3_target_bucket, target_key).put(Body=data)
 
+                outputs.append(f"{doc_filename} - SUCCESS")
 
-        outputs = result.document.export_to_markdown()  # output: "## Docling Technical Report[...]"
+        elif conv_res.status == ConversionStatus.PARTIAL_SUCCESS:
+            outputs.append(f"{conv_res.input.file} - PARTIAL_SUCCESS")
+        else:
+            outputs.append(f"{conv_res.input.file} - FAILURE")
     return index, outputs
 
 
