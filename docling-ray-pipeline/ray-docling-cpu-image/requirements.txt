@@ -1,6 +1,12 @@
 -i https://pypi.org/simple
-
-
-# DeepSearch specific
-docling==2.23.0
 boto3==1.36.22
+
+
+# Docling dependencies
+-i https://download.pytorch.org/whl/cpu
+torch
+torchvision
+torchaudio 
+
+-i https://pypi.org/simple
+docling==2.23.0

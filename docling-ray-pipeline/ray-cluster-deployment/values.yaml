@@ -1,6 +1,6 @@
 image:
   repository: icr.io/ibm-deepsearch/ray-docling
-  tag: v1.0
+  tag: v1.1
   pullPolicy: IfNotPresent
 
 nameOverride: "raycluster-docling"

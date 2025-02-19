@@ -39,7 +39,7 @@ def main(args):
     db_object_ref = ray.put(input_docs)
 
     object_references = [
-        convert_doc.remote(index, db_object_ref) for index in range(4)
+        convert_doc.remote(index, db_object_ref) for index in range(len(input_docs))
     ]
     all_data = []
 
