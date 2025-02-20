@@ -11,6 +11,7 @@ import json
 import yaml
 import boto3
 from botocore.exceptions import ClientError
+from botocore.config import Config
 from docling.document_converter import DocumentConverter
 from docling.datamodel.base_models import ConversionStatus
 
@@ -60,10 +61,17 @@ def print_runtime(input_data):
 def convert_doc(index, db_ref):
     USE_V2 = True
     converter = DocumentConverter()
+    config = Config(
+        connect_timeout=30,
+        retries=dict(max_attempts=1),
+        signature_version="s3v4",
+    )
     s3_target = boto3.resource(
             's3', endpoint_url = 'https://' + s3_target_endpoint,
             aws_access_key_id = s3_target_access_key,
-            aws_secret_access_key = s3_target_secret_key
+            aws_secret_access_key = s3_target_secret_key,
+            region_name = 'eu-de',
+            config = config
         )
     outputs = []
     for url in db_ref[index]:
@@ -170,6 +178,8 @@ def main(args):
         
         print('Total keys: ', len(source_objects_list))
         print('Filtered keys to process: ', len(filtered_source_keys))
+    else:
+        filtered_source_keys = source_objects_list
 
     # Generate pre-signed urls
     session = boto3.session.Session()
