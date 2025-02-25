@@ -17,6 +17,6 @@ helm repo add kuberay https://ray-project.github.io/kuberay-helm/
 
 helm install kuberay-operator kuberay/kuberay-operator --version 1.1.0
 
-helm install raycluster kuberay/ray-cluster --version 1.1.0 -f ./ray-cluster-deployment/values.yaml
+helm upgrade --install raycluster kuberay/ray-cluster --version 1.1.0 -f ./ray-cluster-deployment/values.yaml
 
 ```

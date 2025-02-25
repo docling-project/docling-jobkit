@@ -1,6 +1,8 @@
 image:
-  repository: icr.io/ibm-deepsearch/ray-docling
-  tag: v1.1
+  repository: quay.io/modh/ray
+  tag: 2.35.0-py311-rocm62
+  #repository: icr.io/ibm-deepsearch/ray-docling
+  #tag: v1.1
   pullPolicy: IfNotPresent
 
 nameOverride: "raycluster-docling"
@@ -19,7 +21,8 @@ imagePullSecrets:
 head:
   # rayVersion determines the autoscaler's image version.
   # It should match the Ray version in the image of the containers.
-  rayVersion: 2.42.1
+  rayVersion: 2.35.0
+  #rayVersion: 2.42.1
   # If enableInTreeAutoscaling is true, the autoscaler sidecar will be added to the Ray head pod.
   # Ray autoscaler integration is supported only for Ray versions >= 1.11.0
   # Ray autoscaler integration is Beta with KubeRay >= 0.3.0 and Ray >= 2.0.0.
@@ -50,7 +53,8 @@ head:
     kueue.x-k8s.io/priority-class: dev-priority
   # Note: From KubeRay v0.6.0, users need to create the ServiceAccount by themselves if they specify the `serviceAccountName`
   # in the headGroupSpec. See https://github.com/ray-project/kuberay/pull/1128 for more details.
-  serviceAccountName: "ds-ray-cluster-runner"
+
+  #serviceAccountName: "ds-ray-cluster-runner"
   restartPolicy: ""
   lifecycle: #https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/config.html#pod-and-container-lifecyle-prestophook
     preStop:
@@ -139,6 +143,8 @@ worker:
     - name: OMP_NUM_THREADS
       value: "1"
     - name: OPENBLAS_NUM_THREADS
+      value: "1"
+    - name: RAY_ENABLE_RECORD_ACTOR_TASK_LOGGING
       value: "1"
   lifecycle: #https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/config.html#pod-and-container-lifecyle-prestophook
     preStop:
