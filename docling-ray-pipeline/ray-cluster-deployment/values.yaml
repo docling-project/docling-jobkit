@@ -1,60 +1,18 @@
 image:
   repository: quay.io/modh/ray
   tag: 2.35.0-py311-rocm62
-  #repository: icr.io/ibm-deepsearch/ray-docling
-  #tag: v1.1
   pullPolicy: IfNotPresent
 
 nameOverride: "raycluster-docling"
 fullnameOverride: ""
 
-imagePullSecrets:
-  - name: ibm-deepsearch-pull-secret
-
-# common defined values shared between the head and worker
-# common:
-  # containerEnv specifies environment variables for the Ray head and worker containers.
-  # Follows standard K8s container env schema.
-  # containerEnv: []
-  #  - name: BLAH
-  #    value: VAL
 head:
   # rayVersion determines the autoscaler's image version.
   # It should match the Ray version in the image of the containers.
   rayVersion: 2.35.0
-  #rayVersion: 2.42.1
-  # If enableInTreeAutoscaling is true, the autoscaler sidecar will be added to the Ray head pod.
-  # Ray autoscaler integration is supported only for Ray versions >= 1.11.0
-  # Ray autoscaler integration is Beta with KubeRay >= 0.3.0 and Ray >= 2.0.0.
   enableInTreeAutoscaling: true
-  # autoscalerOptions is an OPTIONAL field specifying configuration overrides for the Ray autoscaler.
-  # The example configuration shown below represents the DEFAULT values.
   autoscalerOptions:
-    # upscalingMode: Default
-    # idleTimeoutSeconds is the number of seconds to wait before scaling down a worker pod which is not using Ray resources.
     idleTimeoutSeconds: 240
-    # imagePullPolicy optionally overrides the autoscaler container's default image pull policy (IfNotPresent).
-    # imagePullPolicy: IfNotPresent
-    # Optionally specify the autoscaler container's securityContext.
-    # securityContext: {}
-    # env: []
-    # envFrom: []
-    # resources specifies optional resource request and limit overrides for the autoscaler container.
-    # For large Ray clusters, we recommend monitoring container resource usage to determine if overriding the defaults is required.
-    # resources:
-    #   limits:
-    #     cpu: "500m"
-    #     memory: "512Mi"
-    #   requests:
-    #     cpu: "500m"
-    #     memory: "512Mi"
-  labels:
-    kueue.x-k8s.io/queue-name: user-queue
-    kueue.x-k8s.io/priority-class: dev-priority
-  # Note: From KubeRay v0.6.0, users need to create the ServiceAccount by themselves if they specify the `serviceAccountName`
-  # in the headGroupSpec. See https://github.com/ray-project/kuberay/pull/1128 for more details.
-
-  #serviceAccountName: "ds-ray-cluster-runner"
   restartPolicy: ""
   lifecycle: #https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/config.html#pod-and-container-lifecyle-prestophook
     preStop:
@@ -64,14 +22,6 @@ head:
     dashboard-host: '0.0.0.0'
     num-cpus: "0"
     block: 'true'
-  # containerEnv specifies environment variables for the Ray container,
-  # Follows standard K8s container env schema.
-  containerEnv: []
-  # - name: EXAMPLE_ENV
-  #   value: "1"
-  envFrom: []
-    # - secretRef:
-    #     name: my-env-secret
   # ports optionally allows specifying ports for the Ray container.
   ports:
     - containerPort: 6379
@@ -97,41 +47,14 @@ head:
     requests:
       cpu: "1"
       memory: "8G"
-  annotations: {}
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-  # Pod security context.
-  podSecurityContext: {}
-  # Ray container security context.
-  #securityContext:
-  #  runAsUser: 1000
-  # Optional: The following volumes/volumeMounts configurations are optional but recommended because
-  # Ray writes logs to /tmp/ray/session_latests/logs instead of stdout/stderr.
   volumes:
     - name: log-volume
       emptyDir: {}
   volumeMounts:
     - mountPath: /tmp/ray
       name: log-volume
-  # sidecarContainers specifies additional containers to attach to the Ray pod.
-  # Follows standard K8s container spec.
-  sidecarContainers: []
-  # See docs/guidance/pod-command.md for more details about how to specify
-  # container command for head Pod.
-  command: []
-  args: []
-  # Optional, for the user to provide any additional fields to the service.
-  # See https://pkg.go.dev/k8s.io/Kubernetes/pkg/api/v1#Service
-  headService: {}
-    # metadata:
-    #   annotations:
-    #     prometheus.io/scrape: "true"
 
 worker:
-  # If you want to disable the default workergroup
-  # uncomment the line below
-  # disabled: true
   groupName: workergroup
   replicas: 0
   minReplicas: 0
@@ -150,20 +73,7 @@ worker:
     preStop:
       exec:
         command: [ "/bin/sh","-c","ray stop" ]
-  labels:
-    kueue.x-k8s.io/queue-name: user-queue
-    kueue.x-k8s.io/priority-class: dev-priority
-  serviceAccountName: ""
-  restartPolicy: ""
-  # containerEnv specifies environment variables for the Ray container,
-  # Follows standard K8s container env schema.
-  # - name: EXAMPLE_ENV
-  #   value: "1"
-  envFrom: []
-    # - secretRef:
-    #     name: my-env-secret
-  # ports optionally allows specifying ports for the Ray container.
-  # ports: []
+
   # resource requests and limits for the Ray head container.
   # Modify as needed for your application.
   # Note that the resources in this example are much too small for production;
@@ -182,15 +92,6 @@ worker:
       cpu: "1"
       memory: "8G"
       #nvidia.com/gpu: 1
-  annotations: {}
-  #nodeSelector:
-  #  nvidia.com/gpu.product: Tesla-V100-PCIE-16GB
-  tolerations: []
-  affinity: {}
-  # Pod security context.
-  podSecurityContext: {}
-  # Ray container security context.
-  securityContext: {}
   # Optional: The following volumes/volumeMounts configurations are optional but recommended because
   # Ray writes logs to /tmp/ray/session_latests/logs instead of stdout/stderr.
   volumes:
@@ -199,13 +100,6 @@ worker:
   volumeMounts:
     - mountPath: /tmp/ray
       name: log-volume
-  # sidecarContainers specifies additional containers to attach to the Ray pod.
-  # Follows standard K8s container spec.
-  sidecarContainers: []
-  # See docs/guidance/pod-command.md for more details about how to specify
-  # container command for worker Pod.
-  command: []
-  args: []
 
 # Configuration for Head's Kubernetes Service
 service:

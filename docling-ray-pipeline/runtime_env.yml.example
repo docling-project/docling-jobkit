@@ -6,12 +6,9 @@ env_vars:
   HUGGING_FACE_HUB_TOKEN: "this is hugging face token for VLLM if it needs to download model"
   VLLM_API_KEY: "this is the api key that VLLM will expect when api is called"
 
-# Expected environment if clean ray image is used
+# Expected environment if clean ray image is used. Take into account that ray worker can timeout before it finishes installing modules.
 #pip:
-#  - torch==2.5.1
-#  - torchvision==0.20.1
-#  - torchaudio==2.5.1
-#  - --index-url=https://download.pytorch.org/whl/cpu
 #  - docling==2.23.0
+#  - --index-url=https://download.pytorch.org/whl/cpu
 #  - boto3~=1.35.36
 #  - --extra-index-url=https://pypi.org/simple
