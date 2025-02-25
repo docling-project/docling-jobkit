@@ -39,8 +39,8 @@ s3_target_endpoint = os.environ['S3_TARGET_ENDPOINTS']
 s3_target_bucket = os.environ['S3_TARGET_BUCKET']
 s3_target_prefix = os.environ['S3_TARGET_PREFIX']
 s3_target_ssl = os.environ.get('S3_TARGET_SSL', True)
-batch_size = int(environ['BATCH_SIZE'])
-max_concurrency = int(environ['OMP_NUM_THREADS'])
+batch_size = int(os.environ['BATCH_SIZE'])
+max_concurrency = int(os.environ['OMP_NUM_THREADS'])
 
 # Load conversion settings
 do_ocr = os.environ.get("SETTINGS_DO_OCR", True)

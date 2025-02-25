@@ -24,7 +24,7 @@ env_vars:
   SETTINGS_GENERATE_PAGE_IMAGES: "True"
 
 
-  # In case of using pure ray image
+# Expected environment if clean ray image is used. Take into account that ray worker can timeout before it finishes installing modules.
 pip:
   - torch==2.5.1
   - torchvision==0.20.1
