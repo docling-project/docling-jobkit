@@ -9,7 +9,7 @@ env_vars:
   VLLM_API_KEY: "this is the api key that VLLM will expect when api is called"
 
 #pip:
-#  - boto3
+#  - boto3=="~1.35.36"
 #  - vllm
 #  - docling
 #  - pillow
