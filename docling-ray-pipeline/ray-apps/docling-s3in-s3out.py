@@ -38,13 +38,13 @@ s3_target_secret_key = os.environ['S3_TARGET_SECRET_KEY']
 s3_target_endpoint = os.environ['S3_TARGET_ENDPOINTS']
 s3_target_bucket = os.environ['S3_TARGET_BUCKET']
 s3_target_prefix = os.environ['S3_TARGET_PREFIX']
-s3_target_ssl = os.environ.get('S3_SOURCE_SSL', True)
-batch_size = int(environ['BATCH_SIZE'])
-max_concurrency = int(environ['OMP_NUM_THREADS'])
+s3_target_ssl = os.environ.get('S3_TARGET_SSL', True)
+batch_size = int(os.environ['BATCH_SIZE'])
+max_concurrency = int(os.environ['OMP_NUM_THREADS'])
 
 # Load conversion settings
 do_ocr = os.environ.get("SETTINGS_DO_OCR", True)
-ocr_kind = os.environ.get("SETTINGS_OCR_KING", "easyocr")
+ocr_kind = os.environ.get("SETTINGS_OCR_KIND", "easyocr")
 do_table_structure = os.environ.get("SETTINGS_DO_TABLE_STRUCTURE", True)
 table_structure_mode = os.environ.get("SETTINGS_TABLE_STRUCTURE_MODE", "fast")
 generate_page_images = os.environ.get("SETTINGS_GENERATE_PAGE_IMAGES", True)
@@ -246,6 +246,7 @@ class DoclingConvert:
             conv_res: ConversionResult = self.converter.convert(url)
             if conv_res.status == ConversionStatus.SUCCESS:
                 doc_filename = conv_res.input.file.stem
+                print(f"Converted {doc_filename} now saving results")
                 # Export Docling document format to JSON:
                 target_key = f"{s3_target_prefix}/json/{doc_filename}.json"
                 data = json.dumps(conv_res.document.export_to_dict())
@@ -253,14 +254,6 @@ class DoclingConvert:
                     file=data,
                     target_key=target_key,
                     content_type="application/json",
-                )
-                # Export Docling document format to YAML:
-                target_key = f"{s3_target_prefix}/yaml/{doc_filename}.yaml"
-                data = yaml.safe_dump(conv_res.document.export_to_dict())
-                self.upload_to_s3(
-                    file=data,
-                    target_key=target_key,
-                    content_type="application/yaml",
                 )
                 # Export Docling document format to doctags:
                 target_key = f"{s3_target_prefix}/doctags/{doc_filename}.doctags.txt"

@@ -1,17 +1,14 @@
 working_dir: "./"
-#conda:
-#  dependencies:
-#    - pip:
+
 env_vars:
   TORCH_HOME: "/tmp"
   OMP_NUM_THREADS: "4"
   HUGGING_FACE_HUB_TOKEN: "this is hugging face token for VLLM if it needs to download model"
   VLLM_API_KEY: "this is the api key that VLLM will expect when api is called"
 
+# Expected environment if clean ray image is used. Take into account that ray worker can timeout before it finishes installing modules.
 #pip:
-#  - boto3=="~1.35.36"
-#  - vllm
-#  - docling
-#  - pillow
-#  - datasets
-#  - pycurl
+#  - docling==2.24.0
+#  - --index-url=https://download.pytorch.org/whl/cpu
+#  - boto3~=1.35.36
+#  - --extra-index-url=https://pypi.org/simple
