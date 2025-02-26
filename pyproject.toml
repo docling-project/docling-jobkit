@@ -33,6 +33,7 @@ dependencies = [
     "ray~=2.30",
     "docling~=2.23",
     "typer~=0.12",
+    "boto3~=1.35.36",
 ]
 
 [project.optional-dependencies]
@@ -97,7 +98,7 @@ explicit = true
 include = ["docling_jobkit"]
 
 [project.scripts]
-docling-jobkit = "docling_pipeline.app:main"
+docling-ray-job = "docling_jobkit.ray_job.main:main"
 
 [project.urls]
 Homepage = "https://github.com/DS4SD/docling-jobkit"

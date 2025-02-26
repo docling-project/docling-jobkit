@@ -1,14 +1,7 @@
-r"""
-This is basic ray app that uses docling to convert documents.
-"""
-
-
-import time
 import ray
 import argparse
 import os
 import json
-import yaml
 from typing import Optional
 from pydantic import BaseModel
 from botocore.client import BaseClient

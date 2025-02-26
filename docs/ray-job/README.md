@@ -1,3 +1,9 @@
+# Example Docling Ray Job
+
+
+### Complete `runtime_env.yml`
+
+```yaml
 working_dir: "./"
 
 env_vars:
@@ -26,8 +32,6 @@ env_vars:
 
 # Expected environment if clean ray image is used. Take into account that ray worker can timeout before it finishes installing modules.
 pip:
-  - docling==2.23.0
+  - docling-jobkit
   - --index-url=https://download.pytorch.org/whl/cpu
-  - boto3~=1.35.36
-  - --extra-index-url=https://pypi.org/simple
-
+```
