@@ -255,15 +255,6 @@ class DoclingConvert:
                     target_key=target_key,
                     content_type="application/json",
                 )
-                # Currently not working with dynamic environment, need further investigation
-                # Export Docling document format to YAML:
-                # target_key = f"{s3_target_prefix}/yaml/{doc_filename}.yaml"
-                # data = yaml.safe_dump(conv_res.document.export_to_dict())
-                # self.upload_to_s3(
-                #     file=data,
-                #     target_key=target_key,
-                #     content_type="application/yaml",
-                # )
                 # Export Docling document format to doctags:
                 target_key = f"{s3_target_prefix}/doctags/{doc_filename}.doctags.txt"
                 data = conv_res.document.export_to_document_tokens()

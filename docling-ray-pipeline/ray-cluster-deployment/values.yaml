@@ -10,9 +10,9 @@ head:
   # rayVersion determines the autoscaler's image version.
   # It should match the Ray version in the image of the containers.
   rayVersion: 2.35.0
-  enableInTreeAutoscaling: true
-  autoscalerOptions:
-    idleTimeoutSeconds: 240
+  # enableInTreeAutoscaling: true
+  # autoscalerOptions:
+    # idleTimeoutSeconds: 240
   restartPolicy: ""
   lifecycle: #https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/config.html#pod-and-container-lifecyle-prestophook
     preStop:
@@ -56,9 +56,9 @@ head:
 
 worker:
   groupName: workergroup
-  replicas: 0
-  minReplicas: 0
-  maxReplicas: 4
+  replicas: 4
+  # minReplicas: 0
+  # maxReplicas: 4
   rayStartParams:
     block: 'true'
     num-gpus: '0'
@@ -66,8 +66,6 @@ worker:
     - name: OMP_NUM_THREADS
       value: "1"
     - name: OPENBLAS_NUM_THREADS
-      value: "1"
-    - name: RAY_ENABLE_RECORD_ACTOR_TASK_LOGGING
       value: "1"
   lifecycle: #https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/config.html#pod-and-container-lifecyle-prestophook
     preStop:

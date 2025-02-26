@@ -1,6 +1,0 @@
-# Docling cpu-only dependencies
--i https://download.pytorch.org/whl/cpu
-docling==2.23.0
-
--i https://pypi.org/simple
-boto3~=1.35.36
