@@ -45,11 +45,11 @@ Coming soon. Initial instruction from [OpenShift AI docs](https://docs.redhat.co
 
 ## Get help and support
 
-Please feel free to connect with us using the [discussion section](https://github.com/DS4SD/docling/discussions) of the main [Docling repository](https://github.com/DS4SD/docling).
+Please feel free to connect with us using the [discussion section](https://github.com/docling-project/docling/discussions) of the main [Docling repository](https://github.com/docling-project/docling).
 
 ## Contributing
 
-Please read [Contributing to Docling Serve](https://github.com/DS4SD/docling-jobkit/blob/main/CONTRIBUTING.md) for details.
+Please read [Contributing to Docling Serve](https://github.com/docling-project/docling-jobkit/blob/main/CONTRIBUTING.md) for details.
 
 ## References
 
