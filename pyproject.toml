@@ -101,11 +101,11 @@ include = ["docling_jobkit"]
 docling-ray-job = "docling_jobkit.ray_job.main:main"
 
 [project.urls]
-Homepage = "https://github.com/DS4SD/docling-jobkit"
+Homepage = "https://github.com/docling-project/docling-jobkit"
 # Documentation = "https://ds4sd.github.io/docling"
-Repository = "https://github.com/DS4SD/docling-jobkit"
-Issues = "https://github.com/DS4SD/docling-jobkit/issues"
-Changelog = "https://github.com/DS4SD/docling-jobkit/blob/main/CHANGELOG.md"
+Repository = "https://github.com/docling-project/docling-jobkit"
+Issues = "https://github.com/docling-project/docling-jobkit/issues"
+Changelog = "https://github.com/docling-project/docling-jobkit/blob/main/CHANGELOG.md"
 
 [tool.ruff]
 target-version = "py310"

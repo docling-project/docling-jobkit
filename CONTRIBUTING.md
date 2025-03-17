@@ -2,13 +2,13 @@
 Our project welcomes external contributions. If you have an itch, please feel
 free to scratch it.
 
-To contribute code or documentation, please submit a [pull request](https://github.com/DS4SD/docling-jobkit/pulls).
+To contribute code or documentation, please submit a [pull request](https://github.com/docling-project/docling-jobkit/pulls).
 
 A good way to familiarize yourself with the codebase and contribution process is
-to look for and tackle low-hanging fruit in the [issue tracker](https://github.com/DS4SD/docling-jobkit/issues).
+to look for and tackle low-hanging fruit in the [issue tracker](https://github.com/docling-project/docling-jobkit/issues).
 Before embarking on a more ambitious contribution, please quickly [get in touch](#communication) with us.
 
-For general questions or support requests, please refer to the [discussion section](https://github.com/DS4SD/docling/discussions)
+For general questions or support requests, please refer to the [discussion section](https://github.com/docling-project/docling/discussions)
 of the main Docling repository.
 
 **Note: We appreciate your effort and want to avoid situations where a contribution
@@ -17,14 +17,14 @@ cannot be accepted at all!**
 
 ### Proposing New Features
 
-If you would like to implement a new feature, please [raise an issue](https://github.com/DS4SD/docling-jobkit/issues)
+If you would like to implement a new feature, please [raise an issue](https://github.com/docling-project/docling-jobkit/issues)
 before sending a pull request so the feature can be discussed. This is to avoid
 you spending valuable time working on a feature that the project developers
 are not interested in accepting into the codebase.
 
 ### Fixing Bugs
 
-If you would like to fix a bug, please [raise an issue](https://github.com/DS4SD/docling/docling-jobkit) before sending a
+If you would like to fix a bug, please [raise an issue](https://github.com/docling-project/docling/docling-jobkit) before sending a
 pull request so it can be tracked.
 
 ### Merge Approval
@@ -79,7 +79,7 @@ This project strictly adheres to using dependencies that are compatible with the
 
 ## Communication
 
-Please feel free to connect with us using the [discussion section](https://github.com/DS4SD/docling/discussions) of the main Docling repository.
+Please feel free to connect with us using the [discussion section](https://github.com/docling-project/docling/discussions) of the main Docling repository.
 
 
 
