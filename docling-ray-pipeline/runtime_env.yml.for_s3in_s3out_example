@@ -21,7 +21,12 @@ env_vars:
   SETTINGS_OCR_KIND: "easyocr"
   SETTINGS_DO_TABLE_STRUCTURE: "True"
   SETTINGS_TABLE_STRUCTURE_MODE: "fast"
+  SETTINGS_DO_CODE_ENRICHMENT: "False"
+  SETTINGS_DO_FORMULA_ENRICHMENT: "False"
+  SETTINGS_DO_PICTURE_CLASSIFICATION: "False"
+  SETTINGS_DO_PICTURE_DESCRIPTION: "False"
   SETTINGS_GENERATE_PAGE_IMAGES: "True"
+  SETTINGS_GENERATE_PICTURE_IMAGES: "False"
 
 
 # Expected environment if clean ray image is used. Take into account that ray worker can timeout before it finishes installing modules.
