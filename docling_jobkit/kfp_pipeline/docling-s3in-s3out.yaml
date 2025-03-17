@@ -1,0 +1,247 @@
+# PIPELINE DEFINITION
+# Name: docling-hello
+# Inputs:
+#    convertion_options: dict [Default: {'force_ocr': False, 'to_formats': ['md'], 'include_images': True, 'return_as_file': False, 'abort_on_error': False, 'ocr_lang': [], 'ocr_engine': 'easyocr', 'table_mode': 'accurate', 'images_scale': 2.0, 'image_export_mode': 'placeholder', 'do_ocr': True, 'from_formats': ['docx', 'pptx', 'html', 'image', 'pdf', 'asciidoc', 'md', 'xlsx', 'xml_uspto', 'xml_jats', 'json_docling'], 'pdf_backend': 'dlparse_v2', 'do_table_structure': True}]
+#    source: dict [Default: {}]
+#    target: dict [Default: {}]
+# Outputs:
+#    Output: list
+components:
+  comp-convert-payload:
+    executorLabel: exec-convert-payload
+    inputDefinitions:
+      parameters:
+        http_sources:
+          defaultValue:
+          - url: https://arxiv.org/pdf/2408.09869
+          isOptional: true
+          parameterType: LIST
+        options:
+          defaultValue:
+            abort_on_error: false
+            do_ocr: true
+            do_table_structure: true
+            force_ocr: false
+            from_formats:
+            - docx
+            - pptx
+            - html
+            - image
+            - pdf
+            - asciidoc
+            - md
+            - xlsx
+            - xml_uspto
+            - xml_jats
+            - json_docling
+            image_export_mode: placeholder
+            images_scale: 2.0
+            include_images: true
+            ocr_engine: easyocr
+            ocr_lang: []
+            pdf_backend: dlparse_v2
+            return_as_file: false
+            table_mode: accurate
+            to_formats:
+            - md
+          isOptional: true
+          parameterType: STRUCT
+        target:
+          defaultValue:
+            s3_target_access_key: '123454321'
+            s3_target_bucket: target-bucket
+            s3_target_endpoint: s3.eu-de.cloud-object-storage.appdomain.cloud
+            s3_target_prefix: my-docs
+            s3_target_secret_key: secretsecret
+            s3_target_ssl: true
+          isOptional: true
+          parameterType: STRUCT
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: LIST
+deploymentSpec:
+  executors:
+    exec-convert-payload:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - convert_payload
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location --index-url https://download.pytorch.org/whl/cpu\
+          \ --extra-index-url https://pypi.org/simple --trusted-host https://download.pytorch.org/whl/cpu\
+          \ --trusted-host https://pypi.org/simple 'kfp==2.12.1' '--no-deps' 'typing-extensions>=3.7.4,<5;\
+          \ python_version<\"3.9\"'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple\
+          \ --trusted-host https://download.pytorch.org/whl/cpu --trusted-host https://pypi.org/simple\
+          \ 'docling==2.24.0' 'git+https://docling-project/docling-jobkit.git@vku/s3_commons'\
+          \ && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef convert_payload(\n        options: Dict = {\n            \"from_formats\"\
+          : [\"docx\",\"pptx\",\"html\",\"image\",\"pdf\",\"asciidoc\",\"md\",\"xlsx\"\
+          ,\"xml_uspto\",\"xml_jats\",\"json_docling\"],\n            \"to_formats\"\
+          : [\"md\"],\n            \"image_export_mode\": \"placeholder\",\n     \
+          \       \"do_ocr\": True,\n            \"force_ocr\": False,\n         \
+          \   \"ocr_engine\": \"easyocr\",\n            \"ocr_lang\": [],\n      \
+          \      \"pdf_backend\": \"dlparse_v2\",\n            \"table_mode\": \"\
+          accurate\",\n            \"abort_on_error\": False,\n            \"return_as_file\"\
+          : False,\n            \"do_table_structure\": True,\n            \"include_images\"\
+          : True,\n            \"images_scale\": 2\n        },\n        http_sources:\
+          \ List = [{\"url\": \"https://arxiv.org/pdf/2408.09869\"}],\n        target:\
+          \ Dict = {\n            \"s3_target_endpoint\": \"s3.eu-de.cloud-object-storage.appdomain.cloud\"\
+          ,\n            \"s3_target_access_key\": \"123454321\",\n            \"\
+          s3_target_secret_key\": \"secretsecret\",\n            \"s3_target_bucket\"\
+          : \"target-bucket\",\n            \"s3_target_prefix\": \"my-docs\",\n \
+          \           \"s3_target_ssl\": True\n        }\n    ) -> List:\n\n    import\
+          \ os\n    import logging\n    import json\n    from typing import Dict,\
+          \ List\n    from pathlib import Path\n    from docling.backend.docling_parse_backend\
+          \ import DoclingParseDocumentBackend\n    from docling.document_converter\
+          \ import DocumentConverter, PdfFormatOption\n    from docling.datamodel.base_models\
+          \ import ConversionStatus, InputFormat\n    from docling.datamodel.pipeline_options\
+          \ import PdfPipelineOptions, TableFormerMode\n    from docling.datamodel.document\
+          \ import ConversionResult\n    from docling.pipeline.standard_pdf_pipeline\
+          \ import StandardPdfPipeline\n    from docling.utils.model_downloader import\
+          \ download_models\n    from urllib.parse import urlunsplit, urlparse\n \
+          \   from docling_jobkit.connectors import s3_helper\n\n    logging.basicConfig(level=logging.INFO)\n\
+          \n\n    easyocr_path = Path(\"/models/.EasyOCR\")\n    os.environ['MODULE_PATH']\
+          \ = str(easyocr_path)\n    os.environ['EASYOCR_MODULE_PATH'] = str(easyocr_path)\n\
+          \    # logging.info('The MODULE_PATH value: {}'.format(os.getenv('MODULE_PATH')))\n\
+          \    # logging.info('The EASYOCR_MODULE_PATH value: {}'.format(os.getenv('EASYOCR_MODULE_PATH')))\n\
+          \n    models_path = download_models(output_dir=Path(\"/models\"))\n    #\
+          \ logging.info('The models path: {}'.format(models_path))\n\n    # logging.info('current\
+          \ options: {}'.format(options))\n\n    # payload_json = json.loads(payload)\n\
+          \    # options = payload_json[\"options\"]\n\n    pipeline_options = PdfPipelineOptions()\n\
+          \    pipeline_options.do_ocr = options[\"do_ocr\"]\n    pipeline_options.ocr_options.kind\
+          \ = options[\"ocr_engine\"]\n    pipeline_options.do_table_structure = options[\"\
+          do_table_structure\"]\n    pipeline_options.table_structure_options.mode\
+          \ = TableFormerMode(options[\"table_mode\"])\n    pipeline_options.generate_page_images\
+          \ = options[\"include_images\"]\n    pipeline_options.artifacts_path = models_path\n\
+          \n\n    converter = DocumentConverter(\n        format_options={\n     \
+          \       InputFormat.PDF: PdfFormatOption(\n                pipeline_options=pipeline_options,\n\
+          \                backend=DoclingParseDocumentBackend,\n            )\n \
+          \       }\n    )\n\n    s3_coords = S3Coordinates(\n        endpoint = target[\"\
+          s3_target_endpoint\"],\n        verify_ssl = target[\"s3_target_ssl\"],\n\
+          \        access_key = target[\"s3_target_access_key\"],\n        secret_key\
+          \ = target[\"s3_target_secret_key\"],\n        bucket = target[\"s3_target_bucket\"\
+          ],\n        key_prefix = target[\"s3_target_prefix\"]\n    )\n\n    s3_target,\
+          \ _ = get_s3_connection(s3_coords)\n\n\n    results = []\n    for url in\
+          \ http_sources:\n        url = url[\"url\"]\n        parsed = urlparse(url)\n\
+          \        root, ext = os.path.splitext(parsed.path)\n        # if ext[1:]\
+          \ not in options[\"from_formats\"]:\n        #     continue\n        conv_res:\
+          \ ConversionResult = converter.convert(url)\n        if conv_res.status\
+          \ == ConversionStatus.SUCCESS:\n            doc_filename = conv_res.input.file.stem\n\
+          \            logging.info(f\"Converted {doc_filename} now saving results\"\
+          )\n            # Export Docling document format to JSON:\n            target_key\
+          \ = f\"{s3_coords.key_prefix}/json/{doc_filename}.json\"\n            data\
+          \ = json.dumps(conv_res.document.export_to_dict())\n            upload_to_s3(\n\
+          \                s3_client=s3_target, \n                bucket=s3_coords.target,\n\
+          \                file=data,\n                target_key=target_key,\n  \
+          \              content_type=\"application/json\",\n            )\n\n   \
+          \         results.append(f\"{doc_filename} - SUCCESS\")\n\n        elif\
+          \ conv_res.status == ConversionStatus.PARTIAL_SUCCESS:\n            results.append(f\"\
+          {conv_res.input.file} - PARTIAL_SUCCESS\")\n        else:\n            results.append(f\"\
+          {conv_res.input.file} - FAILURE\")\n\n    logging.info('Convertion results:\
+          \ {}'.format(results))\n\n    return results\n\n"
+        image: python:3.11
+        resources:
+          resourceCpuLimit: '1'
+          resourceCpuRequest: 200m
+          resourceMemoryLimit: 5G
+          resourceMemoryRequest: 1G
+pipelineInfo:
+  name: docling-hello
+root:
+  dag:
+    outputs:
+      parameters:
+        Output:
+          valueFromParameter:
+            outputParameterKey: Output
+            producerSubtask: convert-payload
+    tasks:
+      convert-payload:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-convert-payload
+        inputs:
+          parameters:
+            http_sources:
+              runtimeValue:
+                constant:
+                - url: https://arxiv.org/pdf/2408.09869
+            options:
+              componentInputParameter: convertion_options
+        taskInfo:
+          name: convert-payload
+  inputDefinitions:
+    parameters:
+      convertion_options:
+        defaultValue:
+          abort_on_error: false
+          do_ocr: true
+          do_table_structure: true
+          force_ocr: false
+          from_formats:
+          - docx
+          - pptx
+          - html
+          - image
+          - pdf
+          - asciidoc
+          - md
+          - xlsx
+          - xml_uspto
+          - xml_jats
+          - json_docling
+          image_export_mode: placeholder
+          images_scale: 2.0
+          include_images: true
+          ocr_engine: easyocr
+          ocr_lang: []
+          pdf_backend: dlparse_v2
+          return_as_file: false
+          table_mode: accurate
+          to_formats:
+          - md
+        isOptional: true
+        parameterType: STRUCT
+      source:
+        defaultValue: {}
+        isOptional: true
+        parameterType: STRUCT
+      target:
+        defaultValue: {}
+        isOptional: true
+        parameterType: STRUCT
+  outputDefinitions:
+    parameters:
+      Output:
+        parameterType: LIST
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.12.1
+---
+platforms:
+  kubernetes:
+    deploymentSpec:
+      executors:
+        exec-convert-payload:
+          pvcMount:
+          - constant: docling-pipelines-models-cache
+            mountPath: /models

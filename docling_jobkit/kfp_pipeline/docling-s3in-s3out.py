@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 
 
 @dsl.component(
-    packages_to_install=["docling==2.24.0"], #"git+https://my-repo/mycustomlibrary.git"],
+    packages_to_install=["docling==2.24.0", "git+https://docling-project/docling-jobkit.git@vku/s3_commons"],
     pip_index_urls=["https://download.pytorch.org/whl/cpu", "https://pypi.org/simple"],
     base_image="python:3.11",
     #base_image="quay.io/bbrowning/docling-kfp:v2.25.0",
@@ -52,6 +52,7 @@ def convert_payload(
     from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline
     from docling.utils.model_downloader import download_models
     from urllib.parse import urlunsplit, urlparse
+    from docling_jobkit.connectors import s3_helper
 
     logging.basicConfig(level=logging.INFO)
 
@@ -88,16 +89,16 @@ def convert_payload(
         }
     )
 
-    # s3_coords = S3Coordinates(
-    #     endpoint = target["s3_target_endpoint"],
-    #     verify_ssl = target["s3_target_ssl"],
-    #     access_key = target["s3_target_access_key"],
-    #     secret_key = target["s3_target_secret_key"],
-    #     bucket = target["s3_target_bucket"],
-    #     key_prefix = target["s3_target_prefix"]
-    # )
+    s3_coords = S3Coordinates(
+        endpoint = target["s3_target_endpoint"],
+        verify_ssl = target["s3_target_ssl"],
+        access_key = target["s3_target_access_key"],
+        secret_key = target["s3_target_secret_key"],
+        bucket = target["s3_target_bucket"],
+        key_prefix = target["s3_target_prefix"]
+    )
 
-    # s3_target, _ = get_s3_connection(s3_coords)
+    s3_target, _ = get_s3_connection(s3_coords)
 
 
     results = []
@@ -112,15 +113,15 @@ def convert_payload(
             doc_filename = conv_res.input.file.stem
             logging.info(f"Converted {doc_filename} now saving results")
             # Export Docling document format to JSON:
-            # target_key = f"{s3_coords.key_prefix}/json/{doc_filename}.json"
-            #  data = json.dumps(conv_res.document.export_to_dict())
-            # upload_to_s3(
-            #     s3_client=s3_target, 
-            #     bucket=s3_coords.target,
-            #     file=data,
-            #     target_key=target_key,
-            #     content_type="application/json",
-            # )
+            target_key = f"{s3_coords.key_prefix}/json/{doc_filename}.json"
+            data = json.dumps(conv_res.document.export_to_dict())
+            upload_to_s3(
+                s3_client=s3_target, 
+                bucket=s3_coords.target,
+                file=data,
+                target_key=target_key,
+                content_type="application/json",
+            )
 
             results.append(f"{doc_filename} - SUCCESS")
 
