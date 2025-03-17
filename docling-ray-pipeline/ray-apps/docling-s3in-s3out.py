@@ -47,7 +47,12 @@ do_ocr = os.environ.get("SETTINGS_DO_OCR", True)
 ocr_kind = os.environ.get("SETTINGS_OCR_KIND", "easyocr")
 do_table_structure = os.environ.get("SETTINGS_DO_TABLE_STRUCTURE", True)
 table_structure_mode = os.environ.get("SETTINGS_TABLE_STRUCTURE_MODE", "fast")
-generate_page_images = os.environ.get("SETTINGS_GENERATE_PAGE_IMAGES", True)
+do_code_enrichment = os.environ.get("SETTINGS_DO_CODE_ENRICHMENT", False)
+do_formula_enrichment = os.environ.get("SETTINGS_DO_FORMULA_ENRICHMENT", False)
+do_picture_classification = os.environ.get("SETTINGS_DO_PICTURE_CLASSIFICATION", False)
+do_picture_description = os.environ.get("SETTINGS_DO_PICTURE_DESCRIPTION", False)
+generate_page_images = os.environ.get("SETTINGS_GENERATE_PAGE_IMAGES", False)
+generate_picture_images = os.environ.get("SETTINGS_PICTURE_PAGE_IMAGES", False)
 
 
 class S3Coordinates(BaseModel):
@@ -222,11 +227,18 @@ class DoclingConvert:
         
         pipeline_options = PdfPipelineOptions()
         pipeline_options.do_ocr = do_ocr
-        pipeline_options.ocr_options.kind = ocr_kind
+        if do_ocr:
+            pipeline_options.ocr_options.kind = ocr_kind
         pipeline_options.do_table_structure = do_table_structure
         pipeline_options.table_structure_options.mode = TableFormerMode(table_structure_mode)
+        pipeline_options.do_code_enrichment = do_code_enrichment
+        pipeline_options.do_formula_enrichment = do_formula_enrichment
+        pipeline_options.do_picture_classification = do_picture_classification
+        pipeline_options.do_picture_description = do_picture_description
         pipeline_options.generate_page_images = generate_page_images
+        pipeline_options.generate_picture_images = generate_picture_images
 
+        print("Starting conversion...")
         self.converter = DocumentConverter(
             format_options={
                 InputFormat.PDF: PdfFormatOption(
@@ -273,12 +285,13 @@ class DoclingConvert:
                 )
                 # Export Docling document format to text:
                 target_key = f"{s3_target_prefix}/txt/{doc_filename}.txt"
-                data = conv_res.document.export_to_markdown(strict_text=True)
+                data = conv_res.document.export_to_text()
                 self.upload_to_s3(
                     file=data,
                     target_key=target_key,
                     content_type="text/plain",
                 )
+                # TODO: copy page/picture images if requested
                 yield f"{doc_filename} - SUCCESS"
 
             elif conv_res.status == ConversionStatus.PARTIAL_SUCCESS:
