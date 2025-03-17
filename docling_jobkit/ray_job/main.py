@@ -1,46 +1,46 @@
-import ray
 import argparse
-import os
 import json
+import os
 from typing import Optional
-from pydantic import BaseModel
-from botocore.client import BaseClient
+from urllib.parse import urlparse, urlunsplit
+
+import ray
 from boto3.resources.base import ServiceResource
 from boto3.session import Session
+from botocore.client import BaseClient
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from botocore.paginate import Paginator
-from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.base_models import ConversionStatus, InputFormat
-from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
-from urllib.parse import urlunsplit, urlparse
-from docling.datamodel.document import ConversionResult
-from ray._raylet import ObjectRefGenerator
+from pydantic import BaseModel
+from ray._raylet import ObjectRefGenerator  # type: ignore
 
+from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
+from docling.datamodel.base_models import ConversionStatus, InputFormat
+from docling.datamodel.document import ConversionResult
+from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
+from docling.document_converter import DocumentConverter, PdfFormatOption
 
 # Load credentials
-s3_source_access_key = os.environ['S3_SOURCE_ACCESS_KEY']
-s3_source_secret_key = os.environ['S3_SOURCE_SECRET_KEY']
-s3_source_endpoint = os.environ['S3_SOURCE_ENDPOINTS']
-s3_source_bucket = os.environ['S3_SOURCE_BUCKET']
-s3_source_prefix = os.environ['S3_SOURCE_PREFIX']
-s3_source_ssl = os.environ.get('S3_SOURCE_SSL', True)
-s3_target_access_key = os.environ['S3_TARGET_ACCESS_KEY']
-s3_target_secret_key = os.environ['S3_TARGET_SECRET_KEY']
-s3_target_endpoint = os.environ['S3_TARGET_ENDPOINTS']
-s3_target_bucket = os.environ['S3_TARGET_BUCKET']
-s3_target_prefix = os.environ['S3_TARGET_PREFIX']
-s3_target_ssl = os.environ.get('S3_TARGET_SSL', True)
-batch_size = int(os.environ['BATCH_SIZE'])
-max_concurrency = int(os.environ['OMP_NUM_THREADS'])
+s3_source_access_key = os.environ["S3_SOURCE_ACCESS_KEY"]
+s3_source_secret_key = os.environ["S3_SOURCE_SECRET_KEY"]
+s3_source_endpoint = os.environ["S3_SOURCE_ENDPOINTS"]
+s3_source_bucket = os.environ["S3_SOURCE_BUCKET"]
+s3_source_prefix = os.environ["S3_SOURCE_PREFIX"]
+s3_source_ssl = os.environ.get("S3_SOURCE_SSL", True)
+s3_target_access_key = os.environ["S3_TARGET_ACCESS_KEY"]
+s3_target_secret_key = os.environ["S3_TARGET_SECRET_KEY"]
+s3_target_endpoint = os.environ["S3_TARGET_ENDPOINTS"]
+s3_target_bucket = os.environ["S3_TARGET_BUCKET"]
+s3_target_prefix = os.environ["S3_TARGET_PREFIX"]
+s3_target_ssl = os.environ.get("S3_TARGET_SSL", True)
+batch_size = int(os.environ["BATCH_SIZE"])
+max_concurrency = int(os.environ["OMP_NUM_THREADS"])
 
 # Load conversion settings
-do_ocr = os.environ.get("SETTINGS_DO_OCR", True)
-ocr_kind = os.environ.get("SETTINGS_OCR_KIND", "easyocr")
-do_table_structure = os.environ.get("SETTINGS_DO_TABLE_STRUCTURE", True)
+do_ocr = bool(os.environ.get("SETTINGS_DO_OCR", True))
+do_table_structure = bool(os.environ.get("SETTINGS_DO_TABLE_STRUCTURE", True))
 table_structure_mode = os.environ.get("SETTINGS_TABLE_STRUCTURE_MODE", "fast")
-generate_page_images = os.environ.get("SETTINGS_GENERATE_PAGE_IMAGES", True)
+generate_page_images = bool(os.environ.get("SETTINGS_GENERATE_PAGE_IMAGES", True))
 
 
 class S3Coordinates(BaseModel):
@@ -59,7 +59,7 @@ def get_s3_connection(coords: S3Coordinates):
         connect_timeout=30, retries={"max_attempts": 1}, signature_version="s3v4"
     )
     scheme = "https" if coords.verify_ssl else "http"
-    path="/"
+    path = "/"
     endpoint = urlunsplit((scheme, coords.endpoint, path, "", ""))
 
     client: BaseClient = session.client(
@@ -85,15 +85,17 @@ def get_s3_connection(coords: S3Coordinates):
 
 def count_s3_objects(paginator: Paginator, bucket_name: str, prefix: str):
     response_iterator = paginator.paginate(Bucket=bucket_name, Prefix=prefix)
-    count_obj=0
+    count_obj = 0
     for page in response_iterator:
         if page.get("Contents"):
-            count_obj += sum(1 for _ in page['Contents'])
+            count_obj += sum(1 for _ in page["Contents"])
 
     return count_obj
 
 
-def get_keys_s3_objects_as_set(s3_resource: ServiceResource, bucket_name: str, prefix: str):
+def get_keys_s3_objects_as_set(
+    s3_resource: ServiceResource, bucket_name: str, prefix: str
+):
     bucket = s3_resource.Bucket(bucket_name)
     folder_objects = list(bucket.objects.filter(Prefix=prefix))
     files_on_s3 = set()
@@ -102,10 +104,10 @@ def get_keys_s3_objects_as_set(s3_resource: ServiceResource, bucket_name: str, p
     return files_on_s3
 
 
-def strip_prefix_postfix(source_set, prefix = '', extension = ''):
+def strip_prefix_postfix(source_set, prefix="", extension=""):
     output = set()
     for key in source_set:
-        output.add(key.replace(extension, '').replace(prefix, ''))
+        output.add(key.replace(extension, "").replace(prefix, ""))
     return output
 
 
@@ -117,12 +119,9 @@ def generate_presigns_url(s3_client: BaseClient, source_keys: list):
     for idx, key in enumerate(source_keys):
         try:
             url = s3_client.generate_presigned_url(
-                ClientMethod='get_object',
-                Params={
-                    'Bucket': s3_source_bucket,
-                    'Key': key
-                },
-                ExpiresIn=3600
+                ClientMethod="get_object",
+                Params={"Bucket": s3_source_bucket, "Key": key},
+                ExpiresIn=3600,
             )
         except ClientError as e:
             print(e)
@@ -137,41 +136,51 @@ def generate_presigns_url(s3_client: BaseClient, source_keys: list):
 
 
 def get_source_files(s3_source_client, s3_source_resource):
-    source_paginator = s3_source_client.get_paginator('list_objects_v2')
+    source_paginator = s3_source_client.get_paginator("list_objects_v2")
 
     # Check that source is not empty
-    source_count = count_s3_objects(source_paginator, s3_source_bucket, s3_source_prefix + '/')
+    source_count = count_s3_objects(
+        source_paginator, s3_source_bucket, s3_source_prefix + "/"
+    )
     if source_count == 0:
         print("s3 source is empty")
         ray.shutdown()
-    return get_keys_s3_objects_as_set(s3_source_resource, s3_source_bucket, s3_source_prefix)
+    return get_keys_s3_objects_as_set(
+        s3_source_resource, s3_source_bucket, s3_source_prefix
+    )
 
 
 def check_target_has_source_converted(coords, source_objects_list):
     s3_target_client, s3_target_resource = get_s3_connection(coords)
-    target_paginator = s3_target_client.get_paginator('list_objects_v2')
+    target_paginator = s3_target_client.get_paginator("list_objects_v2")
 
     converted_prefix = s3_target_prefix + "/json/"
-    target_count = count_s3_objects(target_paginator, s3_target_bucket, converted_prefix)
-    print('Target contains json objects: ',target_count)
+    target_count = count_s3_objects(
+        target_paginator, s3_target_bucket, converted_prefix
+    )
+    print("Target contains json objects: ", target_count)
     if target_count != 0:
-        print('Target contains objects, checking content...')
+        print("Target contains objects, checking content...")
 
         # Collect target keys for iterative conversion
-        existing_target_objects = get_keys_s3_objects_as_set(s3_target_resource, s3_target_bucket, converted_prefix)
+        existing_target_objects = get_keys_s3_objects_as_set(
+            s3_target_resource, s3_target_bucket, converted_prefix
+        )
 
         # Filter-out objects that are already processed
-        target_short_key_list = strip_prefix_postfix(existing_target_objects, prefix=converted_prefix, extension='.json')
+        target_short_key_list = strip_prefix_postfix(
+            existing_target_objects, prefix=converted_prefix, extension=".json"
+        )
         filtered_source_keys = []
         print("List of source keys:")
         for key in source_objects_list:
             print(key)
-            clean_key = key.replace('.pdf', '').replace(s3_source_prefix + '/', '')
+            clean_key = key.replace(".pdf", "").replace(s3_source_prefix + "/", "")
             if clean_key not in target_short_key_list:
                 filtered_source_keys.append(key)
-        
-        print('Total keys: ', len(source_objects_list))
-        print('Filtered keys to process: ', len(filtered_source_keys))
+
+        print("Total keys: ", len(source_objects_list))
+        print("Filtered keys to process: ", len(filtered_source_keys))
     else:
         filtered_source_keys = source_objects_list
 
@@ -184,7 +193,7 @@ def put_object(
     object_key: str,
     file: str,
     content_type: Optional[str] = None,
-)->bool:
+) -> bool:
     """Upload a file to an S3 bucket
 
     :param file: File to upload
@@ -206,18 +215,19 @@ def put_object(
     return True
 
 
-@ray.remote(max_concurrency=max_concurrency)
+@ray.remote(max_concurrency=max_concurrency)  # type: ignore
 class DoclingConvert:
     def __init__(self, s3_coords: S3Coordinates, presigned_urls: list):
-        self.coords = s3_coords 
+        self.coords = s3_coords
         self.s3_client, _ = get_s3_connection(s3_coords)
-        self.presigned_urls=presigned_urls
-        
+        self.presigned_urls = presigned_urls
+
         pipeline_options = PdfPipelineOptions()
         pipeline_options.do_ocr = do_ocr
-        pipeline_options.ocr_options.kind = ocr_kind
         pipeline_options.do_table_structure = do_table_structure
-        pipeline_options.table_structure_options.mode = TableFormerMode(table_structure_mode)
+        pipeline_options.table_structure_options.mode = TableFormerMode(
+            table_structure_mode
+        )
         pipeline_options.generate_page_images = generate_page_images
 
         self.converter = DocumentConverter(
@@ -279,7 +289,6 @@ class DoclingConvert:
             else:
                 yield f"{conv_res.input.file} - FAILURE"
 
-
     def upload_to_s3(self, file, target_key, content_type):
         return put_object(
             client=self.s3_client,
@@ -296,7 +305,12 @@ def main(args):
     ray.init(local_mode=False)
 
     # Check inputs
-    if (not s3_source_access_key) or (not s3_source_secret_key) or (not s3_target_access_key) or (not s3_target_secret_key):
+    if (
+        (not s3_source_access_key)
+        or (not s3_source_secret_key)
+        or (not s3_target_access_key)
+        or (not s3_target_secret_key)
+    ):
         print("s3 source or target keys are missing")
         ray.shutdown()
     if (not s3_source_endpoint) or (not s3_target_endpoint):
@@ -305,13 +319,17 @@ def main(args):
     if (not s3_source_bucket) or (not s3_target_bucket):
         print("s3 source or target bucket is missing")
         ray.shutdown()
-    if (s3_source_endpoint == s3_target_endpoint) and (s3_source_bucket == s3_target_bucket) and (s3_source_prefix == s3_target_prefix):
+    if (
+        (s3_source_endpoint == s3_target_endpoint)
+        and (s3_source_bucket == s3_target_bucket)
+        and (s3_source_prefix == s3_target_prefix)
+    ):
         print("s3 source and target are the same")
         ray.shutdown()
     if batch_size == 0:
         print("batch_size have to be higher than zero")
         ray.shutdown()
-    
+
     # get source keys
     s3_coords_source = S3Coordinates(
         endpoint=s3_source_endpoint,
@@ -334,7 +352,9 @@ def main(args):
         key_prefix=s3_target_prefix,
     )
 
-    filtered_source_keys = check_target_has_source_converted(s3_coords_target, source_objects_list)
+    filtered_source_keys = check_target_has_source_converted(
+        s3_coords_target, source_objects_list
+    )
 
     # Generate pre-signed urls
     presigned_urls = generate_presigns_url(s3_source_client, filtered_source_keys)
@@ -345,9 +365,8 @@ def main(args):
     db_object_ref = ray.put(presigned_urls)
     # Launch tasks
     object_references = [
-        c.convert_document.remote(
-            index, db_object_ref
-        ) for index in range(len(presigned_urls))
+        c.convert_document.remote(index, db_object_ref)
+        for index in range(len(presigned_urls))
     ]
 
     ready, unready = [], object_references
@@ -369,10 +388,9 @@ def main(args):
 
     print(result)
 
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Basic docling ray app"
-    )
+    parser = argparse.ArgumentParser(description="Basic docling ray app")
 
     args = parser.parse_args()
     main(args)
