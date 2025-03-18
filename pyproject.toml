@@ -95,7 +95,7 @@ url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
 [tool.setuptools.packages.find]
-include = ["docling_jobkit"]
+include = ["docling_jobkit*"]
 
 [project.scripts]
 docling-ray-job = "docling_jobkit.ray_job.main:main"
