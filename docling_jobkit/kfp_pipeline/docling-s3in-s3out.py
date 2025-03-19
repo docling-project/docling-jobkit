@@ -152,7 +152,7 @@ def compute_batches(
 
 
 @dsl.pipeline
-def docling_hello(
+def docling_s3in_s3out(
         convertion_options: Dict = {
             "from_formats": ["docx","pptx","html","image","pdf","asciidoc","md","xlsx","xml_uspto","xml_jats","json_docling"],
             "to_formats": ["md"],
@@ -217,4 +217,4 @@ def docling_hello(
 
 from kfp import compiler
 
-compiler.Compiler().compile(docling_hello, 'docling-s3in-s3out.yaml')
+compiler.Compiler().compile(docling_s3in_s3out, 'docling-s3in-s3out.yaml')
