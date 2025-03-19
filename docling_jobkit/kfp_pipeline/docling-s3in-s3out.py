@@ -11,31 +11,9 @@ from typing import Dict, List, Optional
     base_image="python:3.11",
     )
 def convert_payload(
-        options: Dict = {
-            "from_formats": ["docx","pptx","html","image","pdf","asciidoc","md","xlsx","xml_uspto","xml_jats","json_docling"],
-            "to_formats": ["md"],
-            "image_export_mode": "placeholder",
-            "do_ocr": True,
-            "force_ocr": False,
-            "ocr_engine": "easyocr",
-            "ocr_lang": [],
-            "pdf_backend": "dlparse_v2",
-            "table_mode": "accurate",
-            "abort_on_error": False,
-            "return_as_file": False,
-            "do_table_structure": True,
-            "include_images": True,
-            "images_scale": 2
-        },
-        target: Dict = {
-            "s3_target_endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
-            "s3_target_access_key": "123454321",
-            "s3_target_secret_key": "secretsecret",
-            "s3_target_bucket": "target-bucket",
-            "s3_target_prefix": "my-docs",
-            "s3_target_ssl": True
-        },
-        pre_signed_urls: List[str] = []
+        options: Dict,
+        target: Dict,
+        pre_signed_urls: List[str]
     ) -> List:
 
     import os
@@ -70,7 +48,7 @@ def convert_payload(
         key_prefix = target["s3_target_prefix"]
     )
     
-    easyocr_path = Path("/models/EasyOCR")
+    easyocr_path = Path("/models/EasyOcr")
     os.environ['MODULE_PATH'] = str(easyocr_path)
     os.environ['EASYOCR_MODULE_PATH'] = str(easyocr_path)
 
