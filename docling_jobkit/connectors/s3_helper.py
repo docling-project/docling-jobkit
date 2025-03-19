@@ -2,6 +2,7 @@ import time
 import os
 import json
 import yaml
+import logging
 from typing import Optional, List
 from pydantic import BaseModel
 from botocore.client import BaseClient
@@ -17,6 +18,7 @@ from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMo
 from urllib.parse import urlunsplit, urlparse
 from docling.datamodel.document import ConversionResult
 
+logging.basicConfig(level=logging.INFO)
 
 class S3Coordinates(BaseModel):
     endpoint: str
@@ -84,7 +86,7 @@ def strip_prefix_postfix(source_set, prefix = '', extension = ''):
     return output
 
 
-def generate_presigns_url(s3_client: BaseClient, source_keys: list, s3_source_bucket: str, batch_size: int = 10):
+def generate_presigns_url(s3_client: BaseClient, source_keys: list, s3_source_bucket: str, batch_size: int = 10, expiration_time: int = 3600):
     presigned_urls = []
     counter = 0
     sub_array = []
@@ -97,10 +99,10 @@ def generate_presigns_url(s3_client: BaseClient, source_keys: list, s3_source_bu
                     'Bucket': s3_source_bucket,
                     'Key': key
                 },
-                ExpiresIn=3600
+                ExpiresIn=expiration_time
             )
         except ClientError as e:
-            print(e)
+            logging.error('Generation of presigned url failed: {}'.format(e))
         sub_array.append(url)
         counter += 1
         if counter == batch_size or (idx + 1) == array_lenght:
@@ -117,7 +119,7 @@ def get_source_files(s3_source_client, s3_source_resource, s3_coords):
     # Check that source is not empty
     source_count = count_s3_objects(source_paginator, s3_coords.bucket, s3_coords.key_prefix + '/')
     if source_count == 0:
-        print("s3 source is empty")
+        logging.error('No documents to process in the source s3 coordinates.')
         ray.shutdown()
     return get_keys_s3_objects_as_set(s3_source_resource, s3_coords.bucket, s3_coords.key_prefix)
 
@@ -128,9 +130,9 @@ def check_target_has_source_converted(coords, source_objects_list, s3_source_pre
 
     converted_prefix = coords.key_prefix + "/json/"
     target_count = count_s3_objects(target_paginator, coords.bucket, converted_prefix)
-    print('Target contains json objects: ',target_count)
+    logging.debug('Target contains json objects: {}'.format(target_count))
     if target_count != 0:
-        print('Target contains objects, checking content...')
+        logging.debug('Target contains objects, checking content...')
 
         # Collect target keys for iterative conversion
         existing_target_objects = get_keys_s3_objects_as_set(s3_target_resource, coords.bucket, converted_prefix)
@@ -138,15 +140,15 @@ def check_target_has_source_converted(coords, source_objects_list, s3_source_pre
         # Filter-out objects that are already processed
         target_short_key_list = strip_prefix_postfix(existing_target_objects, prefix=converted_prefix, extension='.json')
         filtered_source_keys = []
-        print("List of source keys:")
+        logging.debug('List of source keys:')
         for key in source_objects_list:
-            print(key)
+            logging.debug('Object key: {}'.format(key))
             clean_key = key.replace('.pdf', '').replace(s3_source_prefix + '/', '')
             if clean_key not in target_short_key_list:
                 filtered_source_keys.append(key)
         
-        print('Total keys: ', len(source_objects_list))
-        print('Filtered keys to process: ', len(filtered_source_keys))
+        logging.debug('Total keys: {}'.format(len(source_objects_list)))
+        logging.debug('Filtered keys to process: {}'.format(len(filtered_source_keys)))
     else:
         filtered_source_keys = source_objects_list
 
@@ -176,7 +178,7 @@ def put_object(
     try:
         client.put_object(Body=file, Bucket=bucket, Key=object_key, **kwargs)
     except ClientError as e:
-        print(e)
+        logging.error('Put s3 object failed: {}'.format(e))
         return False
     return True
 
@@ -206,7 +208,7 @@ class DoclingConvert:
             if conv_res.status == ConversionStatus.SUCCESS:
                 s3_target_prefix = self.coords.key_prefix
                 doc_filename = conv_res.input.file.stem
-                print(f"Converted {doc_filename} now saving results")
+                logging.debug(f"Converted {doc_filename} now saving results")
                 # Export Docling document format to JSON:
                 target_key = f"{s3_target_prefix}/json/{doc_filename}.json"
                 data = json.dumps(conv_res.document.export_to_dict())

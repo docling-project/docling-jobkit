@@ -34,6 +34,8 @@ dependencies = [
     "docling~=2.23",
     "typer~=0.12",
     "boto3~=1.35.36",
+    "kfp~=2.8.0",
+    "kfp[kubernetes]"
 ]
 
 [project.optional-dependencies]

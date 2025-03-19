@@ -9,7 +9,6 @@ from typing import Dict, List, Optional
     packages_to_install=["docling==2.24.0", "git+https://github.com/docling-project/docling-jobkit@vku/s3_commons"], 
     # pip_index_urls=["https://download.pytorch.org/whl/cpu", "https://pypi.org/simple"],
     base_image="python:3.11",
-    #base_image="quay.io/bbrowning/docling-kfp:v2.25.0",
     )
 def convert_payload(
         options: Dict = {
@@ -36,8 +35,7 @@ def convert_payload(
             "s3_target_prefix": "my-docs",
             "s3_target_ssl": True
         },
-        pre_signed_urls: List = [["https://arxiv.org/pdf/2408.09869".encode()]],
-        batch_index: int = 0
+        pre_signed_urls: List[str] = []
     ) -> List:
 
     import os
@@ -61,6 +59,8 @@ def convert_payload(
 
     logging.basicConfig(level=logging.INFO)
 
+    logging.info('Type of pre_signed_urls: {}'.format(type(pre_signed_urls)))
+
     s3_coords = S3Coordinates(
         endpoint = target["s3_target_endpoint"],
         verify_ssl = target["s3_target_ssl"],
@@ -70,19 +70,11 @@ def convert_payload(
         key_prefix = target["s3_target_prefix"]
     )
     
-    easyocr_path = Path("/models/.EasyOCR")
+    easyocr_path = Path("/models/EasyOCR")
     os.environ['MODULE_PATH'] = str(easyocr_path)
     os.environ['EASYOCR_MODULE_PATH'] = str(easyocr_path)
-    # logging.info('The MODULE_PATH value: {}'.format(os.getenv('MODULE_PATH')))
-    # logging.info('The EASYOCR_MODULE_PATH value: {}'.format(os.getenv('EASYOCR_MODULE_PATH')))
 
     models_path = download_models(output_dir=Path("/models"))
-    # logging.info('The models path: {}'.format(models_path))
-
-    # logging.info('current options: {}'.format(options))
-
-    # payload_json = json.loads(payload)
-    # options = payload_json["options"]
 
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = options["do_ocr"]
@@ -102,64 +94,62 @@ def convert_payload(
     return results
 
 
-# @dsl.component(
-#     packages_to_install=["pydantic", "boto3~=1.35.36"],
-#     base_image="python:3.11",
-#     )
-# def compute_batches(
-#         source: Dict = {
-#             "s3_source_endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
-#             "s3_source_access_key": "123454321",
-#             "s3_source_secret_key": "secretsecret",
-#             "s3_source_bucket": "source-bucket",
-#             "s3_source_prefix": "my-docs",
-#             "s3_source_ssl": True
-#         },
-#         target: Dict = {
-#             "s3_target_endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
-#             "s3_target_access_key": "123454321",
-#             "s3_target_secret_key": "secretsecret",
-#             "s3_target_bucket": "target-bucket",
-#             "s3_target_prefix": "my-docs",
-#             "s3_target_ssl": True
-#         }
-#     ) -> List:
+@dsl.component(
+    packages_to_install=["pydantic", "boto3~=1.35.36", "git+https://github.com/docling-project/docling-jobkit@vku/s3_commons"],
+    base_image="python:3.11",
+    )
+def compute_batches(
+        source: Dict = {
+            "s3_source_endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
+            "s3_source_access_key": "123454321",
+            "s3_source_secret_key": "secretsecret",
+            "s3_source_bucket": "source-bucket",
+            "s3_source_prefix": "my-docs",
+            "s3_source_ssl": True
+        },
+        target: Dict = {
+            "s3_target_endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
+            "s3_target_access_key": "123454321",
+            "s3_target_secret_key": "secretsecret",
+            "s3_target_bucket": "target-bucket",
+            "s3_target_prefix": "my-docs",
+            "s3_target_ssl": True
+        },
+        batch_size: int = 10
+    ) -> List[List[str]]:
 
-#     from botocore.client import BaseClient
-#     from boto3.resources.base import ServiceResource
-#     from boto3.session import Session
-#     from botocore.config import Config
-#     from botocore.exceptions import ClientError
-#     from botocore.paginate import Paginator
+    from docling_jobkit.connectors.s3_helper import (
+        S3Coordinates,
+        get_s3_connection,
+        get_source_files,
+        generate_presigns_url,
+        check_target_has_source_converted
+    )
+    s3_target_coords = S3Coordinates(
+        endpoint = target["s3_target_endpoint"],
+        verify_ssl = target["s3_target_ssl"],
+        access_key = target["s3_target_access_key"],
+        secret_key = target["s3_target_secret_key"],
+        bucket = target["s3_target_bucket"],
+        key_prefix = target["s3_target_prefix"]
+    )
 
-#     session = Session()
+    s3_coords_source = S3Coordinates(
+        endpoint = source["s3_source_endpoint"],
+        verify_ssl = source["s3_source_ssl"],
+        access_key = source["s3_source_access_key"],
+        secret_key = source["s3_source_secret_key"],
+        bucket = source["s3_source_bucket"],
+        key_prefix = source["s3_source_prefix"]
+    )
 
-#     config = Config(
-#         connect_timeout=30, retries={"max_attempts": 1}, signature_version="s3v4"
-#     )
-#     scheme = "https" if verify_ssl else "http"
-#     path="/"
-#     s3_endpoint = urlunsplit((scheme, endpoint, path, "", ""))
+    s3_source_client, s3_source_resource = get_s3_connection(s3_coords_source)
+    source_objects_list = get_source_files(s3_source_client, s3_source_resource, s3_coords_source)
+    filtered_source_keys = check_target_has_source_converted(s3_target_coords, source_objects_list, s3_coords_source.key_prefix)
+    presigned_urls = generate_presigns_url(s3_source_client, filtered_source_keys, s3_coords_source.bucket, batch_size=batch_size, expiration_time=36000)
+    
+    return presigned_urls
 
-#     client: BaseClient = session.client(
-#         "s3",
-#         endpoint_url=s3_endpoint,
-#         verify=verify_ssl,
-#         aws_access_key_id=access_key,
-#         aws_secret_access_key=secret_key,
-#         config=config,
-#     )
-
-#     resource: ServiceResource = session.resource(
-#         "s3",
-#         endpoint_url=s3_endpoint,
-#         verify=verify_ssl,
-#         aws_access_key_id=access_key,
-#         aws_secret_access_key=secret_key,
-#         config=config,
-#     )
-#     return []
-#     #return client, resource
 
 @dsl.pipeline
 def docling_hello(
@@ -179,15 +169,14 @@ def docling_hello(
             "include_images": True,
             "images_scale": 2
         },
-        source: Dict = {},
-        # #  = {
-        # #     "s3_source_endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
-        # #     "s3_source_access_key": "123454321",
-        # #     "s3_source_secret_key": "secretsecret",
-        # #     "s3_source_bucket": "source-bucket",
-        # #     "s3_source_prefix": "my-docs",
-        # #     "s3_source_ssl": True
-        # # },
+        source: Dict = {
+            "s3_source_endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
+            "s3_source_access_key": "123454321",
+            "s3_source_secret_key": "secretsecret",
+            "s3_source_bucket": "source-bucket",
+            "s3_source_prefix": "my-docs",
+            "s3_source_ssl": True
+        },
         target: Dict = {
             "s3_target_endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
             "s3_target_access_key": "123454321",
@@ -195,57 +184,36 @@ def docling_hello(
             "s3_target_bucket": "target-bucket",
             "s3_target_prefix": "my-docs",
             "s3_target_ssl": True
-        }
-    ) -> List:
+        },
+        batch_size: int = 20
+    ):
 
-    import json
+    import logging
 
-    conv_opt = {
-            "from_formats": ["docx","pptx","html","image","pdf","asciidoc","md","xlsx","xml_uspto","xml_jats","json_docling"],
-            "to_formats": ["md"],
-            "image_export_mode": "placeholder",
-            "do_ocr": True,
-            "force_ocr": False,
-            "ocr_engine": "easyocr",
-            "ocr_lang": [],
-            "pdf_backend": "dlparse_v2",
-            "table_mode": "accurate",
-            "abort_on_error": False,
-            "return_as_file": False,
-            "do_table_structure": True,
-            "include_images": True,
-            "images_scale": 2
-        }
+    logging.basicConfig(level=logging.INFO)
 
-    # sample = {
-    #     "options": convertion_options,
-    #     "http_sources": [{"url": "https://arxiv.org/pdf/2408.09869"}]
-    #     #"http_sources": [{"url": "https://www.wrd.org/files/a995c8e28/Regional+Groundwater+Monitoring+Report+2013-2014.pdf"}]
-    # }
+    batches = compute_batches(source=source, target=target, batch_size=5)
+    # disable caching on batches as cached pre-signed urls might have already expired
+    batches.set_caching_options(False)
 
-    # payload_str = str(sample)
+    results = []
+    with dsl.ParallelFor(
+        batches.output,
+        parallelism=3
+    ) as subbatch:
+        converter = convert_payload(options=convertion_options, target=target, pre_signed_urls=subbatch)
+        kubernetes.mount_pvc(
+            converter,
+            pvc_name="docling-pipelines-models-cache",
+            mount_path='/models',
+        )
+        converter.set_memory_request("1G")
+        converter.set_memory_limit("5G")
+        converter.set_cpu_request("200m")
+        converter.set_cpu_limit("1")
 
+        results.append(converter.output)
 
-    converter = convert_payload(options=convertion_options, target=target, pre_signed_urls=[["https://arxiv.org/pdf/2408.09869".encode()]], batch_index=0)
-    kubernetes.mount_pvc(
-        converter,
-        pvc_name="docling-pipelines-models-cache",
-        mount_path='/models',
-    )
-    # kubernetes.add_ephemeral_volume(
-    #     converter,
-    #     volume_name="docling-models-pvc",
-    #     mount_path="/models",
-    #     access_modes=['ReadWriteOnce'],
-    #     size='5Gi',
-    # )
-    converter.set_memory_request("1G")
-    converter.set_memory_limit("5G")
-    converter.set_cpu_request("200m")
-    converter.set_cpu_limit("1")
-
-
-    return converter.output
 
 from kfp import compiler
 
