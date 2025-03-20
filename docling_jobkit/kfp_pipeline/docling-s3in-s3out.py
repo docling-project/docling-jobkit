@@ -5,24 +5,20 @@ from typing import Dict, List, Optional
 
 
 @dsl.component(
-    packages_to_install=["docling==2.26.0"],
+    packages_to_install=["docling==2.28.0"],
     base_image="python:3.11",
 )
 def load_models() -> str:
-    import os
+    
     from pathlib import Path
     from docling.utils.model_downloader import download_models
-
-    easyocr_path = Path("/models/EasyOcr")
-    os.environ['MODULE_PATH'] = str(easyocr_path)
-    os.environ['EASYOCR_MODULE_PATH'] = str(easyocr_path)
 
     models_path = download_models(output_dir=Path("/models")).absolute().as_posix()
 
     return models_path
 
 @dsl.component(
-    packages_to_install=["docling==2.26.0", "git+https://github.com/docling-project/docling-jobkit@vku/s3_commons"], 
+    packages_to_install=["docling==2.28.0", "git+https://github.com/docling-project/docling-jobkit@vku/s3_commons"], 
     # pip_index_urls=["https://download.pytorch.org/whl/cpu", "https://pypi.org/simple"],
     base_image="python:3.11",
     )
@@ -43,6 +39,7 @@ def convert_payload(
     from docling.datamodel.base_models import ConversionStatus, InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
     from docling.datamodel.document import ConversionResult
+    from docling.models.factories import get_ocr_factory
     from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline
     from urllib.parse import urlunsplit, urlparse
     from docling_jobkit.connectors.s3_helper import (
@@ -64,10 +61,14 @@ def convert_payload(
         key_prefix = target["s3_target_prefix"]
     )
     
+    easyocr_path = Path("/models/EasyOcr")
+    os.environ['MODULE_PATH'] = str(easyocr_path)
+    os.environ['EASYOCR_MODULE_PATH'] = str(easyocr_path)
 
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = options["do_ocr"]
-    pipeline_options.ocr_options.kind = options["ocr_engine"]
+    ocr_factory = get_ocr_factory()
+    pipeline_options.ocr_options = ocr_factory.create_options(kind=options["ocr_engine"])
     pipeline_options.do_table_structure = options["do_table_structure"]
     pipeline_options.table_structure_options.mode = TableFormerMode(options["table_mode"])
     pipeline_options.generate_page_images = options["include_images"]

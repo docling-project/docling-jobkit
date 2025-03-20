@@ -2,7 +2,7 @@
 # Name: docling-s3in-s3out
 # Inputs:
 #    batch_size: int [Default: 20.0]
-#    convertion_options: dict [Default: {'force_ocr': False, 'to_formats': ['md'], 'include_images': True, 'return_as_file': False, 'abort_on_error': False, 'ocr_lang': [], 'ocr_engine': 'easyocr', 'table_mode': 'accurate', 'images_scale': 2.0, 'image_export_mode': 'placeholder', 'do_ocr': True, 'from_formats': ['docx', 'pptx', 'html', 'image', 'pdf', 'asciidoc', 'md', 'xlsx', 'xml_uspto', 'xml_jats', 'json_docling'], 'pdf_backend': 'dlparse_v2', 'do_table_structure': True}]
+#    convertion_options: dict [Default: {'force_ocr': False, 'do_code_enrichment': False, 'do_formula_enrichment': False, 'do_picture_classification': False, 'to_formats': ['md', 'json', 'html', 'text', 'doctags'], 'return_as_file': False, 'include_images': True, 'abort_on_error': False, 'ocr_lang': [], 'do_picture_description': False, 'ocr_engine': 'easyocr', 'table_mode': 'accurate', 'images_scale': 2.0, 'image_export_mode': 'placeholder', 'generate_picture_images': False, 'do_ocr': True, 'from_formats': ['docx', 'pptx', 'html', 'image', 'pdf', 'asciidoc', 'md', 'xlsx', 'xml_uspto', 'xml_jats', 'json_docling'], 'pdf_backend': 'dlparse_v2', 'do_table_structure': True}]
 #    source: dict [Default: {'s3_source_prefix': 'my-docs', 's3_source_ssl': True, 's3_source_access_key': '123454321', 's3_source_bucket': 'source-bucket', 's3_source_secret_key': 'secretsecret', 's3_source_endpoint': 's3.eu-de.cloud-object-storage.appdomain.cloud'}]
 #    target: dict [Default: {'s3_target_access_key': '123454321', 's3_target_endpoint': 's3.eu-de.cloud-object-storage.appdomain.cloud', 's3_target_prefix': 'my-docs', 's3_target_bucket': 'target-bucket', 's3_target_secret_key': 'secretsecret', 's3_target_ssl': True}]
 components:
@@ -42,6 +42,8 @@ components:
     executorLabel: exec-convert-payload
     inputDefinitions:
       parameters:
+        cache_path:
+          parameterType: STRING
         options:
           parameterType: STRUCT
         pre_signed_urls:
@@ -62,6 +64,8 @@ components:
             name: comp-convert-payload
           inputs:
             parameters:
+              cache_path:
+                componentInputParameter: pipelinechannel--load-models-Output
               options:
                 componentInputParameter: pipelinechannel--convertion_options
               pre_signed_urls:
@@ -78,8 +82,16 @@ components:
           parameterType: LIST
         pipelinechannel--convertion_options:
           parameterType: STRUCT
+        pipelinechannel--load-models-Output:
+          parameterType: STRING
         pipelinechannel--target:
           parameterType: STRUCT
+  comp-load-models:
+    executorLabel: exec-load-models
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
 deploymentSpec:
   executors:
     exec-compute-batches:
@@ -155,7 +167,7 @@ deploymentSpec:
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.8.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
-          \  python3 -m pip install --quiet --no-warn-script-location 'docling==2.24.0'\
+          \  python3 -m pip install --quiet --no-warn-script-location 'docling==2.28.0'\
           \ 'git+https://github.com/docling-project/docling-jobkit@vku/s3_commons'\
           \ && \"$0\" \"$@\"\n"
         - sh
@@ -170,42 +182,78 @@ deploymentSpec:
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef convert_payload(\n        options: Dict,\n        target: Dict,\n\
-          \        pre_signed_urls: List[str]\n    ) -> List:\n\n    import os\n \
-          \   import logging\n    import json\n    from typing import Dict, List\n\
-          \    from pathlib import Path\n    from docling.backend.docling_parse_backend\
+          \        pre_signed_urls: List[str],\n        cache_path: str,\n    ) ->\
+          \ List:\n\n    import os\n    import logging\n    import json\n    from\
+          \ typing import Dict, List\n    from pathlib import Path\n    from docling.backend.docling_parse_backend\
           \ import DoclingParseDocumentBackend\n    from docling.document_converter\
           \ import DocumentConverter, PdfFormatOption\n    from docling.datamodel.base_models\
           \ import ConversionStatus, InputFormat\n    from docling.datamodel.pipeline_options\
           \ import PdfPipelineOptions, TableFormerMode\n    from docling.datamodel.document\
-          \ import ConversionResult\n    from docling.pipeline.standard_pdf_pipeline\
-          \ import StandardPdfPipeline\n    from docling.utils.model_downloader import\
-          \ download_models\n    from urllib.parse import urlunsplit, urlparse\n \
-          \   from docling_jobkit.connectors.s3_helper import (\n        S3Coordinates,\n\
-          \        DoclingConvert\n    )\n\n\n    logging.basicConfig(level=logging.INFO)\n\
-          \n    logging.info('Type of pre_signed_urls: {}'.format(type(pre_signed_urls)))\n\
-          \n    s3_coords = S3Coordinates(\n        endpoint = target[\"s3_target_endpoint\"\
-          ],\n        verify_ssl = target[\"s3_target_ssl\"],\n        access_key\
-          \ = target[\"s3_target_access_key\"],\n        secret_key = target[\"s3_target_secret_key\"\
+          \ import ConversionResult\n    from docling.models.factories import get_ocr_factory\n\
+          \    from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline\n\
+          \    from urllib.parse import urlunsplit, urlparse\n    from docling_jobkit.connectors.s3_helper\
+          \ import (\n        S3Coordinates,\n        DoclingConvert\n    )\n\n\n\
+          \    logging.basicConfig(level=logging.INFO)\n\n    logging.info('Type of\
+          \ pre_signed_urls: {}'.format(type(pre_signed_urls)))\n\n    s3_coords =\
+          \ S3Coordinates(\n        endpoint = target[\"s3_target_endpoint\"],\n \
+          \       verify_ssl = target[\"s3_target_ssl\"],\n        access_key = target[\"\
+          s3_target_access_key\"],\n        secret_key = target[\"s3_target_secret_key\"\
           ],\n        bucket = target[\"s3_target_bucket\"],\n        key_prefix =\
           \ target[\"s3_target_prefix\"]\n    )\n\n    easyocr_path = Path(\"/models/EasyOcr\"\
           )\n    os.environ['MODULE_PATH'] = str(easyocr_path)\n    os.environ['EASYOCR_MODULE_PATH']\
-          \ = str(easyocr_path)\n\n    models_path = download_models(output_dir=Path(\"\
-          /models\"))\n\n    pipeline_options = PdfPipelineOptions()\n    pipeline_options.do_ocr\
-          \ = options[\"do_ocr\"]\n    pipeline_options.ocr_options.kind = options[\"\
-          ocr_engine\"]\n    pipeline_options.do_table_structure = options[\"do_table_structure\"\
+          \ = str(easyocr_path)\n\n    pipeline_options = PdfPipelineOptions()\n \
+          \   pipeline_options.do_ocr = options[\"do_ocr\"]\n    ocr_factory = get_ocr_factory()\n\
+          \    pipeline_options.ocr_options = ocr_factory.create_options(kind=options[\"\
+          ocr_engine\"])\n    pipeline_options.do_table_structure = options[\"do_table_structure\"\
           ]\n    pipeline_options.table_structure_options.mode = TableFormerMode(options[\"\
           table_mode\"])\n    pipeline_options.generate_page_images = options[\"include_images\"\
-          ]\n    pipeline_options.artifacts_path = models_path\n\n    converter =\
-          \ DoclingConvert(s3_coords, pipeline_options)\n\n    results = []\n    for\
-          \ item in converter.convert_documents(pre_signed_urls):\n        results.append(item)\n\
-          \        logging.info('Convertion result: {}'.format(item))\n\n    return\
-          \ results\n\n"
+          ]\n    pipeline_options.do_code_enrichment = options[\"do_code_enrichment\"\
+          ]\n    pipeline_options.do_formula_enrichment = options[\"do_formula_enrichment\"\
+          ]\n    pipeline_options.do_picture_classification = options[\"do_picture_classification\"\
+          ]\n    pipeline_options.do_picture_description = options[\"do_picture_description\"\
+          ]\n    pipeline_options.generate_picture_images = options[\"generate_picture_images\"\
+          ]\n    pipeline_options.artifacts_path = cache_path\n\n    converter = DoclingConvert(s3_coords,\
+          \ pipeline_options)\n\n    results = []\n    for item in converter.convert_documents(pre_signed_urls):\n\
+          \        results.append(item)\n        logging.info('Convertion result:\
+          \ {}'.format(item))\n\n    return results\n\n"
         image: python:3.11
         resources:
           cpuLimit: 1.0
           cpuRequest: 0.2
           memoryLimit: 5.0
           memoryRequest: 1.0
+    exec-load-models:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - load_models
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.8.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'docling==2.28.0'\
+          \ && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef load_models() -> str:\n\n    from pathlib import Path\n    from\
+          \ docling.utils.model_downloader import download_models\n\n    models_path\
+          \ = download_models(output_dir=Path(\"/models\")).absolute().as_posix()\n\
+          \n    return models_path\n\n"
+        image: python:3.11
 pipelineInfo:
   name: docling-s3in-s3out
 root:
@@ -231,6 +279,7 @@ root:
           name: comp-for-loop-1
         dependentTasks:
         - compute-batches
+        - load-models
         inputs:
           parameters:
             pipelinechannel--compute-batches-Output:
@@ -239,6 +288,10 @@ root:
                 producerTask: compute-batches
             pipelinechannel--convertion_options:
               componentInputParameter: convertion_options
+            pipelinechannel--load-models-Output:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: load-models
             pipelinechannel--target:
               componentInputParameter: target
         iteratorPolicy:
@@ -249,6 +302,13 @@ root:
             inputParameter: pipelinechannel--compute-batches-Output
         taskInfo:
           name: for-loop-1
+      load-models:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-load-models
+        taskInfo:
+          name: load-models
   inputDefinitions:
     parameters:
       batch_size:
@@ -258,7 +318,11 @@ root:
       convertion_options:
         defaultValue:
           abort_on_error: false
+          do_code_enrichment: false
+          do_formula_enrichment: false
           do_ocr: true
+          do_picture_classification: false
+          do_picture_description: false
           do_table_structure: true
           force_ocr: false
           from_formats:
@@ -273,6 +337,7 @@ root:
           - xml_uspto
           - xml_jats
           - json_docling
+          generate_picture_images: false
           image_export_mode: placeholder
           images_scale: 2.0
           include_images: true
@@ -283,6 +348,10 @@ root:
           table_mode: accurate
           to_formats:
           - md
+          - json
+          - html
+          - text
+          - doctags
         isOptional: true
         parameterType: STRUCT
       source:
@@ -313,6 +382,10 @@ platforms:
     deploymentSpec:
       executors:
         exec-convert-payload:
+          pvcMount:
+          - constant: docling-pipelines-models-cache
+            mountPath: /models
+        exec-load-models:
           pvcMount:
           - constant: docling-pipelines-models-cache
             mountPath: /models
