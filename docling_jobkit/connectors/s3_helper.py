@@ -12,11 +12,13 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from botocore.paginate import Paginator
 from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
+from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.base_models import ConversionStatus, InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 from urllib.parse import urlunsplit, urlparse
 from docling.datamodel.document import ConversionResult
+from docling.exceptions import ConversionError
 
 logging.basicConfig(level=logging.INFO)
 
@@ -192,7 +194,7 @@ class DoclingConvert:
             format_options={
                 InputFormat.PDF: PdfFormatOption(
                     pipeline_options=pipeline_options,
-                    backend=DoclingParseDocumentBackend,
+                    backend=DoclingParseV4DocumentBackend,
                 )
             }
         )
@@ -202,9 +204,13 @@ class DoclingConvert:
         for url in presigned_urls:
             parsed = urlparse(url)
             root, ext = os.path.splitext(parsed.path)
+            # This will skip http links that don't have file extension as part of url, arXiv have plenty of docs like this
             if ext[1:] not in self.allowed_formats:
                 continue
-            conv_res: ConversionResult = self.converter.convert(url)
+            try:
+                conv_res: ConversionResult = self.converter.convert(url)
+            except ConversionError as e:
+                logging.error('Conversion exception: {}'.format(e))
             if conv_res.status == ConversionStatus.SUCCESS:
                 s3_target_prefix = self.coords.key_prefix
                 doc_filename = conv_res.input.file.stem
