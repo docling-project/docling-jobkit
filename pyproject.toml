@@ -31,7 +31,7 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "ray~=2.30",
-    "docling~=2.23",
+    "docling~=2.28",
     "typer~=0.12",
     "boto3~=1.35.36",
     "kfp~=2.8.0",
