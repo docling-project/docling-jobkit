@@ -1,10 +1,13 @@
 # PIPELINE DEFINITION
 # Name: docling-s3in-s3out
 # Inputs:
+#    accelerator_settings: dict [Default: {'accelerator_type': 'nvidia.com/gpu', 'use_accelerator': False, 'accelerator_limit': 1.0}]
 #    batch_size: int [Default: 20.0]
 #    convertion_options: dict [Default: {'force_ocr': False, 'do_code_enrichment': False, 'do_formula_enrichment': False, 'do_picture_classification': False, 'to_formats': ['md', 'json', 'html', 'text', 'doctags'], 'return_as_file': False, 'include_images': True, 'abort_on_error': False, 'ocr_lang': [], 'do_picture_description': False, 'ocr_engine': 'easyocr', 'table_mode': 'accurate', 'images_scale': 2.0, 'image_export_mode': 'placeholder', 'generate_picture_images': False, 'do_ocr': True, 'from_formats': ['docx', 'pptx', 'html', 'image', 'pdf', 'asciidoc', 'md', 'xlsx', 'xml_uspto', 'xml_jats', 'json_docling'], 'pdf_backend': 'dlparse_v2', 'do_table_structure': True}]
+#    node_selector: dict [Default: {'add_node_selector': False, 'labels': [{'label_value': 'NVIDIA-A10', 'label_key': 'nvidia.com/gpu.product'}]}]
 #    source: dict [Default: {'s3_source_prefix': 'my-docs', 's3_source_ssl': True, 's3_source_access_key': '123454321', 's3_source_bucket': 'source-bucket', 's3_source_secret_key': 'secretsecret', 's3_source_endpoint': 's3.eu-de.cloud-object-storage.appdomain.cloud'}]
 #    target: dict [Default: {'s3_target_access_key': '123454321', 's3_target_endpoint': 's3.eu-de.cloud-object-storage.appdomain.cloud', 's3_target_prefix': 'my-docs', 's3_target_bucket': 'target-bucket', 's3_target_secret_key': 'secretsecret', 's3_target_ssl': True}]
+#    tolerations: dict [Default: {'add_tolerations': False, 'tolerations': [{'key': 'key', 'value': 'gpuCompute', 'operator': 'Equal', 'effect': 'NoSchedule'}]}]
 components:
   comp-compute-batches:
     executorLabel: exec-compute-batches
@@ -15,24 +18,8 @@ components:
           isOptional: true
           parameterType: NUMBER_INTEGER
         source:
-          defaultValue:
-            s3_source_access_key: '123454321'
-            s3_source_bucket: source-bucket
-            s3_source_endpoint: s3.eu-de.cloud-object-storage.appdomain.cloud
-            s3_source_prefix: my-docs
-            s3_source_secret_key: secretsecret
-            s3_source_ssl: true
-          isOptional: true
           parameterType: STRUCT
         target:
-          defaultValue:
-            s3_target_access_key: '123454321'
-            s3_target_bucket: target-bucket
-            s3_target_endpoint: s3.eu-de.cloud-object-storage.appdomain.cloud
-            s3_target_prefix: my-docs
-            s3_target_secret_key: secretsecret
-            s3_target_ssl: true
-          isOptional: true
           parameterType: STRUCT
     outputDefinitions:
       parameters:
@@ -122,36 +109,28 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef compute_batches(\n        source: Dict = {\n            \"s3_source_endpoint\"\
-          : \"s3.eu-de.cloud-object-storage.appdomain.cloud\",\n            \"s3_source_access_key\"\
-          : \"123454321\",\n            \"s3_source_secret_key\": \"secretsecret\"\
-          ,\n            \"s3_source_bucket\": \"source-bucket\",\n            \"\
-          s3_source_prefix\": \"my-docs\",\n            \"s3_source_ssl\": True\n\
-          \        },\n        target: Dict = {\n            \"s3_target_endpoint\"\
-          : \"s3.eu-de.cloud-object-storage.appdomain.cloud\",\n            \"s3_target_access_key\"\
-          : \"123454321\",\n            \"s3_target_secret_key\": \"secretsecret\"\
-          ,\n            \"s3_target_bucket\": \"target-bucket\",\n            \"\
-          s3_target_prefix\": \"my-docs\",\n            \"s3_target_ssl\": True\n\
-          \        },\n        batch_size: int = 10\n    ) -> List[List[str]]:\n\n\
-          \    from docling_jobkit.connectors.s3_helper import (\n        S3Coordinates,\n\
-          \        get_s3_connection,\n        get_source_files,\n        generate_presigns_url,\n\
-          \        check_target_has_source_converted\n    )\n    s3_target_coords\
-          \ = S3Coordinates(\n        endpoint = target[\"s3_target_endpoint\"],\n\
-          \        verify_ssl = target[\"s3_target_ssl\"],\n        access_key = target[\"\
-          s3_target_access_key\"],\n        secret_key = target[\"s3_target_secret_key\"\
-          ],\n        bucket = target[\"s3_target_bucket\"],\n        key_prefix =\
-          \ target[\"s3_target_prefix\"]\n    )\n\n    s3_coords_source = S3Coordinates(\n\
-          \        endpoint = source[\"s3_source_endpoint\"],\n        verify_ssl\
-          \ = source[\"s3_source_ssl\"],\n        access_key = source[\"s3_source_access_key\"\
-          ],\n        secret_key = source[\"s3_source_secret_key\"],\n        bucket\
-          \ = source[\"s3_source_bucket\"],\n        key_prefix = source[\"s3_source_prefix\"\
-          ]\n    )\n\n    s3_source_client, s3_source_resource = get_s3_connection(s3_coords_source)\n\
-          \    source_objects_list = get_source_files(s3_source_client, s3_source_resource,\
-          \ s3_coords_source)\n    filtered_source_keys = check_target_has_source_converted(s3_target_coords,\
-          \ source_objects_list, s3_coords_source.key_prefix)\n    presigned_urls\
-          \ = generate_presigns_url(s3_source_client, filtered_source_keys, s3_coords_source.bucket,\
-          \ batch_size=batch_size, expiration_time=36000)\n\n    return presigned_urls\n\
-          \n"
+          \ *\n\ndef compute_batches(\n    source: Dict,\n    target: Dict,\n    batch_size:\
+          \ int = 10,\n) -> List[List[str]]:\n    from docling_jobkit.connectors.s3_helper\
+          \ import (\n        S3Coordinates,\n        check_target_has_source_converted,\n\
+          \        generate_presigns_url,\n        get_s3_connection,\n        get_source_files,\n\
+          \    )\n\n    s3_target_coords = S3Coordinates(\n        endpoint=target[\"\
+          s3_target_endpoint\"],\n        verify_ssl=target[\"s3_target_ssl\"],\n\
+          \        access_key=target[\"s3_target_access_key\"],\n        secret_key=target[\"\
+          s3_target_secret_key\"],\n        bucket=target[\"s3_target_bucket\"],\n\
+          \        key_prefix=target[\"s3_target_prefix\"],\n    )\n\n    s3_coords_source\
+          \ = S3Coordinates(\n        endpoint=source[\"s3_source_endpoint\"],\n \
+          \       verify_ssl=source[\"s3_source_ssl\"],\n        access_key=source[\"\
+          s3_source_access_key\"],\n        secret_key=source[\"s3_source_secret_key\"\
+          ],\n        bucket=source[\"s3_source_bucket\"],\n        key_prefix=source[\"\
+          s3_source_prefix\"],\n    )\n\n    s3_source_client, s3_source_resource\
+          \ = get_s3_connection(s3_coords_source)\n    source_objects_list = get_source_files(\n\
+          \        s3_source_client, s3_source_resource, s3_coords_source\n    )\n\
+          \    filtered_source_keys = check_target_has_source_converted(\n       \
+          \ s3_target_coords, source_objects_list, s3_coords_source.key_prefix\n \
+          \   )\n    presigned_urls = generate_presigns_url(\n        s3_source_client,\n\
+          \        filtered_source_keys,\n        s3_coords_source.bucket,\n     \
+          \   batch_size=batch_size,\n        expiration_time=36000,\n    )\n\n  \
+          \  return presigned_urls\n\n"
         image: python:3.11
     exec-convert-payload:
       container:
@@ -181,46 +160,46 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef convert_payload(\n        options: Dict,\n        target: Dict,\n\
-          \        pre_signed_urls: List[str],\n        cache_path: str,\n    ) ->\
-          \ List:\n\n    import os\n    import logging\n    import json\n    from\
-          \ typing import Dict, List\n    from pathlib import Path\n    from docling.backend.docling_parse_backend\
-          \ import DoclingParseDocumentBackend\n    from docling.document_converter\
-          \ import DocumentConverter, PdfFormatOption\n    from docling.datamodel.base_models\
-          \ import ConversionStatus, InputFormat\n    from docling.datamodel.pipeline_options\
-          \ import PdfPipelineOptions, TableFormerMode\n    from docling.datamodel.document\
-          \ import ConversionResult\n    from docling.models.factories import get_ocr_factory\n\
-          \    from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline\n\
-          \    from urllib.parse import urlunsplit, urlparse\n    from docling_jobkit.connectors.s3_helper\
-          \ import (\n        S3Coordinates,\n        DoclingConvert\n    )\n\n\n\
-          \    logging.basicConfig(level=logging.INFO)\n\n    logging.info('Type of\
-          \ pre_signed_urls: {}'.format(type(pre_signed_urls)))\n\n    s3_coords =\
-          \ S3Coordinates(\n        endpoint = target[\"s3_target_endpoint\"],\n \
-          \       verify_ssl = target[\"s3_target_ssl\"],\n        access_key = target[\"\
-          s3_target_access_key\"],\n        secret_key = target[\"s3_target_secret_key\"\
-          ],\n        bucket = target[\"s3_target_bucket\"],\n        key_prefix =\
-          \ target[\"s3_target_prefix\"]\n    )\n\n    easyocr_path = Path(\"/models/EasyOcr\"\
-          )\n    os.environ['MODULE_PATH'] = str(easyocr_path)\n    os.environ['EASYOCR_MODULE_PATH']\
-          \ = str(easyocr_path)\n\n    pipeline_options = PdfPipelineOptions()\n \
-          \   pipeline_options.do_ocr = options[\"do_ocr\"]\n    ocr_factory = get_ocr_factory()\n\
-          \    pipeline_options.ocr_options = ocr_factory.create_options(kind=options[\"\
-          ocr_engine\"])\n    pipeline_options.do_table_structure = options[\"do_table_structure\"\
-          ]\n    pipeline_options.table_structure_options.mode = TableFormerMode(options[\"\
-          table_mode\"])\n    pipeline_options.generate_page_images = options[\"include_images\"\
-          ]\n    pipeline_options.do_code_enrichment = options[\"do_code_enrichment\"\
-          ]\n    pipeline_options.do_formula_enrichment = options[\"do_formula_enrichment\"\
-          ]\n    pipeline_options.do_picture_classification = options[\"do_picture_classification\"\
-          ]\n    pipeline_options.do_picture_description = options[\"do_picture_description\"\
-          ]\n    pipeline_options.generate_picture_images = options[\"generate_picture_images\"\
-          ]\n    pipeline_options.artifacts_path = cache_path\n\n    converter = DoclingConvert(s3_coords,\
-          \ pipeline_options)\n\n    results = []\n    for item in converter.convert_documents(pre_signed_urls):\n\
-          \        results.append(item)\n        logging.info('Convertion result:\
-          \ {}'.format(item))\n\n    return results\n\n"
+          \ *\n\ndef convert_payload(\n    options: Dict,\n    target: Dict,\n   \
+          \ pre_signed_urls: List[str],\n    cache_path: str,\n) -> List:\n    import\
+          \ logging\n    import os\n    from pathlib import Path\n\n    from docling.datamodel.pipeline_options\
+          \ import (\n        AcceleratorDevice,\n        AcceleratorOptions,\n  \
+          \      PdfPipelineOptions,\n        TableFormerMode,\n    )\n    from docling.models.factories\
+          \ import get_ocr_factory\n\n    from docling_jobkit.connectors.s3_helper\
+          \ import DoclingConvert, S3Coordinates\n\n    logging.basicConfig(level=logging.INFO)\n\
+          \n    logging.info(\"Type of pre_signed_urls: {}\".format(type(pre_signed_urls)))\n\
+          \n    s3_coords = S3Coordinates(\n        endpoint=target[\"s3_target_endpoint\"\
+          ],\n        verify_ssl=target[\"s3_target_ssl\"],\n        access_key=target[\"\
+          s3_target_access_key\"],\n        secret_key=target[\"s3_target_secret_key\"\
+          ],\n        bucket=target[\"s3_target_bucket\"],\n        key_prefix=target[\"\
+          s3_target_prefix\"],\n    )\n\n    easyocr_path = Path(\"/models/EasyOcr\"\
+          )\n    os.environ[\"MODULE_PATH\"] = str(easyocr_path)\n    os.environ[\"\
+          EASYOCR_MODULE_PATH\"] = str(easyocr_path)\n\n    pipeline_options = PdfPipelineOptions()\n\
+          \    pipeline_options.do_ocr = options[\"do_ocr\"]\n    ocr_factory = get_ocr_factory()\n\
+          \    pipeline_options.ocr_options = ocr_factory.create_options(\n      \
+          \  kind=options[\"ocr_engine\"]\n    )\n    pipeline_options.do_table_structure\
+          \ = options[\"do_table_structure\"]\n    pipeline_options.table_structure_options.mode\
+          \ = TableFormerMode(\n        options[\"table_mode\"]\n    )\n    pipeline_options.generate_page_images\
+          \ = options[\"include_images\"]\n    pipeline_options.do_code_enrichment\
+          \ = options[\"do_code_enrichment\"]\n    pipeline_options.do_formula_enrichment\
+          \ = options[\"do_formula_enrichment\"]\n    pipeline_options.do_picture_classification\
+          \ = options[\"do_picture_classification\"]\n    pipeline_options.do_picture_description\
+          \ = options[\"do_picture_description\"]\n    pipeline_options.generate_picture_images\
+          \ = options[\"generate_picture_images\"]\n    pipeline_options.artifacts_path\
+          \ = cache_path\n\n    # pipeline_options.accelerator_options = AcceleratorOptions(\n\
+          \    #     num_threads=2, device=AcceleratorDevice.CUDA\n    # )\n\n   \
+          \ converter = DoclingConvert(s3_coords, pipeline_options)\n\n    results\
+          \ = []\n    for item in converter.convert_documents(pre_signed_urls):\n\
+          \        results.append(item)\n        logging.info(\"Convertion result:\
+          \ {}\".format(item))\n\n    return results\n\n"
         image: python:3.11
         resources:
+          accelerator:
+            count: '1'
+            type: nvidia.com/gpu
           cpuLimit: 1.0
           cpuRequest: 0.2
-          memoryLimit: 5.0
+          memoryLimit: 7.0
           memoryRequest: 1.0
     exec-load-models:
       container:
@@ -249,7 +228,7 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef load_models() -> str:\n\n    from pathlib import Path\n    from\
+          \ *\n\ndef load_models() -> str:\n    from pathlib import Path\n\n    from\
           \ docling.utils.model_downloader import download_models\n\n    models_path\
           \ = download_models(output_dir=Path(\"/models\")).absolute().as_posix()\n\
           \n    return models_path\n\n"
@@ -311,6 +290,13 @@ root:
           name: load-models
   inputDefinitions:
     parameters:
+      accelerator_settings:
+        defaultValue:
+          accelerator_limit: 1.0
+          accelerator_type: nvidia.com/gpu
+          use_accelerator: false
+        isOptional: true
+        parameterType: STRUCT
       batch_size:
         defaultValue: 20.0
         isOptional: true
@@ -354,6 +340,14 @@ root:
           - doctags
         isOptional: true
         parameterType: STRUCT
+      node_selector:
+        defaultValue:
+          add_node_selector: false
+          labels:
+          - label_key: nvidia.com/gpu.product
+            label_value: NVIDIA-A10
+        isOptional: true
+        parameterType: STRUCT
       source:
         defaultValue:
           s3_source_access_key: '123454321'
@@ -374,6 +368,16 @@ root:
           s3_target_ssl: true
         isOptional: true
         parameterType: STRUCT
+      tolerations:
+        defaultValue:
+          add_tolerations: false
+          tolerations:
+          - effect: NoSchedule
+            key: key
+            operator: Equal
+            value: gpuCompute
+        isOptional: true
+        parameterType: STRUCT
 schemaVersion: 2.1.0
 sdkVersion: kfp-2.8.0
 ---
@@ -382,9 +386,17 @@ platforms:
     deploymentSpec:
       executors:
         exec-convert-payload:
+          nodeSelector:
+            labels:
+              nvidia.com/gpu.product: NVIDIA-A10
           pvcMount:
           - constant: docling-pipelines-models-cache
             mountPath: /models
+          tolerations:
+          - effect: NoSchedule
+            key: key1
+            operator: Equal
+            value: mcad
         exec-load-models:
           pvcMount:
           - constant: docling-pipelines-models-cache

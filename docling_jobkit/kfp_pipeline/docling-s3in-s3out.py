@@ -35,7 +35,10 @@ def convert_payload(
     import os
     from pathlib import Path
 
-    from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
+    from docling.datamodel.pipeline_options import (
+        PdfPipelineOptions,
+        TableFormerMode,
+    )
     from docling.models.factories import get_ocr_factory
 
     from docling_jobkit.connectors.s3_helper import DoclingConvert, S3Coordinates
@@ -75,6 +78,10 @@ def convert_payload(
     pipeline_options.generate_picture_images = options["generate_picture_images"]
     pipeline_options.artifacts_path = cache_path
 
+    # pipeline_options.accelerator_options = AcceleratorOptions(
+    #     num_threads=2, device=AcceleratorDevice.CUDA
+    # )
+
     converter = DoclingConvert(s3_coords, pipeline_options)
 
     results = []
@@ -94,22 +101,8 @@ def convert_payload(
     base_image="python:3.11",
 )
 def compute_batches(
-    source: Dict = {
-        "s3_source_endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
-        "s3_source_access_key": "123454321",
-        "s3_source_secret_key": "secretsecret",
-        "s3_source_bucket": "source-bucket",
-        "s3_source_prefix": "my-docs",
-        "s3_source_ssl": True,
-    },
-    target: Dict = {
-        "s3_target_endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
-        "s3_target_access_key": "123454321",
-        "s3_target_secret_key": "secretsecret",
-        "s3_target_bucket": "target-bucket",
-        "s3_target_prefix": "my-docs",
-        "s3_target_ssl": True,
-    },
+    source: Dict,
+    target: Dict,
     batch_size: int = 10,
 ) -> List[List[str]]:
     from docling_jobkit.connectors.s3_helper import (
@@ -208,6 +201,28 @@ def docling_s3in_s3out(
         "s3_target_ssl": True,
     },
     batch_size: int = 20,
+    accelerator_settings: Dict = {
+        "use_accelerator": False,
+        "accelerator_type": "nvidia.com/gpu",
+        "accelerator_limit": 1,
+    },
+    node_selector: Dict = {
+        "add_node_selector": False,
+        "labels": [
+            {"label_key": "nvidia.com/gpu.product", "label_value": "NVIDIA-A10"}
+        ],
+    },
+    tolerations: Dict = {
+        "add_tolerations": False,
+        "tolerations": [
+            {
+                "key": "key",
+                "operator": "Equal",
+                "value": "gpuCompute",
+                "effect": "NoSchedule",
+            }
+        ],
+    },
 ):
     import logging
 
@@ -241,6 +256,29 @@ def docling_s3in_s3out(
         converter.set_memory_limit("7G")
         converter.set_cpu_request("200m")
         converter.set_cpu_limit("1")
+
+        use_accelerator = True
+        if use_accelerator:
+            converter.set_accelerator_type("nvidia.com/gpu")
+            converter.set_accelerator_limit("1")
+
+        add_node_selector = True
+        if add_node_selector:
+            kubernetes.add_node_selector(
+                task=converter,
+                label_key="nvidia.com/gpu.product",
+                label_value="NVIDIA-A10",
+            )
+
+        add_tolerations = True
+        if add_tolerations:
+            kubernetes.add_toleration(
+                task=converter,
+                key="key1",
+                operator="Equal",
+                value="mcad",
+                effect="NoSchedule",
+            )
 
         results.append(converter.output)
 
