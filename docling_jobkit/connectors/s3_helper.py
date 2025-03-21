@@ -1,26 +1,26 @@
-import time
-import os
 import json
-import yaml
 import logging
-from typing import Optional, List
-from pydantic import BaseModel
-from botocore.client import BaseClient
+import os
+from typing import Optional
+from urllib.parse import urlparse, urlunsplit
+
 from boto3.resources.base import ServiceResource
 from boto3.session import Session
+from botocore.client import BaseClient
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from botocore.paginate import Paginator
-from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
+from pydantic import BaseModel
+
 from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
-from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.base_models import ConversionStatus, InputFormat
-from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
-from urllib.parse import urlunsplit, urlparse
 from docling.datamodel.document import ConversionResult
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.exceptions import ConversionError
 
 logging.basicConfig(level=logging.INFO)
+
 
 class S3Coordinates(BaseModel):
     endpoint: str
@@ -38,7 +38,7 @@ def get_s3_connection(coords: S3Coordinates):
         connect_timeout=30, retries={"max_attempts": 1}, signature_version="s3v4"
     )
     scheme = "https" if coords.verify_ssl else "http"
-    path="/"
+    path = "/"
     endpoint = urlunsplit((scheme, coords.endpoint, path, "", ""))
 
     client: BaseClient = session.client(
@@ -64,15 +64,17 @@ def get_s3_connection(coords: S3Coordinates):
 
 def count_s3_objects(paginator: Paginator, bucket_name: str, prefix: str):
     response_iterator = paginator.paginate(Bucket=bucket_name, Prefix=prefix)
-    count_obj=0
+    count_obj = 0
     for page in response_iterator:
         if page.get("Contents"):
-            count_obj += sum(1 for _ in page['Contents'])
+            count_obj += sum(1 for _ in page["Contents"])
 
     return count_obj
 
 
-def get_keys_s3_objects_as_set(s3_resource: ServiceResource, bucket_name: str, prefix: str):
+def get_keys_s3_objects_as_set(
+    s3_resource: ServiceResource, bucket_name: str, prefix: str
+):
     bucket = s3_resource.Bucket(bucket_name)
     folder_objects = list(bucket.objects.filter(Prefix=prefix))
     files_on_s3 = set()
@@ -81,14 +83,20 @@ def get_keys_s3_objects_as_set(s3_resource: ServiceResource, bucket_name: str, p
     return files_on_s3
 
 
-def strip_prefix_postfix(source_set, prefix = '', extension = ''):
+def strip_prefix_postfix(source_set, prefix="", extension=""):
     output = set()
     for key in source_set:
-        output.add(key.replace(extension, '').replace(prefix, ''))
+        output.add(key.replace(extension, "").replace(prefix, ""))
     return output
 
 
-def generate_presigns_url(s3_client: BaseClient, source_keys: list, s3_source_bucket: str, batch_size: int = 10, expiration_time: int = 3600):
+def generate_presigns_url(
+    s3_client: BaseClient,
+    source_keys: list,
+    s3_source_bucket: str,
+    batch_size: int = 10,
+    expiration_time: int = 3600,
+):
     presigned_urls = []
     counter = 0
     sub_array = []
@@ -96,15 +104,12 @@ def generate_presigns_url(s3_client: BaseClient, source_keys: list, s3_source_bu
     for idx, key in enumerate(source_keys):
         try:
             url = s3_client.generate_presigned_url(
-                ClientMethod='get_object',
-                Params={
-                    'Bucket': s3_source_bucket,
-                    'Key': key
-                },
-                ExpiresIn=expiration_time
+                ClientMethod="get_object",
+                Params={"Bucket": s3_source_bucket, "Key": key},
+                ExpiresIn=expiration_time,
             )
         except ClientError as e:
-            logging.error('Generation of presigned url failed: {}'.format(e))
+            logging.error("Generation of presigned url failed: {}".format(e))
         sub_array.append(url)
         counter += 1
         if counter == batch_size or (idx + 1) == array_lenght:
@@ -116,41 +121,48 @@ def generate_presigns_url(s3_client: BaseClient, source_keys: list, s3_source_bu
 
 
 def get_source_files(s3_source_client, s3_source_resource, s3_coords):
-    source_paginator = s3_source_client.get_paginator('list_objects_v2')
+    source_paginator = s3_source_client.get_paginator("list_objects_v2")
 
     # Check that source is not empty
-    source_count = count_s3_objects(source_paginator, s3_coords.bucket, s3_coords.key_prefix + '/')
+    source_count = count_s3_objects(
+        source_paginator, s3_coords.bucket, s3_coords.key_prefix + "/"
+    )
     if source_count == 0:
-        logging.error('No documents to process in the source s3 coordinates.')
-        ray.shutdown()
-    return get_keys_s3_objects_as_set(s3_source_resource, s3_coords.bucket, s3_coords.key_prefix)
+        logging.error("No documents to process in the source s3 coordinates.")
+    return get_keys_s3_objects_as_set(
+        s3_source_resource, s3_coords.bucket, s3_coords.key_prefix
+    )
 
 
 def check_target_has_source_converted(coords, source_objects_list, s3_source_prefix):
     s3_target_client, s3_target_resource = get_s3_connection(coords)
-    target_paginator = s3_target_client.get_paginator('list_objects_v2')
+    target_paginator = s3_target_client.get_paginator("list_objects_v2")
 
     converted_prefix = coords.key_prefix + "/json/"
     target_count = count_s3_objects(target_paginator, coords.bucket, converted_prefix)
-    logging.debug('Target contains json objects: {}'.format(target_count))
+    logging.debug("Target contains json objects: {}".format(target_count))
     if target_count != 0:
-        logging.debug('Target contains objects, checking content...')
+        logging.debug("Target contains objects, checking content...")
 
         # Collect target keys for iterative conversion
-        existing_target_objects = get_keys_s3_objects_as_set(s3_target_resource, coords.bucket, converted_prefix)
+        existing_target_objects = get_keys_s3_objects_as_set(
+            s3_target_resource, coords.bucket, converted_prefix
+        )
 
         # Filter-out objects that are already processed
-        target_short_key_list = strip_prefix_postfix(existing_target_objects, prefix=converted_prefix, extension='.json')
+        target_short_key_list = strip_prefix_postfix(
+            existing_target_objects, prefix=converted_prefix, extension=".json"
+        )
         filtered_source_keys = []
-        logging.debug('List of source keys:')
+        logging.debug("List of source keys:")
         for key in source_objects_list:
-            logging.debug('Object key: {}'.format(key))
-            clean_key = key.replace('.pdf', '').replace(s3_source_prefix + '/', '')
+            logging.debug("Object key: {}".format(key))
+            clean_key = key.replace(".pdf", "").replace(s3_source_prefix + "/", "")
             if clean_key not in target_short_key_list:
                 filtered_source_keys.append(key)
-        
-        logging.debug('Total keys: {}'.format(len(source_objects_list)))
-        logging.debug('Filtered keys to process: {}'.format(len(filtered_source_keys)))
+
+        logging.debug("Total keys: {}".format(len(source_objects_list)))
+        logging.debug("Filtered keys to process: {}".format(len(filtered_source_keys)))
     else:
         filtered_source_keys = source_objects_list
 
@@ -163,7 +175,7 @@ def put_object(
     object_key: str,
     file: str,
     content_type: Optional[str] = None,
-)->bool:
+) -> bool:
     """Upload a file to an S3 bucket
 
     :param file: File to upload
@@ -180,14 +192,14 @@ def put_object(
     try:
         client.put_object(Body=file, Bucket=bucket, Key=object_key, **kwargs)
     except ClientError as e:
-        logging.error('Put s3 object failed: {}'.format(e))
+        logging.error("Put s3 object failed: {}".format(e))
         return False
     return True
 
 
 class DoclingConvert:
     def __init__(self, s3_coords: S3Coordinates, pipeline_options: PdfPipelineOptions):
-        self.coords = s3_coords 
+        self.coords = s3_coords
         self.s3_client, _ = get_s3_connection(s3_coords)
 
         self.converter = DocumentConverter(
@@ -210,7 +222,7 @@ class DoclingConvert:
             try:
                 conv_res: ConversionResult = self.converter.convert(url)
             except ConversionError as e:
-                logging.error('Conversion exception: {}'.format(e))
+                logging.error("Conversion exception: {}".format(e))
             if conv_res.status == ConversionStatus.SUCCESS:
                 s3_target_prefix = self.coords.key_prefix
                 doc_filename = conv_res.input.file.stem
@@ -253,7 +265,6 @@ class DoclingConvert:
                 yield f"{conv_res.input.file} - PARTIAL_SUCCESS"
             else:
                 yield f"{conv_res.input.file} - FAILURE"
-
 
     def upload_to_s3(self, file, target_key, content_type):
         return put_object(
