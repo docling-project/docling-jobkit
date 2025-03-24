@@ -1,6 +1,8 @@
+# ruff: noqa: E402
+
 from typing import Dict, List
 
-from kfp import dsl, kubernetes
+from kfp import dsl, kubernetes  # type: ignore
 
 
 @dsl.component(
@@ -34,8 +36,10 @@ def convert_payload(
     import logging
     import os
     from pathlib import Path
+    from typing import cast
 
     from docling.datamodel.pipeline_options import (
+        OcrOptions,
         PdfPipelineOptions,
         TableFormerMode,
     )
@@ -63,8 +67,8 @@ def convert_payload(
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = options["do_ocr"]
     ocr_factory = get_ocr_factory()
-    pipeline_options.ocr_options = ocr_factory.create_options(
-        kind=options["ocr_engine"]
+    pipeline_options.ocr_options = cast(
+        OcrOptions, ocr_factory.create_options(kind=options["ocr_engine"])
     )
     pipeline_options.do_table_structure = options["do_table_structure"]
     pipeline_options.table_structure_options.mode = TableFormerMode(
@@ -201,28 +205,28 @@ def docling_s3in_s3out(
         "s3_target_ssl": True,
     },
     batch_size: int = 20,
-    accelerator_settings: Dict = {
-        "use_accelerator": False,
-        "accelerator_type": "nvidia.com/gpu",
-        "accelerator_limit": 1,
-    },
-    node_selector: Dict = {
-        "add_node_selector": False,
-        "labels": [
-            {"label_key": "nvidia.com/gpu.product", "label_value": "NVIDIA-A10"}
-        ],
-    },
-    tolerations: Dict = {
-        "add_tolerations": False,
-        "tolerations": [
-            {
-                "key": "key",
-                "operator": "Equal",
-                "value": "gpuCompute",
-                "effect": "NoSchedule",
-            }
-        ],
-    },
+    # accelerator_settings: Dict = {
+    #     "use_accelerator": False,
+    #     "accelerator_type": "nvidia.com/gpu",
+    #     "accelerator_limit": 1,
+    # },
+    # node_selector: Dict = {
+    #     "add_node_selector": False,
+    #     "labels": [
+    #         {"label_key": "nvidia.com/gpu.product", "label_value": "NVIDIA-A10"}
+    #     ],
+    # },
+    # tolerations: Dict = {
+    #     "add_tolerations": False,
+    #     "tolerations": [
+    #         {
+    #             "key": "key",
+    #             "operator": "Equal",
+    #             "value": "gpuCompute",
+    #             "effect": "NoSchedule",
+    #         }
+    #     ],
+    # },
 ):
     import logging
 
@@ -257,28 +261,31 @@ def docling_s3in_s3out(
         converter.set_cpu_request("200m")
         converter.set_cpu_limit("1")
 
-        use_accelerator = True
-        if use_accelerator:
-            converter.set_accelerator_type("nvidia.com/gpu")
-            converter.set_accelerator_limit("1")
+        # For enabling document conversion using GPU
+        # currently unable to properly pass input parameters into pipeline, therefore node selector and tolerations are hardcoded
 
-        add_node_selector = True
-        if add_node_selector:
-            kubernetes.add_node_selector(
-                task=converter,
-                label_key="nvidia.com/gpu.product",
-                label_value="NVIDIA-A10",
-            )
+        # use_accelerator = True
+        # if use_accelerator:
+        #     converter.set_accelerator_type("nvidia.com/gpu")
+        #     converter.set_accelerator_limit("1")
 
-        add_tolerations = True
-        if add_tolerations:
-            kubernetes.add_toleration(
-                task=converter,
-                key="key1",
-                operator="Equal",
-                value="mcad",
-                effect="NoSchedule",
-            )
+        # add_node_selector = True
+        # if add_node_selector:
+        #     kubernetes.add_node_selector(
+        #         task=converter,
+        #         label_key="nvidia.com/gpu.product",
+        #         label_value="NVIDIA-A10",
+        #     )
+
+        # add_tolerations = True
+        # if add_tolerations:
+        #     kubernetes.add_toleration(
+        #         task=converter,
+        #         key="key1",
+        #         operator="Equal",
+        #         value="mcad",
+        #         effect="NoSchedule",
+        #     )
 
         results.append(converter.output)
 
