@@ -29,7 +29,10 @@ def convert_payload(
     )
     from docling.models.factories import get_ocr_factory
 
-    from docling_jobkit.connectors.s3_helper import DoclingConvert, S3Coordinates
+    from docling_jobkit.connectors.s3_helper import (  # type: ignore
+        DoclingConvert,
+        S3Coordinates,
+    )
 
     logging.basicConfig(level=logging.INFO)
 
