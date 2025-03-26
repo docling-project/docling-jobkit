@@ -198,7 +198,7 @@ def put_object(
 
 
 class DoclingConvert:
-    def __init__(self, s3_coords: S3Coordinates, pipeline_options: PdfPipelineOptions):
+    def __init__(self, s3_coords: S3Coordinates, pipeline_options: PdfPipelineOptions, allowed_formats: Optional[list[str]] = None):
         self.coords = s3_coords
         self.s3_client, _ = get_s3_connection(s3_coords)
 
@@ -210,7 +210,10 @@ class DoclingConvert:
                 )
             }
         )
-        self.allowed_formats = [ext.value for ext in InputFormat]
+        if not allowed_formats:
+            self.allowed_formats = [ext.value for ext in InputFormat]
+        else:
+            self.allowed_formats = [ext.value for ext in InputFormat if ext.value in allowed_formats]
 
     def convert_documents(self, presigned_urls):
         for url in presigned_urls:
