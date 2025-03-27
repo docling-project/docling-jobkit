@@ -20,14 +20,12 @@ def convert_payload(
     import logging
     import os
     from pathlib import Path
-    from typing import cast
 
     from docling.datamodel.pipeline_options import (
-        OcrOptions,
         PdfPipelineOptions,
         TableFormerMode,
     )
-    from docling.models.factories import get_ocr_factory
+    from docling.models.factories import get_ocr_factory  # type: ignore
 
     from docling_jobkit.connectors.s3_helper import (  # type: ignore
         DoclingConvert,
@@ -51,9 +49,13 @@ def convert_payload(
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = options["do_ocr"]
     ocr_factory = get_ocr_factory()
-    pipeline_options.ocr_options = cast(
-        OcrOptions, ocr_factory.create_options(kind=options["ocr_engine"])
+    # pipeline_options.ocr_options = cast(
+    #     OcrOptions, ocr_factory.create_options(kind=options["ocr_engine"])
+    # )
+    pipeline_options.ocr_options = ocr_factory.create_options(
+        kind=options["ocr_engine"]
     )
+
     pipeline_options.do_table_structure = options["do_table_structure"]
     pipeline_options.table_structure_options.mode = TableFormerMode(
         options["table_mode"]
