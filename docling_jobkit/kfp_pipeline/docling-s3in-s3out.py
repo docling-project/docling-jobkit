@@ -1,6 +1,6 @@
 from typing import Dict, List
 
-from kfp import dsl, kubernetes
+from kfp import compiler, dsl, kubernetes
 
 
 @dsl.component(
@@ -20,15 +20,16 @@ def load_models() -> str:
 @dsl.component(
     packages_to_install=[
         "docling==2.28.0",
-        "git+https://github.com/docling-project/docling-jobkit@vku/s3_commons",
+        "git+https://github.com/docling-project/docling-jobkit@snt/add-allow-formats",
     ],
     # pip_index_urls=["https://download.pytorch.org/whl/cpu", "https://pypi.org/simple"],
     base_image="python:3.11",
 )
 def convert_payload(
     options: Dict,
+    source: Dict,
     target: Dict,
-    pre_signed_urls: List[str],
+    source_keys: List[str],
     cache_path: str,
 ) -> List:
     import logging
@@ -38,6 +39,7 @@ def convert_payload(
     from docling.datamodel.pipeline_options import (
         PdfPipelineOptions,
         TableFormerMode,
+        TableStructureOptions,
     )
     from docling.models.factories import get_ocr_factory
 
@@ -45,9 +47,9 @@ def convert_payload(
 
     logging.basicConfig(level=logging.INFO)
 
-    logging.info("Type of pre_signed_urls: {}".format(type(pre_signed_urls)))
+    logging.info("Type of source_keys: {}".format(type(source_keys)))
 
-    s3_coords = S3Coordinates(
+    target_s3_coords = S3Coordinates(
         endpoint=target["s3_target_endpoint"],
         verify_ssl=target["s3_target_ssl"],
         access_key=target["s3_target_access_key"],
@@ -56,36 +58,45 @@ def convert_payload(
         key_prefix=target["s3_target_prefix"],
     )
 
+    source_s3_coords = S3Coordinates(
+        endpoint=source["s3_source_endpoint"],
+        verify_ssl=source["s3_source_ssl"],
+        access_key=source["s3_source_access_key"],
+        secret_key=source["s3_source_secret_key"],
+        bucket=source["s3_source_bucket"],
+        key_prefix=source["s3_source_prefix"],
+    )
+
     easyocr_path = Path("/models/EasyOcr")
     os.environ["MODULE_PATH"] = str(easyocr_path)
     os.environ["EASYOCR_MODULE_PATH"] = str(easyocr_path)
 
-    pipeline_options = PdfPipelineOptions()
-    pipeline_options.do_ocr = options["do_ocr"]
-    ocr_factory = get_ocr_factory()
-    pipeline_options.ocr_options = ocr_factory.create_options(
-        kind=options["ocr_engine"]
-    )
-    pipeline_options.do_table_structure = options["do_table_structure"]
-    pipeline_options.table_structure_options.mode = TableFormerMode(
-        options["table_mode"]
-    )
-    pipeline_options.generate_page_images = options["include_images"]
-    pipeline_options.do_code_enrichment = options["do_code_enrichment"]
-    pipeline_options.do_formula_enrichment = options["do_formula_enrichment"]
-    pipeline_options.do_picture_classification = options["do_picture_classification"]
-    pipeline_options.do_picture_description = options["do_picture_description"]
-    pipeline_options.generate_picture_images = options["generate_picture_images"]
+    if options.get("ocr_engine"):
+        options["ocr_options"] = (
+            get_ocr_factory()
+            .create_options(kind=options.pop("ocr_engine"))
+            .model_dump()
+        )
+    if options.get("table_mode"):
+        options["table_structure_options"] = TableStructureOptions(
+            mode=TableFormerMode(options.pop("table_mode"))
+        ).model_dump()
+
+    from_format_options = options.pop("from_formats", None)
+    to_format_options = options.pop("to_formats", None)
+    pipeline_options = PdfPipelineOptions.model_validate(options)
     pipeline_options.artifacts_path = cache_path
 
-    # pipeline_options.accelerator_options = AcceleratorOptions(
-    #     num_threads=2, device=AcceleratorDevice.CUDA
-    # )
-
-    converter = DoclingConvert(s3_coords, pipeline_options)
+    converter = DoclingConvert(
+        source_s3_coords=source_s3_coords,
+        target_s3_coords=target_s3_coords,
+        pipeline_options=pipeline_options,
+        allowed_formats=from_format_options,
+        to_formats=to_format_options,
+    )
 
     results = []
-    for item in converter.convert_documents(pre_signed_urls):
+    for item in converter.convert_documents(source_keys):
         results.append(item)
         logging.info("Convertion result: {}".format(item))
 
@@ -96,7 +107,7 @@ def convert_payload(
     packages_to_install=[
         "pydantic",
         "boto3~=1.35.36",
-        "git+https://github.com/docling-project/docling-jobkit@vku/s3_commons",
+        "git+https://github.com/docling-project/docling-jobkit@snt/add-allow-formats",
     ],
     base_image="python:3.11",
 )
@@ -108,7 +119,7 @@ def compute_batches(
     from docling_jobkit.connectors.s3_helper import (
         S3Coordinates,
         check_target_has_source_converted,
-        generate_presigns_url,
+        generate_batch_keys,
         get_s3_connection,
         get_source_files,
     )
@@ -138,19 +149,16 @@ def compute_batches(
     filtered_source_keys = check_target_has_source_converted(
         s3_target_coords, source_objects_list, s3_coords_source.key_prefix
     )
-    presigned_urls = generate_presigns_url(
-        s3_source_client,
+    batch_keys = generate_batch_keys(
         filtered_source_keys,
-        s3_coords_source.bucket,
         batch_size=batch_size,
-        expiration_time=36000,
     )
 
-    return presigned_urls
+    return batch_keys
 
 
 @dsl.pipeline
-def docling_s3in_s3out(
+def docling_s3in_s3out_tiago(
     convertion_options: Dict = {
         "from_formats": [
             "docx",
@@ -181,7 +189,7 @@ def docling_s3in_s3out(
         "do_picture_classification": False,
         "do_picture_description": False,
         "generate_picture_images": False,
-        "include_images": True,
+        "generate_page_images": True,
         "images_scale": 2,
     },
     source: Dict = {
@@ -243,6 +251,7 @@ def docling_s3in_s3out(
     with dsl.ParallelFor(batches.output, parallelism=3) as subbatch:
         converter = convert_payload(
             options=convertion_options,
+            source=source,
             target=target,
             pre_signed_urls=subbatch,
             cache_path=models_cache.output,
@@ -262,13 +271,13 @@ def docling_s3in_s3out(
             converter.set_accelerator_type("nvidia.com/gpu")
             converter.set_accelerator_limit("1")
 
-        add_node_selector = True
-        if add_node_selector:
-            kubernetes.add_node_selector(
-                task=converter,
-                label_key="nvidia.com/gpu.product",
-                label_value="NVIDIA-A10",
-            )
+        # add_node_selector = True
+        # if add_node_selector:
+        #     kubernetes.add_node_selector(
+        #         task=converter,
+        #         label_key="nvidia.com/gpu.product",
+        #         label_value="NVIDIA-A10",
+        #     )
 
         add_tolerations = True
         if add_tolerations:
@@ -283,6 +292,4 @@ def docling_s3in_s3out(
         results.append(converter.output)
 
 
-from kfp import compiler
-
-compiler.Compiler().compile(docling_s3in_s3out, "docling-s3in-s3out.yaml")
+compiler.Compiler().compile(docling_s3in_s3out_tiago, "docling-s3in-s3out-tiago.yaml")

@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 from typing import Optional
@@ -18,6 +17,8 @@ from docling.datamodel.document import ConversionResult
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.exceptions import ConversionError
+from docling.utils.utils import create_hash
+from docling_core.types.doc.base import ImageRefMode
 
 logging.basicConfig(level=logging.INFO)
 
@@ -90,34 +91,40 @@ def strip_prefix_postfix(source_set, prefix="", extension=""):
     return output
 
 
-def generate_presigns_url(
-    s3_client: BaseClient,
+def generate_batch_keys(
     source_keys: list,
-    s3_source_bucket: str,
     batch_size: int = 10,
-    expiration_time: int = 3600,
 ):
-    presigned_urls = []
+    batched_keys = []
     counter = 0
     sub_array = []
     array_lenght = len(source_keys)
     for idx, key in enumerate(source_keys):
-        try:
-            url = s3_client.generate_presigned_url(
-                ClientMethod="get_object",
-                Params={"Bucket": s3_source_bucket, "Key": key},
-                ExpiresIn=expiration_time,
-            )
-        except ClientError as e:
-            logging.error("Generation of presigned url failed: {}".format(e))
-        sub_array.append(url)
+        sub_array.append(key)
         counter += 1
         if counter == batch_size or (idx + 1) == array_lenght:
-            presigned_urls.append(sub_array)
+            batched_keys.append(sub_array)
             sub_array = []
             counter = 0
 
-    return presigned_urls
+    return batched_keys
+
+
+def generate_presign_url(
+    s3_client: BaseClient,
+    source_key: str,
+    s3_source_bucket: str,
+    expiration_time: int = 3600,
+) -> Optional[str]:
+    try:
+        return s3_client.generate_presigned_url(
+            ClientMethod="get_object",
+            Params={"Bucket": s3_source_bucket, "Key": source_key},
+            ExpiresIn=expiration_time,
+        )
+    except ClientError as e:
+        logging.error("Generation of presigned url failed: {}".format(e))
+        return None
 
 
 def get_source_files(s3_source_client, s3_source_resource, s3_coords):
@@ -198,9 +205,19 @@ def put_object(
 
 
 class DoclingConvert:
-    def __init__(self, s3_coords: S3Coordinates, pipeline_options: PdfPipelineOptions, allowed_formats: Optional[list[str]] = None):
-        self.coords = s3_coords
-        self.s3_client, _ = get_s3_connection(s3_coords)
+    def __init__(
+        self,
+        source_s3_coords: S3Coordinates,
+        target_s3_coords: S3Coordinates,
+        pipeline_options: PdfPipelineOptions,
+        allowed_formats: Optional[list[str]] = None,
+        to_formats: Optional[list[str]] = None,
+    ):
+        self.source_coords = source_s3_coords
+        self.source_s3_client, _ = get_s3_connection(source_s3_coords)
+
+        self.target_coords = target_s3_coords
+        self.target_s3_client, _ = get_s3_connection(target_s3_coords)
 
         self.converter = DocumentConverter(
             format_options={
@@ -213,10 +230,22 @@ class DoclingConvert:
         if not allowed_formats:
             self.allowed_formats = [ext.value for ext in InputFormat]
         else:
-            self.allowed_formats = [ext.value for ext in InputFormat if ext.value in allowed_formats]
+            self.allowed_formats = [
+                ext.value for ext in InputFormat if ext.value in allowed_formats
+            ]
 
-    def convert_documents(self, presigned_urls):
-        for url in presigned_urls:
+        self.to_formats = to_formats
+
+        self.export_page_images = pipeline_options.generate_page_images
+
+    def convert_documents(self, object_keys):
+        for key in object_keys:
+            url = generate_presign_url(
+                self.source_s3_client,
+                key,
+                self.source_coords.bucket,
+                expiration_time=36000,
+            )
             parsed = urlparse(url)
             root, ext = os.path.splitext(parsed.path)
             # This will skip http links that don't have file extension as part of url, arXiv have plenty of docs like this
@@ -227,41 +256,82 @@ class DoclingConvert:
             except ConversionError as e:
                 logging.error("Conversion exception: {}".format(e))
             if conv_res.status == ConversionStatus.SUCCESS:
-                s3_target_prefix = self.coords.key_prefix
+                s3_target_prefix = self.target_coords.key_prefix
                 doc_filename = conv_res.input.file.stem
                 logging.debug(f"Converted {doc_filename} now saving results")
-                # Export Docling document format to JSON:
-                target_key = f"{s3_target_prefix}/json/{doc_filename}.json"
-                data = json.dumps(conv_res.document.export_to_dict())
-                self.upload_to_s3(
-                    file=data,
-                    target_key=target_key,
-                    content_type="application/json",
-                )
-                # Export Docling document format to doctags:
-                target_key = f"{s3_target_prefix}/doctags/{doc_filename}.doctags.txt"
-                data = conv_res.document.export_to_document_tokens()
-                self.upload_to_s3(
-                    file=data,
-                    target_key=target_key,
-                    content_type="text/plain",
-                )
-                # Export Docling document format to markdown:
-                target_key = f"{s3_target_prefix}/md/{doc_filename}.md"
-                data = conv_res.document.export_to_markdown()
-                self.upload_to_s3(
-                    file=data,
-                    target_key=target_key,
-                    content_type="text/markdown",
-                )
-                # Export Docling document format to text:
-                target_key = f"{s3_target_prefix}/txt/{doc_filename}.txt"
-                data = conv_res.document.export_to_text()
-                self.upload_to_s3(
-                    file=data,
-                    target_key=target_key,
-                    content_type="text/plain",
-                )
+
+                if self.export_page_images:
+                    # Export pages images:
+                    for page_no, page in conv_res.document.pages.items():
+                        try:
+                            page_hash = create_hash(
+                                f"{conv_res.input.document_hash}_page_no_{page_no}"
+                            )
+                            page_image_key = (
+                                f"{s3_target_prefix}/PDFImages/{page_hash}.png"
+                            )
+
+                            self.upload_to_s3(
+                                file=page.image.pil_image.tobytes(),
+                                target_key=page_image_key,
+                                content_type="application/png",
+                            )
+
+                        except Exception as exc:
+                            logging.error(
+                                "Upload image of page with hash %r raised error: %r",
+                                f"{conv_res.input.document_hash}_page_{page_no}",
+                                exc,
+                            )
+
+                if self.to_formats is None or (
+                    self.to_formats and "json" in self.to_formats
+                ):
+                    # Export Docling document format to JSON:
+                    target_key = f"{s3_target_prefix}/json/{doc_filename}.json"
+                    data = conv_res.document.save_as_json(
+                        image_mode=ImageRefMode.REFERENCED
+                    )
+                    self.upload_to_s3(
+                        file=data,
+                        target_key=target_key,
+                        content_type="application/json",
+                    )
+                if self.to_formats is None or (
+                    self.to_formats and "doctags" in self.to_formats
+                ):
+                    # Export Docling document format to doctags:
+                    target_key = (
+                        f"{s3_target_prefix}/doctags/{doc_filename}.doctags.txt"
+                    )
+                    data = conv_res.document.export_to_document_tokens()
+                    self.upload_to_s3(
+                        file=data,
+                        target_key=target_key,
+                        content_type="text/plain",
+                    )
+                if self.to_formats is None or (
+                    self.to_formats and "md" in self.to_formats
+                ):
+                    # Export Docling document format to markdown:
+                    target_key = f"{s3_target_prefix}/md/{doc_filename}.md"
+                    data = conv_res.document.export_to_markdown()
+                    self.upload_to_s3(
+                        file=data,
+                        target_key=target_key,
+                        content_type="text/markdown",
+                    )
+                if self.to_formats is None or (
+                    self.to_formats and "text" in self.to_formats
+                ):
+                    # Export Docling document format to text:
+                    target_key = f"{s3_target_prefix}/txt/{doc_filename}.txt"
+                    data = conv_res.document.export_to_text()
+                    self.upload_to_s3(
+                        file=data,
+                        target_key=target_key,
+                        content_type="text/plain",
+                    )
                 yield f"{doc_filename} - SUCCESS"
 
             elif conv_res.status == ConversionStatus.PARTIAL_SUCCESS:
@@ -271,8 +341,8 @@ class DoclingConvert:
 
     def upload_to_s3(self, file, target_key, content_type):
         return put_object(
-            client=self.s3_client,
-            bucket=self.coords.bucket,
+            client=self.target_s3_client,
+            bucket=self.target_coords.bucket,
             object_key=target_key,
             file=file,
             content_type=content_type,
