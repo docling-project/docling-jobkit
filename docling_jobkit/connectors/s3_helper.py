@@ -1,6 +1,7 @@
 import logging
 import os
 import tempfile
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse, urlunsplit
 
@@ -19,6 +20,7 @@ from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.exceptions import ConversionError
 from docling.utils.utils import create_hash
 from docling_core.types.doc.base import ImageRefMode
+from docling_core.types.doc.document import DoclingDocument, PageItem, PictureItem
 
 logging.basicConfig(level=logging.INFO)
 
@@ -236,6 +238,7 @@ class DoclingConvert:
         self.to_formats = to_formats
 
         self.export_page_images = pipeline_options.generate_page_images
+        self.export_images = pipeline_options.generate_picture_images
 
     def convert_documents(self, object_keys):
         for key in object_keys:
@@ -263,27 +266,19 @@ class DoclingConvert:
 
                 if self.export_page_images:
                     # Export pages images:
-                    for page_no, page in conv_res.document.pages.items():
-                        try:
-                            page_hash = create_hash(
-                                f"{conv_res.input.document_hash}_page_no_{page_no}"
-                            )
-                            page_image_key = (
-                                f"{s3_target_prefix}/PDFImages/{page_hash}.png"
-                            )
+                    self.upload_page_images(
+                        conv_res.document.pages,
+                        s3_target_prefix,
+                        conv_res.input.document_hash,
+                    )
 
-                            self.upload_to_s3(
-                                file=page.image.pil_image.tobytes(),
-                                target_key=page_image_key,
-                                content_type="application/png",
-                            )
-
-                        except Exception as exc:
-                            logging.error(
-                                "Upload image of page with hash %r raised error: %r",
-                                f"{conv_res.input.document_hash}_page_{page_no}",
-                                exc,
-                            )
+                if self.export_images:
+                    # Export pictures
+                    self.upload_pictures(
+                        conv_res.document,
+                        s3_target_prefix,
+                        conv_res.input.document_hash,
+                    )
 
                 if self.to_formats is None or (
                     self.to_formats and "json" in self.to_formats
@@ -365,3 +360,54 @@ class DoclingConvert:
                 f"{file} - UPLOAD-FAIL: an error occour uploading file type {content_type} to s3"
             )
         return success
+
+    def upload_page_images(
+        self, pages: dict[int, PageItem], s3_target_prefix: str, doc_hash: str
+    ):
+        for page_no, page in pages.items():
+            try:
+                if page.image and page.image.pil_image:
+                    page_hash = create_hash(f"{doc_hash}_page_no_{page_no}")
+                    page_image_key = f"{s3_target_prefix}/Pages/{page_hash}.png"
+
+                    self.upload_to_s3(
+                        file=page.image.pil_image.tobytes(),
+                        target_key=page_image_key,
+                        content_type="application/png",
+                    )
+                    page.image.uri = Path(page_image_key)
+
+            except Exception as exc:
+                logging.error(
+                    "Upload image of page with hash %r raised error: %r",
+                    page_hash,
+                    exc,
+                )
+
+    def upload_pictures(
+        self, document: DoclingDocument, s3_target_prefix: str, doc_hash: str
+    ):
+        picture_number = 0
+        for element, _level in document.iterate_items():
+            if isinstance(element, PictureItem):
+                if element.image and element.image.pil_image:
+                    try:
+                        element_hash = create_hash(f"{doc_hash}_img_{picture_number}")
+                        element_image_key = (
+                            f"{s3_target_prefix}/Images/{element_hash}.png"
+                        )
+
+                        self.upload_to_s3(
+                            file=element.image.pil_image.tobytes(),
+                            target_key=element_image_key,
+                            content_type="application/png",
+                        )
+                        element.image.uri = Path(element_image_key)
+
+                    except Exception as exc:
+                        logging.error(
+                            "Upload picture with hash %r raised error: %r",
+                            element_hash,
+                            exc,
+                        )
+                    picture_number += 1
