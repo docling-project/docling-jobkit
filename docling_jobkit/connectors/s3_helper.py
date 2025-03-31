@@ -1,5 +1,6 @@
 import logging
 import os
+import tempfile
 from typing import Optional
 from urllib.parse import urlparse, urlunsplit
 
@@ -11,7 +12,6 @@ from botocore.exceptions import ClientError
 from botocore.paginate import Paginator
 from pydantic import BaseModel
 
-from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
 from docling.datamodel.base_models import ConversionStatus, InputFormat
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.pipeline_options import PdfPipelineOptions
@@ -223,7 +223,6 @@ class DoclingConvert:
             format_options={
                 InputFormat.PDF: PdfFormatOption(
                     pipeline_options=pipeline_options,
-                    backend=DoclingParseV4DocumentBackend,
                 )
             }
         )
@@ -246,6 +245,8 @@ class DoclingConvert:
                 self.source_coords.bucket,
                 expiration_time=36000,
             )
+            if not url:
+                continue
             parsed = urlparse(url)
             root, ext = os.path.splitext(parsed.path)
             # This will skip http links that don't have file extension as part of url, arXiv have plenty of docs like this
@@ -322,6 +323,18 @@ class DoclingConvert:
                         content_type="text/markdown",
                     )
                 if self.to_formats is None or (
+                    self.to_formats and "html" in self.to_formats
+                ):
+                    # Export Docling document format to html:
+                    target_key = f"{s3_target_prefix}/html/{doc_filename}.html"
+                    with tempfile.TemporaryFile() as temp_file:
+                        data = conv_res.document.save_as_html(temp_file)
+                        self.upload_to_s3(
+                            file=data,
+                            target_key=target_key,
+                            content_type="text/html",
+                        )
+                if self.to_formats is None or (
                     self.to_formats and "text" in self.to_formats
                 ):
                     # Export Docling document format to text:
@@ -340,10 +353,15 @@ class DoclingConvert:
                 yield f"{conv_res.input.file} - FAILURE"
 
     def upload_to_s3(self, file, target_key, content_type):
-        return put_object(
+        success = put_object(
             client=self.target_s3_client,
             bucket=self.target_coords.bucket,
             object_key=target_key,
             file=file,
             content_type=content_type,
         )
+        if not success:
+            logging.error(
+                f"{file} - UPLOAD-FAIL: an error occour uploading file type {content_type} to s3"
+            )
+        return success
