@@ -287,10 +287,11 @@ class DoclingConvert:
                     target_key = f"{s3_target_prefix}/json/{doc_filename}.json"
                     with tempfile.NamedTemporaryFile() as temp_json_file:
                         conv_res.document.save_as_json(
-                            filename=temp_json_file, image_mode=ImageRefMode.REFERENCED
+                            filename=Path(temp_json_file.name),
+                            image_mode=ImageRefMode.REFERENCED,
                         )
                     self.upload_to_s3(
-                        file=temp_json_file,
+                        file=temp_json_file.name,
                         target_key=target_key,
                         content_type="application/json",
                     )
@@ -324,7 +325,7 @@ class DoclingConvert:
                     # Export Docling document format to html:
                     target_key = f"{s3_target_prefix}/html/{doc_filename}.html"
                     with tempfile.NamedTemporaryFile() as temp_html_file:
-                        conv_res.document.save_as_html(temp_html_file)
+                        conv_res.document.save_as_html(Path(temp_html_file.name))
                         self.upload_to_s3(
                             file=temp_html_file.name,
                             target_key=target_key,
