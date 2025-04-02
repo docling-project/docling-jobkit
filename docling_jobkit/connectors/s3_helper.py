@@ -397,7 +397,7 @@ class DoclingConvert:
             client=self.target_s3_client,
             bucket=self.target_coords.bucket,
             object_key=target_key,
-            file=file,
+            file_name=file,
             content_type=content_type,
         )
         if not success:
