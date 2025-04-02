@@ -2,7 +2,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 from urllib.parse import urlparse, urlunsplit
 
 from boto3.resources.base import ServiceResource
@@ -185,12 +185,12 @@ def put_object(
     file: str,
     content_type: Optional[str] = None,
 ) -> bool:
-    """Upload a file to an S3 bucket
+    """Upload a object to an S3 bucket
 
-    :param file: File to upload
+    :param file: Object to upload
     :param bucket: Bucket to upload to
     :param object_key: S3 key to upload to
-    :return: True if file was uploaded, else False
+    :return: True if object was uploaded, else False
     """
 
     kwargs = {}
@@ -202,6 +202,35 @@ def put_object(
         client.put_object(Body=file, Bucket=bucket, Key=object_key, **kwargs)
     except ClientError as e:
         logging.error("Put s3 object failed: {}".format(e))
+        return False
+    return True
+
+
+def upload_file(
+    client,
+    bucket: str,
+    object_key: str,
+    file_name: Union[str, Path],
+    content_type: Optional[str] = None,
+):
+    """Upload a file to an S3 bucket
+
+    :param file_name: File to upload
+    :param bucket: Bucket to upload to
+    :param object_key: S3 key to upload to
+    :param Optional[content_type]: Content type of file
+    :return: True if file was uploaded, else False
+    """
+
+    kwargs = {}
+
+    if content_type is not None:
+        kwargs["ContentType"] = content_type
+
+    try:
+        client.upload_file(file_name, bucket, object_key, ExtraArgs={**kwargs})
+    except ClientError as e:
+        logging.error("Upload file to s3 failed: {}".format(e))
         return False
     return True
 
@@ -290,11 +319,11 @@ class DoclingConvert:
                             filename=Path(temp_json_file.name),
                             image_mode=ImageRefMode.REFERENCED,
                         )
-                    self.upload_to_s3(
-                        file=temp_json_file.name,
-                        target_key=target_key,
-                        content_type="application/json",
-                    )
+                        self.upload_file_to_s3(
+                            file=temp_json_file.name,
+                            target_key=target_key,
+                            content_type="application/json",
+                        )
                 if self.to_formats is None or (
                     self.to_formats and "doctags" in self.to_formats
                 ):
@@ -303,7 +332,7 @@ class DoclingConvert:
                         f"{s3_target_prefix}/doctags/{doc_filename}.doctags.txt"
                     )
                     data = conv_res.document.export_to_document_tokens()
-                    self.upload_to_s3(
+                    self.upload_object_to_s3(
                         file=data,
                         target_key=target_key,
                         content_type="text/plain",
@@ -314,7 +343,7 @@ class DoclingConvert:
                     # Export Docling document format to markdown:
                     target_key = f"{s3_target_prefix}/md/{doc_filename}.md"
                     data = conv_res.document.export_to_markdown()
-                    self.upload_to_s3(
+                    self.upload_object_to_s3(
                         file=data,
                         target_key=target_key,
                         content_type="text/markdown",
@@ -326,7 +355,7 @@ class DoclingConvert:
                     target_key = f"{s3_target_prefix}/html/{doc_filename}.html"
                     with tempfile.NamedTemporaryFile() as temp_html_file:
                         conv_res.document.save_as_html(Path(temp_html_file.name))
-                        self.upload_to_s3(
+                        self.upload_file_to_s3(
                             file=temp_html_file.name,
                             target_key=target_key,
                             content_type="text/html",
@@ -337,7 +366,7 @@ class DoclingConvert:
                     # Export Docling document format to text:
                     target_key = f"{s3_target_prefix}/txt/{doc_filename}.txt"
                     data = conv_res.document.export_to_text()
-                    self.upload_to_s3(
+                    self.upload_object_to_s3(
                         file=data,
                         target_key=target_key,
                         content_type="text/plain",
@@ -349,8 +378,22 @@ class DoclingConvert:
             else:
                 yield f"{conv_res.input.file} - FAILURE"
 
-    def upload_to_s3(self, file, target_key, content_type):
+    def upload_object_to_s3(self, file, target_key, content_type):
         success = put_object(
+            client=self.target_s3_client,
+            bucket=self.target_coords.bucket,
+            object_key=target_key,
+            file=file,
+            content_type=content_type,
+        )
+        if not success:
+            logging.error(
+                f"{file} - UPLOAD-FAIL: an error occour uploading object type {content_type} to s3"
+            )
+        return success
+
+    def upload_file_to_s3(self, file, target_key, content_type):
+        success = upload_file(
             client=self.target_s3_client,
             bucket=self.target_coords.bucket,
             object_key=target_key,
@@ -372,7 +415,7 @@ class DoclingConvert:
                     page_hash = create_hash(f"{doc_hash}_page_no_{page_no}")
                     page_image_key = f"{s3_target_prefix}/Pages/{page_hash}.png"
 
-                    self.upload_to_s3(
+                    self.upload_object_to_s3(
                         file=page.image.pil_image.tobytes(),
                         target_key=page_image_key,
                         content_type="application/png",
@@ -399,7 +442,7 @@ class DoclingConvert:
                             f"{s3_target_prefix}/Images/{element_hash}.png"
                         )
 
-                        self.upload_to_s3(
+                        self.upload_object_to_s3(
                             file=element.image.pil_image.tobytes(),
                             target_key=element_image_key,
                             content_type="application/png",
