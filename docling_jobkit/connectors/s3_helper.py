@@ -9,7 +9,6 @@ from boto3.resources.base import ServiceResource
 from boto3.session import Session
 from botocore.client import BaseClient
 from botocore.config import Config
-from botocore.exceptions import ClientError
 from botocore.paginate import Paginator
 from pydantic import BaseModel
 
@@ -124,8 +123,8 @@ def generate_presign_url(
             Params={"Bucket": s3_source_bucket, "Key": source_key},
             ExpiresIn=expiration_time,
         )
-    except ClientError as e:
-        logging.error("Generation of presigned url failed: {}".format(e))
+    except Exception as e:
+        logging.error("Generation of presigned url failed", exc_info=e)
         return None
 
 
@@ -200,8 +199,8 @@ def put_object(
 
     try:
         client.put_object(Body=file, Bucket=bucket, Key=object_key, **kwargs)
-    except ClientError as e:
-        logging.error("Put s3 object failed: {}".format(e))
+    except Exception as e:
+        logging.error("Put s3 object failed", exc_info=e)
         return False
     return True
 
@@ -229,8 +228,8 @@ def upload_file(
 
     try:
         client.upload_file(file_name, bucket, object_key, ExtraArgs={**kwargs})
-    except ClientError as e:
-        logging.error("Upload file to s3 failed: {}".format(e))
+    except Exception as e:
+        logging.error("Upload file to s3 failed", exc_info=e)
         return False
     return True
 
