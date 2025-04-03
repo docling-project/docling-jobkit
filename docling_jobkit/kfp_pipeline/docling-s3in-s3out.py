@@ -2,7 +2,7 @@
 
 from typing import Dict, List
 
-from kfp import dsl, kubernetes  # type: ignore
+from kfp import dsl  # type: ignore
 
 
 @dsl.component(
@@ -10,7 +10,7 @@ from kfp import dsl, kubernetes  # type: ignore
         "docling==2.28.0",
         "git+https://github.com/docling-project/docling-jobkit@vku/s3_commons",
     ],
-    base_image="quay.io/docling-project/docling-serve:dev-0.0.2" # base docling-serve image with fixed permissions
+    base_image="quay.io/docling-project/docling-serve:dev-0.0.2",  # base docling-serve image with fixed permissions
 )
 def convert_payload(
     options: Dict,
@@ -18,8 +18,6 @@ def convert_payload(
     pre_signed_urls: List[str],
 ) -> List:
     import logging
-    import os
-    from pathlib import Path
 
     from docling.datamodel.pipeline_options import (
         PdfPipelineOptions,
@@ -45,14 +43,13 @@ def convert_payload(
         key_prefix=target["s3_target_prefix"],
     )
 
-
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = options["do_ocr"]
     ocr_factory = get_ocr_factory()
     # pipeline_options.ocr_options = cast(
     #     OcrOptions, ocr_factory.create_options(kind=options["ocr_engine"])
     # )
-    pipeline_options.ocr_options = ocr_factory.create_options(
+    pipeline_options.ocr_options = ocr_factory.create_options(  # type: ignore
         kind=options["ocr_engine"]
     )
 
