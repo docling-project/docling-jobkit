@@ -71,12 +71,6 @@ def convert_payload(
     os.environ["MODULE_PATH"] = str(easyocr_path)
     os.environ["EASYOCR_MODULE_PATH"] = str(easyocr_path)
 
-    if options.get("ocr_engine"):
-        options["ocr_options"] = (
-            get_ocr_factory()
-            .create_options(kind=options.pop("ocr_engine"))
-            .model_dump()
-        )
     if options.get("table_mode"):
         options["table_structure_options"] = TableStructureOptions(
             mode=TableFormerMode(options.pop("table_mode"))
@@ -85,6 +79,10 @@ def convert_payload(
     from_format_options = options.pop("from_formats", None)
     to_format_options = options.pop("to_formats", None)
     pipeline_options = PdfPipelineOptions.model_validate(options)
+    if options.get("ocr_engine"):
+        pipeline_options.ocr_options = get_ocr_factory().create_options(
+            kind=options.pop("ocr_engine")
+        )
     pipeline_options.artifacts_path = cache_path
 
     converter = DoclingConvert(
@@ -173,7 +171,7 @@ def docling_s3in_s3out_tiago(
             "xml_jats",
             "json_docling",
         ],
-        "to_formats": ["md", "json", "html", "text", "doctags"],
+        "to_formats": ["json"],
         "image_export_mode": "placeholder",
         "do_ocr": True,
         "force_ocr": False,
@@ -188,7 +186,7 @@ def docling_s3in_s3out_tiago(
         "do_formula_enrichment": False,
         "do_picture_classification": False,
         "do_picture_description": False,
-        "generate_picture_images": False,
+        "generate_picture_images": True,
         "generate_page_images": True,
         "images_scale": 2,
     },
@@ -253,7 +251,7 @@ def docling_s3in_s3out_tiago(
             options=convertion_options,
             source=source,
             target=target,
-            pre_signed_urls=subbatch,
+            source_keys=subbatch,
             cache_path=models_cache.output,
         )
         kubernetes.mount_pvc(
