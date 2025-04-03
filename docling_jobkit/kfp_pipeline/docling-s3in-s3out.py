@@ -62,7 +62,6 @@ def convert_payload(
     pipeline_options.do_picture_description = options["do_picture_description"]
     pipeline_options.generate_picture_images = options["generate_picture_images"]
 
-
     # pipeline_options.accelerator_options = AcceleratorOptions(
     #     num_threads=2, device=AcceleratorDevice.CUDA
     # )

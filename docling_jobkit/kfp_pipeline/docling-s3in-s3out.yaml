@@ -168,7 +168,7 @@ deploymentSpec:
           \ = options[\"do_formula_enrichment\"]\n    pipeline_options.do_picture_classification\
           \ = options[\"do_picture_classification\"]\n    pipeline_options.do_picture_description\
           \ = options[\"do_picture_description\"]\n    pipeline_options.generate_picture_images\
-          \ = options[\"generate_picture_images\"]\n\n\n    # pipeline_options.accelerator_options\
+          \ = options[\"generate_picture_images\"]\n\n    # pipeline_options.accelerator_options\
           \ = AcceleratorOptions(\n    #     num_threads=2, device=AcceleratorDevice.CUDA\n\
           \    # )\n\n    converter = DoclingConvert(s3_coords, pipeline_options)\n\
           \n    results = []\n    for item in converter.convert_documents(pre_signed_urls):\n\
