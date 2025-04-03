@@ -297,7 +297,6 @@ class DoclingConvert:
                     # Export pages images:
                     self.upload_page_images(
                         conv_res.document.pages,
-                        s3_target_prefix,
                         conv_res.input.document_hash,
                     )
 
@@ -305,7 +304,6 @@ class DoclingConvert:
                     # Export pictures
                     self.upload_pictures(
                         conv_res.document,
-                        s3_target_prefix,
                         conv_res.input.document_hash,
                     )
 
