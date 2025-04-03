@@ -26,8 +26,6 @@ components:
     executorLabel: exec-convert-payload
     inputDefinitions:
       parameters:
-        cache_path:
-          parameterType: STRING
         options:
           parameterType: STRUCT
         pre_signed_urls:
@@ -48,8 +46,6 @@ components:
             name: comp-convert-payload
           inputs:
             parameters:
-              cache_path:
-                componentInputParameter: pipelinechannel--load-models-Output
               options:
                 componentInputParameter: pipelinechannel--convertion_options
               pre_signed_urls:
@@ -66,16 +62,8 @@ components:
           parameterType: LIST
         pipelinechannel--convertion_options:
           parameterType: STRUCT
-        pipelinechannel--load-models-Output:
-          parameterType: STRING
         pipelinechannel--target:
           parameterType: STRUCT
-  comp-load-models:
-    executorLabel: exec-load-models
-    outputDefinitions:
-      parameters:
-        Output:
-          parameterType: STRING
 deploymentSpec:
   executors:
     exec-compute-batches:
@@ -158,21 +146,18 @@ deploymentSpec:
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef convert_payload(\n    options: Dict,\n    target: Dict,\n   \
-          \ pre_signed_urls: List[str],\n    cache_path: str,\n) -> List:\n    import\
-          \ logging\n    import os\n    from pathlib import Path\n    from typing\
-          \ import cast\n\n    from docling.datamodel.pipeline_options import (\n\
-          \        OcrOptions,\n        PdfPipelineOptions,\n        TableFormerMode,\n\
-          \    )\n    from docling.models.factories import get_ocr_factory\n\n   \
-          \ from docling_jobkit.connectors.s3_helper import DoclingConvert, S3Coordinates\n\
-          \n    logging.basicConfig(level=logging.INFO)\n\n    logging.info(\"Type\
-          \ of pre_signed_urls: {}\".format(type(pre_signed_urls)))\n\n    s3_coords\
-          \ = S3Coordinates(\n        endpoint=target[\"s3_target_endpoint\"],\n \
-          \       verify_ssl=target[\"s3_target_ssl\"],\n        access_key=target[\"\
+          \ pre_signed_urls: List[str],\n) -> List:\n    import logging\n    import\
+          \ os\n    from pathlib import Path\n    from typing import cast\n\n    from\
+          \ docling.datamodel.pipeline_options import (\n        OcrOptions,\n   \
+          \     PdfPipelineOptions,\n        TableFormerMode,\n    )\n    from docling.models.factories\
+          \ import get_ocr_factory\n\n    from docling_jobkit.connectors.s3_helper\
+          \ import DoclingConvert, S3Coordinates\n\n    logging.basicConfig(level=logging.INFO)\n\
+          \n    logging.info(\"Type of pre_signed_urls: {}\".format(type(pre_signed_urls)))\n\
+          \n    s3_coords = S3Coordinates(\n        endpoint=target[\"s3_target_endpoint\"\
+          ],\n        verify_ssl=target[\"s3_target_ssl\"],\n        access_key=target[\"\
           s3_target_access_key\"],\n        secret_key=target[\"s3_target_secret_key\"\
           ],\n        bucket=target[\"s3_target_bucket\"],\n        key_prefix=target[\"\
-          s3_target_prefix\"],\n    )\n\n    easyocr_path = Path(\"/models/EasyOcr\"\
-          )\n    os.environ[\"MODULE_PATH\"] = str(easyocr_path)\n    os.environ[\"\
-          EASYOCR_MODULE_PATH\"] = str(easyocr_path)\n\n    pipeline_options = PdfPipelineOptions()\n\
+          s3_target_prefix\"],\n    )\n\n\n    pipeline_options = PdfPipelineOptions()\n\
           \    pipeline_options.do_ocr = options[\"do_ocr\"]\n    ocr_factory = get_ocr_factory()\n\
           \    pipeline_options.ocr_options = cast(\n        OcrOptions, ocr_factory.create_options(kind=options[\"\
           ocr_engine\"])\n    )\n    pipeline_options.do_table_structure = options[\"\
@@ -183,51 +168,18 @@ deploymentSpec:
           \ = options[\"do_formula_enrichment\"]\n    pipeline_options.do_picture_classification\
           \ = options[\"do_picture_classification\"]\n    pipeline_options.do_picture_description\
           \ = options[\"do_picture_description\"]\n    pipeline_options.generate_picture_images\
-          \ = options[\"generate_picture_images\"]\n    pipeline_options.artifacts_path\
-          \ = cache_path\n\n    # pipeline_options.accelerator_options = AcceleratorOptions(\n\
-          \    #     num_threads=2, device=AcceleratorDevice.CUDA\n    # )\n\n   \
-          \ converter = DoclingConvert(s3_coords, pipeline_options)\n\n    results\
-          \ = []\n    for item in converter.convert_documents(pre_signed_urls):\n\
+          \ = options[\"generate_picture_images\"]\n\n\n    # pipeline_options.accelerator_options\
+          \ = AcceleratorOptions(\n    #     num_threads=2, device=AcceleratorDevice.CUDA\n\
+          \    # )\n\n    converter = DoclingConvert(s3_coords, pipeline_options)\n\
+          \n    results = []\n    for item in converter.convert_documents(pre_signed_urls):\n\
           \        results.append(item)\n        logging.info(\"Convertion result:\
           \ {}\".format(item))\n\n    return results\n\n"
-        image: python:3.11
+        image: quay.io/docling-project/docling-serve:dev-0.0.2
         resources:
           cpuLimit: 1.0
           cpuRequest: 0.2
           memoryLimit: 7.0
           memoryRequest: 1.0
-    exec-load-models:
-      container:
-        args:
-        - --executor_input
-        - '{{$}}'
-        - --function_to_execute
-        - load_models
-        command:
-        - sh
-        - -c
-        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
-          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
-          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.8.0'\
-          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
-          \  python3 -m pip install --quiet --no-warn-script-location 'docling==2.28.0'\
-          \ && \"$0\" \"$@\"\n"
-        - sh
-        - -ec
-        - 'program_path=$(mktemp -d)
-
-
-          printf "%s" "$0" > "$program_path/ephemeral_component.py"
-
-          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
-
-          '
-        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef load_models() -> str:\n    from pathlib import Path\n\n    from\
-          \ docling.utils.model_downloader import download_models\n\n    models_path\
-          \ = download_models(output_dir=Path(\"/models\")).absolute().as_posix()\n\
-          \n    return models_path\n\n"
-        image: python:3.11
 pipelineInfo:
   name: docling-s3in-s3out
 root:
@@ -253,7 +205,6 @@ root:
           name: comp-for-loop-1
         dependentTasks:
         - compute-batches
-        - load-models
         inputs:
           parameters:
             pipelinechannel--compute-batches-Output:
@@ -262,10 +213,6 @@ root:
                 producerTask: compute-batches
             pipelinechannel--convertion_options:
               componentInputParameter: convertion_options
-            pipelinechannel--load-models-Output:
-              taskOutputParameter:
-                outputParameterKey: Output
-                producerTask: load-models
             pipelinechannel--target:
               componentInputParameter: target
         iteratorPolicy:
@@ -276,13 +223,6 @@ root:
             inputParameter: pipelinechannel--compute-batches-Output
         taskInfo:
           name: for-loop-1
-      load-models:
-        cachingOptions:
-          enableCache: true
-        componentRef:
-          name: comp-load-models
-        taskInfo:
-          name: load-models
   inputDefinitions:
     parameters:
       batch_size:
@@ -350,16 +290,3 @@ root:
         parameterType: STRUCT
 schemaVersion: 2.1.0
 sdkVersion: kfp-2.8.0
----
-platforms:
-  kubernetes:
-    deploymentSpec:
-      executors:
-        exec-convert-payload:
-          pvcMount:
-          - constant: docling-pipelines-models-cache
-            mountPath: /models
-        exec-load-models:
-          pvcMount:
-          - constant: docling-pipelines-models-cache
-            mountPath: /models

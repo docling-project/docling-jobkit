@@ -6,32 +6,16 @@ from kfp import dsl, kubernetes  # type: ignore
 
 
 @dsl.component(
-    packages_to_install=["docling==2.28.0"],
-    base_image="python:3.11",
-)
-def load_models() -> str:
-    from pathlib import Path
-
-    from docling.utils.model_downloader import download_models
-
-    models_path = download_models(output_dir=Path("/models")).absolute().as_posix()
-
-    return models_path
-
-
-@dsl.component(
     packages_to_install=[
         "docling==2.28.0",
         "git+https://github.com/docling-project/docling-jobkit@vku/s3_commons",
     ],
-    # pip_index_urls=["https://download.pytorch.org/whl/cpu", "https://pypi.org/simple"],
-    base_image="python:3.11",
+    base_image="quay.io/docling-project/docling-serve:dev-0.0.2" # base docling-serve image with fixed permissions
 )
 def convert_payload(
     options: Dict,
     target: Dict,
     pre_signed_urls: List[str],
-    cache_path: str,
 ) -> List:
     import logging
     import os
@@ -60,9 +44,6 @@ def convert_payload(
         key_prefix=target["s3_target_prefix"],
     )
 
-    easyocr_path = Path("/models/EasyOcr")
-    os.environ["MODULE_PATH"] = str(easyocr_path)
-    os.environ["EASYOCR_MODULE_PATH"] = str(easyocr_path)
 
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = options["do_ocr"]
@@ -80,7 +61,7 @@ def convert_payload(
     pipeline_options.do_picture_classification = options["do_picture_classification"]
     pipeline_options.do_picture_description = options["do_picture_description"]
     pipeline_options.generate_picture_images = options["generate_picture_images"]
-    pipeline_options.artifacts_path = cache_path
+
 
     # pipeline_options.accelerator_options = AcceleratorOptions(
     #     num_threads=2, device=AcceleratorDevice.CUDA
@@ -232,13 +213,6 @@ def docling_s3in_s3out(
 
     logging.basicConfig(level=logging.INFO)
 
-    models_cache = load_models()
-    kubernetes.mount_pvc(
-        models_cache,
-        pvc_name="docling-pipelines-models-cache",
-        mount_path="/models",
-    )
-
     batches = compute_batches(source=source, target=target, batch_size=5)
     # disable caching on batches as cached pre-signed urls might have already expired
     batches.set_caching_options(False)
@@ -249,12 +223,6 @@ def docling_s3in_s3out(
             options=convertion_options,
             target=target,
             pre_signed_urls=subbatch,
-            cache_path=models_cache.output,
-        )
-        kubernetes.mount_pvc(
-            converter,
-            pvc_name="docling-pipelines-models-cache",
-            mount_path="/models",
         )
         converter.set_memory_request("1G")
         converter.set_memory_limit("7G")
