@@ -406,14 +406,12 @@ class DoclingConvert:
             )
         return success
 
-    def upload_page_images(
-        self, pages: dict[int, PageItem], s3_target_prefix: str, doc_hash: str
-    ):
+    def upload_page_images(self, pages: dict[int, PageItem], doc_hash: str):
         for page_no, page in pages.items():
             try:
                 if page.image and page.image.pil_image:
                     page_hash = create_hash(f"{doc_hash}_page_no_{page_no}")
-                    page_image_key = f"{s3_target_prefix}/Pages/{page_hash}.png"
+                    page_image_key = f"../pages/{page_hash}.png"
 
                     self.upload_object_to_s3(
                         file=page.image.pil_image.tobytes(),
@@ -429,18 +427,14 @@ class DoclingConvert:
                     exc,
                 )
 
-    def upload_pictures(
-        self, document: DoclingDocument, s3_target_prefix: str, doc_hash: str
-    ):
+    def upload_pictures(self, document: DoclingDocument, doc_hash: str):
         picture_number = 0
         for element, _level in document.iterate_items():
             if isinstance(element, PictureItem):
                 if element.image and element.image.pil_image:
                     try:
                         element_hash = create_hash(f"{doc_hash}_img_{picture_number}")
-                        element_image_key = (
-                            f"{s3_target_prefix}/Images/{element_hash}.png"
-                        )
+                        element_image_key = f"../images/{element_hash}.png"
 
                         self.upload_object_to_s3(
                             file=element.image.pil_image.tobytes(),
