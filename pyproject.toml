@@ -1,9 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "docling-jobkit"
 version = "0.1.0"  # DO NOT EDIT, updated automatically
 description = "Running a distributed job processing documents with Docling."
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name="Michele Dolfi", email="dol@zurich.ibm.com"},
     {name="Viktor Kuropiatnyk", email="vku@zurich.ibm.com"},
@@ -21,12 +25,18 @@ maintainers = [
     {name="Peter Staar", email="taa@zurich.ibm.com"},
 ]
 classifiers = [
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-    # "Development Status :: 5 - Production/Stable",
+    "Operating System :: OS Independent", 
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Typing :: Typed",
-    "Programming Language :: Python :: 3"
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 requires-python = ">=3.10"
 dependencies = [
@@ -96,8 +106,8 @@ name = "pytorch-cu124"
 url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
-[tool.setuptools.packages.find]
-include = ["docling_jobkit*"]
+[tool.hatch.build.targets.sdist]
+include = ["docling_jobkit"]
 
 [project.scripts]
 docling-ray-job = "docling_jobkit.ray_job.main:main"
