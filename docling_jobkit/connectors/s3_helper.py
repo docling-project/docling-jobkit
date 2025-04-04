@@ -217,7 +217,7 @@ class DoclingConvert:
             parsed = urlparse(url)
             root, ext = os.path.splitext(parsed.path)
             # This will skip http links that don't have file extension as part of url, arXiv have plenty of docs like this
-            if ext[1:] not in self.allowed_formats:
+            if ext[1:].lower() not in self.allowed_formats:
                 continue
             try:
                 conv_res: ConversionResult = self.converter.convert(url)
