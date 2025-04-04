@@ -12,6 +12,8 @@ from botocore.config import Config
 from botocore.paginate import Paginator
 from pydantic import BaseModel
 
+from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
+from docling.backend.pdf_backend import PdfDocumentBackend
 from docling.datamodel.base_models import ConversionStatus, InputFormat
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.pipeline_options import PdfPipelineOptions
@@ -242,6 +244,7 @@ class DoclingConvert:
         pipeline_options: PdfPipelineOptions,
         allowed_formats: Optional[list[str]] = None,
         to_formats: Optional[list[str]] = None,
+        backend: Optional[type[PdfDocumentBackend]] = None,
     ):
         self.source_coords = source_s3_coords
         self.source_s3_client, _ = get_s3_connection(source_s3_coords)
@@ -253,6 +256,7 @@ class DoclingConvert:
             format_options={
                 InputFormat.PDF: PdfFormatOption(
                     pipeline_options=pipeline_options,
+                    backend=backend if backend else DoclingParseV4DocumentBackend,
                 )
             }
         )

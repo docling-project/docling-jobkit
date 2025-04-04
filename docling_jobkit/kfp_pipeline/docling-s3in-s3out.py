@@ -35,8 +35,15 @@ def convert_payload(
     import logging
     import os
     from pathlib import Path
+    from typing import Optional
 
+    from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
+    from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBackend
+    from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
+    from docling.backend.pdf_backend import PdfDocumentBackend
+    from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
     from docling.datamodel.pipeline_options import (
+        PdfBackend,
         PdfPipelineOptions,
         TableFormerMode,
         TableStructureOptions,
@@ -71,6 +78,21 @@ def convert_payload(
     os.environ["MODULE_PATH"] = str(easyocr_path)
     os.environ["EASYOCR_MODULE_PATH"] = str(easyocr_path)
 
+    backend: Optional[type[PdfDocumentBackend]] = None
+    if options.get("pdf_backend"):
+        if options.get("pdf_backend") == PdfBackend.DLPARSE_V1:
+            backend = DoclingParseDocumentBackend
+        elif options.get("pdf_backend") == PdfBackend.DLPARSE_V2:
+            backend = DoclingParseV2DocumentBackend
+        elif options.get("pdf_backend") == PdfBackend.DLPARSE_V4:
+            backend = DoclingParseV4DocumentBackend
+        elif options.get("pdf_backend") == PdfBackend.PYPDFIUM2:
+            backend = PyPdfiumDocumentBackend
+        else:
+            raise RuntimeError(
+                f"Unexpected PDF backend type {options.get('pdf_backend')}"
+            )
+
     if options.get("table_mode"):
         options["table_structure_options"] = TableStructureOptions(
             mode=TableFormerMode(options.pop("table_mode"))
@@ -91,6 +113,7 @@ def convert_payload(
         pipeline_options=pipeline_options,
         allowed_formats=from_format_options,
         to_formats=to_format_options,
+        backend=backend,
     )
 
     results = []
