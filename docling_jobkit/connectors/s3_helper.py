@@ -1,23 +1,27 @@
-import json
 import logging
 import os
-from typing import Optional
+import tempfile
+from pathlib import Path
+from typing import Optional, Union
 from urllib.parse import urlparse, urlunsplit
 
 from boto3.resources.base import ServiceResource
 from boto3.session import Session
 from botocore.client import BaseClient
 from botocore.config import Config
-from botocore.exceptions import ClientError
 from botocore.paginate import Paginator
 from pydantic import BaseModel
 
 from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
+from docling.backend.pdf_backend import PdfDocumentBackend
 from docling.datamodel.base_models import ConversionStatus, InputFormat
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.exceptions import ConversionError
+from docling.utils.utils import create_hash
+from docling_core.types.doc.base import ImageRefMode
+from docling_core.types.doc.document import DoclingDocument, PageItem, PictureItem
 
 logging.basicConfig(level=logging.INFO)
 
@@ -90,34 +94,40 @@ def strip_prefix_postfix(source_set, prefix="", extension=""):
     return output
 
 
-def generate_presigns_url(
-    s3_client: BaseClient,
+def generate_batch_keys(
     source_keys: list,
-    s3_source_bucket: str,
     batch_size: int = 10,
-    expiration_time: int = 3600,
 ):
-    presigned_urls = []
+    batched_keys = []
     counter = 0
     sub_array = []
     array_lenght = len(source_keys)
     for idx, key in enumerate(source_keys):
-        try:
-            url = s3_client.generate_presigned_url(
-                ClientMethod="get_object",
-                Params={"Bucket": s3_source_bucket, "Key": key},
-                ExpiresIn=expiration_time,
-            )
-        except ClientError as e:
-            logging.error("Generation of presigned url failed: {}".format(e))
-        sub_array.append(url)
+        sub_array.append(key)
         counter += 1
         if counter == batch_size or (idx + 1) == array_lenght:
-            presigned_urls.append(sub_array)
+            batched_keys.append(sub_array)
             sub_array = []
             counter = 0
 
-    return presigned_urls
+    return batched_keys
+
+
+def generate_presign_url(
+    s3_client: BaseClient,
+    source_key: str,
+    s3_source_bucket: str,
+    expiration_time: int = 3600,
+) -> Optional[str]:
+    try:
+        return s3_client.generate_presigned_url(
+            ClientMethod="get_object",
+            Params={"Bucket": s3_source_bucket, "Key": source_key},
+            ExpiresIn=expiration_time,
+        )
+    except Exception as e:
+        logging.error("Generation of presigned url failed", exc_info=e)
+        return None
 
 
 def get_source_files(s3_source_client, s3_source_resource, s3_coords):
@@ -176,12 +186,12 @@ def put_object(
     file: str,
     content_type: Optional[str] = None,
 ) -> bool:
-    """Upload a file to an S3 bucket
+    """Upload a object to an S3 bucket
 
-    :param file: File to upload
+    :param file: Object to upload
     :param bucket: Bucket to upload to
     :param object_key: S3 key to upload to
-    :return: True if file was uploaded, else False
+    :return: True if object was uploaded, else False
     """
 
     kwargs = {}
@@ -191,74 +201,179 @@ def put_object(
 
     try:
         client.put_object(Body=file, Bucket=bucket, Key=object_key, **kwargs)
-    except ClientError as e:
-        logging.error("Put s3 object failed: {}".format(e))
+    except Exception as e:
+        logging.error("Put s3 object failed", exc_info=e)
+        return False
+    return True
+
+
+def upload_file(
+    client,
+    bucket: str,
+    object_key: str,
+    file_name: Union[str, Path],
+    content_type: Optional[str] = None,
+):
+    """Upload a file to an S3 bucket
+
+    :param file_name: File to upload
+    :param bucket: Bucket to upload to
+    :param object_key: S3 key to upload to
+    :param Optional[content_type]: Content type of file
+    :return: True if file was uploaded, else False
+    """
+
+    kwargs = {}
+
+    if content_type is not None:
+        kwargs["ContentType"] = content_type
+
+    try:
+        client.upload_file(file_name, bucket, object_key, ExtraArgs={**kwargs})
+    except Exception as e:
+        logging.error("Upload file to s3 failed", exc_info=e)
         return False
     return True
 
 
 class DoclingConvert:
-    def __init__(self, s3_coords: S3Coordinates, pipeline_options: PdfPipelineOptions):
-        self.coords = s3_coords
-        self.s3_client, _ = get_s3_connection(s3_coords)
+    def __init__(
+        self,
+        source_s3_coords: S3Coordinates,
+        target_s3_coords: S3Coordinates,
+        pipeline_options: PdfPipelineOptions,
+        allowed_formats: Optional[list[str]] = None,
+        to_formats: Optional[list[str]] = None,
+        backend: Optional[type[PdfDocumentBackend]] = None,
+    ):
+        self.source_coords = source_s3_coords
+        self.source_s3_client, _ = get_s3_connection(source_s3_coords)
+
+        self.target_coords = target_s3_coords
+        self.target_s3_client, _ = get_s3_connection(target_s3_coords)
 
         self.converter = DocumentConverter(
             format_options={
                 InputFormat.PDF: PdfFormatOption(
                     pipeline_options=pipeline_options,
-                    backend=DoclingParseV4DocumentBackend,
+                    backend=backend if backend else DoclingParseV4DocumentBackend,
                 )
             }
         )
-        self.allowed_formats = [ext.value for ext in InputFormat]
+        if not allowed_formats:
+            self.allowed_formats = [ext.value for ext in InputFormat]
+        else:
+            self.allowed_formats = [
+                ext.value for ext in InputFormat if ext.value in allowed_formats
+            ]
 
-    def convert_documents(self, presigned_urls):
-        for url in presigned_urls:
+        self.to_formats = to_formats
+
+        self.export_page_images = pipeline_options.generate_page_images
+        self.export_images = pipeline_options.generate_picture_images
+
+    def convert_documents(self, object_keys):
+        for key in object_keys:
+            url = generate_presign_url(
+                self.source_s3_client,
+                key,
+                self.source_coords.bucket,
+                expiration_time=36000,
+            )
+            if not url:
+                continue
             parsed = urlparse(url)
             root, ext = os.path.splitext(parsed.path)
             # This will skip http links that don't have file extension as part of url, arXiv have plenty of docs like this
-            if ext[1:].lower() not in self.allowed_formats:
+            if ext[1:] not in self.allowed_formats:
                 continue
             try:
                 conv_res: ConversionResult = self.converter.convert(url)
             except ConversionError as e:
                 logging.error("Conversion exception: {}".format(e))
             if conv_res.status == ConversionStatus.SUCCESS:
-                s3_target_prefix = self.coords.key_prefix
+                s3_target_prefix = self.target_coords.key_prefix
                 doc_filename = conv_res.input.file.stem
                 logging.debug(f"Converted {doc_filename} now saving results")
-                # Export Docling document format to JSON:
-                target_key = f"{s3_target_prefix}/json/{doc_filename}.json"
-                data = json.dumps(conv_res.document.export_to_dict())
-                self.upload_to_s3(
-                    file=data,
-                    target_key=target_key,
-                    content_type="application/json",
-                )
-                # Export Docling document format to doctags:
-                target_key = f"{s3_target_prefix}/doctags/{doc_filename}.doctags.txt"
-                data = conv_res.document.export_to_document_tokens()
-                self.upload_to_s3(
-                    file=data,
-                    target_key=target_key,
-                    content_type="text/plain",
-                )
-                # Export Docling document format to markdown:
-                target_key = f"{s3_target_prefix}/md/{doc_filename}.md"
-                data = conv_res.document.export_to_markdown()
-                self.upload_to_s3(
-                    file=data,
-                    target_key=target_key,
-                    content_type="text/markdown",
-                )
-                # Export Docling document format to text:
-                target_key = f"{s3_target_prefix}/txt/{doc_filename}.txt"
-                data = conv_res.document.export_to_text()
-                self.upload_to_s3(
-                    file=data,
-                    target_key=target_key,
-                    content_type="text/plain",
-                )
+
+                if self.export_page_images:
+                    # Export pages images:
+                    self.upload_page_images(
+                        conv_res.document.pages,
+                        s3_target_prefix,
+                        conv_res.input.document_hash,
+                    )
+
+                if self.export_images:
+                    # Export pictures
+                    self.upload_pictures(
+                        conv_res.document,
+                        s3_target_prefix,
+                        conv_res.input.document_hash,
+                    )
+
+                if self.to_formats is None or (
+                    self.to_formats and "json" in self.to_formats
+                ):
+                    # Export Docling document format to JSON:
+                    target_key = f"{s3_target_prefix}/json/{doc_filename}.json"
+                    with tempfile.NamedTemporaryFile() as temp_json_file:
+                        conv_res.document.save_as_json(
+                            filename=Path(temp_json_file.name),
+                            image_mode=ImageRefMode.REFERENCED,
+                        )
+                        self.upload_file_to_s3(
+                            file=temp_json_file.name,
+                            target_key=target_key,
+                            content_type="application/json",
+                        )
+                if self.to_formats is None or (
+                    self.to_formats and "doctags" in self.to_formats
+                ):
+                    # Export Docling document format to doctags:
+                    target_key = (
+                        f"{s3_target_prefix}/doctags/{doc_filename}.doctags.txt"
+                    )
+                    data = conv_res.document.export_to_document_tokens()
+                    self.upload_object_to_s3(
+                        file=data,
+                        target_key=target_key,
+                        content_type="text/plain",
+                    )
+                if self.to_formats is None or (
+                    self.to_formats and "md" in self.to_formats
+                ):
+                    # Export Docling document format to markdown:
+                    target_key = f"{s3_target_prefix}/md/{doc_filename}.md"
+                    data = conv_res.document.export_to_markdown()
+                    self.upload_object_to_s3(
+                        file=data,
+                        target_key=target_key,
+                        content_type="text/markdown",
+                    )
+                if self.to_formats is None or (
+                    self.to_formats and "html" in self.to_formats
+                ):
+                    # Export Docling document format to html:
+                    target_key = f"{s3_target_prefix}/html/{doc_filename}.html"
+                    with tempfile.NamedTemporaryFile() as temp_html_file:
+                        conv_res.document.save_as_html(Path(temp_html_file.name))
+                        self.upload_file_to_s3(
+                            file=temp_html_file.name,
+                            target_key=target_key,
+                            content_type="text/html",
+                        )
+                if self.to_formats is None or (
+                    self.to_formats and "text" in self.to_formats
+                ):
+                    # Export Docling document format to text:
+                    target_key = f"{s3_target_prefix}/txt/{doc_filename}.txt"
+                    data = conv_res.document.export_to_text()
+                    self.upload_object_to_s3(
+                        file=data,
+                        target_key=target_key,
+                        content_type="text/plain",
+                    )
                 yield f"{doc_filename} - SUCCESS"
 
             elif conv_res.status == ConversionStatus.PARTIAL_SUCCESS:
@@ -266,11 +381,79 @@ class DoclingConvert:
             else:
                 yield f"{conv_res.input.file} - FAILURE"
 
-    def upload_to_s3(self, file, target_key, content_type):
-        return put_object(
-            client=self.s3_client,
-            bucket=self.coords.bucket,
+    def upload_object_to_s3(self, file, target_key, content_type):
+        success = put_object(
+            client=self.target_s3_client,
+            bucket=self.target_coords.bucket,
             object_key=target_key,
             file=file,
             content_type=content_type,
         )
+        if not success:
+            logging.error(
+                f"{file} - UPLOAD-FAIL: an error occour uploading object type {content_type} to s3"
+            )
+        return success
+
+    def upload_file_to_s3(self, file, target_key, content_type):
+        success = upload_file(
+            client=self.target_s3_client,
+            bucket=self.target_coords.bucket,
+            object_key=target_key,
+            file_name=file,
+            content_type=content_type,
+        )
+        if not success:
+            logging.error(
+                f"{file} - UPLOAD-FAIL: an error occour uploading file type {content_type} to s3"
+            )
+        return success
+
+    def upload_page_images(
+        self, pages: dict[int, PageItem], s3_target_prefix: str, doc_hash: str
+    ):
+        for page_no, page in pages.items():
+            try:
+                if page.image and page.image.pil_image:
+                    page_hash = create_hash(f"{doc_hash}_page_no_{page_no}")
+                    page_path_suffix = f"/pages/{page_hash}.png"
+
+                    self.upload_object_to_s3(
+                        file=page.image.pil_image.tobytes(),
+                        target_key=f"{s3_target_prefix}" + page_path_suffix,
+                        content_type="application/png",
+                    )
+                    page.image.uri = Path(".." + page_path_suffix)
+
+            except Exception as exc:
+                logging.error(
+                    "Upload image of page with hash %r raised error: %r",
+                    page_hash,
+                    exc,
+                )
+
+    def upload_pictures(
+        self, document: DoclingDocument, s3_target_prefix: str, doc_hash: str
+    ):
+        picture_number = 0
+        for element, _level in document.iterate_items():
+            if isinstance(element, PictureItem):
+                if element.image and element.image.pil_image:
+                    try:
+                        element_hash = create_hash(f"{doc_hash}_img_{picture_number}")
+                        element_path_suffix = f"/images/{element_hash}.png"
+
+                        self.upload_object_to_s3(
+                            file=element.image.pil_image.tobytes(),
+                            target_key=f"{s3_target_prefix}" + element_path_suffix,
+                            content_type="application/png",
+                        )
+                        element.image.uri = Path(".." + element_path_suffix)
+
+                    except Exception as exc:
+                        logging.error(
+                            "Upload picture with hash %r raised error: %r",
+                            element_hash,
+                            exc,
+                        )
+                    picture_number += 1

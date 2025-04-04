@@ -8,34 +8,37 @@ from kfp import dsl
 @dsl.component(
     packages_to_install=[
         "docling==2.28.0",
-        "git+https://github.com/docling-project/docling-jobkit@f898ea96f8c1b8360c837dca41c4295a0fecbca5",
+        "git+https://github.com/docling-project/docling-jobkit@snt/add-allow-formats",
     ],
     base_image="quay.io/docling-project/docling-serve:dev-0.0.2",  # base docling-serve image with fixed permissions
 )
 def convert_payload(
     options: dict,
+    source: dict,
     target: dict,
-    pre_signed_urls: List[str],
+    source_keys: List[str],
 ) -> list:
     import logging
+    from typing import Optional
 
+    from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
+    from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBackend
+    from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
+    from docling.backend.pdf_backend import PdfDocumentBackend
+    from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
     from docling.datamodel.pipeline_options import (
         OcrOptions,
+        PdfBackend,
         PdfPipelineOptions,
         TableFormerMode,
     )
     from docling.models.factories import get_ocr_factory
 
-    from docling_jobkit.connectors.s3_helper import (
-        DoclingConvert,
-        S3Coordinates,
-    )
+    from docling_jobkit.connectors.s3_helper import DoclingConvert, S3Coordinates
 
     logging.basicConfig(level=logging.INFO)
 
-    logging.info("Type of pre_signed_urls: {}".format(type(pre_signed_urls)))
-
-    s3_coords = S3Coordinates(
+    target_s3_coords = S3Coordinates(
         endpoint=target["s3_target_endpoint"],
         verify_ssl=target["s3_target_ssl"],
         access_key=target["s3_target_access_key"],
@@ -43,6 +46,30 @@ def convert_payload(
         bucket=target["s3_target_bucket"],
         key_prefix=target["s3_target_prefix"],
     )
+
+    source_s3_coords = S3Coordinates(
+        endpoint=source["s3_source_endpoint"],
+        verify_ssl=source["s3_source_ssl"],
+        access_key=source["s3_source_access_key"],
+        secret_key=source["s3_source_secret_key"],
+        bucket=source["s3_source_bucket"],
+        key_prefix=source["s3_source_prefix"],
+    )
+
+    backend: Optional[type[PdfDocumentBackend]] = None
+    if options.get("pdf_backend"):
+        if options.get("pdf_backend") == PdfBackend.DLPARSE_V1:
+            backend = DoclingParseDocumentBackend
+        elif options.get("pdf_backend") == PdfBackend.DLPARSE_V2:
+            backend = DoclingParseV2DocumentBackend
+        elif options.get("pdf_backend") == PdfBackend.DLPARSE_V4:
+            backend = DoclingParseV4DocumentBackend
+        elif options.get("pdf_backend") == PdfBackend.PYPDFIUM2:
+            backend = PyPdfiumDocumentBackend
+        else:
+            raise RuntimeError(
+                f"Unexpected PDF backend type {options.get('pdf_backend')}"
+            )
 
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = options["do_ocr"]
@@ -67,10 +94,17 @@ def convert_payload(
     #     num_threads=2, device=AcceleratorDevice.CUDA
     # )
 
-    converter = DoclingConvert(s3_coords, pipeline_options)
+    converter = DoclingConvert(
+        source_s3_coords=source_s3_coords,
+        target_s3_coords=target_s3_coords,
+        pipeline_options=pipeline_options,
+        allowed_formats=options.get("from_formats"),
+        to_formats=options.get("to_formats"),
+        backend=backend,
+    )
 
     results = []
-    for item in converter.convert_documents(pre_signed_urls):
+    for item in converter.convert_documents(source_keys):
         results.append(item)
         logging.info("Convertion result: {}".format(item))
 
@@ -81,7 +115,7 @@ def convert_payload(
     packages_to_install=[
         "pydantic",
         "boto3~=1.35.36",
-        "git+https://github.com/docling-project/docling-jobkit@f898ea96f8c1b8360c837dca41c4295a0fecbca5",
+        "git+https://github.com/docling-project/docling-jobkit@snt/add-allow-formats",
     ],
     base_image="python:3.11",
 )
@@ -93,7 +127,7 @@ def compute_batches(
     from docling_jobkit.connectors.s3_helper import (
         S3Coordinates,
         check_target_has_source_converted,
-        generate_presigns_url,
+        generate_batch_keys,
         get_s3_connection,
         get_source_files,
     )
@@ -123,15 +157,12 @@ def compute_batches(
     filtered_source_keys = check_target_has_source_converted(
         s3_target_coords, source_objects_list, s3_coords_source.key_prefix
     )
-    presigned_urls = generate_presigns_url(
-        s3_source_client,
+    batch_keys = generate_batch_keys(
         filtered_source_keys,
-        s3_coords_source.bucket,
         batch_size=batch_size,
-        expiration_time=36000,
     )
 
-    return presigned_urls
+    return batch_keys
 
 
 @dsl.pipeline
@@ -221,8 +252,9 @@ def docling_s3in_s3out(
     with dsl.ParallelFor(batches.output, parallelism=3) as subbatch:
         converter = convert_payload(
             options=convertion_options,
+            source=source,
             target=target,
-            pre_signed_urls=subbatch,
+            source_keys=subbatch,
         )
         converter.set_memory_request("1G")
         converter.set_memory_limit("7G")
