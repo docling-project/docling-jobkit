@@ -188,6 +188,7 @@ module = [
     "easyocr.*",
     "tesserocr.*",
     "rapidocr_onnxruntime.*",
+    "kfp.*",
 ]
 ignore_missing_imports = true
 
