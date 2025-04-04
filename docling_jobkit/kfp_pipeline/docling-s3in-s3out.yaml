@@ -94,7 +94,7 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef compute_batches(\n    source: Dict,\n    target: Dict,\n    batch_size:\
+          \ *\n\ndef compute_batches(\n    source: dict,\n    target: dict,\n    batch_size:\
           \ int = 10,\n) -> List[List[str]]:\n    from docling_jobkit.connectors.s3_helper\
           \ import (\n        S3Coordinates,\n        check_target_has_source_converted,\n\
           \        generate_presigns_url,\n        get_s3_connection,\n        get_source_files,\n\
@@ -145,23 +145,23 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef convert_payload(\n    options: Dict,\n    target: Dict,\n   \
-          \ pre_signed_urls: List[str],\n) -> List:\n    import logging\n\n    from\
+          \ *\n\ndef convert_payload(\n    options: dict,\n    target: dict,\n   \
+          \ pre_signed_urls: List[str],\n) -> list:\n    import logging\n\n    from\
           \ docling.datamodel.pipeline_options import (\n        PdfPipelineOptions,\n\
-          \        TableFormerMode,\n    )\n    from docling.models.factories import\
-          \ get_ocr_factory  # type: ignore\n\n    from docling_jobkit.connectors.s3_helper\
-          \ import (  # type: ignore\n        DoclingConvert,\n        S3Coordinates,\n\
-          \    )\n\n    logging.basicConfig(level=logging.INFO)\n\n    logging.info(\"\
-          Type of pre_signed_urls: {}\".format(type(pre_signed_urls)))\n\n    s3_coords\
+          \        TableFormerMode,\n        OcrOptions\n    )\n    from docling.models.factories\
+          \ import get_ocr_factory\n\n    from docling_jobkit.connectors.s3_helper\
+          \ import (\n        DoclingConvert,\n        S3Coordinates,\n    )\n\n \
+          \   logging.basicConfig(level=logging.INFO)\n\n    logging.info(\"Type of\
+          \ pre_signed_urls: {}\".format(type(pre_signed_urls)))\n\n    s3_coords\
           \ = S3Coordinates(\n        endpoint=target[\"s3_target_endpoint\"],\n \
           \       verify_ssl=target[\"s3_target_ssl\"],\n        access_key=target[\"\
           s3_target_access_key\"],\n        secret_key=target[\"s3_target_secret_key\"\
           ],\n        bucket=target[\"s3_target_bucket\"],\n        key_prefix=target[\"\
           s3_target_prefix\"],\n    )\n\n    pipeline_options = PdfPipelineOptions()\n\
           \    pipeline_options.do_ocr = options[\"do_ocr\"]\n    ocr_factory = get_ocr_factory()\n\
-          \n    pipeline_options.ocr_options = ocr_factory.create_options(  # type:\
-          \ ignore\n        kind=options[\"ocr_engine\"]\n    )\n\n    pipeline_options.do_table_structure\
-          \ = options[\"do_table_structure\"]\n    pipeline_options.table_structure_options.mode\
+          \n    pipeline_options.ocr_options = cast(\n        OcrOptions, ocr_factory.create_options(kind=options[\"\
+          ocr_engine\"])\n    )\n\n    pipeline_options.do_table_structure = options[\"\
+          do_table_structure\"]\n    pipeline_options.table_structure_options.mode\
           \ = TableFormerMode(\n        options[\"table_mode\"]\n    )\n    pipeline_options.generate_page_images\
           \ = options[\"include_images\"]\n    pipeline_options.do_code_enrichment\
           \ = options[\"do_code_enrichment\"]\n    pipeline_options.do_formula_enrichment\
@@ -174,7 +174,7 @@ deploymentSpec:
           \n    results = []\n    for item in converter.convert_documents(pre_signed_urls):\n\
           \        results.append(item)\n        logging.info(\"Convertion result:\
           \ {}\".format(item))\n\n    return results\n\n"
-        image: quay.io/docling-project/docling-serve:dev-0.0.2
+        image: quay.io/docling-project/docling-serve:dev-0.0.7
         resources:
           cpuLimit: 1.0
           cpuRequest: 0.2
@@ -192,8 +192,7 @@ root:
         inputs:
           parameters:
             batch_size:
-              runtimeValue:
-                constant: 5.0
+              componentInputParameter: batch_size
             source:
               componentInputParameter: source
             target:

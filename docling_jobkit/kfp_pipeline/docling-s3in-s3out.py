@@ -1,8 +1,8 @@
 # ruff: noqa: E402
 
-from typing import Dict, List
+from typing import List, cast
 
-from kfp import dsl  # type: ignore
+from kfp import dsl
 
 
 @dsl.component(
@@ -10,22 +10,23 @@ from kfp import dsl  # type: ignore
         "docling==2.28.0",
         "git+https://github.com/docling-project/docling-jobkit@f898ea96f8c1b8360c837dca41c4295a0fecbca5",
     ],
-    base_image="quay.io/docling-project/docling-serve:dev-0.0.2",  # base docling-serve image with fixed permissions
+    base_image="quay.io/docling-project/docling-serve:dev-0.0.7",  # base docling-serve image with fixed permissions
 )
 def convert_payload(
-    options: Dict,
-    target: Dict,
+    options: dict,
+    target: dict,
     pre_signed_urls: List[str],
-) -> List:
+) -> list:
     import logging
 
     from docling.datamodel.pipeline_options import (
+        OcrOptions,
         PdfPipelineOptions,
         TableFormerMode,
     )
-    from docling.models.factories import get_ocr_factory  # type: ignore
+    from docling.models.factories import get_ocr_factory
 
-    from docling_jobkit.connectors.s3_helper import (  # type: ignore
+    from docling_jobkit.connectors.s3_helper import (
         DoclingConvert,
         S3Coordinates,
     )
@@ -47,8 +48,8 @@ def convert_payload(
     pipeline_options.do_ocr = options["do_ocr"]
     ocr_factory = get_ocr_factory()
 
-    pipeline_options.ocr_options = ocr_factory.create_options(  # type: ignore
-        kind=options["ocr_engine"]
+    pipeline_options.ocr_options = cast(
+        OcrOptions, ocr_factory.create_options(kind=options["ocr_engine"])
     )
 
     pipeline_options.do_table_structure = options["do_table_structure"]
@@ -85,8 +86,8 @@ def convert_payload(
     base_image="python:3.11",
 )
 def compute_batches(
-    source: Dict,
-    target: Dict,
+    source: dict,
+    target: dict,
     batch_size: int = 10,
 ) -> List[List[str]]:
     from docling_jobkit.connectors.s3_helper import (
@@ -135,7 +136,7 @@ def compute_batches(
 
 @dsl.pipeline
 def docling_s3in_s3out(
-    convertion_options: Dict = {
+    convertion_options: dict = {
         "from_formats": [
             "docx",
             "pptx",
@@ -168,7 +169,7 @@ def docling_s3in_s3out(
         "include_images": True,
         "images_scale": 2,
     },
-    source: Dict = {
+    source: dict = {
         "s3_source_endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
         "s3_source_access_key": "123454321",
         "s3_source_secret_key": "secretsecret",
@@ -176,7 +177,7 @@ def docling_s3in_s3out(
         "s3_source_prefix": "my-docs",
         "s3_source_ssl": True,
     },
-    target: Dict = {
+    target: dict = {
         "s3_target_endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
         "s3_target_access_key": "123454321",
         "s3_target_secret_key": "secretsecret",
@@ -185,18 +186,18 @@ def docling_s3in_s3out(
         "s3_target_ssl": True,
     },
     batch_size: int = 20,
-    # accelerator_settings: Dict = {
+    # accelerator_settings: dict = {
     #     "use_accelerator": False,
     #     "accelerator_type": "nvidia.com/gpu",
     #     "accelerator_limit": 1,
     # },
-    # node_selector: Dict = {
+    # node_selector: dict = {
     #     "add_node_selector": False,
     #     "labels": [
     #         {"label_key": "nvidia.com/gpu.product", "label_value": "NVIDIA-A10"}
     #     ],
     # },
-    # tolerations: Dict = {
+    # tolerations: dict = {
     #     "add_tolerations": False,
     #     "tolerations": [
     #         {
@@ -212,7 +213,7 @@ def docling_s3in_s3out(
 
     logging.basicConfig(level=logging.INFO)
 
-    batches = compute_batches(source=source, target=target, batch_size=5)
+    batches = compute_batches(source=source, target=target, batch_size=batch_size)
     # disable caching on batches as cached pre-signed urls might have already expired
     batches.set_caching_options(False)
 
