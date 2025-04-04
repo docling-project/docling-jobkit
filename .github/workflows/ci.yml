@@ -8,9 +8,7 @@ on:
 
 jobs:
   code-checks:
+    if: ${{ github.event_name == 'push' || (github.event.pull_request.head.repo.full_name != 'docling-project/docling-jobkit' && github.event.pull_request.head.repo.full_name != 'docling-project/docling-jobkit') }}
     uses: ./.github/workflows/job-checks.yml
-    permissions:
-      packages: write
-      contents: read
-      attestations: write
-      id-token: write
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

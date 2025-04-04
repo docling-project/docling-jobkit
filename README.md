@@ -72,6 +72,10 @@ If you use Docling in your projects, please consider citing the following:
 
 The Docling Serve codebase is under MIT license.
 
-## IBM ❤️ Open Source AI
+## LF AI & Data
 
-Docling has been brought to you by IBM.
+Docling is hosted as a project in the [LF AI & Data Foundation](https://lfaidata.foundation/projects/).
+
+### IBM ❤️ Open Source AI
+
+The project was started by the AI for Knowledge team at IBM Research Zurich.

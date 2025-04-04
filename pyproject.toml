@@ -1,9 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "docling-jobkit"
 version = "0.1.0"  # DO NOT EDIT, updated automatically
 description = "Running a distributed job processing documents with Docling."
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name="Michele Dolfi", email="dol@zurich.ibm.com"},
     {name="Viktor Kuropiatnyk", email="vku@zurich.ibm.com"},
@@ -21,12 +25,18 @@ maintainers = [
     {name="Peter Staar", email="taa@zurich.ibm.com"},
 ]
 classifiers = [
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-    # "Development Status :: 5 - Production/Stable",
+    "Operating System :: OS Independent", 
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Typing :: Typed",
-    "Programming Language :: Python :: 3"
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 requires-python = ">=3.10"
 dependencies = [
@@ -58,11 +68,13 @@ cu124 = [
 
 [dependency-groups]
 dev = [
+    "coverage>=7.8.0",
     "mypy~=1.11",
     "pre-commit~=3.8",
     "pytest~=8.3",
     "pytest-asyncio~=0.24",
     "pytest-check~=2.4",
+    "pytest-cov>=6.1.1",
     "python-semantic-release~=7.32",
     "ruff>=0.9.6",
 ]
@@ -96,8 +108,8 @@ name = "pytorch-cu124"
 url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
-[tool.setuptools.packages.find]
-include = ["docling_jobkit*"]
+[tool.hatch.build.targets.sdist]
+include = ["docling_jobkit"]
 
 [project.scripts]
 docling-ray-job = "docling_jobkit.ray_job.main:main"
@@ -151,14 +163,18 @@ ignore = [
     "RUF012", # Mutable Class Attributes
 ]
 
-#extend-select = []
+[tool.ruff.lint.pep8-naming]
+classmethod-decorators = [
+    # Allow Pydantic's `@validator` decorator to trigger class method treatment.
+    "pydantic.validator",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
 "tests/*.py" = ["ASYNC"] # Disable ASYNC check for tests
 
 [tool.ruff.lint.mccabe]
-max-complexity = 15
+max-complexity = 20
 
 [tool.ruff.lint.isort.sections]
 "docling" = ["docling", "docling_core"]
@@ -173,6 +189,9 @@ section-order = [
   "first-party",
   "local-folder",
 ]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.mypy]
 pretty = true
