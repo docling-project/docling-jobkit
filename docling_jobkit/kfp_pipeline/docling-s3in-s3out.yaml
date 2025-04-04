@@ -147,8 +147,8 @@ deploymentSpec:
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef convert_payload(\n    options: dict,\n    target: dict,\n   \
           \ pre_signed_urls: List[str],\n) -> list:\n    import logging\n\n    from\
-          \ docling.datamodel.pipeline_options import (\n        PdfPipelineOptions,\n\
-          \        TableFormerMode,\n        OcrOptions\n    )\n    from docling.models.factories\
+          \ docling.datamodel.pipeline_options import (\n        OcrOptions,\n   \
+          \     PdfPipelineOptions,\n        TableFormerMode,\n    )\n    from docling.models.factories\
           \ import get_ocr_factory\n\n    from docling_jobkit.connectors.s3_helper\
           \ import (\n        DoclingConvert,\n        S3Coordinates,\n    )\n\n \
           \   logging.basicConfig(level=logging.INFO)\n\n    logging.info(\"Type of\
@@ -174,7 +174,7 @@ deploymentSpec:
           \n    results = []\n    for item in converter.convert_documents(pre_signed_urls):\n\
           \        results.append(item)\n        logging.info(\"Convertion result:\
           \ {}\".format(item))\n\n    return results\n\n"
-        image: quay.io/docling-project/docling-serve:dev-0.0.7
+        image: quay.io/docling-project/docling-serve:dev-0.0.2
         resources:
           cpuLimit: 1.0
           cpuRequest: 0.2

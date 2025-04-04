@@ -10,7 +10,7 @@ from kfp import dsl
         "docling==2.28.0",
         "git+https://github.com/docling-project/docling-jobkit@f898ea96f8c1b8360c837dca41c4295a0fecbca5",
     ],
-    base_image="quay.io/docling-project/docling-serve:dev-0.0.7",  # base docling-serve image with fixed permissions
+    base_image="quay.io/docling-project/docling-serve:dev-0.0.2",  # base docling-serve image with fixed permissions
 )
 def convert_payload(
     options: dict,
