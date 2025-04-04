@@ -8,7 +8,7 @@ from kfp import dsl  # type: ignore
 @dsl.component(
     packages_to_install=[
         "docling==2.28.0",
-        "git+https://github.com/docling-project/docling-jobkit@vku/s3_commons",
+        "git+https://github.com/docling-project/docling-jobkit@f898ea96f8c1b8360c837dca41c4295a0fecbca5",
     ],
     base_image="quay.io/docling-project/docling-serve:dev-0.0.2",  # base docling-serve image with fixed permissions
 )
@@ -46,9 +46,7 @@ def convert_payload(
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = options["do_ocr"]
     ocr_factory = get_ocr_factory()
-    # pipeline_options.ocr_options = cast(
-    #     OcrOptions, ocr_factory.create_options(kind=options["ocr_engine"])
-    # )
+
     pipeline_options.ocr_options = ocr_factory.create_options(  # type: ignore
         kind=options["ocr_engine"]
     )
@@ -82,7 +80,7 @@ def convert_payload(
     packages_to_install=[
         "pydantic",
         "boto3~=1.35.36",
-        "git+https://github.com/docling-project/docling-jobkit@vku/s3_commons",
+        "git+https://github.com/docling-project/docling-jobkit@f898ea96f8c1b8360c837dca41c4295a0fecbca5",
     ],
     base_image="python:3.11",
 )

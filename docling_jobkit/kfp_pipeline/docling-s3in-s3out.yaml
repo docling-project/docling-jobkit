@@ -81,7 +81,7 @@ deploymentSpec:
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.8.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
           \  python3 -m pip install --quiet --no-warn-script-location 'pydantic' 'boto3~=1.35.36'\
-          \ 'git+https://github.com/docling-project/docling-jobkit@vku/s3_commons'\
+          \ 'git+https://github.com/docling-project/docling-jobkit@f898ea96f8c1b8360c837dca41c4295a0fecbca5'\
           \ && \"$0\" \"$@\"\n"
         - sh
         - -ec
@@ -132,7 +132,7 @@ deploymentSpec:
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.8.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
           \  python3 -m pip install --quiet --no-warn-script-location 'docling==2.28.0'\
-          \ 'git+https://github.com/docling-project/docling-jobkit@vku/s3_commons'\
+          \ 'git+https://github.com/docling-project/docling-jobkit@f898ea96f8c1b8360c837dca41c4295a0fecbca5'\
           \ && \"$0\" \"$@\"\n"
         - sh
         - -ec
@@ -146,22 +146,22 @@ deploymentSpec:
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef convert_payload(\n    options: Dict,\n    target: Dict,\n   \
-          \ pre_signed_urls: List[str],\n) -> List:\n    import logging\n    import\
-          \ os\n    from pathlib import Path\n    from typing import cast\n\n    from\
-          \ docling.datamodel.pipeline_options import (\n        OcrOptions,\n   \
-          \     PdfPipelineOptions,\n        TableFormerMode,\n    )\n    from docling.models.factories\
-          \ import get_ocr_factory\n\n    from docling_jobkit.connectors.s3_helper\
-          \ import DoclingConvert, S3Coordinates\n\n    logging.basicConfig(level=logging.INFO)\n\
-          \n    logging.info(\"Type of pre_signed_urls: {}\".format(type(pre_signed_urls)))\n\
-          \n    s3_coords = S3Coordinates(\n        endpoint=target[\"s3_target_endpoint\"\
-          ],\n        verify_ssl=target[\"s3_target_ssl\"],\n        access_key=target[\"\
+          \ pre_signed_urls: List[str],\n) -> List:\n    import logging\n\n    from\
+          \ docling.datamodel.pipeline_options import (\n        PdfPipelineOptions,\n\
+          \        TableFormerMode,\n    )\n    from docling.models.factories import\
+          \ get_ocr_factory  # type: ignore\n\n    from docling_jobkit.connectors.s3_helper\
+          \ import (  # type: ignore\n        DoclingConvert,\n        S3Coordinates,\n\
+          \    )\n\n    logging.basicConfig(level=logging.INFO)\n\n    logging.info(\"\
+          Type of pre_signed_urls: {}\".format(type(pre_signed_urls)))\n\n    s3_coords\
+          \ = S3Coordinates(\n        endpoint=target[\"s3_target_endpoint\"],\n \
+          \       verify_ssl=target[\"s3_target_ssl\"],\n        access_key=target[\"\
           s3_target_access_key\"],\n        secret_key=target[\"s3_target_secret_key\"\
           ],\n        bucket=target[\"s3_target_bucket\"],\n        key_prefix=target[\"\
-          s3_target_prefix\"],\n    )\n\n\n    pipeline_options = PdfPipelineOptions()\n\
+          s3_target_prefix\"],\n    )\n\n    pipeline_options = PdfPipelineOptions()\n\
           \    pipeline_options.do_ocr = options[\"do_ocr\"]\n    ocr_factory = get_ocr_factory()\n\
-          \    pipeline_options.ocr_options = cast(\n        OcrOptions, ocr_factory.create_options(kind=options[\"\
-          ocr_engine\"])\n    )\n    pipeline_options.do_table_structure = options[\"\
-          do_table_structure\"]\n    pipeline_options.table_structure_options.mode\
+          \n    pipeline_options.ocr_options = ocr_factory.create_options(  # type:\
+          \ ignore\n        kind=options[\"ocr_engine\"]\n    )\n\n    pipeline_options.do_table_structure\
+          \ = options[\"do_table_structure\"]\n    pipeline_options.table_structure_options.mode\
           \ = TableFormerMode(\n        options[\"table_mode\"]\n    )\n    pipeline_options.generate_page_images\
           \ = options[\"include_images\"]\n    pipeline_options.do_code_enrichment\
           \ = options[\"do_code_enrichment\"]\n    pipeline_options.do_formula_enrichment\
