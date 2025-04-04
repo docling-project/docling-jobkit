@@ -15,6 +15,7 @@ from docling_jobkit.connectors.s3_helper import (
     get_s3_connection,
     get_source_files,
 )
+from docling_jobkit.model.convert import ConvertDocumentsOptions
 
 load_dotenv("./dev/.env")
 
@@ -35,16 +36,42 @@ batch_size = int(os.environ["BATCH_SIZE"])
 max_concurrency = int(os.environ["OMP_NUM_THREADS"])
 
 # Load conversion settings
-do_ocr = os.environ.get("SETTINGS_DO_OCR", True)
-ocr_kind = os.environ.get("SETTINGS_OCR_KIND", "easyocr")
-do_table_structure = os.environ.get("SETTINGS_DO_TABLE_STRUCTURE", True)
-table_structure_mode = os.environ.get("SETTINGS_TABLE_STRUCTURE_MODE", "fast")
-generate_page_images = os.environ.get("SETTINGS_GENERATE_PAGE_IMAGES", False)
-do_code_enrichment = os.environ.get("SETTINGS_DO_CODE_ENRICHMENT", False)
-do_formula_enrichment = os.environ.get("SETTINGS_DO_FORMULA_ENRICHMENT", False)
-do_picture_classification = os.environ.get("SETTINGS_DO_PICTURE_CLASSIFICATION", False)
-do_picture_description = os.environ.get("SETTINGS_DO_PICTURE_DESCRIPTION", False)
-generate_picture_images = os.environ.get("SETTINGS_PICTURE_PAGE_IMAGES", False)
+
+input_convertion_options: dict = {
+        "from_formats": [
+            "docx",
+            "pptx",
+            "html",
+            "image",
+            "pdf",
+            "asciidoc",
+            "md",
+            "xlsx",
+            "xml_uspto",
+            "xml_jats",
+            "json_docling",
+        ],
+        "to_formats": ["md", "json", "html", "text", "doctags"],
+        "image_export_mode": "placeholder",
+        "do_ocr": os.environ.get("SETTINGS_DO_OCR", True),
+        "force_ocr": False,
+        "ocr_engine": os.environ.get("SETTINGS_OCR_KIND", "easyocr"),
+        "ocr_lang": ["en"],
+        "pdf_backend": "dlparse_v4",
+        "table_mode": os.environ.get("SETTINGS_TABLE_STRUCTURE_MODE", "fast"),
+        "abort_on_error": False,
+        "return_as_file": False,
+        "do_table_structure": os.environ.get("SETTINGS_DO_TABLE_STRUCTURE", True),
+        "include_images": os.environ.get("SETTINGS_GENERATE_PAGE_IMAGES", False),
+        "images_scale": 2,
+        "do_code_enrichment": os.environ.get("SETTINGS_DO_CODE_ENRICHMENT", False),
+        "do_formula_enrichment": os.environ.get("SETTINGS_DO_FORMULA_ENRICHMENT", False),
+        "do_picture_classification": os.environ.get("SETTINGS_DO_PICTURE_CLASSIFICATION", False),
+        "do_picture_description": os.environ.get("SETTINGS_DO_PICTURE_DESCRIPTION", False),
+        "generate_picture_images": os.environ.get("SETTINGS_PICTURE_PAGE_IMAGES", False),
+        
+        
+    }
 
 
 # get source keys
@@ -67,6 +94,10 @@ s3_target_coords = S3Coordinates(
 )
 
 
+# validate inputs
+convert_options = ConvertDocumentsOptions.model_validate(input_convertion_options)
+
+
 s3_source_client, s3_source_resource = get_s3_connection(s3_coords_source)
 source_objects_list = get_source_files(
     s3_source_client, s3_source_resource, s3_coords_source
@@ -82,17 +113,17 @@ presigned_urls = generate_presigns_url(
 os.environ["EASYOCR_MODULE_PATH"] = "./models_cache/EasyOcr"
 models_path = download_models(output_dir=Path("./models_cache"))
 pipeline_options = PdfPipelineOptions()
-pipeline_options.do_ocr = do_ocr
+pipeline_options.do_ocr = convert_options.do_ocr
 ocr_factory = get_ocr_factory()
-pipeline_options.ocr_options = ocr_factory.create_options(kind=ocr_kind)
-pipeline_options.do_table_structure = do_table_structure
-pipeline_options.table_structure_options.mode = TableFormerMode(table_structure_mode)
-pipeline_options.generate_page_images = generate_page_images
-pipeline_options.do_code_enrichment = do_code_enrichment
-pipeline_options.do_formula_enrichment = do_formula_enrichment
-pipeline_options.do_picture_classification = do_picture_classification
-pipeline_options.do_picture_description = do_picture_description
-pipeline_options.generate_picture_images = generate_picture_images
+pipeline_options.ocr_options = ocr_factory.create_options(kind=convert_options.ocr_engine)
+pipeline_options.do_table_structure = convert_options.do_table_structure
+pipeline_options.table_structure_options.mode = TableFormerMode(convert_options.table_mode)
+pipeline_options.generate_page_images = convert_options.include_images
+pipeline_options.do_code_enrichment = convert_options.do_code_enrichment
+pipeline_options.do_formula_enrichment = convert_options.do_formula_enrichment
+pipeline_options.do_picture_classification = convert_options.do_picture_classification
+pipeline_options.do_picture_description = convert_options.do_picture_description
+pipeline_options.generate_picture_images = convert_options.generate_picture_images
 
 pipeline_options.artifacts_path = models_path
 
