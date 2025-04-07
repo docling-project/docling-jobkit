@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Union
 from urllib.parse import urlparse, urlunsplit
+from io import BytesIO
 
 from boto3.resources.base import ServiceResource
 from boto3.session import Session
@@ -417,9 +418,10 @@ class DoclingConvert:
                 if page.image and page.image.pil_image:
                     page_hash = create_hash(f"{doc_hash}_page_no_{page_no}")
                     page_path_suffix = f"/pages/{page_hash}.png"
-
+                    byteIO = BytesIO()
+                    page.image.pil_image.save(byteIO, format='PNG')
                     self.upload_object_to_s3(
-                        file=page.image.pil_image.tobytes(),
+                        file=byteIO.getvalue(),
                         target_key=f"{s3_target_prefix}" + page_path_suffix,
                         content_type="application/png",
                     )
@@ -442,9 +444,10 @@ class DoclingConvert:
                     try:
                         element_hash = create_hash(f"{doc_hash}_img_{picture_number}")
                         element_path_suffix = f"/images/{element_hash}.png"
-
+                        byteIO = BytesIO()
+                        element.image.pil_image.save(byteIO, format='PNG')
                         self.upload_object_to_s3(
-                            file=element.image.pil_image.tobytes(),
+                            file=byteIO.getvalue(),
                             target_key=f"{s3_target_prefix}" + element_path_suffix,
                             content_type="application/png",
                         )
