@@ -18,17 +18,18 @@ from docling.datamodel.document import ConversionResult
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.exceptions import ConversionError
+from docling_jobkit.model.s3_inputs import S3Coordinates
 
 logging.basicConfig(level=logging.INFO)
 
 
-class S3Coordinates(BaseModel):
-    endpoint: str
-    verify_ssl: bool
-    access_key: str
-    secret_key: str
-    bucket: str
-    key_prefix: str
+# class S3Coordinates(BaseModel):
+#     endpoint: str
+#     verify_ssl: bool
+#     access_key: str
+#     secret_key: str
+#     bucket: str
+#     key_prefix: str
 
 
 def get_s3_connection(coords: S3Coordinates):
@@ -45,8 +46,8 @@ def get_s3_connection(coords: S3Coordinates):
         "s3",
         endpoint_url=endpoint,
         verify=coords.verify_ssl,
-        aws_access_key_id=coords.access_key,
-        aws_secret_access_key=coords.secret_key,
+        aws_access_key_id=coords.access_key.get_secret_value(),
+        aws_secret_access_key=coords.secret_key.get_secret_value(),
         config=config,
     )
 
@@ -54,8 +55,8 @@ def get_s3_connection(coords: S3Coordinates):
         "s3",
         endpoint_url=endpoint,
         verify=coords.verify_ssl,
-        aws_access_key_id=coords.access_key,
-        aws_secret_access_key=coords.secret_key,
+        aws_access_key_id=coords.access_key.get_secret_value(),
+        aws_secret_access_key=coords.secret_key.get_secret_value(),
         config=config,
     )
 

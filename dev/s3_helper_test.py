@@ -9,13 +9,15 @@ from docling.utils.model_downloader import download_models
 
 from docling_jobkit.connectors.s3_helper import (
     DoclingConvert,
-    S3Coordinates,
+    # S3Coordinates,
     check_target_has_source_converted,
     generate_presigns_url,
     get_s3_connection,
     get_source_files,
 )
 from docling_jobkit.model.convert import ConvertDocumentsOptions
+from docling_jobkit.model.s3_inputs import S3Coordinates
+
 
 load_dotenv("./dev/.env")
 
@@ -74,24 +76,46 @@ input_convertion_options: dict = {
     }
 
 
-# get source keys
-s3_coords_source = S3Coordinates(
-    endpoint=s3_source_endpoint,
-    verify_ssl=s3_source_ssl,
-    access_key=s3_source_access_key,
-    secret_key=s3_source_secret_key,
-    bucket=s3_source_bucket,
-    key_prefix=s3_source_prefix,
-)
+s3_source: dict = {
+    "endpoint": s3_source_endpoint,
+    "verify_ssl": s3_source_ssl,
+    "access_key": s3_source_access_key,
+    "secret_key": s3_source_secret_key,
+    "bucket": s3_source_bucket,
+    "key_prefix": s3_source_prefix
+}
 
-s3_target_coords = S3Coordinates(
-    endpoint=s3_target_endpoint,
-    verify_ssl=s3_target_ssl,
-    access_key=s3_target_access_key,
-    secret_key=s3_target_secret_key,
-    bucket=s3_target_bucket,
-    key_prefix=s3_target_prefix,
-)
+s3_target: dict = {
+    "endpoint": s3_target_endpoint,
+    "verify_ssl": s3_target_ssl,
+    "access_key": s3_target_access_key,
+    "secret_key": s3_target_secret_key,
+    "bucket": s3_target_bucket,
+    "key_prefix": s3_target_prefix
+}
+
+# validate inputs
+s3_coords_source = S3Coordinates.model_validate(s3_source)
+s3_target_coords = S3Coordinates.model_validate(s3_target)
+
+# # get source keys
+# s3_coords_source = S3Coordinates(
+#     endpoint=s3_source_endpoint,
+#     verify_ssl=s3_source_ssl,
+#     access_key=s3_source_access_key,
+#     secret_key=s3_source_secret_key,
+#     bucket=s3_source_bucket,
+#     key_prefix=s3_source_prefix,
+# )
+
+# s3_target_coords = S3Coordinates(
+#     endpoint=s3_target_endpoint,
+#     verify_ssl=s3_target_ssl,
+#     access_key=s3_target_access_key,
+#     secret_key=s3_target_secret_key,
+#     bucket=s3_target_bucket,
+#     key_prefix=s3_target_prefix,
+# )
 
 
 # validate inputs
