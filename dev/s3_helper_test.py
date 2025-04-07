@@ -1,17 +1,22 @@
 import os
 from pathlib import Path
-
+from typing import Optional
 from dotenv import load_dotenv
 
-from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
+from docling.datamodel.pipeline_options import (
+    PdfPipelineOptions, 
+    TableFormerMode,
+    PdfBackend,
+)
+from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBackend
+from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
 from docling.models.factories import get_ocr_factory
 from docling.utils.model_downloader import download_models
-
+from docling.backend.pdf_backend import PdfDocumentBackend
 from docling_jobkit.connectors.s3_helper import (
     DoclingConvert,
     S3Coordinates,
     check_target_has_source_converted,
-    generate_presigns_url,
     get_s3_connection,
     get_source_files,
 )
@@ -35,6 +40,8 @@ batch_size = int(os.environ["BATCH_SIZE"])
 max_concurrency = int(os.environ["OMP_NUM_THREADS"])
 
 # Load conversion settings
+from_formats = os.environ.get("SETTINGS_FROM_FORMATS", ["pdf"])
+to_formats = os.environ.get("SETTINGS_TO_FORMATS", ["json"])
 do_ocr = os.environ.get("SETTINGS_DO_OCR", True)
 ocr_kind = os.environ.get("SETTINGS_OCR_KIND", "easyocr")
 do_table_structure = os.environ.get("SETTINGS_DO_TABLE_STRUCTURE", True)
@@ -45,6 +52,7 @@ do_formula_enrichment = os.environ.get("SETTINGS_DO_FORMULA_ENRICHMENT", False)
 do_picture_classification = os.environ.get("SETTINGS_DO_PICTURE_CLASSIFICATION", False)
 do_picture_description = os.environ.get("SETTINGS_DO_PICTURE_DESCRIPTION", False)
 generate_picture_images = os.environ.get("SETTINGS_PICTURE_PAGE_IMAGES", False)
+pdf_backend = os.environ.get("SETTINGS_PDF_BACKEND", "dlparse_v2")
 
 
 # get source keys
@@ -74,9 +82,24 @@ source_objects_list = get_source_files(
 filtered_source_keys = check_target_has_source_converted(
     s3_target_coords, source_objects_list, s3_coords_source.key_prefix
 )
-presigned_urls = generate_presigns_url(
-    s3_source_client, filtered_source_keys, s3_coords_source.bucket, batch_size=5
-)
+# presigned_urls = generate_presign_url(
+#     s3_source_client, filtered_source_keys, s3_coords_source.bucket, batch_size=5
+# )
+
+backend: Optional[type[PdfDocumentBackend]] = None
+if pdf_backend:
+    if pdf_backend == PdfBackend.DLPARSE_V1:
+        backend = DoclingParseDocumentBackend
+    elif pdf_backend == PdfBackend.DLPARSE_V2:
+        backend = DoclingParseV2DocumentBackend
+    elif pdf_backend == PdfBackend.DLPARSE_V4:
+        backend = DoclingParseV4DocumentBackend
+    elif pdf_backend == PdfBackend.PYPDFIUM2:
+        backend = PyPdfiumDocumentBackend
+    else:
+        raise RuntimeError(
+            f"Unexpected PDF backend type {options.get('pdf_backend')}"
+        )
 
 
 os.environ["EASYOCR_MODULE_PATH"] = "./models_cache/EasyOcr"
@@ -96,11 +119,19 @@ pipeline_options.generate_picture_images = generate_picture_images
 
 pipeline_options.artifacts_path = models_path
 
-converter = DoclingConvert(s3_target_coords, pipeline_options)
+# converter = DoclingConvert(s3_target_coords, pipeline_options)
+converter = DoclingConvert(
+        source_s3_coords=s3_coords_source,
+        target_s3_coords=s3_target_coords,
+        pipeline_options=pipeline_options,
+        allowed_formats=from_formats,
+        to_formats=to_formats,
+        backend=backend,
+    )
 
-print(presigned_urls)
+print(filtered_source_keys)
 
 results = []
-for item in converter.convert_documents(presigned_urls=presigned_urls[0]):
+for item in converter.convert_documents(filtered_source_keys):
     results.append(item)
     print(f"Convertion result: {item}")

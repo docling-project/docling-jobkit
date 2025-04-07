@@ -166,7 +166,7 @@ def compute_batches(
 
 
 @dsl.pipeline
-def docling_s3in_s3out(
+def tiago_docling_s3in_s3out(
     convertion_options: dict = {
         "from_formats": [
             "docx",
@@ -292,4 +292,4 @@ def docling_s3in_s3out(
 
 from kfp import compiler
 
-compiler.Compiler().compile(docling_s3in_s3out, "docling-s3in-s3out.yaml")
+compiler.Compiler().compile(tiago_docling_s3in_s3out, "docling-s3in-s3out.yaml")
