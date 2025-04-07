@@ -1,5 +1,5 @@
 # PIPELINE DEFINITION
-# Name: tiago-docling-s3in-s3out
+# Name: docling-s3in-s3out
 # Inputs:
 #    batch_size: int [Default: 20.0]
 #    convertion_options: dict [Default: {'force_ocr': False, 'do_code_enrichment': False, 'do_formula_enrichment': False, 'do_picture_classification': False, 'to_formats': ['md', 'json', 'html', 'text', 'doctags'], 'return_as_file': False, 'include_images': True, 'abort_on_error': False, 'ocr_lang': [], 'do_picture_description': False, 'ocr_engine': 'easyocr', 'table_mode': 'accurate', 'images_scale': 2.0, 'image_export_mode': 'placeholder', 'generate_picture_images': False, 'do_ocr': True, 'from_formats': ['docx', 'pptx', 'html', 'image', 'pdf', 'asciidoc', 'md', 'xlsx', 'xml_uspto', 'xml_jats', 'json_docling'], 'pdf_backend': 'dlparse_v2', 'do_table_structure': True}]
@@ -206,7 +206,7 @@ deploymentSpec:
           memoryLimit: 7.0
           memoryRequest: 1.0
 pipelineInfo:
-  name: tiago-docling-s3in-s3out
+  name: docling-s3in-s3out
 root:
   dag:
     tasks:
