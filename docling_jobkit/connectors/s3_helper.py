@@ -1,10 +1,10 @@
 import logging
 import os
 import tempfile
+from io import BytesIO
 from pathlib import Path
 from typing import Optional, Union
 from urllib.parse import urlparse, urlunsplit
-from io import BytesIO
 
 from boto3.resources.base import ServiceResource
 from boto3.session import Session
@@ -294,8 +294,14 @@ class DoclingConvert:
                 logging.error("Conversion exception: {}".format(e))
             if conv_res.status == ConversionStatus.SUCCESS:
                 s3_target_prefix = self.target_coords.key_prefix
-                doc_filename = conv_res.input.file.stem
-                logging.debug(f"Converted {doc_filename} now saving results")
+                doc_hash = conv_res.input.document_hash
+                logging.debug(f"Converted {doc_hash} now saving results")
+
+                self.upload_file_to_s3(
+                    file=conv_res.input.file,
+                    target_key=f"{s3_target_prefix}/pdf/{doc_hash}.pdf",
+                    content_type="application/pdf",
+                )
 
                 if self.export_page_images:
                     # Export pages images:
@@ -317,7 +323,7 @@ class DoclingConvert:
                     self.to_formats and "json" in self.to_formats
                 ):
                     # Export Docling document format to JSON:
-                    target_key = f"{s3_target_prefix}/json/{doc_filename}.json"
+                    target_key = f"{s3_target_prefix}/json/{doc_hash}.json"
                     with tempfile.NamedTemporaryFile() as temp_json_file:
                         conv_res.document.save_as_json(
                             filename=Path(temp_json_file.name),
@@ -332,9 +338,7 @@ class DoclingConvert:
                     self.to_formats and "doctags" in self.to_formats
                 ):
                     # Export Docling document format to doctags:
-                    target_key = (
-                        f"{s3_target_prefix}/doctags/{doc_filename}.doctags.txt"
-                    )
+                    target_key = f"{s3_target_prefix}/doctags/{doc_hash}.doctags.txt"
                     data = conv_res.document.export_to_document_tokens()
                     self.upload_object_to_s3(
                         file=data,
@@ -345,7 +349,7 @@ class DoclingConvert:
                     self.to_formats and "md" in self.to_formats
                 ):
                     # Export Docling document format to markdown:
-                    target_key = f"{s3_target_prefix}/md/{doc_filename}.md"
+                    target_key = f"{s3_target_prefix}/md/{doc_hash}.md"
                     data = conv_res.document.export_to_markdown()
                     self.upload_object_to_s3(
                         file=data,
@@ -356,7 +360,7 @@ class DoclingConvert:
                     self.to_formats and "html" in self.to_formats
                 ):
                     # Export Docling document format to html:
-                    target_key = f"{s3_target_prefix}/html/{doc_filename}.html"
+                    target_key = f"{s3_target_prefix}/html/{doc_hash}.html"
                     with tempfile.NamedTemporaryFile() as temp_html_file:
                         conv_res.document.save_as_html(Path(temp_html_file.name))
                         self.upload_file_to_s3(
@@ -368,14 +372,14 @@ class DoclingConvert:
                     self.to_formats and "text" in self.to_formats
                 ):
                     # Export Docling document format to text:
-                    target_key = f"{s3_target_prefix}/txt/{doc_filename}.txt"
+                    target_key = f"{s3_target_prefix}/txt/{doc_hash}.txt"
                     data = conv_res.document.export_to_text()
                     self.upload_object_to_s3(
                         file=data,
                         target_key=target_key,
                         content_type="text/plain",
                     )
-                yield f"{doc_filename} - SUCCESS"
+                yield f"{doc_hash} - SUCCESS"
 
             elif conv_res.status == ConversionStatus.PARTIAL_SUCCESS:
                 yield f"{conv_res.input.file} - PARTIAL_SUCCESS"
@@ -419,7 +423,7 @@ class DoclingConvert:
                     page_hash = create_hash(f"{doc_hash}_page_no_{page_no}")
                     page_path_suffix = f"/pages/{page_hash}.png"
                     byteIO = BytesIO()
-                    page.image.pil_image.save(byteIO, format='PNG')
+                    page.image.pil_image.save(byteIO, format="PNG")
                     self.upload_object_to_s3(
                         file=byteIO.getvalue(),
                         target_key=f"{s3_target_prefix}" + page_path_suffix,
@@ -445,7 +449,7 @@ class DoclingConvert:
                         element_hash = create_hash(f"{doc_hash}_img_{picture_number}")
                         element_path_suffix = f"/images/{element_hash}.png"
                         byteIO = BytesIO()
-                        element.image.pil_image.save(byteIO, format='PNG')
+                        element.image.pil_image.save(byteIO, format="PNG")
                         self.upload_object_to_s3(
                             file=byteIO.getvalue(),
                             target_key=f"{s3_target_prefix}" + element_path_suffix,
