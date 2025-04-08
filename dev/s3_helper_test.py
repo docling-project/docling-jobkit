@@ -38,42 +38,30 @@ batch_size = int(os.environ["BATCH_SIZE"])
 max_concurrency = int(os.environ["OMP_NUM_THREADS"])
 
 # Load conversion settings
-
 input_convertion_options: dict = {
-        "from_formats": [
-            "docx",
-            "pptx",
-            "html",
-            "image",
-            "pdf",
-            "asciidoc",
-            "md",
-            "xlsx",
-            "xml_uspto",
-            "xml_jats",
-            "json_docling",
-        ],
-        "to_formats": ["md", "json", "html", "text", "doctags"],
-        "image_export_mode": "placeholder",
-        "do_ocr": os.environ.get("SETTINGS_DO_OCR", True),
-        "force_ocr": False,
-        "ocr_engine": os.environ.get("SETTINGS_OCR_KIND", "easyocr"),
-        "ocr_lang": ["en"],
-        "pdf_backend": "dlparse_v4",
-        "table_mode": os.environ.get("SETTINGS_TABLE_STRUCTURE_MODE", "fast"),
-        "abort_on_error": False,
-        "return_as_file": False,
-        "do_table_structure": os.environ.get("SETTINGS_DO_TABLE_STRUCTURE", True),
-        "include_images": os.environ.get("SETTINGS_GENERATE_PAGE_IMAGES", False),
-        "images_scale": 2,
-        "do_code_enrichment": os.environ.get("SETTINGS_DO_CODE_ENRICHMENT", False),
-        "do_formula_enrichment": os.environ.get("SETTINGS_DO_FORMULA_ENRICHMENT", False),
-        "do_picture_classification": os.environ.get("SETTINGS_DO_PICTURE_CLASSIFICATION", False),
-        "do_picture_description": os.environ.get("SETTINGS_DO_PICTURE_DESCRIPTION", False),
-        "generate_picture_images": os.environ.get("SETTINGS_PICTURE_PAGE_IMAGES", False),
-        
-        
-    }
+    "from_formats": ["docx", "pptx", "html", "image", "pdf", "asciidoc", "md", "xlsx", "xml_uspto", "xml_jats", "json_docling"],
+    "to_formats": ["md", "json", "html", "text", "doctags"],
+    "image_export_mode": "placeholder",
+    "do_ocr": os.environ.get("SETTINGS_DO_OCR", True),
+    "force_ocr": False,
+    "ocr_engine": os.environ.get("SETTINGS_OCR_KIND", "easyocr"),
+    "ocr_lang": ["en"],
+    "pdf_backend": os.environ.get("SETTINGS_PDF_BACKEND", "dlparse_v4"),
+    "table_mode": os.environ.get("SETTINGS_TABLE_STRUCTURE_MODE", "fast"),
+    "abort_on_error": False,
+    "return_as_file": False,
+    "do_table_structure": os.environ.get("SETTINGS_DO_TABLE_STRUCTURE", True),
+    "include_images": os.environ.get("SETTINGS_GENERATE_PAGE_IMAGES", False),
+    "images_scale": 2,
+    "do_code_enrichment": os.environ.get("SETTINGS_DO_CODE_ENRICHMENT", False),
+    "do_formula_enrichment": os.environ.get("SETTINGS_DO_FORMULA_ENRICHMENT", False),
+    "do_picture_classification": os.environ.get("SETTINGS_DO_PICTURE_CLASSIFICATION", False),
+    "do_picture_description": os.environ.get("SETTINGS_DO_PICTURE_DESCRIPTION", False),
+    "generate_picture_images": os.environ.get("SETTINGS_PICTURE_PAGE_IMAGES", False),
+}
+
+# validate inputs
+convert_options = ConvertDocumentsOptions.model_validate(input_convertion_options)
 
 
 s3_source: dict = {
@@ -97,29 +85,6 @@ s3_target: dict = {
 # validate inputs
 s3_coords_source = S3Coordinates.model_validate(s3_source)
 s3_target_coords = S3Coordinates.model_validate(s3_target)
-
-# # get source keys
-# s3_coords_source = S3Coordinates(
-#     endpoint=s3_source_endpoint,
-#     verify_ssl=s3_source_ssl,
-#     access_key=s3_source_access_key,
-#     secret_key=s3_source_secret_key,
-#     bucket=s3_source_bucket,
-#     key_prefix=s3_source_prefix,
-# )
-
-# s3_target_coords = S3Coordinates(
-#     endpoint=s3_target_endpoint,
-#     verify_ssl=s3_target_ssl,
-#     access_key=s3_target_access_key,
-#     secret_key=s3_target_secret_key,
-#     bucket=s3_target_bucket,
-#     key_prefix=s3_target_prefix,
-# )
-
-
-# validate inputs
-convert_options = ConvertDocumentsOptions.model_validate(input_convertion_options)
 
 
 s3_source_client, s3_source_resource = get_s3_connection(s3_coords_source)
