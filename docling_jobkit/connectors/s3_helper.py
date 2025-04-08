@@ -23,15 +23,6 @@ from docling_jobkit.model.s3_inputs import S3Coordinates
 logging.basicConfig(level=logging.INFO)
 
 
-# class S3Coordinates(BaseModel):
-#     endpoint: str
-#     verify_ssl: bool
-#     access_key: str
-#     secret_key: str
-#     bucket: str
-#     key_prefix: str
-
-
 def get_s3_connection(coords: S3Coordinates):
     session = Session()
 
