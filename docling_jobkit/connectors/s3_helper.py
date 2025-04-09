@@ -297,11 +297,12 @@ class DoclingConvert:
                 doc_hash = conv_res.input.document_hash
                 logging.debug(f"Converted {doc_hash} now saving results")
 
-                self.upload_file_to_s3(
-                    file=conv_res.input.file,
-                    target_key=f"{s3_target_prefix}/pdf/{doc_hash}.pdf",
-                    content_type="application/pdf",
-                )
+                if os.path.exists(conv_res.input.file):
+                    self.upload_file_to_s3(
+                        file=conv_res.input.file,
+                        target_key=f"{s3_target_prefix}/pdf/{doc_hash}.pdf",
+                        content_type="application/pdf",
+                    )
 
                 if self.export_page_images:
                     # Export pages images:
@@ -421,7 +422,8 @@ class DoclingConvert:
             try:
                 if page.image and page.image.pil_image:
                     page_hash = create_hash(f"{doc_hash}_page_no_{page_no}")
-                    page_path_suffix = f"/pages/{page_hash}.png"
+                    page_dpi = page.image.dpi
+                    page_path_suffix = f"/pages/{page_hash}_{page_dpi}.png"
                     byteIO = BytesIO()
                     page.image.pil_image.save(byteIO, format="PNG")
                     self.upload_object_to_s3(
@@ -447,7 +449,10 @@ class DoclingConvert:
                 if element.image and element.image.pil_image:
                     try:
                         element_hash = create_hash(f"{doc_hash}_img_{picture_number}")
-                        element_path_suffix = f"/images/{element_hash}.png"
+                        element_dpi = element.image.dpi
+                        element_path_suffix = (
+                            f"/images/{element_hash}_{element_dpi}.png"
+                        )
                         byteIO = BytesIO()
                         element.image.pil_image.save(byteIO, format="PNG")
                         self.upload_object_to_s3(
