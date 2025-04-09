@@ -1,18 +1,22 @@
 import os
 from pathlib import Path
 from typing import Optional
+
 from dotenv import load_dotenv
 
-from docling.datamodel.pipeline_options import (
-    PdfPipelineOptions, 
-    TableFormerMode,
-    PdfBackend,
-)
+from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
 from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBackend
 from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
+from docling.backend.pdf_backend import PdfDocumentBackend
+from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
+from docling.datamodel.pipeline_options import (
+    PdfBackend,
+    PdfPipelineOptions,
+    TableFormerMode,
+)
 from docling.models.factories import get_ocr_factory
 from docling.utils.model_downloader import download_models
-from docling.backend.pdf_backend import PdfDocumentBackend
+
 from docling_jobkit.connectors.s3_helper import (
     DoclingConvert,
     S3Coordinates,
@@ -97,9 +101,7 @@ if pdf_backend:
     elif pdf_backend == PdfBackend.PYPDFIUM2:
         backend = PyPdfiumDocumentBackend
     else:
-        raise RuntimeError(
-            f"Unexpected PDF backend type {options.get('pdf_backend')}"
-        )
+        raise RuntimeError(f"Unexpected PDF backend type {pdf_backend}")
 
 
 os.environ["EASYOCR_MODULE_PATH"] = "./models_cache/EasyOcr"
@@ -121,13 +123,13 @@ pipeline_options.artifacts_path = models_path
 
 # converter = DoclingConvert(s3_target_coords, pipeline_options)
 converter = DoclingConvert(
-        source_s3_coords=s3_coords_source,
-        target_s3_coords=s3_target_coords,
-        pipeline_options=pipeline_options,
-        allowed_formats=from_formats,
-        to_formats=to_formats,
-        backend=backend,
-    )
+    source_s3_coords=s3_coords_source,
+    target_s3_coords=s3_target_coords,
+    pipeline_options=pipeline_options,
+    allowed_formats=from_formats,
+    to_formats=to_formats,
+    backend=backend,
+)
 
 print(filtered_source_keys)
 
