@@ -28,7 +28,9 @@ components:
       parameters:
         options:
           parameterType: STRUCT
-        pre_signed_urls:
+        source:
+          parameterType: STRUCT
+        source_keys:
           parameterType: LIST
         target:
           parameterType: STRUCT
@@ -48,7 +50,9 @@ components:
             parameters:
               options:
                 componentInputParameter: pipelinechannel--convertion_options
-              pre_signed_urls:
+              source:
+                componentInputParameter: pipelinechannel--source
+              source_keys:
                 componentInputParameter: pipelinechannel--compute-batches-Output-loop-item
               target:
                 componentInputParameter: pipelinechannel--target
@@ -61,6 +65,8 @@ components:
         pipelinechannel--compute-batches-Output-loop-item:
           parameterType: LIST
         pipelinechannel--convertion_options:
+          parameterType: STRUCT
+        pipelinechannel--source:
           parameterType: STRUCT
         pipelinechannel--target:
           parameterType: STRUCT
@@ -81,8 +87,8 @@ deploymentSpec:
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.8.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
           \  python3 -m pip install --quiet --no-warn-script-location 'pydantic' 'boto3~=1.35.36'\
-          \ 'git+https://github.com/docling-project/docling-jobkit@f898ea96f8c1b8360c837dca41c4295a0fecbca5'\
-          \ && \"$0\" \"$@\"\n"
+          \ 'git+https://github.com/docling-project/docling-jobkit@main' && \"$0\"\
+          \ \"$@\"\n"
         - sh
         - -ec
         - 'program_path=$(mktemp -d)
@@ -97,7 +103,7 @@ deploymentSpec:
           \ *\n\ndef compute_batches(\n    source: dict,\n    target: dict,\n    batch_size:\
           \ int = 10,\n) -> List[List[str]]:\n    from docling_jobkit.connectors.s3_helper\
           \ import (\n        S3Coordinates,\n        check_target_has_source_converted,\n\
-          \        generate_presigns_url,\n        get_s3_connection,\n        get_source_files,\n\
+          \        generate_batch_keys,\n        get_s3_connection,\n        get_source_files,\n\
           \    )\n\n    s3_target_coords = S3Coordinates(\n        endpoint=target[\"\
           s3_target_endpoint\"],\n        verify_ssl=target[\"s3_target_ssl\"],\n\
           \        access_key=target[\"s3_target_access_key\"],\n        secret_key=target[\"\
@@ -112,10 +118,8 @@ deploymentSpec:
           \        s3_source_client, s3_source_resource, s3_coords_source\n    )\n\
           \    filtered_source_keys = check_target_has_source_converted(\n       \
           \ s3_target_coords, source_objects_list, s3_coords_source.key_prefix\n \
-          \   )\n    presigned_urls = generate_presigns_url(\n        s3_source_client,\n\
-          \        filtered_source_keys,\n        s3_coords_source.bucket,\n     \
-          \   batch_size=batch_size,\n        expiration_time=36000,\n    )\n\n  \
-          \  return presigned_urls\n\n"
+          \   )\n    batch_keys = generate_batch_keys(\n        filtered_source_keys,\n\
+          \        batch_size=batch_size,\n    )\n\n    return batch_keys\n\n"
         image: python:3.11
     exec-convert-payload:
       container:
@@ -132,8 +136,8 @@ deploymentSpec:
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.8.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
           \  python3 -m pip install --quiet --no-warn-script-location 'docling==2.28.0'\
-          \ 'git+https://github.com/docling-project/docling-jobkit@f898ea96f8c1b8360c837dca41c4295a0fecbca5'\
-          \ && \"$0\" \"$@\"\n"
+          \ 'git+https://github.com/docling-project/docling-jobkit@main' && \"$0\"\
+          \ \"$@\"\n"
         - sh
         - -ec
         - 'program_path=$(mktemp -d)
@@ -145,21 +149,39 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef convert_payload(\n    options: dict,\n    target: dict,\n   \
-          \ pre_signed_urls: List[str],\n) -> list:\n    import logging\n\n    from\
-          \ docling.datamodel.pipeline_options import (\n        OcrOptions,\n   \
-          \     PdfPipelineOptions,\n        TableFormerMode,\n    )\n    from docling.models.factories\
-          \ import get_ocr_factory\n\n    from docling_jobkit.connectors.s3_helper\
-          \ import (\n        DoclingConvert,\n        S3Coordinates,\n    )\n\n \
-          \   logging.basicConfig(level=logging.INFO)\n\n    logging.info(\"Type of\
-          \ pre_signed_urls: {}\".format(type(pre_signed_urls)))\n\n    s3_coords\
-          \ = S3Coordinates(\n        endpoint=target[\"s3_target_endpoint\"],\n \
-          \       verify_ssl=target[\"s3_target_ssl\"],\n        access_key=target[\"\
+          \ *\n\ndef convert_payload(\n    options: dict,\n    source: dict,\n   \
+          \ target: dict,\n    source_keys: List[str],\n) -> list:\n    import logging\n\
+          \    from typing import Optional\n\n    from docling.backend.docling_parse_backend\
+          \ import DoclingParseDocumentBackend\n    from docling.backend.docling_parse_v2_backend\
+          \ import DoclingParseV2DocumentBackend\n    from docling.backend.docling_parse_v4_backend\
+          \ import DoclingParseV4DocumentBackend\n    from docling.backend.pdf_backend\
+          \ import PdfDocumentBackend\n    from docling.backend.pypdfium2_backend\
+          \ import PyPdfiumDocumentBackend\n    from docling.datamodel.pipeline_options\
+          \ import (\n        OcrOptions,\n        PdfBackend,\n        PdfPipelineOptions,\n\
+          \        TableFormerMode,\n    )\n    from docling.models.factories import\
+          \ get_ocr_factory\n\n    from docling_jobkit.connectors.s3_helper import\
+          \ DoclingConvert, S3Coordinates\n\n    logging.basicConfig(level=logging.INFO)\n\
+          \n    target_s3_coords = S3Coordinates(\n        endpoint=target[\"s3_target_endpoint\"\
+          ],\n        verify_ssl=target[\"s3_target_ssl\"],\n        access_key=target[\"\
           s3_target_access_key\"],\n        secret_key=target[\"s3_target_secret_key\"\
           ],\n        bucket=target[\"s3_target_bucket\"],\n        key_prefix=target[\"\
-          s3_target_prefix\"],\n    )\n\n    pipeline_options = PdfPipelineOptions()\n\
-          \    pipeline_options.do_ocr = options[\"do_ocr\"]\n    ocr_factory = get_ocr_factory()\n\
-          \n    pipeline_options.ocr_options = cast(\n        OcrOptions, ocr_factory.create_options(kind=options[\"\
+          s3_target_prefix\"],\n    )\n\n    source_s3_coords = S3Coordinates(\n \
+          \       endpoint=source[\"s3_source_endpoint\"],\n        verify_ssl=source[\"\
+          s3_source_ssl\"],\n        access_key=source[\"s3_source_access_key\"],\n\
+          \        secret_key=source[\"s3_source_secret_key\"],\n        bucket=source[\"\
+          s3_source_bucket\"],\n        key_prefix=source[\"s3_source_prefix\"],\n\
+          \    )\n\n    backend: Optional[type[PdfDocumentBackend]] = None\n    if\
+          \ options.get(\"pdf_backend\"):\n        if options.get(\"pdf_backend\"\
+          ) == PdfBackend.DLPARSE_V1:\n            backend = DoclingParseDocumentBackend\n\
+          \        elif options.get(\"pdf_backend\") == PdfBackend.DLPARSE_V2:\n \
+          \           backend = DoclingParseV2DocumentBackend\n        elif options.get(\"\
+          pdf_backend\") == PdfBackend.DLPARSE_V4:\n            backend = DoclingParseV4DocumentBackend\n\
+          \        elif options.get(\"pdf_backend\") == PdfBackend.PYPDFIUM2:\n  \
+          \          backend = PyPdfiumDocumentBackend\n        else:\n          \
+          \  raise RuntimeError(\n                f\"Unexpected PDF backend type {options.get('pdf_backend')}\"\
+          \n            )\n\n    pipeline_options = PdfPipelineOptions()\n    pipeline_options.do_ocr\
+          \ = options[\"do_ocr\"]\n    ocr_factory = get_ocr_factory()\n\n    pipeline_options.ocr_options\
+          \ = cast(\n        OcrOptions, ocr_factory.create_options(kind=options[\"\
           ocr_engine\"])\n    )\n\n    pipeline_options.do_table_structure = options[\"\
           do_table_structure\"]\n    pipeline_options.table_structure_options.mode\
           \ = TableFormerMode(\n        options[\"table_mode\"]\n    )\n    pipeline_options.generate_page_images\
@@ -170,10 +192,13 @@ deploymentSpec:
           \ = options[\"do_picture_description\"]\n    pipeline_options.generate_picture_images\
           \ = options[\"generate_picture_images\"]\n\n    # pipeline_options.accelerator_options\
           \ = AcceleratorOptions(\n    #     num_threads=2, device=AcceleratorDevice.CUDA\n\
-          \    # )\n\n    converter = DoclingConvert(s3_coords, pipeline_options)\n\
-          \n    results = []\n    for item in converter.convert_documents(pre_signed_urls):\n\
-          \        results.append(item)\n        logging.info(\"Convertion result:\
-          \ {}\".format(item))\n\n    return results\n\n"
+          \    # )\n\n    converter = DoclingConvert(\n        source_s3_coords=source_s3_coords,\n\
+          \        target_s3_coords=target_s3_coords,\n        pipeline_options=pipeline_options,\n\
+          \        allowed_formats=options.get(\"from_formats\"),\n        to_formats=options.get(\"\
+          to_formats\"),\n        backend=backend,\n    )\n\n    results = []\n  \
+          \  for item in converter.convert_documents(source_keys):\n        results.append(item)\n\
+          \        logging.info(\"Convertion result: {}\".format(item))\n\n    return\
+          \ results\n\n"
         image: quay.io/docling-project/docling-serve:dev-0.0.2
         resources:
           cpuLimit: 1.0
@@ -212,6 +237,8 @@ root:
                 producerTask: compute-batches
             pipelinechannel--convertion_options:
               componentInputParameter: convertion_options
+            pipelinechannel--source:
+              componentInputParameter: source
             pipelinechannel--target:
               componentInputParameter: target
         iteratorPolicy:
