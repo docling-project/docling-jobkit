@@ -87,8 +87,8 @@ deploymentSpec:
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.8.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
           \  python3 -m pip install --quiet --no-warn-script-location 'pydantic' 'boto3~=1.35.36'\
-          \ 'git+https://github.com/docling-project/docling-jobkit@main' && \"$0\"\
-          \ \"$@\"\n"
+          \ 'git+https://github.com/docling-project/docling-jobkit@input-check' &&\
+          \ \"$0\" \"$@\"\n"
         - sh
         - -ec
         - 'program_path=$(mktemp -d)
@@ -136,8 +136,8 @@ deploymentSpec:
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.8.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
           \  python3 -m pip install --quiet --no-warn-script-location 'docling==2.28.0'\
-          \ 'git+https://github.com/docling-project/docling-jobkit@main' && \"$0\"\
-          \ \"$@\"\n"
+          \ 'git+https://github.com/docling-project/docling-jobkit@input-check' &&\
+          \ \"$0\" \"$@\"\n"
         - sh
         - -ec
         - 'program_path=$(mktemp -d)
@@ -160,45 +160,38 @@ deploymentSpec:
           \ import (\n        OcrOptions,\n        PdfBackend,\n        PdfPipelineOptions,\n\
           \        TableFormerMode,\n    )\n    from docling.models.factories import\
           \ get_ocr_factory\n\n    from docling_jobkit.connectors.s3_helper import\
-          \ DoclingConvert, S3Coordinates\n\n    logging.basicConfig(level=logging.INFO)\n\
-          \n    target_s3_coords = S3Coordinates(\n        endpoint=target[\"s3_target_endpoint\"\
-          ],\n        verify_ssl=target[\"s3_target_ssl\"],\n        access_key=target[\"\
-          s3_target_access_key\"],\n        secret_key=target[\"s3_target_secret_key\"\
-          ],\n        bucket=target[\"s3_target_bucket\"],\n        key_prefix=target[\"\
-          s3_target_prefix\"],\n    )\n\n    source_s3_coords = S3Coordinates(\n \
-          \       endpoint=source[\"s3_source_endpoint\"],\n        verify_ssl=source[\"\
-          s3_source_ssl\"],\n        access_key=source[\"s3_source_access_key\"],\n\
-          \        secret_key=source[\"s3_source_secret_key\"],\n        bucket=source[\"\
-          s3_source_bucket\"],\n        key_prefix=source[\"s3_source_prefix\"],\n\
-          \    )\n\n    backend: Optional[type[PdfDocumentBackend]] = None\n    if\
-          \ options.get(\"pdf_backend\"):\n        if options.get(\"pdf_backend\"\
-          ) == PdfBackend.DLPARSE_V1:\n            backend = DoclingParseDocumentBackend\n\
-          \        elif options.get(\"pdf_backend\") == PdfBackend.DLPARSE_V2:\n \
-          \           backend = DoclingParseV2DocumentBackend\n        elif options.get(\"\
-          pdf_backend\") == PdfBackend.DLPARSE_V4:\n            backend = DoclingParseV4DocumentBackend\n\
-          \        elif options.get(\"pdf_backend\") == PdfBackend.PYPDFIUM2:\n  \
-          \          backend = PyPdfiumDocumentBackend\n        else:\n          \
-          \  raise RuntimeError(\n                f\"Unexpected PDF backend type {options.get('pdf_backend')}\"\
+          \ DoclingConvert\n    from docling_jobkit.model.convert import ConvertDocumentsOptions\n\
+          \    from docling_jobkit.model.s3_inputs import S3Coordinates\n\n    logging.basicConfig(level=logging.INFO)\n\
+          \n    # validate inputs\n    source_s3_coords = S3Coordinates.model_validate(source)\n\
+          \    target_s3_coords = S3Coordinates.model_validate(target)\n\n    convert_options\
+          \ = ConvertDocumentsOptions.model_validate(options)\n\n\n    backend: Optional[type[PdfDocumentBackend]]\
+          \ = None\n    if convert_options.pdf_backend:\n        if convert_options.pdf_backend\
+          \ == PdfBackend.DLPARSE_V1:\n            backend = DoclingParseDocumentBackend\n\
+          \        elif convert_options.pdf_backend == PdfBackend.DLPARSE_V2:\n  \
+          \          backend = DoclingParseV2DocumentBackend\n        elif convert_options.pdf_backend\
+          \ == PdfBackend.DLPARSE_V4:\n            backend = DoclingParseV4DocumentBackend\n\
+          \        elif convert_options.pdf_backend == PdfBackend.PYPDFIUM2:\n   \
+          \         backend = PyPdfiumDocumentBackend\n        else:\n           \
+          \ raise RuntimeError(\n                f\"Unexpected PDF backend type {convert_options.pdf_backend}\"\
           \n            )\n\n    pipeline_options = PdfPipelineOptions()\n    pipeline_options.do_ocr\
-          \ = options[\"do_ocr\"]\n    ocr_factory = get_ocr_factory()\n\n    pipeline_options.ocr_options\
-          \ = cast(\n        OcrOptions, ocr_factory.create_options(kind=options[\"\
-          ocr_engine\"])\n    )\n\n    pipeline_options.do_table_structure = options[\"\
-          do_table_structure\"]\n    pipeline_options.table_structure_options.mode\
-          \ = TableFormerMode(\n        options[\"table_mode\"]\n    )\n    pipeline_options.generate_page_images\
-          \ = options[\"include_images\"]\n    pipeline_options.do_code_enrichment\
-          \ = options[\"do_code_enrichment\"]\n    pipeline_options.do_formula_enrichment\
-          \ = options[\"do_formula_enrichment\"]\n    pipeline_options.do_picture_classification\
-          \ = options[\"do_picture_classification\"]\n    pipeline_options.do_picture_description\
-          \ = options[\"do_picture_description\"]\n    pipeline_options.generate_picture_images\
-          \ = options[\"generate_picture_images\"]\n\n    # pipeline_options.accelerator_options\
-          \ = AcceleratorOptions(\n    #     num_threads=2, device=AcceleratorDevice.CUDA\n\
-          \    # )\n\n    converter = DoclingConvert(\n        source_s3_coords=source_s3_coords,\n\
-          \        target_s3_coords=target_s3_coords,\n        pipeline_options=pipeline_options,\n\
-          \        allowed_formats=options.get(\"from_formats\"),\n        to_formats=options.get(\"\
-          to_formats\"),\n        backend=backend,\n    )\n\n    results = []\n  \
-          \  for item in converter.convert_documents(source_keys):\n        results.append(item)\n\
-          \        logging.info(\"Convertion result: {}\".format(item))\n\n    return\
-          \ results\n\n"
+          \ = convert_options.do_ocr\n    ocr_factory = get_ocr_factory()\n\n    pipeline_options.ocr_options\
+          \ = cast(\n        OcrOptions, ocr_factory.create_options(kind=convert_options.ocr_engine)\n\
+          \    )\n\n    pipeline_options.do_table_structure = convert_options.do_table_structure\n\
+          \    pipeline_options.table_structure_options.mode = TableFormerMode(convert_options.table_mode)\n\
+          \    pipeline_options.generate_page_images = convert_options.include_images\n\
+          \    pipeline_options.do_code_enrichment = convert_options.do_code_enrichment\n\
+          \    pipeline_options.do_formula_enrichment = convert_options.do_formula_enrichment\n\
+          \    pipeline_options.do_picture_classification = convert_options.do_picture_classification\n\
+          \    pipeline_options.do_picture_description = convert_options.do_picture_description\n\
+          \    pipeline_options.generate_picture_images = convert_options.generate_picture_images\n\
+          \n    # pipeline_options.accelerator_options = AcceleratorOptions(\n   \
+          \ #     num_threads=2, device=AcceleratorDevice.CUDA\n    # )\n\n    converter\
+          \ = DoclingConvert(\n        source_s3_coords=source_s3_coords,\n      \
+          \  target_s3_coords=target_s3_coords,\n        pipeline_options=pipeline_options,\n\
+          \        allowed_formats=convert_options.from_formats,\n        to_formats=convert_options.to_formats,\n\
+          \        backend=backend,\n    )\n\n    results = []\n    for item in converter.convert_documents(source_keys):\n\
+          \        results.append(item)\n        logging.info(\"Convertion result:\
+          \ {}\".format(item))\n\n    return results\n\n"
         image: quay.io/docling-project/docling-serve:dev-0.0.2
         resources:
           cpuLimit: 1.0

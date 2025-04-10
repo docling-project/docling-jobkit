@@ -8,7 +8,7 @@ from kfp import dsl
 @dsl.component(
     packages_to_install=[
         "docling==2.28.0",
-        "git+https://github.com/docling-project/docling-jobkit@72a458e83fdfe8bd7141779028a983430b495166",
+        "git+https://github.com/docling-project/docling-jobkit@input-check",
     ],
     base_image="quay.io/docling-project/docling-serve:dev-0.0.2",  # base docling-serve image with fixed permissions
 )
@@ -34,61 +34,53 @@ def convert_payload(
     )
     from docling.models.factories import get_ocr_factory
 
-    from docling_jobkit.connectors.s3_helper import DoclingConvert, S3Coordinates
+    from docling_jobkit.connectors.s3_helper import DoclingConvert
+    from docling_jobkit.model.convert import ConvertDocumentsOptions
+    from docling_jobkit.model.s3_inputs import S3Coordinates
 
     logging.basicConfig(level=logging.INFO)
 
-    target_s3_coords = S3Coordinates(
-        endpoint=target["s3_target_endpoint"],
-        verify_ssl=target["s3_target_ssl"],
-        access_key=target["s3_target_access_key"],
-        secret_key=target["s3_target_secret_key"],
-        bucket=target["s3_target_bucket"],
-        key_prefix=target["s3_target_prefix"],
-    )
+    # validate inputs
+    source_s3_coords = S3Coordinates.model_validate(source)
+    target_s3_coords = S3Coordinates.model_validate(target)
 
-    source_s3_coords = S3Coordinates(
-        endpoint=source["s3_source_endpoint"],
-        verify_ssl=source["s3_source_ssl"],
-        access_key=source["s3_source_access_key"],
-        secret_key=source["s3_source_secret_key"],
-        bucket=source["s3_source_bucket"],
-        key_prefix=source["s3_source_prefix"],
-    )
+    convert_options = ConvertDocumentsOptions.model_validate(options)
 
     backend: Optional[type[PdfDocumentBackend]] = None
-    if options.get("pdf_backend"):
-        if options.get("pdf_backend") == PdfBackend.DLPARSE_V1:
+    if convert_options.pdf_backend:
+        if convert_options.pdf_backend == PdfBackend.DLPARSE_V1:
             backend = DoclingParseDocumentBackend
-        elif options.get("pdf_backend") == PdfBackend.DLPARSE_V2:
+        elif convert_options.pdf_backend == PdfBackend.DLPARSE_V2:
             backend = DoclingParseV2DocumentBackend
-        elif options.get("pdf_backend") == PdfBackend.DLPARSE_V4:
+        elif convert_options.pdf_backend == PdfBackend.DLPARSE_V4:
             backend = DoclingParseV4DocumentBackend
-        elif options.get("pdf_backend") == PdfBackend.PYPDFIUM2:
+        elif convert_options.pdf_backend == PdfBackend.PYPDFIUM2:
             backend = PyPdfiumDocumentBackend
         else:
             raise RuntimeError(
-                f"Unexpected PDF backend type {options.get('pdf_backend')}"
+                f"Unexpected PDF backend type {convert_options.pdf_backend}"
             )
 
     pipeline_options = PdfPipelineOptions()
-    pipeline_options.do_ocr = options["do_ocr"]
+    pipeline_options.do_ocr = convert_options.do_ocr
     ocr_factory = get_ocr_factory()
 
     pipeline_options.ocr_options = cast(
-        OcrOptions, ocr_factory.create_options(kind=options["ocr_engine"])
+        OcrOptions, ocr_factory.create_options(kind=convert_options.ocr_engine)
     )
 
-    pipeline_options.do_table_structure = options["do_table_structure"]
+    pipeline_options.do_table_structure = convert_options.do_table_structure
     pipeline_options.table_structure_options.mode = TableFormerMode(
-        options["table_mode"]
+        convert_options.table_mode
     )
-    pipeline_options.generate_page_images = options["include_images"]
-    pipeline_options.do_code_enrichment = options["do_code_enrichment"]
-    pipeline_options.do_formula_enrichment = options["do_formula_enrichment"]
-    pipeline_options.do_picture_classification = options["do_picture_classification"]
-    pipeline_options.do_picture_description = options["do_picture_description"]
-    pipeline_options.generate_picture_images = options["generate_picture_images"]
+    pipeline_options.generate_page_images = convert_options.include_images
+    pipeline_options.do_code_enrichment = convert_options.do_code_enrichment
+    pipeline_options.do_formula_enrichment = convert_options.do_formula_enrichment
+    pipeline_options.do_picture_classification = (
+        convert_options.do_picture_classification
+    )
+    pipeline_options.do_picture_description = convert_options.do_picture_description
+    pipeline_options.generate_picture_images = convert_options.generate_picture_images
 
     # pipeline_options.accelerator_options = AcceleratorOptions(
     #     num_threads=2, device=AcceleratorDevice.CUDA
@@ -98,8 +90,8 @@ def convert_payload(
         source_s3_coords=source_s3_coords,
         target_s3_coords=target_s3_coords,
         pipeline_options=pipeline_options,
-        allowed_formats=options.get("from_formats"),
-        to_formats=options.get("to_formats"),
+        allowed_formats=convert_options.from_formats,
+        to_formats=convert_options.to_formats,
         backend=backend,
     )
 
@@ -115,7 +107,7 @@ def convert_payload(
     packages_to_install=[
         "pydantic",
         "boto3~=1.35.36",
-        "git+https://github.com/docling-project/docling-jobkit@72a458e83fdfe8bd7141779028a983430b495166",
+        "git+https://github.com/docling-project/docling-jobkit@input-check",
     ],
     base_image="python:3.11",
 )
