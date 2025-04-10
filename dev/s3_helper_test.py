@@ -85,7 +85,7 @@ class Settings(BaseSettings):
             return v
 
     @field_validator("pdf_backend", mode="before")
-    def check_batch_size(cls, v, info: ValidationInfo):
+    def check_pdf_backend(cls, v, info: ValidationInfo):
         if isinstance(v, str):
             if v == PdfBackend.DLPARSE_V1:
                 return DoclingParseDocumentBackend
