@@ -20,11 +20,12 @@ from docling.utils.model_downloader import download_models
 
 from docling_jobkit.connectors.s3_helper import (
     DoclingConvert,
-    S3Coordinates,
     check_target_has_source_converted,
     get_s3_connection,
     get_source_files,
 )
+from docling_jobkit.model.convert import ConvertDocumentsOptions
+from docling_jobkit.model.s3_inputs import S3Coordinates
 
 
 class Settings(BaseSettings):
@@ -85,7 +86,7 @@ class Settings(BaseSettings):
             return v
 
     @field_validator("pdf_backend", mode="before")
-    def check_batch_size(cls, v, info: ValidationInfo):
+    def check_pdf_backend(cls, v, info: ValidationInfo):
         if isinstance(v, str):
             if v == PdfBackend.DLPARSE_V1:
                 return DoclingParseDocumentBackend
@@ -114,23 +115,56 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-s3_coords_source = S3Coordinates(
-    endpoint=settings.source_endpoint,
-    verify_ssl=settings.source_ssl,
-    access_key=settings.source_access_key,
-    secret_key=settings.source_secret_key,
-    bucket=settings.source_bucket,
-    key_prefix=settings.source_prefix,
-)
+# We already checked envs but in deployment the inputs arrive as json
 
-s3_target_coords = S3Coordinates(
-    endpoint=settings.target_endpoint,
-    verify_ssl=settings.target_ssl,
-    access_key=settings.target_access_key,
-    secret_key=settings.target_secret_key,
-    bucket=settings.target_bucket,
-    key_prefix=settings.target_prefix,
-)
+s3_source: dict = {
+    "endpoint": settings.source_endpoint,
+    "verify_ssl": settings.source_ssl,
+    "access_key": settings.source_access_key,
+    "secret_key": settings.source_secret_key,
+    "bucket": settings.source_bucket,
+    "key_prefix": settings.source_prefix,
+}
+
+s3_target: dict = {
+    "endpoint": settings.target_endpoint,
+    "verify_ssl": settings.target_ssl,
+    "access_key": settings.target_access_key,
+    "secret_key": settings.target_secret_key,
+    "bucket": settings.target_bucket,
+    "key_prefix": settings.target_prefix,
+}
+
+# validate s3 inputs
+s3_coords_source = S3Coordinates.model_validate(s3_source)
+s3_target_coords = S3Coordinates.model_validate(s3_target)
+
+# Imitate conversion options json
+# Load conversion settings
+input_convertion_options: dict = {
+    "from_formats": settings.from_formats,
+    "to_formats": settings.to_formats,
+    "image_export_mode": "placeholder",
+    "do_ocr": settings.do_ocr,
+    "force_ocr": False,
+    "ocr_engine": settings.ocr_kind,
+    "ocr_lang": ["en"],
+    "pdf_backend": "dlparse_v4",
+    "table_mode": settings.table_structure_mode,
+    "abort_on_error": False,
+    "return_as_file": False,
+    "do_table_structure": settings.do_table_structure,
+    "include_images": settings.generate_page_images,
+    "images_scale": 2,
+    "do_code_enrichment": settings.do_code_enrichment,
+    "do_formula_enrichment": settings.do_formula_enrichment,
+    "do_picture_classification": settings.do_picture_classification,
+    "do_picture_description": settings.do_picture_description,
+    "generate_picture_images": settings.generate_picture_images,
+}
+
+# validate inputs
+convert_options = ConvertDocumentsOptions.model_validate(input_convertion_options)
 
 
 s3_source_client, s3_source_resource = get_s3_connection(s3_coords_source)
@@ -140,37 +174,34 @@ source_objects_list = get_source_files(
 filtered_source_keys = check_target_has_source_converted(
     s3_target_coords, source_objects_list, s3_coords_source.key_prefix
 )
-# presigned_urls = generate_presign_url(
-#     s3_source_client, filtered_source_keys, s3_coords_source.bucket, batch_size=5
-# )
 
 
 os.environ["EASYOCR_MODULE_PATH"] = "./models_cache/EasyOcr"
 models_path = download_models(output_dir=Path("./models_cache"))
 pipeline_options = PdfPipelineOptions()
-pipeline_options.do_ocr = settings.do_ocr
+pipeline_options.do_ocr = convert_options.do_ocr
 ocr_factory = get_ocr_factory()
-pipeline_options.ocr_options = ocr_factory.create_options(kind=settings.ocr_kind)
-pipeline_options.do_table_structure = settings.do_table_structure
-pipeline_options.table_structure_options.mode = TableFormerMode(
-    settings.table_structure_mode
+pipeline_options.ocr_options = ocr_factory.create_options(
+    kind=convert_options.ocr_engine
 )
-pipeline_options.generate_page_images = settings.generate_page_images
-pipeline_options.do_code_enrichment = settings.do_code_enrichment
-pipeline_options.do_formula_enrichment = settings.do_formula_enrichment
-pipeline_options.do_picture_classification = settings.do_picture_classification
-pipeline_options.do_picture_description = settings.do_picture_description
-pipeline_options.generate_picture_images = settings.generate_picture_images
-
+pipeline_options.do_table_structure = convert_options.do_table_structure
+pipeline_options.table_structure_options.mode = TableFormerMode(
+    convert_options.table_mode
+)
+pipeline_options.generate_page_images = convert_options.include_images
+pipeline_options.do_code_enrichment = convert_options.do_code_enrichment
+pipeline_options.do_formula_enrichment = convert_options.do_formula_enrichment
+pipeline_options.do_picture_classification = convert_options.do_picture_classification
+pipeline_options.do_picture_description = convert_options.do_picture_description
+pipeline_options.generate_picture_images = convert_options.generate_picture_images
 pipeline_options.artifacts_path = models_path
 
-# converter = DoclingConvert(s3_target_coords, pipeline_options)
 converter = DoclingConvert(
     source_s3_coords=s3_coords_source,
     target_s3_coords=s3_target_coords,
     pipeline_options=pipeline_options,
-    allowed_formats=settings.from_formats,
-    to_formats=settings.to_formats,
+    allowed_formats=convert_options.from_formats,
+    to_formats=convert_options.to_formats,
     backend=settings.pdf_backend,
 )
 

@@ -11,11 +11,10 @@ from boto3.session import Session
 from botocore.client import BaseClient
 from botocore.config import Config
 from botocore.paginate import Paginator
-from pydantic import BaseModel
 
 from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
 from docling.backend.pdf_backend import PdfDocumentBackend
-from docling.datamodel.base_models import ConversionStatus, InputFormat
+from docling.datamodel.base_models import ConversionStatus, InputFormat, OutputFormat
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -24,16 +23,9 @@ from docling.utils.utils import create_hash
 from docling_core.types.doc.base import ImageRefMode
 from docling_core.types.doc.document import DoclingDocument, PageItem, PictureItem
 
+from docling_jobkit.model.s3_inputs import S3Coordinates
+
 logging.basicConfig(level=logging.INFO)
-
-
-class S3Coordinates(BaseModel):
-    endpoint: str
-    verify_ssl: bool
-    access_key: str
-    secret_key: str
-    bucket: str
-    key_prefix: str
 
 
 def get_s3_connection(coords: S3Coordinates):
@@ -50,8 +42,8 @@ def get_s3_connection(coords: S3Coordinates):
         "s3",
         endpoint_url=endpoint,
         verify=coords.verify_ssl,
-        aws_access_key_id=coords.access_key,
-        aws_secret_access_key=coords.secret_key,
+        aws_access_key_id=coords.access_key.get_secret_value(),
+        aws_secret_access_key=coords.secret_key.get_secret_value(),
         config=config,
     )
 
@@ -59,8 +51,8 @@ def get_s3_connection(coords: S3Coordinates):
         "s3",
         endpoint_url=endpoint,
         verify=coords.verify_ssl,
-        aws_access_key_id=coords.access_key,
-        aws_secret_access_key=coords.secret_key,
+        aws_access_key_id=coords.access_key.get_secret_value(),
+        aws_secret_access_key=coords.secret_key.get_secret_value(),
         config=config,
     )
 
@@ -243,8 +235,8 @@ class DoclingConvert:
         source_s3_coords: S3Coordinates,
         target_s3_coords: S3Coordinates,
         pipeline_options: PdfPipelineOptions,
-        allowed_formats: Optional[list[str]] = None,
-        to_formats: Optional[list[str]] = None,
+        allowed_formats: Optional[list[InputFormat]] = None,
+        to_formats: Optional[list[OutputFormat]] = None,
         backend: Optional[type[PdfDocumentBackend]] = None,
     ):
         self.source_coords = source_s3_coords
