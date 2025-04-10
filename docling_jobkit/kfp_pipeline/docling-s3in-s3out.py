@@ -117,30 +117,16 @@ def compute_batches(
     batch_size: int = 10,
 ) -> List[List[str]]:
     from docling_jobkit.connectors.s3_helper import (
-        S3Coordinates,
         check_target_has_source_converted,
         generate_batch_keys,
         get_s3_connection,
         get_source_files,
     )
+    from docling_jobkit.model.s3_inputs import S3Coordinates
 
-    s3_target_coords = S3Coordinates(
-        endpoint=target["s3_target_endpoint"],
-        verify_ssl=target["s3_target_ssl"],
-        access_key=target["s3_target_access_key"],
-        secret_key=target["s3_target_secret_key"],
-        bucket=target["s3_target_bucket"],
-        key_prefix=target["s3_target_prefix"],
-    )
-
-    s3_coords_source = S3Coordinates(
-        endpoint=source["s3_source_endpoint"],
-        verify_ssl=source["s3_source_ssl"],
-        access_key=source["s3_source_access_key"],
-        secret_key=source["s3_source_secret_key"],
-        bucket=source["s3_source_bucket"],
-        key_prefix=source["s3_source_prefix"],
-    )
+    # validate inputs
+    s3_coords_source = S3Coordinates.model_validate(source)
+    s3_target_coords = S3Coordinates.model_validate(target)
 
     s3_source_client, s3_source_resource = get_s3_connection(s3_coords_source)
     source_objects_list = get_source_files(
@@ -193,20 +179,20 @@ def docling_s3in_s3out(
         "images_scale": 2,
     },
     source: dict = {
-        "s3_source_endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
-        "s3_source_access_key": "123454321",
-        "s3_source_secret_key": "secretsecret",
-        "s3_source_bucket": "source-bucket",
-        "s3_source_prefix": "my-docs",
-        "s3_source_ssl": True,
+        "endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
+        "access_key": "123454321",
+        "secret_key": "secretsecret",
+        "bucket": "source-bucket",
+        "key_prefix": "my-docs",
+        "verify_ssl": True,
     },
     target: dict = {
-        "s3_target_endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
-        "s3_target_access_key": "123454321",
-        "s3_target_secret_key": "secretsecret",
-        "s3_target_bucket": "target-bucket",
-        "s3_target_prefix": "my-docs",
-        "s3_target_ssl": True,
+        "endpoint": "s3.eu-de.cloud-object-storage.appdomain.cloud",
+        "access_key": "123454321",
+        "secret_key": "secretsecret",
+        "bucket": "target-bucket",
+        "key_prefix": "my-docs",
+        "verify_ssl": True,
     },
     batch_size: int = 20,
     # accelerator_settings: dict = {

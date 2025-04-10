@@ -1,16 +1,17 @@
-from typing import Annotated, Optional
+from typing import Annotated
 
-from pydantic import BaseModel, Field, StrictStr, SecretStr
+from pydantic import BaseModel, Field, SecretStr, StrictStr
+
 
 class S3Coordinates(BaseModel):
     endpoint: Annotated[
         StrictStr,
         Field(
-            description=(
-                "S3 service endpoint, without protocol. "
-                "Required."
-            ),
-            examples=["s3.eu-de.cloud-object-storage.appdomain.cloud", "s3.us-east-2.amazonaws.com "],
+            description=("S3 service endpoint, without protocol. Required."),
+            examples=[
+                "s3.eu-de.cloud-object-storage.appdomain.cloud",
+                "s3.us-east-2.amazonaws.com ",
+            ],
         ),
     ]
 
@@ -27,30 +28,21 @@ class S3Coordinates(BaseModel):
     access_key: Annotated[
         SecretStr,
         Field(
-            description=(
-                "S3 access key. "
-                "Required."
-            ),
+            description=("S3 access key. Required."),
         ),
     ]
 
     secret_key: Annotated[
         SecretStr,
         Field(
-            description=(
-                "S3 secret key. "
-                "Required."
-            ),
+            description=("S3 secret key. Required."),
         ),
     ]
 
     bucket: Annotated[
         str,
         Field(
-            description=(
-                "S3 bucket name. "
-                "Required."
-            ),
+            description=("S3 bucket name. Required."),
         ),
     ]
 
@@ -58,8 +50,7 @@ class S3Coordinates(BaseModel):
         str,
         Field(
             description=(
-                "Prefix for the object keys on s3. "
-                "Optional, defaults to empty."
+                "Prefix for the object keys on s3. Optional, defaults to empty."
             ),
         ),
     ] = ""

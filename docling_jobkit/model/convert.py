@@ -12,7 +12,6 @@ from docling.datamodel.pipeline_options import (
 from docling.models.factories import get_ocr_factory
 from docling_core.types.doc import ImageRefMode
 
-
 ocr_engines_enum = get_ocr_factory().get_enum()
 
 
