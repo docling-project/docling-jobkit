@@ -14,7 +14,7 @@ from botocore.paginate import Paginator
 
 from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
 from docling.backend.pdf_backend import PdfDocumentBackend
-from docling.datamodel.base_models import ConversionStatus, InputFormat, OutputFormat
+from docling.datamodel.base_models import ConversionStatus, InputFormat
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -235,8 +235,8 @@ class DoclingConvert:
         source_s3_coords: S3Coordinates,
         target_s3_coords: S3Coordinates,
         pipeline_options: PdfPipelineOptions,
-        allowed_formats: Optional[list[InputFormat]] = None,
-        to_formats: Optional[list[OutputFormat]] = None,
+        allowed_formats: Optional[list[str]] = None,
+        to_formats: Optional[list[str]] = None,
         backend: Optional[type[PdfDocumentBackend]] = None,
     ):
         self.source_coords = source_s3_coords

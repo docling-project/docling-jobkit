@@ -1,7 +1,7 @@
 # Define the input options for the API
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from docling.datamodel.base_models import InputFormat, OutputFormat
 from docling.datamodel.pipeline_options import (
@@ -17,7 +17,7 @@ ocr_engines_enum = get_ocr_factory().get_enum()
 
 class ConvertDocumentsOptions(BaseModel):
     from_formats: Annotated[
-        list[InputFormat],
+        list[str],
         Field(
             description=(
                 "Input format(s) to convert from. String or list of strings. "
@@ -26,19 +26,45 @@ class ConvertDocumentsOptions(BaseModel):
             ),
             examples=[[v.value for v in InputFormat]],
         ),
-    ] = list(InputFormat)
+    ] = [v.value for v in InputFormat]
+
+    @field_validator("from_formats", mode="before")
+    def check_from_formats(cls, v, info: ValidationInfo):
+        if isinstance(v, str):
+            v = [v]
+        allowed_from_formats = [x.value for x in InputFormat]
+        if not set(v) == set(allowed_from_formats):
+            for i in v:
+                if i not in allowed_from_formats:
+                    raise ValueError(
+                        f"{i} is not allowed. Allowed from formats: {', '.join(allowed_from_formats)}"
+                    )
+        return v
 
     to_formats: Annotated[
-        list[OutputFormat],
+        list[str],
         Field(
             description=(
                 "Output format(s) to convert to. String or list of strings. "
                 f"Allowed values: {', '.join([v.value for v in OutputFormat])}. "
                 "Optional, defaults to Markdown."
             ),
-            examples=[[OutputFormat.MARKDOWN]],
+            examples=[[OutputFormat.MARKDOWN.value]],
         ),
-    ] = [OutputFormat.MARKDOWN]
+    ] = [OutputFormat.MARKDOWN.value]
+
+    @field_validator("to_formats", mode="before")
+    def check_to_formats(cls, v, info: ValidationInfo):
+        if isinstance(v, str):
+            v = [v]
+        allowed_to_formats = [x.value for x in OutputFormat]
+        if not set(v) == set(allowed_to_formats):
+            for i in v:
+                if i not in allowed_to_formats:
+                    raise ValueError(
+                        f"{i} is not allowed. Allowed to formats: {', '.join(allowed_to_formats)}"
+                    )
+        return v
 
     image_export_mode: Annotated[
         ImageRefMode,
@@ -76,8 +102,8 @@ class ConvertDocumentsOptions(BaseModel):
         ),
     ] = False
 
-    ocr_engine: Annotated[  # type: ignore
-        ocr_engines_enum,
+    ocr_engine: Annotated[
+        str,
         Field(
             description=(
                 "The OCR engine to use. String. "
@@ -86,7 +112,16 @@ class ConvertDocumentsOptions(BaseModel):
             ),
             examples=[EasyOcrOptions.kind],
         ),
-    ] = ocr_engines_enum(EasyOcrOptions.kind)  # type: ignore
+    ] = EasyOcrOptions.kind
+
+    @field_validator("ocr_engine")
+    def check_ocr_engine(cls, v, info: ValidationInfo):
+        allowed_engines = [v.value for v in ocr_engines_enum]  # type: ignore
+        if v not in allowed_engines:
+            raise ValueError(
+                f"{v} is not allowed. Allowed engines: {', '.join(allowed_engines)}"
+            )
+        return v
 
     ocr_lang: Annotated[
         Optional[list[str]],
@@ -102,30 +137,39 @@ class ConvertDocumentsOptions(BaseModel):
     ] = None
 
     pdf_backend: Annotated[
-        PdfBackend,
+        str,
         Field(
             description=(
                 "The PDF backend to use. String. "
                 f"Allowed values: {', '.join([v.value for v in PdfBackend])}. "
                 f"Optional, defaults to {PdfBackend.DLPARSE_V4.value}."
             ),
-            examples=[PdfBackend.DLPARSE_V4],
+            examples=[PdfBackend.DLPARSE_V4.value],
         ),
-    ] = PdfBackend.DLPARSE_V4
+    ] = PdfBackend.DLPARSE_V4.value
 
-    table_mode: Annotated[
-        TableFormerMode,
+    @field_validator("pdf_backend")
+    def check_pdf_backend(cls, v, info: ValidationInfo):
+        allowed_backend = [v.value for v in PdfBackend]
+        if v not in allowed_backend:
+            raise ValueError(
+                f"{v} is not allowed. Allowed pdf_backend: {', '.join(allowed_backend)}"
+            )
+        return v
+
+    table_mode: Annotated[  # type: ignore
+        Literal[TableFormerMode.FAST.value, TableFormerMode.ACCURATE.value],
         Field(
-            TableFormerMode.FAST,
+            TableFormerMode.FAST.value,
             description=(
                 "Mode to use for table structure, String. "
                 f"Allowed values: {', '.join([v.value for v in TableFormerMode])}. "
-                "Optional, defaults to fast."
+                f"Optional, defaults to {TableFormerMode.FAST.value}."
             ),
-            examples=[TableFormerMode.FAST],
+            examples=[TableFormerMode.FAST.value],
             # pattern="fast|accurate",
         ),
-    ] = TableFormerMode.FAST
+    ] = TableFormerMode.FAST.value
 
     abort_on_error: Annotated[
         bool,
