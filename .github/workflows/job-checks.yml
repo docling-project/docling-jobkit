@@ -2,13 +2,21 @@ name: Run checks
 
 on:
   workflow_call:
+    inputs:
+      push_coverage:
+          type: boolean
+          description: "If true, the coverage results are pushed to codecov.io."
+          default: true
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 
 jobs:
-  py-lint:
+  run-checks:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.12']
+        python-version: ['3.10', '3.11', '3.12']
     steps:
       - uses: actions/checkout@v4
       - name: Install uv and set the python version
@@ -17,6 +25,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
       - name: Install dependencies
-        run: uv sync --all-extras --no-extra cu124
-      - name: Run styling check
+        run: uv sync --frozen --all-extras --no-extra cu124
+      - name: Run styling check and tests
         run: uv run --no-sync pre-commit run --all-files
+      - name: Upload coverage to Codecov
+        if: inputs.push_coverage
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
