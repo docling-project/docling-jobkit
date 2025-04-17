@@ -177,7 +177,10 @@ filtered_source_keys = check_target_has_source_converted(
 
 
 os.environ["EASYOCR_MODULE_PATH"] = "./models_cache/EasyOcr"
-models_path = download_models(output_dir=Path("./models_cache"))
+models_path = download_models(
+    output_dir=Path("./models_cache"),
+    with_smolvlm=convert_options.do_picture_description,
+)
 pipeline_options = PdfPipelineOptions()
 pipeline_options.do_ocr = convert_options.do_ocr
 ocr_factory = get_ocr_factory()
