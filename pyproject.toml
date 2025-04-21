@@ -45,7 +45,8 @@ dependencies = [
     "typer~=0.12",
     "boto3~=1.35.36",
     "kfp~=2.8.0",
-    "kfp[kubernetes]"
+    "kfp[kubernetes]",
+    "pandas~=2.2.3",
 ]
 
 [project.optional-dependencies]
@@ -208,6 +209,7 @@ module = [
     "tesserocr.*",
     "rapidocr_onnxruntime.*",
     "kfp.*",
+    "pandas.*",
 ]
 ignore_missing_imports = true
 

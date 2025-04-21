@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import tempfile
@@ -6,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Union
 from urllib.parse import urlparse, urlunsplit
 
+import pandas as pd
 from boto3.resources.base import ServiceResource
 from boto3.session import Session
 from botocore.client import BaseClient
@@ -21,11 +23,37 @@ from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.exceptions import ConversionError
 from docling.utils.utils import create_hash
 from docling_core.types.doc.base import ImageRefMode
-from docling_core.types.doc.document import DoclingDocument, PageItem, PictureItem
+from docling_core.types.doc.document import (
+    DocItem,
+    DoclingDocument,
+    PageItem,
+    PictureClassificationData,
+    PictureItem,
+)
+from docling_core.types.doc.labels import DocItemLabel
 
 from docling_jobkit.model.s3_inputs import S3Coordinates
 
 logging.basicConfig(level=logging.INFO)
+
+classifier_labels = [
+    "bar_chart",
+    "bar_code",
+    "chemistry_markush_structure",
+    "chemistry_molecular_structure",
+    "flow_chart",
+    "icon",
+    "line_chart",
+    "logo",
+    "map",
+    "other",
+    "pie_chart",
+    "qr_code",
+    "remote_sensing",
+    "screenshot",
+    "signature",
+    "stamp",
+]
 
 
 def get_s3_connection(coords: S3Coordinates):
@@ -238,6 +266,7 @@ class DoclingConvert:
         allowed_formats: Optional[list[str]] = None,
         to_formats: Optional[list[str]] = None,
         backend: Optional[type[PdfDocumentBackend]] = None,
+        export_parquet_file: bool = False,
     ):
         self.source_coords = source_s3_coords
         self.source_s3_client, _ = get_s3_connection(source_s3_coords)
@@ -264,6 +293,7 @@ class DoclingConvert:
 
         self.export_page_images = pipeline_options.generate_page_images
         self.export_images = pipeline_options.generate_picture_images
+        self.export_parquet_file = export_parquet_file
 
     def convert_documents(self, object_keys):
         for key in object_keys:
@@ -332,7 +362,7 @@ class DoclingConvert:
                 ):
                     # Export Docling document format to doctags:
                     target_key = f"{s3_target_prefix}/doctags/{doc_hash}.doctags.txt"
-                    data = conv_res.document.export_to_document_tokens()
+                    data = conv_res.document.export_to_doctags()
                     self.upload_object_to_s3(
                         file=data,
                         target_key=target_key,
@@ -372,6 +402,21 @@ class DoclingConvert:
                         target_key=target_key,
                         content_type="text/plain",
                     )
+
+                if self.export_parquet_file:
+                    # Export Docling parquet document:
+                    target_key = f"{s3_target_prefix}/parquet/{doc_hash}.parquet"
+                    with tempfile.NamedTemporaryFile() as temp_html_file:
+                        self.document_to_parquet(
+                            document=conv_res.document,
+                            tempfile=Path(temp_html_file.name),
+                        )
+                        self.upload_file_to_s3(
+                            file=temp_html_file.name,
+                            target_key=target_key,
+                            content_type="application/vnd.apache.parquet",
+                        )
+
                 yield f"{doc_hash} - SUCCESS"
 
             elif conv_res.status == ConversionStatus.PARTIAL_SUCCESS:
@@ -461,3 +506,71 @@ class DoclingConvert:
                             exc,
                         )
                     picture_number += 1
+
+    def document_to_parquet(self, document: DoclingDocument, tempfile: Path):
+        result_table = []
+
+        page_images = []
+        for page_no, page in document.pages.items():
+            if page.image is not None and page.image.pil_image is not None:
+                page_images.append(page.image.pil_image.tobytes())
+
+        # Count the number of picture of each type
+        num_formulas = 0
+        num_codes = 0
+        picture_classes = dict.fromkeys(classifier_labels, 0)
+        for element, _level in document.iterate_items():
+            if isinstance(element, PictureItem):
+                element.image = None  # reset images
+                classification = next(
+                    (
+                        annot
+                        for annot in element.annotations
+                        if isinstance(annot, PictureClassificationData)
+                    ),
+                    None,
+                )
+                if classification is None or len(classification.predicted_classes) == 0:
+                    continue
+
+                predicted_class = classification.predicted_classes[0].class_name
+                if predicted_class in picture_classes:
+                    picture_classes[predicted_class] += 1
+
+            elif isinstance(element, DocItem):
+                if element.label == DocItemLabel.FORMULA:
+                    num_formulas += 1
+                elif element.label == DocItemLabel.CODE:
+                    num_codes += 1
+
+        num_pages = len(document.pages)
+        num_tables = len(document.tables)
+        num_elements = len(document.texts)
+        num_pictures = len(document.pictures)
+
+        # All features
+        features = [
+            num_pages,
+            num_elements,
+            num_tables,
+            num_pictures,
+            num_formulas,
+            num_codes,
+            *picture_classes.values(),
+        ]
+
+        doc_hash = document.origin.binary_hash if document.origin else "unknown_hash"
+        doc_json = json.dumps(document.export_to_dict())
+
+        result_table.append(
+            {
+                "doc_hash": doc_hash,
+                "document": doc_json,
+                "page_images": page_images,
+                "features": features,
+                "doctags": str.encode(document.export_to_doctags()),
+            }
+        )
+
+        pd_df = pd.json_normalize(result_table)
+        pd_df.to_parquet(tempfile)
