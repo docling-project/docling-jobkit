@@ -47,6 +47,8 @@ dependencies = [
     "kfp~=2.8.0",
     "kfp[kubernetes]",
     "pandas~=2.2.3",
+    "fastparquet~=2024.11.0",
+    "pyarrow~=19.0.1",
 ]
 
 [project.optional-dependencies]
