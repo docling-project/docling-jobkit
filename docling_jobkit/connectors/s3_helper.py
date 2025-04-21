@@ -362,7 +362,7 @@ class DoclingConvert:
                 ):
                     # Export Docling document format to doctags:
                     target_key = f"{s3_target_prefix}/doctags/{doc_hash}.doctags.txt"
-                    data = conv_res.document.export_to_doctags()
+                    data = conv_res.document.export_to_document_tokens()
                     self.upload_object_to_s3(
                         file=data,
                         target_key=target_key,
@@ -568,7 +568,7 @@ class DoclingConvert:
                 "document": doc_json,
                 "page_images": page_images,
                 "features": features,
-                "doctags": str.encode(document.export_to_doctags()),
+                "doctags": str.encode(document.export_to_document_tokens()),
             }
         )
 
