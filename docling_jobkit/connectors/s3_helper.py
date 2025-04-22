@@ -432,7 +432,7 @@ class DoclingConvert:
                         target_key = f"{s3_target_prefix}/parquet/{doc_hash}.parquet"
                         with tempfile.NamedTemporaryFile() as temp_html_file:
                             self.document_to_parquet(
-                                document=conv_res,
+                                conv_res=conv_res,
                                 tempfile=Path(temp_html_file.name),
                             )
                             self.upload_file_to_s3(
