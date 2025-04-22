@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import tempfile
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -267,7 +268,7 @@ class DoclingConvert:
         allowed_formats: Optional[list[str]] = None,
         to_formats: Optional[list[str]] = None,
         backend: Optional[type[PdfDocumentBackend]] = None,
-        export_parquet_file: bool = False,
+        export_parquet_file: bool = True,
     ):
         self.source_coords = source_s3_coords
         self.source_s3_client, _ = get_s3_connection(source_s3_coords)
@@ -330,7 +331,11 @@ class DoclingConvert:
                     doc_hash = conv_res.input.document_hash
                     logging.debug(f"Converted {doc_hash} now saving results")
 
-                    manifest_dict = {}
+                    manifest_dict = {
+                        "doc_hash": doc_hash,
+                        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "row_number": 2,
+                    }
 
                     if os.path.exists(conv_res.input.file):
                         self.upload_file_to_s3(
@@ -374,7 +379,6 @@ class DoclingConvert:
                             target_key=target_key,
                             content_type="application/json",
                         )
-                        manifest_dict["json"] = target_key
                     if self.to_formats is None or (
                         self.to_formats and "doctags" in self.to_formats
                     ):
@@ -389,7 +393,6 @@ class DoclingConvert:
                             target_key=target_key,
                             content_type="text/plain",
                         )
-                        manifest_dict["doctags"] = target_key
                     if self.to_formats is None or (
                         self.to_formats and "md" in self.to_formats
                     ):
@@ -402,7 +405,6 @@ class DoclingConvert:
                             target_key=target_key,
                             content_type="text/markdown",
                         )
-                        manifest_dict["md"] = target_key
                     if self.to_formats is None or (
                         self.to_formats and "html" in self.to_formats
                     ):
@@ -416,7 +418,6 @@ class DoclingConvert:
                             target_key=target_key,
                             content_type="text/html",
                         )
-                        manifest_dict["html"] = target_key
 
                     if self.to_formats is None or (
                         self.to_formats and "text" in self.to_formats
@@ -430,7 +431,6 @@ class DoclingConvert:
                             target_key=target_key,
                             content_type="text/plain",
                         )
-                        manifest_dict["txt"] = target_key
                     if self.export_parquet_file:
                         # Export Docling parquet document:
                         target_key = f"{s3_target_prefix}/parquet/{doc_hash}.parquet"
