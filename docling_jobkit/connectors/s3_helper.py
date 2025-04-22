@@ -311,20 +311,18 @@ class DoclingConvert:
             # This will skip http links that don't have file extension as part of url, arXiv have plenty of docs like this
             if ext[1:] not in self.allowed_formats:
                 continue
-            with tempfile.NamedTemporaryFile(
-                suffix=ext
-            ) as source_file:  # download file to be able to upload it later to s3
-                try:
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                temp_dir = Path(tmpdirname)
+                try:  # download file to be able to upload it later to s3
+                    file_name = temp_dir / os.path.basename(parsed.path)
                     r = httpx.get(url, timeout=30)
-                    with open(source_file.name, "wb") as writer:
+                    with open(file_name, "wb") as writer:
                         writer.write(r.content)
                 except Exception as exc:
                     logging.error("An error occour downloading file.", exc_info=exc)
                     continue
                 try:
-                    conv_res: ConversionResult = self.converter.convert(
-                        Path(source_file.name)
-                    )
+                    conv_res: ConversionResult = self.converter.convert(file_name)
                 except ConversionError as e:
                     logging.error("Conversion exception: {}".format(e))
                 if conv_res.status == ConversionStatus.SUCCESS:
@@ -332,7 +330,7 @@ class DoclingConvert:
                     doc_hash = conv_res.input.document_hash
                     logging.debug(f"Converted {doc_hash} now saving results")
 
-                    manifest_file = {}
+                    manifest_dict = {}
 
                     if os.path.exists(conv_res.input.file):
                         self.upload_file_to_s3(
@@ -340,7 +338,7 @@ class DoclingConvert:
                             target_key=f"{s3_target_prefix}/pdf/{doc_hash}.pdf",
                             content_type="application/pdf",
                         )
-                        manifest_file["pdf"] = f"{s3_target_prefix}/pdf/{doc_hash}.pdf"
+                        manifest_dict["pdf"] = f"{s3_target_prefix}/pdf/{doc_hash}.pdf"
 
                     if self.export_page_images:
                         # Export pages images:
@@ -348,7 +346,7 @@ class DoclingConvert:
                             conv_res.document.pages,
                             s3_target_prefix,
                             conv_res.input.document_hash,
-                            manifest_file,
+                            manifest_dict,
                         )
 
                     if self.export_images:
@@ -357,7 +355,7 @@ class DoclingConvert:
                             conv_res.document,
                             s3_target_prefix,
                             conv_res.input.document_hash,
-                            manifest_file,
+                            manifest_dict,
                         )
 
                     if self.to_formats is None or (
@@ -365,17 +363,18 @@ class DoclingConvert:
                     ):
                         # Export Docling document format to JSON:
                         target_key = f"{s3_target_prefix}/json/{doc_hash}.json"
-                        with tempfile.NamedTemporaryFile() as temp_json_file:
-                            conv_res.document.save_as_json(
-                                filename=Path(temp_json_file.name),
-                                image_mode=ImageRefMode.REFERENCED,
-                            )
-                            self.upload_file_to_s3(
-                                file=temp_json_file.name,
-                                target_key=target_key,
-                                content_type="application/json",
-                            )
-                            manifest_file["json"] = target_key
+                        temp_json_file = temp_dir / f"{doc_hash}.json"
+
+                        conv_res.document.save_as_json(
+                            filename=Path(temp_json_file.name),
+                            image_mode=ImageRefMode.REFERENCED,
+                        )
+                        self.upload_file_to_s3(
+                            file=temp_json_file.name,
+                            target_key=target_key,
+                            content_type="application/json",
+                        )
+                        manifest_dict["json"] = target_key
                     if self.to_formats is None or (
                         self.to_formats and "doctags" in self.to_formats
                     ):
@@ -383,70 +382,81 @@ class DoclingConvert:
                         target_key = (
                             f"{s3_target_prefix}/doctags/{doc_hash}.doctags.txt"
                         )
+
                         data = conv_res.document.export_to_document_tokens()
                         self.upload_object_to_s3(
                             file=data,
                             target_key=target_key,
                             content_type="text/plain",
                         )
-                        manifest_file["doctags"] = target_key
+                        manifest_dict["doctags"] = target_key
                     if self.to_formats is None or (
                         self.to_formats and "md" in self.to_formats
                     ):
                         # Export Docling document format to markdown:
                         target_key = f"{s3_target_prefix}/md/{doc_hash}.md"
+
                         data = conv_res.document.export_to_markdown()
                         self.upload_object_to_s3(
                             file=data,
                             target_key=target_key,
                             content_type="text/markdown",
                         )
-                        manifest_file["md"] = target_key
+                        manifest_dict["md"] = target_key
                     if self.to_formats is None or (
                         self.to_formats and "html" in self.to_formats
                     ):
                         # Export Docling document format to html:
                         target_key = f"{s3_target_prefix}/html/{doc_hash}.html"
-                        with tempfile.NamedTemporaryFile() as temp_html_file:
-                            conv_res.document.save_as_html(Path(temp_html_file.name))
-                            self.upload_file_to_s3(
-                                file=temp_html_file.name,
-                                target_key=target_key,
-                                content_type="text/html",
-                            )
-                            manifest_file["html"] = target_key
+                        temp_html_file = temp_dir / f"{doc_hash}.html"
+
+                        conv_res.document.save_as_html(temp_html_file)
+                        self.upload_file_to_s3(
+                            file=temp_html_file,
+                            target_key=target_key,
+                            content_type="text/html",
+                        )
+                        manifest_dict["html"] = target_key
+
                     if self.to_formats is None or (
                         self.to_formats and "text" in self.to_formats
                     ):
                         # Export Docling document format to text:
                         target_key = f"{s3_target_prefix}/txt/{doc_hash}.txt"
+
                         data = conv_res.document.export_to_text()
                         self.upload_object_to_s3(
                             file=data,
                             target_key=target_key,
                             content_type="text/plain",
                         )
-                        manifest_file["txt"] = target_key
+                        manifest_dict["txt"] = target_key
                     if self.export_parquet_file:
                         # Export Docling parquet document:
                         target_key = f"{s3_target_prefix}/parquet/{doc_hash}.parquet"
-                        with tempfile.NamedTemporaryFile() as temp_html_file:
-                            self.document_to_parquet(
-                                conv_res=conv_res,
-                                tempfile=Path(temp_html_file.name),
-                            )
-                            self.upload_file_to_s3(
-                                file=temp_html_file.name,
-                                target_key=target_key,
-                                content_type="application/vnd.apache.parquet",
-                            )
-                            manifest_file["parquet"] = target_key
+                        temp_parquet_file = temp_dir / f"{doc_hash}.parquet"
 
-                    self.upload_object_to_s3(
-                        file=manifest_file,
+                        self.document_to_parquet(
+                            conv_res=conv_res,
+                            tempfile=temp_parquet_file,
+                        )
+                        self.upload_file_to_s3(
+                            file=temp_parquet_file,
+                            target_key=target_key,
+                            content_type="application/vnd.apache.parquet",
+                        )
+                        manifest_dict["parquet"] = target_key
+
+                    # Export manifest file:
+                    temp_manifest_file = temp_dir / "manifest.json"
+                    with open(temp_manifest_file, "w") as file:
+                        json.dump(manifest_dict, file, indent=4)
+                    self.upload_file_to_s3(
+                        file=temp_manifest_file,
                         target_key=f"{s3_target_prefix}/manifest/{doc_hash}.json",
                         content_type="application/json",
                     )
+
                     yield f"{doc_hash} - SUCCESS"
 
                 elif conv_res.status == ConversionStatus.PARTIAL_SUCCESS:
