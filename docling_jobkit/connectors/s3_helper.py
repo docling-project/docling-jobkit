@@ -351,7 +351,6 @@ class DoclingConvert:
                             conv_res.document.pages,
                             s3_target_prefix,
                             conv_res.input.document_hash,
-                            manifest_dict,
                         )
 
                     if self.export_images:
@@ -360,7 +359,6 @@ class DoclingConvert:
                             conv_res.document,
                             s3_target_prefix,
                             conv_res.input.document_hash,
-                            manifest_dict,
                         )
 
                     if self.to_formats is None or (
@@ -497,9 +495,7 @@ class DoclingConvert:
         pages: dict[int, PageItem],
         s3_target_prefix: str,
         doc_hash: str,
-        manifest_file: dict,
     ):
-        manifest_file["pages"] = []
         for page_no, page in pages.items():
             try:
                 if page.image and page.image.pil_image:
@@ -514,9 +510,6 @@ class DoclingConvert:
                         content_type="application/png",
                     )
                     page.image.uri = Path(".." + page_path_suffix)
-                    manifest_file["pages"].append(
-                        {page_no: f"{s3_target_prefix}" + page_path_suffix}
-                    )
 
             except Exception as exc:
                 logging.error(
@@ -530,9 +523,7 @@ class DoclingConvert:
         document: DoclingDocument,
         s3_target_prefix: str,
         doc_hash: str,
-        manifest_file: dict,
     ):
-        manifest_file["images"] = []
         picture_number = 0
         for element, _level in document.iterate_items():
             if isinstance(element, PictureItem):
@@ -551,12 +542,6 @@ class DoclingConvert:
                             content_type="application/png",
                         )
                         element.image.uri = Path(".." + element_path_suffix)
-                        manifest_file["images"].append(
-                            {
-                                picture_number: f"{s3_target_prefix}"
-                                + element_path_suffix
-                            }
-                        )
 
                     except Exception as exc:
                         logging.error(
