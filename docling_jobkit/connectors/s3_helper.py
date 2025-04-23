@@ -634,7 +634,6 @@ class DoclingConvert:
                 "page_images": page_images,
                 "features": features,
                 "doctags": str.encode(conv_res.document.export_to_document_tokens()),
-                "manifest": {},
             }
         )
 
