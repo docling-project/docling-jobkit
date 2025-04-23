@@ -297,6 +297,8 @@ class DoclingConvert:
         self.export_images = pipeline_options.generate_picture_images
         self.export_parquet_file = export_parquet_file
 
+        self.max_file_size = 1073741824  # TODO: be set from ENV
+
     def convert_documents(self, object_keys):
         for key in object_keys:
             url = generate_presign_url(
@@ -317,8 +319,11 @@ class DoclingConvert:
                 try:  # download file to be able to upload it later to s3
                     file_name = temp_dir / os.path.basename(parsed.path)
                     r = httpx.get(url, timeout=30)
-                    with open(file_name, "wb") as writer:
-                        writer.write(r.content)
+                    content_length = r.headers.get("Content-Length", None)
+
+                    if not content_length or int(content_length) < self.max_file_size:
+                        with open(file_name, "wb") as writer:
+                            writer.write(r.content)
                 except Exception as exc:
                     logging.error("An error occour downloading file.", exc_info=exc)
                     continue
@@ -340,10 +345,12 @@ class DoclingConvert:
                     if os.path.exists(conv_res.input.file):
                         self.upload_file_to_s3(
                             file=conv_res.input.file,
-                            target_key=f"{s3_target_prefix}/pdf/{doc_hash}.pdf",
+                            target_key=f"{s3_target_prefix}/pdf/{file_name.name}.pdf",
                             content_type="application/pdf",
                         )
-                        manifest_dict["pdf"] = f"{s3_target_prefix}/pdf/{doc_hash}.pdf"
+                        manifest_dict["pdf"] = (
+                            f"{s3_target_prefix}/pdf/{file_name.name}.pdf"
+                        )
 
                     if self.export_page_images:
                         # Export pages images:
@@ -365,8 +372,8 @@ class DoclingConvert:
                         self.to_formats and "json" in self.to_formats
                     ):
                         # Export Docling document format to JSON:
-                        target_key = f"{s3_target_prefix}/json/{doc_hash}.json"
-                        temp_json_file = temp_dir / f"{doc_hash}.json"
+                        target_key = f"{s3_target_prefix}/json/{file_name.name}.json"
+                        temp_json_file = temp_dir / f"{file_name.name}.json"
 
                         conv_res.document.save_as_json(
                             filename=Path(temp_json_file.name),
@@ -382,7 +389,7 @@ class DoclingConvert:
                     ):
                         # Export Docling document format to doctags:
                         target_key = (
-                            f"{s3_target_prefix}/doctags/{doc_hash}.doctags.txt"
+                            f"{s3_target_prefix}/doctags/{file_name.name}.doctags.txt"
                         )
 
                         data = conv_res.document.export_to_document_tokens()
@@ -395,7 +402,7 @@ class DoclingConvert:
                         self.to_formats and "md" in self.to_formats
                     ):
                         # Export Docling document format to markdown:
-                        target_key = f"{s3_target_prefix}/md/{doc_hash}.md"
+                        target_key = f"{s3_target_prefix}/md/{file_name.name}.md"
 
                         data = conv_res.document.export_to_markdown()
                         self.upload_object_to_s3(
@@ -407,8 +414,8 @@ class DoclingConvert:
                         self.to_formats and "html" in self.to_formats
                     ):
                         # Export Docling document format to html:
-                        target_key = f"{s3_target_prefix}/html/{doc_hash}.html"
-                        temp_html_file = temp_dir / f"{doc_hash}.html"
+                        target_key = f"{s3_target_prefix}/html/{file_name.name}.html"
+                        temp_html_file = temp_dir / f"{file_name.name}.html"
 
                         conv_res.document.save_as_html(temp_html_file)
                         self.upload_file_to_s3(
@@ -421,7 +428,7 @@ class DoclingConvert:
                         self.to_formats and "text" in self.to_formats
                     ):
                         # Export Docling document format to text:
-                        target_key = f"{s3_target_prefix}/txt/{doc_hash}.txt"
+                        target_key = f"{s3_target_prefix}/txt/{file_name.name}.txt"
 
                         data = conv_res.document.export_to_text()
                         self.upload_object_to_s3(
@@ -431,8 +438,10 @@ class DoclingConvert:
                         )
                     if self.export_parquet_file:
                         # Export Docling parquet document:
-                        target_key = f"{s3_target_prefix}/parquet/{doc_hash}.parquet"
-                        temp_parquet_file = temp_dir / f"{doc_hash}.parquet"
+                        target_key = (
+                            f"{s3_target_prefix}/parquet/{file_name.name}.parquet"
+                        )
+                        temp_parquet_file = temp_dir / f"{file_name.name}.parquet"
 
                         self.document_to_parquet(
                             conv_res=conv_res,
@@ -451,7 +460,7 @@ class DoclingConvert:
                         json.dump(manifest_dict, file, indent=4)
                     self.upload_file_to_s3(
                         file=temp_manifest_file,
-                        target_key=f"{s3_target_prefix}/manifest/{doc_hash}.json",
+                        target_key=f"{s3_target_prefix}/manifest/{file_name.name}.json",
                         content_type="application/json",
                     )
 
