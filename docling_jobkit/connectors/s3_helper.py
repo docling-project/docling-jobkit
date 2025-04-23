@@ -1,11 +1,15 @@
+import json
 import logging
 import os
 import tempfile
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Optional, Union
 from urllib.parse import urlparse, urlunsplit
 
+import httpx
+import pandas as pd
 from boto3.resources.base import ServiceResource
 from boto3.session import Session
 from botocore.client import BaseClient
@@ -21,11 +25,37 @@ from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.exceptions import ConversionError
 from docling.utils.utils import create_hash
 from docling_core.types.doc.base import ImageRefMode
-from docling_core.types.doc.document import DoclingDocument, PageItem, PictureItem
+from docling_core.types.doc.document import (
+    DocItem,
+    DoclingDocument,
+    PageItem,
+    PictureClassificationData,
+    PictureItem,
+)
+from docling_core.types.doc.labels import DocItemLabel
 
 from docling_jobkit.model.s3_inputs import S3Coordinates
 
 logging.basicConfig(level=logging.INFO)
+
+classifier_labels = [
+    "bar_chart",
+    "bar_code",
+    "chemistry_markush_structure",
+    "chemistry_molecular_structure",
+    "flow_chart",
+    "icon",
+    "line_chart",
+    "logo",
+    "map",
+    "other",
+    "pie_chart",
+    "qr_code",
+    "remote_sensing",
+    "screenshot",
+    "signature",
+    "stamp",
+]
 
 
 def get_s3_connection(coords: S3Coordinates):
@@ -123,18 +153,19 @@ def generate_presign_url(
         return None
 
 
-def get_source_files(s3_source_client, s3_source_resource, s3_coords):
+def get_source_files(s3_source_client, s3_source_resource, s3_coords: S3Coordinates):
     source_paginator = s3_source_client.get_paginator("list_objects_v2")
 
-    # Check that source is not empty
-    source_count = count_s3_objects(
-        source_paginator, s3_coords.bucket, s3_coords.key_prefix + "/"
+    key_prefix = (
+        s3_coords.key_prefix
+        if s3_coords.key_prefix.endswith("/")
+        else s3_coords.key_prefix + "/"
     )
+    # Check that source is not empty
+    source_count = count_s3_objects(source_paginator, s3_coords.bucket, key_prefix)
     if source_count == 0:
         logging.error("No documents to process in the source s3 coordinates.")
-    return get_keys_s3_objects_as_set(
-        s3_source_resource, s3_coords.bucket, s3_coords.key_prefix
-    )
+    return get_keys_s3_objects_as_set(s3_source_resource, s3_coords.bucket, key_prefix)
 
 
 def check_target_has_source_converted(coords, source_objects_list, s3_source_prefix):
@@ -238,6 +269,7 @@ class DoclingConvert:
         allowed_formats: Optional[list[str]] = None,
         to_formats: Optional[list[str]] = None,
         backend: Optional[type[PdfDocumentBackend]] = None,
+        export_parquet_file: bool = True,
     ):
         self.source_coords = source_s3_coords
         self.source_s3_client, _ = get_s3_connection(source_s3_coords)
@@ -264,6 +296,9 @@ class DoclingConvert:
 
         self.export_page_images = pipeline_options.generate_page_images
         self.export_images = pipeline_options.generate_picture_images
+        self.export_parquet_file = export_parquet_file
+
+        self.max_file_size = 1073741824  # TODO: be set from ENV
 
     def convert_documents(self, object_keys):
         for key in object_keys:
@@ -280,44 +315,68 @@ class DoclingConvert:
             # This will skip http links that don't have file extension as part of url, arXiv have plenty of docs like this
             if ext[1:] not in self.allowed_formats:
                 continue
-            try:
-                conv_res: ConversionResult = self.converter.convert(url)
-            except ConversionError as e:
-                logging.error("Conversion exception: {}".format(e))
-            if conv_res.status == ConversionStatus.SUCCESS:
-                s3_target_prefix = self.target_coords.key_prefix
-                doc_hash = conv_res.input.document_hash
-                logging.debug(f"Converted {doc_hash} now saving results")
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                temp_dir = Path(tmpdirname)
+                try:  # download file to be able to upload it later to s3
+                    file_name = temp_dir / os.path.basename(parsed.path)
+                    r = httpx.get(url, timeout=30)
+                    content_length = r.headers.get("Content-Length", None)
 
-                if os.path.exists(conv_res.input.file):
-                    self.upload_file_to_s3(
-                        file=conv_res.input.file,
-                        target_key=f"{s3_target_prefix}/pdf/{doc_hash}.pdf",
-                        content_type="application/pdf",
-                    )
+                    if not content_length or int(content_length) < self.max_file_size:
+                        with open(file_name, "wb") as writer:
+                            writer.write(r.content)
+                except Exception as exc:
+                    logging.error("An error occour downloading file.", exc_info=exc)
+                    continue
+                try:
+                    conv_res: ConversionResult = self.converter.convert(file_name)
+                except ConversionError as e:
+                    logging.error("Conversion exception: {}".format(e))
+                if conv_res.status == ConversionStatus.SUCCESS:
+                    s3_target_prefix = self.target_coords.key_prefix
+                    doc_hash = conv_res.input.document_hash
+                    name_without_ext = os.path.splitext(file_name.name)[0]
+                    logging.debug(f"Converted {doc_hash} now saving results")
 
-                if self.export_page_images:
-                    # Export pages images:
-                    self.upload_page_images(
-                        conv_res.document.pages,
-                        s3_target_prefix,
-                        conv_res.input.document_hash,
-                    )
+                    manifest_dict = {
+                        "doc_hash": doc_hash,
+                        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "row_number": 2,
+                    }
 
-                if self.export_images:
-                    # Export pictures
-                    self.upload_pictures(
-                        conv_res.document,
-                        s3_target_prefix,
-                        conv_res.input.document_hash,
-                    )
+                    if os.path.exists(conv_res.input.file):
+                        self.upload_file_to_s3(
+                            file=conv_res.input.file,
+                            target_key=f"{s3_target_prefix}/pdf/{name_without_ext}.pdf",
+                            content_type="application/pdf",
+                        )
+                        manifest_dict["pdf"] = (
+                            f"{s3_target_prefix}/pdf/{name_without_ext}.pdf"
+                        )
 
-                if self.to_formats is None or (
-                    self.to_formats and "json" in self.to_formats
-                ):
-                    # Export Docling document format to JSON:
-                    target_key = f"{s3_target_prefix}/json/{doc_hash}.json"
-                    with tempfile.NamedTemporaryFile() as temp_json_file:
+                    if self.export_page_images:
+                        # Export pages images:
+                        self.upload_page_images(
+                            conv_res.document.pages,
+                            s3_target_prefix,
+                            conv_res.input.document_hash,
+                        )
+
+                    if self.export_images:
+                        # Export pictures
+                        self.upload_pictures(
+                            conv_res.document,
+                            s3_target_prefix,
+                            conv_res.input.document_hash,
+                        )
+
+                    if self.to_formats is None or (
+                        self.to_formats and "json" in self.to_formats
+                    ):
+                        # Export Docling document format to JSON:
+                        target_key = f"{s3_target_prefix}/json/{name_without_ext}.json"
+                        temp_json_file = temp_dir / f"{name_without_ext}.json"
+
                         conv_res.document.save_as_json(
                             filename=Path(temp_json_file.name),
                             image_mode=ImageRefMode.REFERENCED,
@@ -327,57 +386,92 @@ class DoclingConvert:
                             target_key=target_key,
                             content_type="application/json",
                         )
-                if self.to_formats is None or (
-                    self.to_formats and "doctags" in self.to_formats
-                ):
-                    # Export Docling document format to doctags:
-                    target_key = f"{s3_target_prefix}/doctags/{doc_hash}.doctags.txt"
-                    data = conv_res.document.export_to_document_tokens()
-                    self.upload_object_to_s3(
-                        file=data,
-                        target_key=target_key,
-                        content_type="text/plain",
-                    )
-                if self.to_formats is None or (
-                    self.to_formats and "md" in self.to_formats
-                ):
-                    # Export Docling document format to markdown:
-                    target_key = f"{s3_target_prefix}/md/{doc_hash}.md"
-                    data = conv_res.document.export_to_markdown()
-                    self.upload_object_to_s3(
-                        file=data,
-                        target_key=target_key,
-                        content_type="text/markdown",
-                    )
-                if self.to_formats is None or (
-                    self.to_formats and "html" in self.to_formats
-                ):
-                    # Export Docling document format to html:
-                    target_key = f"{s3_target_prefix}/html/{doc_hash}.html"
-                    with tempfile.NamedTemporaryFile() as temp_html_file:
-                        conv_res.document.save_as_html(Path(temp_html_file.name))
+                    if self.to_formats is None or (
+                        self.to_formats and "doctags" in self.to_formats
+                    ):
+                        # Export Docling document format to doctags:
+                        target_key = (
+                            f"{s3_target_prefix}/doctags/{name_without_ext}.doctags.txt"
+                        )
+
+                        data = conv_res.document.export_to_document_tokens()
+                        self.upload_object_to_s3(
+                            file=data,
+                            target_key=target_key,
+                            content_type="text/plain",
+                        )
+                    if self.to_formats is None or (
+                        self.to_formats and "md" in self.to_formats
+                    ):
+                        # Export Docling document format to markdown:
+                        target_key = f"{s3_target_prefix}/md/{name_without_ext}.md"
+
+                        data = conv_res.document.export_to_markdown()
+                        self.upload_object_to_s3(
+                            file=data,
+                            target_key=target_key,
+                            content_type="text/markdown",
+                        )
+                    if self.to_formats is None or (
+                        self.to_formats and "html" in self.to_formats
+                    ):
+                        # Export Docling document format to html:
+                        target_key = f"{s3_target_prefix}/html/{name_without_ext}.html"
+                        temp_html_file = temp_dir / f"{name_without_ext}.html"
+
+                        conv_res.document.save_as_html(temp_html_file)
                         self.upload_file_to_s3(
-                            file=temp_html_file.name,
+                            file=temp_html_file,
                             target_key=target_key,
                             content_type="text/html",
                         )
-                if self.to_formats is None or (
-                    self.to_formats and "text" in self.to_formats
-                ):
-                    # Export Docling document format to text:
-                    target_key = f"{s3_target_prefix}/txt/{doc_hash}.txt"
-                    data = conv_res.document.export_to_text()
-                    self.upload_object_to_s3(
-                        file=data,
-                        target_key=target_key,
-                        content_type="text/plain",
-                    )
-                yield f"{doc_hash} - SUCCESS"
 
-            elif conv_res.status == ConversionStatus.PARTIAL_SUCCESS:
-                yield f"{conv_res.input.file} - PARTIAL_SUCCESS"
-            else:
-                yield f"{conv_res.input.file} - FAILURE"
+                    if self.to_formats is None or (
+                        self.to_formats and "text" in self.to_formats
+                    ):
+                        # Export Docling document format to text:
+                        target_key = f"{s3_target_prefix}/txt/{name_without_ext}.txt"
+
+                        data = conv_res.document.export_to_text()
+                        self.upload_object_to_s3(
+                            file=data,
+                            target_key=target_key,
+                            content_type="text/plain",
+                        )
+                    if self.export_parquet_file:
+                        # Export Docling parquet document:
+                        target_key = (
+                            f"{s3_target_prefix}/parquet/{name_without_ext}.parquet"
+                        )
+                        temp_parquet_file = temp_dir / f"{name_without_ext}.parquet"
+
+                        self.document_to_parquet(
+                            conv_res=conv_res,
+                            tempfile=temp_parquet_file,
+                        )
+                        self.upload_file_to_s3(
+                            file=temp_parquet_file,
+                            target_key=target_key,
+                            content_type="application/vnd.apache.parquet",
+                        )
+                        manifest_dict["parquet"] = target_key
+
+                    # Export manifest file:
+                    temp_manifest_file = temp_dir / "manifest.json"
+                    with open(temp_manifest_file, "w") as file:
+                        json.dump(manifest_dict, file, indent=4)
+                    self.upload_file_to_s3(
+                        file=temp_manifest_file,
+                        target_key=f"{s3_target_prefix}/manifest/{name_without_ext}.json",
+                        content_type="application/json",
+                    )
+
+                    yield f"{doc_hash} - SUCCESS"
+
+                elif conv_res.status == ConversionStatus.PARTIAL_SUCCESS:
+                    yield f"{conv_res.input.file} - PARTIAL_SUCCESS"
+                else:
+                    yield f"{conv_res.input.file} - FAILURE"
 
     def upload_object_to_s3(self, file, target_key, content_type):
         success = put_object(
@@ -408,7 +502,10 @@ class DoclingConvert:
         return success
 
     def upload_page_images(
-        self, pages: dict[int, PageItem], s3_target_prefix: str, doc_hash: str
+        self,
+        pages: dict[int, PageItem],
+        s3_target_prefix: str,
+        doc_hash: str,
     ):
         for page_no, page in pages.items():
             try:
@@ -433,7 +530,10 @@ class DoclingConvert:
                 )
 
     def upload_pictures(
-        self, document: DoclingDocument, s3_target_prefix: str, doc_hash: str
+        self,
+        document: DoclingDocument,
+        s3_target_prefix: str,
+        doc_hash: str,
     ):
         picture_number = 0
         for element, _level in document.iterate_items():
@@ -461,3 +561,81 @@ class DoclingConvert:
                             exc,
                         )
                     picture_number += 1
+
+    def document_to_parquet(self, conv_res: ConversionResult, tempfile: Path):
+        result_table: list[dict[str, Any]] = []
+
+        page_images = []
+        for page_no, page in conv_res.document.pages.items():
+            if page.image is not None and page.image.pil_image is not None:
+                page_images.append(page.image.pil_image.tobytes())
+
+        # Count the number of picture of each type
+        num_formulas = 0
+        num_codes = 0
+        picture_classes = dict.fromkeys(classifier_labels, 0)
+        for element, _level in conv_res.document.iterate_items():
+            if isinstance(element, PictureItem):
+                element.image = None  # reset images
+                classification = next(
+                    (
+                        annot
+                        for annot in element.annotations
+                        if isinstance(annot, PictureClassificationData)
+                    ),
+                    None,
+                )
+                if classification is None or len(classification.predicted_classes) == 0:
+                    continue
+
+                predicted_class = classification.predicted_classes[0].class_name
+                if predicted_class in picture_classes:
+                    picture_classes[predicted_class] += 1
+
+            elif isinstance(element, DocItem):
+                if element.label == DocItemLabel.FORMULA:
+                    num_formulas += 1
+                elif element.label == DocItemLabel.CODE:
+                    num_codes += 1
+
+        num_pages = len(conv_res.document.pages)
+        num_tables = len(conv_res.document.tables)
+        num_elements = len(conv_res.document.texts)
+        num_pictures = len(conv_res.document.pictures)
+
+        # All features
+        features = [
+            num_pages,
+            num_elements,
+            num_tables,
+            num_pictures,
+            num_formulas,
+            num_codes,
+            *picture_classes.values(),
+        ]
+
+        doc_hash = (
+            conv_res.document.origin.binary_hash
+            if conv_res.document.origin
+            else "unknown_hash"
+        )
+        doc_json = json.dumps(conv_res.document.export_to_dict())
+
+        pdf_byte_array: Optional[bytearray] = None
+        if os.path.exists(conv_res.input.file):
+            with open(conv_res.input.file, "rb") as file:
+                pdf_byte_array = bytearray(file.read())
+
+        result_table.append(
+            {
+                "pdf": pdf_byte_array,
+                "doc_hash": doc_hash,
+                "document": doc_json,
+                "page_images": page_images,
+                "features": features,
+                "doctags": str.encode(conv_res.document.export_to_document_tokens()),
+            }
+        )
+
+        pd_df = pd.json_normalize(result_table)
+        pd_df.to_parquet(tempfile)
