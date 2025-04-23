@@ -163,7 +163,7 @@ def get_source_files(s3_source_client, s3_source_resource, s3_coords):
     if source_count == 0:
         logging.error("No documents to process in the source s3 coordinates.")
     return get_keys_s3_objects_as_set(
-        s3_source_resource, s3_coords.bucket, s3_coords.key_prefix
+        s3_source_resource, s3_coords.bucket, s3_coords.key_prefix + "/"
     )
 
 
