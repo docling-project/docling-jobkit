@@ -334,6 +334,7 @@ class DoclingConvert:
                 if conv_res.status == ConversionStatus.SUCCESS:
                     s3_target_prefix = self.target_coords.key_prefix
                     doc_hash = conv_res.input.document_hash
+                    name_without_ext = os.path.splitext(file_name.name)[0]
                     logging.debug(f"Converted {doc_hash} now saving results")
 
                     manifest_dict = {
@@ -345,11 +346,11 @@ class DoclingConvert:
                     if os.path.exists(conv_res.input.file):
                         self.upload_file_to_s3(
                             file=conv_res.input.file,
-                            target_key=f"{s3_target_prefix}/pdf/{file_name.name}.pdf",
+                            target_key=f"{s3_target_prefix}/pdf/{name_without_ext}.pdf",
                             content_type="application/pdf",
                         )
                         manifest_dict["pdf"] = (
-                            f"{s3_target_prefix}/pdf/{file_name.name}.pdf"
+                            f"{s3_target_prefix}/pdf/{name_without_ext}.pdf"
                         )
 
                     if self.export_page_images:
@@ -372,8 +373,8 @@ class DoclingConvert:
                         self.to_formats and "json" in self.to_formats
                     ):
                         # Export Docling document format to JSON:
-                        target_key = f"{s3_target_prefix}/json/{file_name.name}.json"
-                        temp_json_file = temp_dir / f"{file_name.name}.json"
+                        target_key = f"{s3_target_prefix}/json/{name_without_ext}.json"
+                        temp_json_file = temp_dir / f"{name_without_ext}.json"
 
                         conv_res.document.save_as_json(
                             filename=Path(temp_json_file.name),
@@ -389,7 +390,7 @@ class DoclingConvert:
                     ):
                         # Export Docling document format to doctags:
                         target_key = (
-                            f"{s3_target_prefix}/doctags/{file_name.name}.doctags.txt"
+                            f"{s3_target_prefix}/doctags/{name_without_ext}.doctags.txt"
                         )
 
                         data = conv_res.document.export_to_document_tokens()
@@ -402,7 +403,7 @@ class DoclingConvert:
                         self.to_formats and "md" in self.to_formats
                     ):
                         # Export Docling document format to markdown:
-                        target_key = f"{s3_target_prefix}/md/{file_name.name}.md"
+                        target_key = f"{s3_target_prefix}/md/{name_without_ext}.md"
 
                         data = conv_res.document.export_to_markdown()
                         self.upload_object_to_s3(
@@ -414,8 +415,8 @@ class DoclingConvert:
                         self.to_formats and "html" in self.to_formats
                     ):
                         # Export Docling document format to html:
-                        target_key = f"{s3_target_prefix}/html/{file_name.name}.html"
-                        temp_html_file = temp_dir / f"{file_name.name}.html"
+                        target_key = f"{s3_target_prefix}/html/{name_without_ext}.html"
+                        temp_html_file = temp_dir / f"{name_without_ext}.html"
 
                         conv_res.document.save_as_html(temp_html_file)
                         self.upload_file_to_s3(
@@ -428,7 +429,7 @@ class DoclingConvert:
                         self.to_formats and "text" in self.to_formats
                     ):
                         # Export Docling document format to text:
-                        target_key = f"{s3_target_prefix}/txt/{file_name.name}.txt"
+                        target_key = f"{s3_target_prefix}/txt/{name_without_ext}.txt"
 
                         data = conv_res.document.export_to_text()
                         self.upload_object_to_s3(
@@ -439,9 +440,9 @@ class DoclingConvert:
                     if self.export_parquet_file:
                         # Export Docling parquet document:
                         target_key = (
-                            f"{s3_target_prefix}/parquet/{file_name.name}.parquet"
+                            f"{s3_target_prefix}/parquet/{name_without_ext}.parquet"
                         )
-                        temp_parquet_file = temp_dir / f"{file_name.name}.parquet"
+                        temp_parquet_file = temp_dir / f"{name_without_ext}.parquet"
 
                         self.document_to_parquet(
                             conv_res=conv_res,
@@ -460,7 +461,7 @@ class DoclingConvert:
                         json.dump(manifest_dict, file, indent=4)
                     self.upload_file_to_s3(
                         file=temp_manifest_file,
-                        target_key=f"{s3_target_prefix}/manifest/{file_name.name}.json",
+                        target_key=f"{s3_target_prefix}/manifest/{name_without_ext}.json",
                         content_type="application/json",
                     )
 
