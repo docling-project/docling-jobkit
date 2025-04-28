@@ -45,7 +45,8 @@ dependencies = [
     "typer~=0.12",
     "boto3~=1.35.36",
     "kfp~=2.8.0",
-    "kfp[kubernetes]"
+    "kfp[kubernetes]",
+    "httpx>=0.28.1",
 ]
 
 [project.optional-dependencies]
