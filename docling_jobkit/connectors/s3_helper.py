@@ -266,6 +266,8 @@ class DoclingConvert:
         self.export_page_images = pipeline_options.generate_page_images
         self.export_images = pipeline_options.generate_picture_images
 
+        self.max_file_size = 1073741824  # TODO: be set from ENV
+
     def convert_documents(self, object_keys):
         for key in object_keys:
             url = generate_presign_url(
