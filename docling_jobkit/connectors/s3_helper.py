@@ -342,17 +342,19 @@ class DoclingConvert:
                             target_key=target_key,
                             content_type="application/json",
                         )
-                if self.to_formats is None or (
-                    self.to_formats and "doctags" in self.to_formats
-                ):
-                    # Export Docling document format to doctags:
-                    target_key = f"{s3_target_prefix}/doctags/{doc_hash}.doctags.txt"
-                    data = conv_res.document.export_to_doctags()
-                    self.upload_object_to_s3(
-                        file=data,
-                        target_key=target_key,
-                        content_type="text/plain",
-                    )
+                    if self.to_formats is None or (
+                        self.to_formats and "doctags" in self.to_formats
+                    ):
+                        # Export Docling document format to doctags:
+                        target_key = (
+                            f"{s3_target_prefix}/doctags/{doc_hash}.doctags.txt"
+                        )
+                        data = conv_res.document.export_to_doctags()
+                        self.upload_object_to_s3(
+                            file=data,
+                            target_key=target_key,
+                            content_type="text/plain",
+                        )
                     if self.to_formats is None or (
                         self.to_formats and "doctags" in self.to_formats
                     ):
@@ -404,6 +406,7 @@ class DoclingConvert:
                             target_key=target_key,
                             content_type="text/plain",
                         )
+
                     yield f"{doc_hash} - SUCCESS"
 
                 elif conv_res.status == ConversionStatus.PARTIAL_SUCCESS:
