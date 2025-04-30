@@ -8,7 +8,7 @@ from kfp import dsl
 @dsl.component(
     packages_to_install=[
         "docling==2.28.0",
-        "git+https://github.com/docling-project/docling-jobkit@5488c3858a00a716fdbbec46dd757c793fa5c2bb",
+        "git+https://github.com/docling-project/docling-jobkit@27bad5b9159bd0fcb7c84be940416c6738c03b86",
     ],
     base_image="quay.io/docling-project/docling-serve:dev-0.0.2",  # base docling-serve image with fixed permissions
 )
@@ -107,7 +107,7 @@ def convert_payload(
     packages_to_install=[
         "pydantic",
         "boto3~=1.35.36",
-        "git+https://github.com/docling-project/docling-jobkit@5488c3858a00a716fdbbec46dd757c793fa5c2bb",
+        "git+https://github.com/docling-project/docling-jobkit@27bad5b9159bd0fcb7c84be940416c6738c03b86",
     ],
     base_image="python:3.11",
 )
