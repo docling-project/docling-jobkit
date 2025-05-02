@@ -120,7 +120,7 @@ deploymentSpec:
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef compute_batches(\n    source: dict,\n    target: dict,\n    dataset:\
           \ Output[Dataset],\n    batch_size: int = 10,\n) -> NamedTuple(\"outputs\"\
-          , [(\"batch_indices\", List[int])]): # type: ignore[valid-type]\n    import\
+          , [(\"batch_indices\", List[int])]):  # type: ignore[valid-type]\n    import\
           \ json\n    from typing import NamedTuple\n\n    from docling_jobkit.connectors.s3_helper\
           \ import (\n        check_target_has_source_converted,\n        generate_batch_keys,\n\
           \        get_s3_connection,\n        get_source_files,\n    )\n    from\
@@ -169,31 +169,34 @@ deploymentSpec:
           \ *\n\ndef convert_payload(\n    options: dict,\n    source: dict,\n   \
           \ target: dict,\n    batch_index: int,\n    # source_keys: List[str],\n\
           \    dataset: Input[Dataset],\n) -> list:\n    import json\n    import logging\n\
-          \    import os\n    from typing import Optional\n\n    from docling.backend.docling_parse_backend\
-          \ import DoclingParseDocumentBackend\n    from docling.backend.docling_parse_v2_backend\
-          \ import DoclingParseV2DocumentBackend\n    from docling.backend.docling_parse_v4_backend\
-          \ import DoclingParseV4DocumentBackend\n    from docling.backend.pdf_backend\
-          \ import PdfDocumentBackend\n    from docling.backend.pypdfium2_backend\
-          \ import PyPdfiumDocumentBackend\n    from docling.datamodel.pipeline_options\
-          \ import (\n        OcrOptions,\n        PdfBackend,\n        PdfPipelineOptions,\n\
-          \        TableFormerMode,\n    )\n    from docling.models.factories import\
-          \ get_ocr_factory\n\n    from docling_jobkit.connectors.s3_helper import\
-          \ DoclingConvert\n    from docling_jobkit.model.convert import ConvertDocumentsOptions\n\
-          \    from docling_jobkit.model.s3_inputs import S3Coordinates\n\n    logging.basicConfig(level=logging.INFO)\n\
+          \    import os\n    from typing import Optional\n    from pathlib import\
+          \ Path\n\n    from docling.backend.docling_parse_backend import DoclingParseDocumentBackend\n\
+          \    from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBackend\n\
+          \    from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend\n\
+          \    from docling.backend.pdf_backend import PdfDocumentBackend\n    from\
+          \ docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend\n   \
+          \ from docling.datamodel.pipeline_options import (\n        OcrOptions,\n\
+          \        PdfBackend,\n        PdfPipelineOptions,\n        TableFormerMode,\n\
+          \    )\n    from docling.models.factories import get_ocr_factory\n\n   \
+          \ from docling_jobkit.connectors.s3_helper import DoclingConvert\n    from\
+          \ docling_jobkit.model.convert import ConvertDocumentsOptions\n    from\
+          \ docling_jobkit.model.s3_inputs import S3Coordinates\n\n    logging.basicConfig(level=logging.INFO)\n\
           \n    # set expected path to pre-loaded models\n    os.environ[\"DOCLING_ARTIFACTS_PATH\"\
-          ] = \"/opt/app-root/src/.cache/docling/models\"\n\n    # validate inputs\n\
-          \    source_s3_coords = S3Coordinates.model_validate(source)\n    target_s3_coords\
-          \ = S3Coordinates.model_validate(target)\n\n    convert_options = ConvertDocumentsOptions.model_validate(options)\n\
-          \n    backend: Optional[type[PdfDocumentBackend]] = None\n    if convert_options.pdf_backend:\n\
-          \        if convert_options.pdf_backend == PdfBackend.DLPARSE_V1:\n    \
-          \        backend = DoclingParseDocumentBackend\n        elif convert_options.pdf_backend\
-          \ == PdfBackend.DLPARSE_V2:\n            backend = DoclingParseV2DocumentBackend\n\
-          \        elif convert_options.pdf_backend == PdfBackend.DLPARSE_V4:\n  \
-          \          backend = DoclingParseV4DocumentBackend\n        elif convert_options.pdf_backend\
-          \ == PdfBackend.PYPDFIUM2:\n            backend = PyPdfiumDocumentBackend\n\
-          \        else:\n            raise RuntimeError(\n                f\"Unexpected\
-          \ PDF backend type {convert_options.pdf_backend}\"\n            )\n\n  \
-          \  pipeline_options = PdfPipelineOptions()\n    pipeline_options.do_ocr\
+          ] = \"/opt/app-root/src/.cache/docling/models\"\n    # easyocr_path = Path(\"\
+          /opt/app-root/src/.cache/docling/models/EasyOcr\")\n    # os.environ[\"\
+          MODULE_PATH\"] = str(easyocr_path)\n    # os.environ[\"EASYOCR_MODULE_PATH\"\
+          ] = str(easyocr_path)\n\n    # validate inputs\n    source_s3_coords = S3Coordinates.model_validate(source)\n\
+          \    target_s3_coords = S3Coordinates.model_validate(target)\n\n    convert_options\
+          \ = ConvertDocumentsOptions.model_validate(options)\n\n    backend: Optional[type[PdfDocumentBackend]]\
+          \ = None\n    if convert_options.pdf_backend:\n        if convert_options.pdf_backend\
+          \ == PdfBackend.DLPARSE_V1:\n            backend = DoclingParseDocumentBackend\n\
+          \        elif convert_options.pdf_backend == PdfBackend.DLPARSE_V2:\n  \
+          \          backend = DoclingParseV2DocumentBackend\n        elif convert_options.pdf_backend\
+          \ == PdfBackend.DLPARSE_V4:\n            backend = DoclingParseV4DocumentBackend\n\
+          \        elif convert_options.pdf_backend == PdfBackend.PYPDFIUM2:\n   \
+          \         backend = PyPdfiumDocumentBackend\n        else:\n           \
+          \ raise RuntimeError(\n                f\"Unexpected PDF backend type {convert_options.pdf_backend}\"\
+          \n            )\n\n    pipeline_options = PdfPipelineOptions()\n    pipeline_options.do_ocr\
           \ = convert_options.do_ocr\n    ocr_factory = get_ocr_factory()\n\n    pipeline_options.ocr_options\
           \ = cast(\n        OcrOptions, ocr_factory.create_options(kind=convert_options.ocr_engine)\n\
           \    )\n\n    pipeline_options.do_table_structure = convert_options.do_table_structure\n\
@@ -214,7 +217,7 @@ deploymentSpec:
           \n    results = []\n    for item in converter.convert_documents(source_keys):\n\
           \        results.append(item)\n        logging.info(\"Convertion result:\
           \ {}\".format(item))\n\n    return results\n\n"
-        image: quay.io/docling-project/docling-serve:dev-0.0.2
+        image: quay.io/docling-project/docling-serve:jobkit-base-0.0.19
         resources:
           cpuLimit: 1.0
           cpuRequest: 0.2

@@ -11,7 +11,7 @@ from kfp.dsl import Dataset, Input, Output
         "docling==2.28.0",
         "git+https://github.com/docling-project/docling-jobkit@27bad5b9159bd0fcb7c84be940416c6738c03b86",
     ],
-    base_image="quay.io/docling-project/docling-serve:dev-0.0.2",  # base docling-serve image with fixed permissions
+    base_image="quay.io/docling-project/docling-serve:jobkit-base-0.0.19",  # base docling-serve image with fixed permissions
 )
 def convert_payload(
     options: dict,
@@ -47,6 +47,9 @@ def convert_payload(
 
     # set expected path to pre-loaded models
     os.environ["DOCLING_ARTIFACTS_PATH"] = "/opt/app-root/src/.cache/docling/models"
+    # easyocr_path = Path("/opt/app-root/src/.cache/docling/models/EasyOcr")
+    # os.environ["MODULE_PATH"] = str(easyocr_path)
+    # os.environ["EASYOCR_MODULE_PATH"] = str(easyocr_path)
 
     # validate inputs
     source_s3_coords = S3Coordinates.model_validate(source)
