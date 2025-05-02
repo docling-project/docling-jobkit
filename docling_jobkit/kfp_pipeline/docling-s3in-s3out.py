@@ -2,7 +2,7 @@
 
 from typing import List, NamedTuple, cast
 
-from kfp import dsl, kubernetes
+from kfp import dsl
 from kfp.dsl import Dataset, Input, Output
 
 
@@ -25,7 +25,6 @@ def convert_payload(
     import logging
     import os
     from typing import Optional
-    from pathlib import Path
 
     from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
     from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBackend
