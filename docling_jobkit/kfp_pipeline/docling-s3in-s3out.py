@@ -1,24 +1,29 @@
 # ruff: noqa: E402
 
-from typing import List, cast
+from typing import List, NamedTuple, cast
 
 from kfp import dsl
+from kfp.dsl import Dataset, Input, Output
 
 
 @dsl.component(
     packages_to_install=[
         "docling==2.28.0",
-        "git+https://github.com/docling-project/docling-jobkit@5488c3858a00a716fdbbec46dd757c793fa5c2bb",
+        "git+https://github.com/docling-project/docling-jobkit@27bad5b9159bd0fcb7c84be940416c6738c03b86",
     ],
-    base_image="quay.io/docling-project/docling-serve:dev-0.0.2",  # base docling-serve image with fixed permissions
+    base_image="quay.io/docling-project/docling-serve:jobkit-base-0.0.19",  # base docling-serve image with fixed permissions
 )
 def convert_payload(
     options: dict,
     source: dict,
     target: dict,
-    source_keys: List[str],
+    batch_index: int,
+    # source_keys: List[str],
+    dataset: Input[Dataset],
 ) -> list:
+    import json
     import logging
+    import os
     from typing import Optional
 
     from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
@@ -39,6 +44,12 @@ def convert_payload(
     from docling_jobkit.model.s3_inputs import S3Coordinates
 
     logging.basicConfig(level=logging.INFO)
+
+    # set expected path to pre-loaded models
+    os.environ["DOCLING_ARTIFACTS_PATH"] = "/opt/app-root/src/.cache/docling/models"
+    # easyocr_path = Path("/opt/app-root/src/.cache/docling/models/EasyOcr")
+    # os.environ["MODULE_PATH"] = str(easyocr_path)
+    # os.environ["EASYOCR_MODULE_PATH"] = str(easyocr_path)
 
     # validate inputs
     source_s3_coords = S3Coordinates.model_validate(source)
@@ -95,6 +106,10 @@ def convert_payload(
         backend=backend,
     )
 
+    with open(dataset.path) as f:
+        batches = json.load(f)
+    source_keys = batches[batch_index]
+
     results = []
     for item in converter.convert_documents(source_keys):
         results.append(item)
@@ -107,15 +122,19 @@ def convert_payload(
     packages_to_install=[
         "pydantic",
         "boto3~=1.35.36",
-        "git+https://github.com/docling-project/docling-jobkit@5488c3858a00a716fdbbec46dd757c793fa5c2bb",
+        "git+https://github.com/docling-project/docling-jobkit@27bad5b9159bd0fcb7c84be940416c6738c03b86",
     ],
     base_image="python:3.11",
 )
 def compute_batches(
     source: dict,
     target: dict,
+    dataset: Output[Dataset],
     batch_size: int = 10,
-) -> List[List[str]]:
+) -> NamedTuple("outputs", [("batch_indices", List[int])]):  # type: ignore[valid-type]
+    import json
+    from typing import NamedTuple
+
     from docling_jobkit.connectors.s3_helper import (
         check_target_has_source_converted,
         generate_batch_keys,
@@ -140,11 +159,16 @@ def compute_batches(
         batch_size=batch_size,
     )
 
-    return batch_keys
+    with open(dataset.path, "w") as out_batches:
+        json.dump(batch_keys, out_batches)
+
+    batch_indices = list(range(len(batch_keys)))
+    outputs = NamedTuple("outputs", [("batch_indices", List[int])])
+    return outputs(batch_indices)
 
 
 @dsl.pipeline
-def docling_s3in_s3out(
+def inputs_s3in_s3out(
     convertion_options: dict = {
         "from_formats": [
             "docx",
@@ -227,12 +251,13 @@ def docling_s3in_s3out(
     batches.set_caching_options(False)
 
     results = []
-    with dsl.ParallelFor(batches.output, parallelism=3) as subbatch:
+    with dsl.ParallelFor(batches.outputs["batch_indices"], parallelism=3) as subbatch:
         converter = convert_payload(
             options=convertion_options,
             source=source,
             target=target,
-            source_keys=subbatch,
+            dataset=batches.outputs["dataset"],
+            batch_index=subbatch,
         )
         converter.set_memory_request("1G")
         converter.set_memory_limit("7G")
@@ -270,4 +295,4 @@ def docling_s3in_s3out(
 
 from kfp import compiler
 
-compiler.Compiler().compile(docling_s3in_s3out, "docling-s3in-s3out.yaml")
+compiler.Compiler().compile(inputs_s3in_s3out, "docling-s3in-s3out.yaml")
