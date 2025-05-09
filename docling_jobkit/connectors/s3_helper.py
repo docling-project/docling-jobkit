@@ -294,6 +294,7 @@ class DoclingConvert:
                             writer.write(r.content)
                 except Exception as exc:
                     logging.error("An error occurred downloading file.", exc_info=exc)
+                    yield f"{parsed.path} - FAILURE"
                     continue
                 try:
                     conv_res: ConversionResult = self.converter.convert(file_name)
