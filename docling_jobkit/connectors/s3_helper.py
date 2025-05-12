@@ -22,7 +22,6 @@ from docling.datamodel.base_models import ConversionStatus, InputFormat
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.exceptions import ConversionError
 from docling.utils.utils import create_hash
 from docling_core.types.doc.base import ImageRefMode
 from docling_core.types.doc.document import (
@@ -340,12 +339,19 @@ class DoclingConvert:
                             with open(file_name, "wb") as writer:
                                 writer.write(r.content)
                     except Exception as exc:
-                        logging.error("An error occour downloading file.", exc_info=exc)
+                        logging.error(
+                            "An error occurred downloading file.", exc_info=exc
+                        )
+                        yield f"{parsed.path} - FAILURE"
                         continue
                     try:
                         conv_res: ConversionResult = self.converter.convert(file_name)
-                    except ConversionError as e:
-                        logging.error("Conversion exception: {}".format(e))
+                    except Exception as e:
+                        logging.error(
+                            "An error occurred while converting document.", exc_info=e
+                        )
+                        yield f"{parsed.path} - FAILURE"
+                        continue
                     if conv_res.status == ConversionStatus.SUCCESS:
                         s3_target_prefix = self.target_coords.key_prefix
                         doc_hash = conv_res.input.document_hash
