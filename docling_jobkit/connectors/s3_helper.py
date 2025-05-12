@@ -661,4 +661,4 @@ class DoclingConvert:
         )
 
         pd_df = pd.json_normalize(result_table)
-        pd_df.to_parquet(tempfile, append=True)
+        pd_df.to_parquet(tempfile, engine="fastparquet", append=True)
