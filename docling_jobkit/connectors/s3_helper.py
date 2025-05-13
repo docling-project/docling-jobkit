@@ -646,14 +646,14 @@ class DoclingConvert:
         )
         doc_json = json.dumps(conv_res.document.export_to_dict())
 
-        pdf_byte_array: Optional[bytearray] = None
-        if os.path.exists(conv_res.input.file):
-            with open(conv_res.input.file, "rb") as file:
-                pdf_byte_array = bytearray(file.read())
+        # pdf_byte_array: Optional[bytearray] = None
+        # if os.path.exists(conv_res.input.file):
+        #     with open(conv_res.input.file, "rb") as file:
+        #         pdf_byte_array = bytearray(file.read())
 
         result_table.append(
             {
-                "pdf": pdf_byte_array,
+                # "pdf": pdf_byte_array,
                 "doc_hash": doc_hash,
                 "document": doc_json,
                 "page_images": page_images,
