@@ -277,7 +277,7 @@ class DoclingConvert:
         allowed_formats: Optional[list[str]] = None,
         to_formats: Optional[list[str]] = None,
         backend: Optional[type[PdfDocumentBackend]] = None,
-        export_parquet_file: bool = False,
+        export_parquet_file: bool = True,
     ):
         self.source_coords = source_s3_coords
         self.source_s3_client, _ = get_s3_connection(source_s3_coords)
@@ -309,7 +309,9 @@ class DoclingConvert:
         self.max_file_size = 1073741824  # TODO: be set from ENV
 
     def convert_documents(self, object_keys):
-        fd, parquet_path = tempfile.mkstemp()  # temporary file for parquet
+        fd, parquet_path = tempfile.mkstemp(
+            suffix=".parquet"
+        )  # temporary file for parquet
         try:
             for i, key in enumerate(object_keys):
                 url = generate_presign_url(
@@ -661,7 +663,10 @@ class DoclingConvert:
         )
 
         pd_df = pd.json_normalize(result_table)
-        if os.stat(tempfile).st_size == 0:
-            pd_df.to_parquet(tempfile, engine="pyarrow")
-        else:
-            pd_df.to_parquet(tempfile, engine="fastparquet", append=True)
+        try:
+            if os.stat(tempfile).st_size == 0:
+                pd_df.to_parquet(tempfile, engine="pyarrow")
+            else:
+                pd_df.to_parquet(tempfile, engine="fastparquet", append=True)
+        except Exception as e:
+            logging.error("An error occurred while writing parquet file.", exc_info=e)
