@@ -1,3 +1,17 @@
+## [v0.1.0](https://github.com/docling-project/docling-jobkit/releases/tag/v0.1.0) - 2025-05-13
+
+### Feature
+
+* Implements fix for the issue caused by passing batch list of objects are regular parameter ([#31](https://github.com/docling-project/docling-jobkit/issues/31)) ([`3f5e8b3`](https://github.com/docling-project/docling-jobkit/commit/3f5e8b3a76d35902bd558d1d10c3a2e66320a616))
+
+### Fix
+
+* Convert document exception handler ([#34](https://github.com/docling-project/docling-jobkit/issues/34)) ([`2c27c71`](https://github.com/docling-project/docling-jobkit/commit/2c27c71b75da98f04fccc7abc7ddc3a9a3afb0cd))
+* Pinning of the new base image ([#32](https://github.com/docling-project/docling-jobkit/issues/32)) ([`1e068ea`](https://github.com/docling-project/docling-jobkit/commit/1e068ea8804e96bfe222906787d411b97743237e))
+* Wrong indentation in convert_documents method ([#29](https://github.com/docling-project/docling-jobkit/issues/29)) ([`27bad5b`](https://github.com/docling-project/docling-jobkit/commit/27bad5b9159bd0fcb7c84be940416c6738c03b86))
+* Add missing doc max size ([#27](https://github.com/docling-project/docling-jobkit/issues/27)) ([`89dd116`](https://github.com/docling-project/docling-jobkit/commit/89dd1169fe7a965a09f91b7e2ef4ceecb1236e71))
+* Export pdf, check existing conversions ([#26](https://github.com/docling-project/docling-jobkit/issues/26)) ([`3e55ce9`](https://github.com/docling-project/docling-jobkit/commit/3e55ce999a07032f26c150c4d6a9080e22edc1f3))
+
 ## [v0.0.2](https://github.com/docling-project/docling-jobkit/releases/tag/v0.0.2) - 2025-04-16
 
 ### Fix
