@@ -277,7 +277,7 @@ class DoclingConvert:
         allowed_formats: Optional[list[str]] = None,
         to_formats: Optional[list[str]] = None,
         backend: Optional[type[PdfDocumentBackend]] = None,
-        export_parquet_file: bool = True,
+        export_parquet_file: bool = False,
     ):
         self.source_coords = source_s3_coords
         self.source_s3_client, _ = get_s3_connection(source_s3_coords)
@@ -487,7 +487,7 @@ class DoclingConvert:
                         yield f"{conv_res.input.file} - FAILURE"
 
         finally:
-            if os.path.exists(parquet_path):
+            if self.export_parquet_file and os.stat(parquet_path).st_size != 0:
                 target_key = f"{s3_target_prefix}/parquet/{parquet_path}.parquet"
                 self.upload_file_to_s3(
                     file=parquet_path,
