@@ -15,6 +15,7 @@ from boto3.session import Session
 from botocore.client import BaseClient
 from botocore.config import Config
 from botocore.paginate import Paginator
+from pandas import DataFrame
 
 from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
 from docling.backend.pdf_backend import PdfDocumentBackend
@@ -309,9 +310,7 @@ class DoclingConvert:
         self.max_file_size = 1073741824  # TODO: be set from ENV
 
     def convert_documents(self, object_keys):
-        fd, parquet_path = tempfile.mkstemp(
-            suffix=".parquet"
-        )  # temporary file for parquet
+        pd_d = DataFrame()  # DataFrame to append parquet info
         try:
             for i, key in enumerate(object_keys):
                 url = generate_presign_url(
@@ -465,10 +464,10 @@ class DoclingConvert:
                                 content_type="text/plain",
                             )
                         if self.export_parquet_file:
-                            # Export Docling parquet document:
+                            # Save Docling parquet info:
                             self.document_to_parquet(
                                 conv_res=conv_res,
-                                tempfile=parquet_path,
+                                pd_daframe=pd_d,
                             )
 
                         # Export manifest file:
@@ -489,14 +488,17 @@ class DoclingConvert:
                         yield f"{conv_res.input.file} - FAILURE"
 
         finally:
-            if self.export_parquet_file and os.stat(parquet_path).st_size != 0:
-                target_key = f"{s3_target_prefix}/parquet/{parquet_path}.parquet"
-                self.upload_file_to_s3(
-                    file=parquet_path,
-                    target_key=target_key,
-                    content_type="application/vnd.apache.parquet",
-                )
-            os.remove(parquet_path)
+            if self.export_parquet_file and not pd_d.empty:
+                with tempfile.NamedTemporaryFile(
+                    suffix=".parquet"
+                ) as temp_parquet_file:
+                    target_key = f"{s3_target_prefix}/parquet/{os.path.basename(temp_parquet_file.name)}"
+                    pd_d.to_parquet(temp_parquet_file.name)
+                    self.upload_file_to_s3(
+                        file=temp_parquet_file.name,
+                        target_key=target_key,
+                        content_type="application/vnd.apache.parquet",
+                    )
 
     def upload_object_to_s3(self, file, target_key, content_type):
         success = put_object(
@@ -587,7 +589,7 @@ class DoclingConvert:
                         )
                     picture_number += 1
 
-    def document_to_parquet(self, conv_res: ConversionResult, tempfile: Path):
+    def document_to_parquet(self, conv_res: ConversionResult, pd_dataframe: DataFrame):
         result_table: list[dict[str, Any]] = []
 
         page_images = []
@@ -646,14 +648,14 @@ class DoclingConvert:
         )
         doc_json = json.dumps(conv_res.document.export_to_dict())
 
-        # pdf_byte_array: Optional[bytearray] = None
-        # if os.path.exists(conv_res.input.file):
-        #     with open(conv_res.input.file, "rb") as file:
-        #         pdf_byte_array = bytearray(file.read())
+        pdf_byte_array: Optional[bytearray] = None
+        if os.path.exists(conv_res.input.file):
+            with open(conv_res.input.file, "rb") as file:
+                pdf_byte_array = bytearray(file.read())
 
         result_table.append(
             {
-                # "pdf": pdf_byte_array,
+                "pdf": pdf_byte_array,
                 "doc_hash": doc_hash,
                 "document": doc_json,
                 "page_images": page_images,
@@ -663,10 +665,11 @@ class DoclingConvert:
         )
 
         pd_df = pd.json_normalize(result_table)
-        try:
-            if os.stat(tempfile).st_size == 0:
-                pd_df.to_parquet(tempfile, engine="pyarrow")
-            else:
-                pd_df.to_parquet(tempfile, engine="fastparquet", append=True)
-        except Exception as e:
-            logging.error("An error occurred while writing parquet file.", exc_info=e)
+        pd_dataframe._append(pd_df)
+        # try:
+        #     if os.stat(tempfile).st_size == 0:
+        #         pd_df.to_parquet(tempfile, engine="pyarrow")
+        #     else:
+        #         pd_df.to_parquet(tempfile, engine="fastparquet", append=True)
+        # except Exception as e:
+        #     logging.error("An error occurred while writing parquet file.", exc_info=e)
