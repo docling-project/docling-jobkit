@@ -465,8 +465,8 @@ class DoclingConvert:
                             )
                         if self.export_parquet_file:
                             logging.info("saving document info in dataframe...")
-                            # Save Docling parquet info:
-                            self.document_to_parquet(
+                            # Save Docling parquet info into DataFrame:
+                            pd_d = self.document_to_dataframe(
                                 conv_res=conv_res,
                                 pd_dataframe=pd_d,
                             )
@@ -592,7 +592,9 @@ class DoclingConvert:
                         )
                     picture_number += 1
 
-    def document_to_parquet(self, conv_res: ConversionResult, pd_dataframe: DataFrame):
+    def document_to_dataframe(
+        self, conv_res: ConversionResult, pd_dataframe: DataFrame
+    ) -> DataFrame:
         result_table: list[dict[str, Any]] = []
 
         page_images = []
@@ -668,8 +670,9 @@ class DoclingConvert:
         )
 
         pd_df = pd.json_normalize(result_table)
-        pd_dataframe._append(pd_df)
-        logging.info(f"dataframe is empty after appending data: {pd_dataframe.empty}")
+        pd_df = pd_dataframe._append(pd_df)
+        logging.info(f"dataframe is empty after appending data: {pd_df.empty}")
+        return pd_df
         # try:
         #     if os.stat(tempfile).st_size == 0:
         #         pd_df.to_parquet(tempfile, engine="pyarrow")
