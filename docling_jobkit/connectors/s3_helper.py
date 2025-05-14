@@ -38,6 +38,9 @@ from docling_jobkit.model.s3_inputs import S3Coordinates
 
 logging.basicConfig(level=logging.INFO)
 
+# Set the maximum file size of parquet to 500MB
+MAX_PARQUET_FILE_SIZE = 1024 * 1024  # 1MB for testing
+
 classifier_labels = [
     "bar_chart",
     "bar_code",
@@ -359,20 +362,11 @@ class DoclingConvert:
                         name_without_ext = os.path.splitext(file_name.name)[0]
                         logging.debug(f"Converted {doc_hash} now saving results")
 
-                        manifest_dict = {
-                            "doc_hash": doc_hash,
-                            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            "row_number": 2,
-                        }
-
                         if os.path.exists(conv_res.input.file):
                             self.upload_file_to_s3(
                                 file=conv_res.input.file,
                                 target_key=f"{s3_target_prefix}/pdf/{name_without_ext}.pdf",
                                 content_type="application/pdf",
-                            )
-                            manifest_dict["pdf"] = (
-                                f"{s3_target_prefix}/pdf/{name_without_ext}.pdf"
                             )
 
                         if self.export_page_images:
@@ -469,17 +463,8 @@ class DoclingConvert:
                             pd_d = self.document_to_dataframe(
                                 conv_res=conv_res,
                                 pd_dataframe=pd_d,
+                                filename=name_without_ext,
                             )
-
-                        # Export manifest file:
-                        temp_manifest_file = temp_dir / "manifest.json"
-                        with open(temp_manifest_file, "w") as file:
-                            json.dump(manifest_dict, file, indent=4)
-                        self.upload_file_to_s3(
-                            file=temp_manifest_file,
-                            target_key=f"{s3_target_prefix}/manifest/{name_without_ext}.json",
-                            content_type="application/json",
-                        )
 
                         yield f"{doc_hash} - SUCCESS"
 
@@ -492,16 +477,7 @@ class DoclingConvert:
             logging.info(f"upload parquet bool: {self.export_parquet_file}")
             logging.info(f"dataframe is empty before uploading parquet: {pd_d.empty}")
             if self.export_parquet_file and not pd_d.empty:
-                with tempfile.NamedTemporaryFile(
-                    suffix=".parquet"
-                ) as temp_parquet_file:
-                    target_key = f"{s3_target_prefix}/parquet/{os.path.basename(temp_parquet_file.name)}"
-                    pd_d.to_parquet(temp_parquet_file.name)
-                    self.upload_file_to_s3(
-                        file=temp_parquet_file.name,
-                        target_key=target_key,
-                        content_type="application/vnd.apache.parquet",
-                    )
+                self.upload_parquet_file(pd_d, self.target_coords.key_prefix)
 
     def upload_object_to_s3(self, file, target_key, content_type):
         success = put_object(
@@ -593,7 +569,7 @@ class DoclingConvert:
                     picture_number += 1
 
     def document_to_dataframe(
-        self, conv_res: ConversionResult, pd_dataframe: DataFrame
+        self, conv_res: ConversionResult, pd_dataframe: DataFrame, filename: str
     ) -> DataFrame:
         result_table: list[dict[str, Any]] = []
 
@@ -660,6 +636,7 @@ class DoclingConvert:
 
         result_table.append(
             {
+                "filename": filename,
                 "pdf": pdf_byte_array,
                 "doc_hash": doc_hash,
                 "document": doc_json,
@@ -673,10 +650,83 @@ class DoclingConvert:
         pd_df = pd_dataframe._append(pd_df)
         logging.info(f"dataframe is empty after appending data: {pd_df.empty}")
         return pd_df
-        # try:
-        #     if os.stat(tempfile).st_size == 0:
-        #         pd_df.to_parquet(tempfile, engine="pyarrow")
-        #     else:
-        #         pd_df.to_parquet(tempfile, engine="fastparquet", append=True)
-        # except Exception as e:
-        #     logging.error("An error occurred while writing parquet file.", exc_info=e)
+
+    def upload_parquet_file(self, pd_dataframe: DataFrame, s3_target_prefix: str):
+        # Variables to track the file writing process
+        file_index = 0
+        current_file_size = 0
+        current_df = pd.DataFrame()
+        # Manifest dictionary
+        manifest = {}
+
+        while len(pd_dataframe) > 0:
+            # Get a chunk of the DataFrame that fits within the file size limit
+            chunk_size = min(
+                len(pd_dataframe), MAX_PARQUET_FILE_SIZE // (current_file_size + 1)
+            )
+
+            # If the chunk size is 0, it means the current file size has exceeded the limit
+            if chunk_size == 0:
+                with tempfile.NamedTemporaryFile(
+                    suffix=f".parquet_{file_index}"
+                ) as temp_file:
+                    pd_dataframe.to_parquet(temp_file.name)
+                    current_file_size += os.path.getsize(temp_file.name)
+                    file_index += 1
+
+                    target_key = (
+                        f"{s3_target_prefix}/parquet/{os.path.basename(temp_file.name)}"
+                    )
+                    self.upload_file_to_s3(
+                        file=temp_file.name,
+                        target_key=target_key,
+                        content_type="application/vnd.apache.parquet",
+                    )
+
+                    manifest[f"parquet_{file_index}"] = {
+                        "filename": pd_dataframe["filename"].tolist(),
+                        "doc_hash": pd_dataframe["doc_hash"].tolist(),
+                        "row_number": 3,
+                        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    }
+
+                pd_dataframe = pd.DataFrame()
+            else:
+                # Get the current chunk of the DataFrame
+                current_df = pd_dataframe.iloc[:chunk_size]
+                pd_dataframe = pd_dataframe.iloc[chunk_size:]
+
+                with tempfile.NamedTemporaryFile(
+                    suffix=f".parquet_{file_index}"
+                ) as temp_file:
+                    current_df.to_parquet(temp_file.name)
+                    current_file_size += os.path.getsize(temp_file.name)
+                    file_index += 1
+
+                    target_key = (
+                        f"{s3_target_prefix}/parquet/{os.path.basename(temp_file.name)}"
+                    )
+                    self.upload_file_to_s3(
+                        file=temp_file.name,
+                        target_key=target_key,
+                        content_type="application/vnd.apache.parquet",
+                    )
+
+                    manifest[f"parquet_{file_index}"] = {
+                        "filenames": current_df["filename"].tolist(),
+                        "doc_hashes": current_df["doc_hash"].tolist(),
+                        "row_number": 3,
+                        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    }
+
+        logging.info(f"Total parquet files uploaded: {file_index}")
+
+        # Export manifest file:
+        with tempfile.NamedTemporaryFile(suffix=".json") as temp_file_json:
+            with open(temp_file_json.name, "w") as file:
+                json.dump(manifest, file, indent=4)
+            self.upload_file_to_s3(
+                file=temp_file_json.name,
+                target_key=f"{s3_target_prefix}/manifest/{os.path.basename(temp_file_json.name)}",
+                content_type="application/json",
+            )
