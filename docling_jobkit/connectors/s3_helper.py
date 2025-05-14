@@ -464,6 +464,7 @@ class DoclingConvert:
                                 content_type="text/plain",
                             )
                         if self.export_parquet_file:
+                            logging.info("saving document info in dataframe...")
                             # Save Docling parquet info:
                             self.document_to_parquet(
                                 conv_res=conv_res,
@@ -488,6 +489,8 @@ class DoclingConvert:
                         yield f"{conv_res.input.file} - FAILURE"
 
         finally:
+            logging.info(f"upload parquet bool: {self.export_parquet_file}")
+            logging.info(f"dataframe is empty before uploading parquet: {pd_d.empty}")
             if self.export_parquet_file and not pd_d.empty:
                 with tempfile.NamedTemporaryFile(
                     suffix=".parquet"
@@ -666,6 +669,7 @@ class DoclingConvert:
 
         pd_df = pd.json_normalize(result_table)
         pd_dataframe._append(pd_df)
+        logging.info(f"dataframe is empty after appending data: {pd_dataframe.empty}")
         # try:
         #     if os.stat(tempfile).st_size == 0:
         #         pd_df.to_parquet(tempfile, engine="pyarrow")
