@@ -467,7 +467,7 @@ class DoclingConvert:
                             # Save Docling parquet info:
                             self.document_to_parquet(
                                 conv_res=conv_res,
-                                pd_daframe=pd_d,
+                                pd_dataframe=pd_d,
                             )
 
                         # Export manifest file:
