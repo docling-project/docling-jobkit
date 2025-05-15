@@ -5,7 +5,7 @@ import tempfile
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any
 from urllib.parse import urlparse, urlunsplit
 
 import httpx
@@ -144,7 +144,7 @@ def generate_presign_url(
     source_key: str,
     s3_source_bucket: str,
     expiration_time: int = 3600,
-) -> Optional[str]:
+) -> str | None:
     try:
         return s3_client.generate_presigned_url(
             ClientMethod="get_object",
@@ -220,7 +220,7 @@ def put_object(
     bucket: str,
     object_key: str,
     file: str,
-    content_type: Optional[str] = None,
+    content_type: str | None = None,
 ) -> bool:
     """Upload a object to an S3 bucket
 
@@ -247,8 +247,8 @@ def upload_file(
     client,
     bucket: str,
     object_key: str,
-    file_name: Union[str, Path],
-    content_type: Optional[str] = None,
+    file_name: str | Path,
+    content_type: str | None = None,
 ):
     """Upload a file to an S3 bucket
 
@@ -278,9 +278,9 @@ class DoclingConvert:
         source_s3_coords: S3Coordinates,
         target_s3_coords: S3Coordinates,
         pipeline_options: PdfPipelineOptions,
-        allowed_formats: Optional[list[str]] = None,
-        to_formats: Optional[list[str]] = None,
-        backend: Optional[type[PdfDocumentBackend]] = None,
+        allowed_formats: list[str] | None = None,
+        to_formats: list[str] | None = None,
+        backend: type[PdfDocumentBackend] | None = None,
         export_parquet_file: bool = True,
     ):
         self.source_coords = source_s3_coords
@@ -627,7 +627,7 @@ class DoclingConvert:
         )
         doc_json = json.dumps(conv_res.document.export_to_dict())
 
-        pdf_byte_array: Optional[bytearray] = None
+        pdf_byte_array: bytearray | None = None
         if os.path.exists(conv_res.input.file):
             with open(conv_res.input.file, "rb") as file:
                 pdf_byte_array = bytearray(file.read())
