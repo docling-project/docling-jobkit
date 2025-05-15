@@ -38,8 +38,8 @@ from docling_jobkit.model.s3_inputs import S3Coordinates
 
 logging.basicConfig(level=logging.INFO)
 
-# Set the maximum file size of parquet to 500MB
-MAX_PARQUET_FILE_SIZE = 1024 * 1024  # 1MB for testing
+# Set the maximum file size of parquet to 100MB
+MAX_PARQUET_FILE_SIZE = 100 * 1024 * 1024
 
 classifier_labels = [
     "bar_chart",
@@ -474,8 +474,6 @@ class DoclingConvert:
                         yield f"{conv_res.input.file} - FAILURE"
 
         finally:
-            logging.info(f"upload parquet bool: {self.export_parquet_file}")
-            logging.info(f"dataframe is empty before uploading parquet: {pd_d.empty}")
             if self.export_parquet_file and not pd_d.empty:
                 self.upload_parquet_file(pd_d, self.target_coords.key_prefix)
 
@@ -648,7 +646,7 @@ class DoclingConvert:
 
         pd_df = pd.json_normalize(result_table)
         pd_df = pd_dataframe._append(pd_df)
-        logging.info(f"dataframe is empty after appending data: {pd_df.empty}")
+
         return pd_df
 
     def upload_parquet_file(self, pd_dataframe: DataFrame, s3_target_prefix: str):
@@ -658,6 +656,8 @@ class DoclingConvert:
         current_df = pd.DataFrame()
         # Manifest dictionary
         manifest = {}
+        # Current time
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
         while len(pd_dataframe) > 0:
             # Get a chunk of the DataFrame that fits within the file size limit
@@ -674,20 +674,19 @@ class DoclingConvert:
                     current_file_size += os.path.getsize(temp_file.name)
                     file_index += 1
 
-                    target_key = (
-                        f"{s3_target_prefix}/parquet/{os.path.basename(temp_file.name)}"
-                    )
+                    parquet_file_name = f"{timestamp}_{file_index}.parquet"
+                    target_key = f"{s3_target_prefix}/parquet/{parquet_file_name}"
                     self.upload_file_to_s3(
                         file=temp_file.name,
                         target_key=target_key,
                         content_type="application/vnd.apache.parquet",
                     )
 
-                    manifest[f"parquet_{file_index}"] = {
+                    manifest[f"{parquet_file_name}"] = {
                         "filename": pd_dataframe["filename"].tolist(),
                         "doc_hash": pd_dataframe["doc_hash"].tolist(),
                         "row_number": 3,
-                        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "timestamp": timestamp,
                     }
 
                 pd_dataframe = pd.DataFrame()
@@ -703,20 +702,19 @@ class DoclingConvert:
                     current_file_size += os.path.getsize(temp_file.name)
                     file_index += 1
 
-                    target_key = (
-                        f"{s3_target_prefix}/parquet/{os.path.basename(temp_file.name)}"
-                    )
+                    parquet_file_name = f"{timestamp}_{file_index}.parquet"
+                    target_key = f"{s3_target_prefix}/parquet/{parquet_file_name}"
                     self.upload_file_to_s3(
                         file=temp_file.name,
                         target_key=target_key,
                         content_type="application/vnd.apache.parquet",
                     )
 
-                    manifest[f"parquet_{file_index}"] = {
+                    manifest[f"{parquet_file_name}"] = {
                         "filenames": current_df["filename"].tolist(),
                         "doc_hashes": current_df["doc_hash"].tolist(),
                         "row_number": 3,
-                        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "timestamp": timestamp,
                     }
 
         logging.info(f"Total parquet files uploaded: {file_index}")
@@ -727,6 +725,6 @@ class DoclingConvert:
                 json.dump(manifest, file, indent=4)
             self.upload_file_to_s3(
                 file=temp_file_json.name,
-                target_key=f"{s3_target_prefix}/manifest/{os.path.basename(temp_file_json.name)}",
+                target_key=f"{s3_target_prefix}/manifest/{timestamp}.json",
                 content_type="application/json",
             )
