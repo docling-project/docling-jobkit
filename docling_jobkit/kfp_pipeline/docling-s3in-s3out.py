@@ -9,7 +9,7 @@ from kfp.dsl import Dataset, Input, Output
 @dsl.component(
     packages_to_install=[
         "docling==2.28.0",
-        "git+https://github.com/docling-project/docling-jobkit@27bad5b9159bd0fcb7c84be940416c6738c03b86",
+        "git+https://github.com/docling-project/docling-jobkit@2c27c71b75da98f04fccc7abc7ddc3a9a3afb0cd",
     ],
     base_image="quay.io/docling-project/docling-serve:jobkit-base-0.0.19",  # base docling-serve image with fixed permissions
 )
@@ -122,7 +122,7 @@ def convert_payload(
     packages_to_install=[
         "pydantic",
         "boto3~=1.35.36",
-        "git+https://github.com/docling-project/docling-jobkit@27bad5b9159bd0fcb7c84be940416c6738c03b86",
+        "git+https://github.com/docling-project/docling-jobkit@2c27c71b75da98f04fccc7abc7ddc3a9a3afb0cd",
     ],
     base_image="python:3.11",
 )
