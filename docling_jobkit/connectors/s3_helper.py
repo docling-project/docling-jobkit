@@ -38,8 +38,8 @@ from docling_jobkit.model.s3_inputs import S3Coordinates
 
 logging.basicConfig(level=logging.INFO)
 
-# Set the maximum file size of parquet to 100MB
-MAX_PARQUET_FILE_SIZE = 100 * 1024 * 1024
+# Set the maximum file size of parquet to 500MB
+MAX_PARQUET_FILE_SIZE = 500 * 1024 * 1024
 
 classifier_labels = [
     "bar_chart",
@@ -113,7 +113,7 @@ def get_keys_s3_objects_as_set(
     return files_on_s3
 
 
-def strip_prefix_postfix(source_set, prefix="", extension=""):
+def strip_prefix_postfix(source_set: set, prefix: str = "", extension: str = ""):
     output = set()
     for key in source_set:
         output.add(key.replace(extension, "").replace(prefix, ""))
@@ -156,7 +156,11 @@ def generate_presign_url(
         return None
 
 
-def get_source_files(s3_source_client, s3_source_resource, s3_coords: S3Coordinates):
+def get_source_files(
+    s3_source_client: BaseClient,
+    s3_source_resource: ServiceResource,
+    s3_coords: S3Coordinates,
+):
     source_paginator = s3_source_client.get_paginator("list_objects_v2")
 
     key_prefix = (
@@ -216,7 +220,7 @@ def check_target_has_source_converted(
 
 
 def put_object(
-    client,
+    client: BaseClient,
     bucket: str,
     object_key: str,
     file: str,
@@ -244,7 +248,7 @@ def put_object(
 
 
 def upload_file(
-    client,
+    client: BaseClient,
     bucket: str,
     object_key: str,
     file_name: str | Path,
