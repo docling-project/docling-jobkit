@@ -219,28 +219,6 @@ def inputs_s3in_s3out(
         "verify_ssl": True,
     },
     batch_size: int = 20,
-    # accelerator_settings: dict = {
-    #     "use_accelerator": False,
-    #     "accelerator_type": "nvidia.com/gpu",
-    #     "accelerator_limit": 1,
-    # },
-    # node_selector: dict = {
-    #     "add_node_selector": False,
-    #     "labels": [
-    #         {"label_key": "nvidia.com/gpu.product", "label_value": "NVIDIA-A10"}
-    #     ],
-    # },
-    # tolerations: dict = {
-    #     "add_tolerations": False,
-    #     "tolerations": [
-    #         {
-    #             "key": "key",
-    #             "operator": "Equal",
-    #             "value": "gpuCompute",
-    #             "effect": "NoSchedule",
-    #         }
-    #     ],
-    # },
 ):
     import logging
 
@@ -251,7 +229,7 @@ def inputs_s3in_s3out(
     batches.set_caching_options(False)
 
     results = []
-    with dsl.ParallelFor(batches.outputs["batch_indices"], parallelism=3) as subbatch:
+    with dsl.ParallelFor(batches.outputs["batch_indices"], parallelism=20) as subbatch:
         converter = convert_payload(
             options=convertion_options,
             source=source,
@@ -267,32 +245,72 @@ def inputs_s3in_s3out(
         # For enabling document conversion using GPU
         # currently unable to properly pass input parameters into pipeline, therefore node selector and tolerations are hardcoded
 
-        # use_accelerator = True
-        # if use_accelerator:
-        #     converter.set_accelerator_type("nvidia.com/gpu")
-        #     converter.set_accelerator_limit("1")
+        # converter.set_accelerator_type("nvidia.com/gpu")
+        # converter.set_accelerator_limit("1")
 
-        # add_node_selector = True
-        # if add_node_selector:
-        #     kubernetes.add_node_selector(
-        #         task=converter,
-        #         label_key="nvidia.com/gpu.product",
-        #         label_value="NVIDIA-A10",
-        #     )
+        # kubernetes.add_node_selector(
+        #     task=converter,
+        #     label_key="nvidia.com/gpu.product",
+        #     label_value="NVIDIA-A10",
+        # )
 
-        # add_tolerations = True
-        # if add_tolerations:
-        #     kubernetes.add_toleration(
-        #         task=converter,
-        #         key="key1",
-        #         operator="Equal",
-        #         value="mcad",
-        #         effect="NoSchedule",
-        #     )
+        # kubernetes.add_toleration(
+        #     task=converter,
+        #     key="key1",
+        #     operator="Equal",
+        #     value="mcad",
+        #     effect="NoSchedule",
+        # )
 
         results.append(converter.output)
 
 
+### Compile pipeline into a yaml
 from kfp import compiler
 
 compiler.Compiler().compile(inputs_s3in_s3out, "docling-s3in-s3out.yaml")
+
+
+### Start pipeline run programatically
+# import kfp
+# import os
+
+# # TIP: you may need to authenticate with the KFP instance
+# kfp_client = kfp.Client(
+#     host = os.environ["KFP_FULL_URL"],
+#     existing_token = os.environ["OPENSHIFT_TOKEN"],
+#     verify_ssl = False,
+# )
+
+# kfp_client.create_run_from_pipeline_func(
+#     inputs_s3in_s3out,
+#     arguments=dict(
+#         convertion_options = {
+#             "from_formats": [
+#                 "pdf",
+#             ],
+#             "to_formats": ["md", "json", "html", "text", "doctags"],
+#             "image_export_mode": "placeholder",
+#             "do_ocr": True,
+#             "force_ocr": True,
+#             "ocr_engine": "easyocr",
+#         },
+#         source = {
+#             "endpoint": os.environ["S3_SOURCE_ENDPOINT"],
+#             "access_key": os.environ["S3_SOURCE_ACCESS_KEY"],
+#             "secret_key": os.environ["S3_SOURCE_SECRET_KEY"],
+#             "bucket": os.environ["S3_SOURCE_BUCKET"],
+#             "key_prefix": os.environ["S3_SOURCE_PREFIX"],
+#             "verify_ssl": True,
+#         },
+#         target = {
+#             "endpoint": os.environ["S3_TARGET_ENDPOINT"],
+#             "access_key": os.environ["S3_TARGET_ACCESS_KEY"],
+#             "secret_key": os.environ["S3_TARGET_SECRET_KEY"],
+#             "bucket": os.environ["S3_TARGET_BUCKET"],
+#             "key_prefix": os.environ["S3_TARGET_PREFIX"],
+#             "verify_ssl": True,
+#         },
+#         batch_size = 100,
+#     )
+# )
