@@ -1,3 +1,13 @@
+## [v0.2.0](https://github.com/docling-project/docling-jobkit/releases/tag/v0.2.0) - 2025-06-25
+
+### Feature
+
+* Add upload parquet and manifest files ([#25](https://github.com/docling-project/docling-jobkit/issues/25)) ([`ab7c04a`](https://github.com/docling-project/docling-jobkit/commit/ab7c04a908d68743c135913cf069041a3f9acb2b))
+
+### Documentation
+
+* How to run kfp pipeline manually ([#36](https://github.com/docling-project/docling-jobkit/issues/36)) ([`0a3b6d4`](https://github.com/docling-project/docling-jobkit/commit/0a3b6d491e93188a60ee4e71d0247eefe781bf2c))
+
 ## [v0.1.0](https://github.com/docling-project/docling-jobkit/releases/tag/v0.1.0) - 2025-05-13
 
 ### Feature
