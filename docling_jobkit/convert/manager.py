@@ -8,7 +8,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 
 from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
@@ -137,14 +136,12 @@ class DoclingConverterManager:
                 force_full_page_ocr=request.force_ocr,
             )
         except ImportError as err:
-            # TODO: remove fastapi exception
-            raise HTTPException(
-                status_code=400,
-                detail="The requested OCR engine"
+            raise ImportError(
+                "The requested OCR engine"
                 f" (ocr_engine={request.ocr_engine})"
                 " is not available on this system. Please choose another OCR engine "
                 "or contact your system administrator.\n"
-                f"{err}",
+                f"{err}"
             )
 
         if request.ocr_lang is not None:
