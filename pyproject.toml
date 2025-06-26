@@ -190,7 +190,9 @@ module = [
     "tesserocr.*",
     "rapidocr_onnxruntime.*",
     "kfp.*",
+    "kfp_server_api.*",
     "pandas.*",
+    "mlx_vlm.*",
 ]
 ignore_missing_imports = true
 
