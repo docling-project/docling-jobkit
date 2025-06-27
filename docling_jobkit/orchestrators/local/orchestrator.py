@@ -5,6 +5,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from docling.datamodel.base_models import InputFormat
+
 from docling_jobkit.convert.manager import DoclingConverterManager
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.task import Task, TaskSource
@@ -65,7 +67,8 @@ class LocalOrchestrator(BaseOrchestrator):
     async def warm_up_caches(self):
         # Converter with default options
         pdf_format_option = self.cm.get_pdf_pipeline_opts(ConvertDocumentsOptions())
-        self.cm.get_converter(pdf_format_option)
+        converter = self.cm.get_converter(pdf_format_option)
+        converter.initialize_pipeline(InputFormat.PDF)
 
     async def clear_converters(self):
         self.cm.clear_cache()

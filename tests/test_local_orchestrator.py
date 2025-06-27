@@ -60,6 +60,24 @@ async def _wait_task_complete(
 
 
 @pytest.mark.asyncio
+async def test_convert_warmup():
+    cm_config = DoclingConverterManagerConfig()
+    cm = DoclingConverterManager(config=cm_config)
+
+    config = LocalOrchestratorConfig()
+    orchestrator = LocalOrchestrator(config=config, converter_manager=cm)
+
+    options = ConvertDocumentsOptions()
+    pdf_format_option = cm.get_pdf_pipeline_opts(options)
+    converter = cm.get_converter(pdf_format_option)
+
+    assert len(converter.initialized_pipelines) == 0
+
+    await orchestrator.warm_up_caches()
+    assert len(converter.initialized_pipelines) > 0
+
+
+@pytest.mark.asyncio
 async def test_convert_url(orchestrator: LocalOrchestrator):
     options = ConvertDocumentsOptions()
 
