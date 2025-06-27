@@ -15,6 +15,7 @@ from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBacke
 from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
 from docling.backend.pdf_backend import PdfDocumentBackend
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
+from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.pipeline_options import (
@@ -26,8 +27,6 @@ from docling.datamodel.pipeline_options import (
     ProcessingPipeline,
     TableFormerMode,
     VlmPipelineOptions,
-    smoldocling_vlm_conversion_options,
-    smoldocling_vlm_mlx_conversion_options,
 )
 from docling.document_converter import DocumentConverter, FormatOption, PdfFormatOption
 from docling.models.factories import get_ocr_factory
@@ -145,10 +144,7 @@ class DoclingConverterManager:
             )
 
         if request.ocr_lang is not None:
-            if isinstance(request.ocr_lang, str):
-                ocr_options.lang = _to_list_of_strings(request.ocr_lang)
-            else:
-                ocr_options.lang = request.ocr_lang
+            ocr_options.lang = request.ocr_lang
 
         pipeline_options = PdfPipelineOptions(
             artifacts_path=artifacts_path,
@@ -215,12 +211,12 @@ class DoclingConverterManager:
             artifacts_path=artifacts_path,
             document_timeout=request.document_timeout,
         )
-        pipeline_options.vlm_options = smoldocling_vlm_conversion_options
+        pipeline_options.vlm_options = vlm_model_specs.SMOLDOCLING_TRANSFORMERS
         if sys.platform == "darwin":
             try:
                 import mlx_vlm  # noqa: F401
 
-                pipeline_options.vlm_options = smoldocling_vlm_mlx_conversion_options
+                pipeline_options.vlm_options = vlm_model_specs.SMOLDOCLING_MLX
             except ImportError:
                 _log.warning(
                     "To run SmolDocling faster, please install mlx-vlm:\n"

@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import time
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -11,7 +13,7 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManagerConfig,
 )
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
-from docling_jobkit.datamodel.http_inputs import HttpSource
+from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
 from docling_jobkit.datamodel.task import TaskSource
 from docling_jobkit.orchestrators.local.orchestrator import (
     LocalOrchestrator,
@@ -58,11 +60,35 @@ async def _wait_task_complete(
 
 
 @pytest.mark.asyncio
-async def test_convert(orchestrator: LocalOrchestrator):
+async def test_convert_url(orchestrator: LocalOrchestrator):
     options = ConvertDocumentsOptions()
 
     sources: list[TaskSource] = []
     sources.append(HttpSource(url="https://arxiv.org/pdf/2311.18481"))
+
+    task = await orchestrator.enqueue(
+        sources=sources,
+        options=options,
+    )
+
+    await _wait_task_complete(orchestrator, task.task_id)
+    results = await orchestrator.task_result(task_id=task.task_id)
+
+    assert results is not None
+    assert len(results) == 1
+
+    result = results[0]
+    assert result.status == ConversionStatus.SUCCESS
+
+
+async def test_convert_file(orchestrator: LocalOrchestrator):
+    options = ConvertDocumentsOptions()
+
+    doc_filename = Path(__file__).parent / "2206.01062v1-pg4.pdf"
+    encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()
+
+    sources: list[TaskSource] = []
+    sources.append(FileSource(base64_string=encoded_doc, filename=doc_filename.name))
 
     task = await orchestrator.enqueue(
         sources=sources,
