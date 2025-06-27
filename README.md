@@ -2,9 +2,6 @@
 
 Running a distributed job processing documents with Docling.
 
- > [!NOTE]
-> This is an unstable draft implementation which will quickly evolve.
-
 
 ## How to use it
 

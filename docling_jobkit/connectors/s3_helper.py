@@ -34,7 +34,7 @@ from docling_core.types.doc.document import (
 )
 from docling_core.types.doc.labels import DocItemLabel
 
-from docling_jobkit.model.s3_inputs import S3Coordinates
+from docling_jobkit.datamodel.s3_inputs import S3Coordinates
 
 logging.basicConfig(level=logging.INFO)
 

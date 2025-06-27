@@ -24,8 +24,8 @@ from docling_jobkit.connectors.s3_helper import (
     get_s3_connection,
     get_source_files,
 )
-from docling_jobkit.model.convert import ConvertDocumentsOptions
-from docling_jobkit.model.s3_inputs import S3Coordinates
+from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
+from docling_jobkit.datamodel.s3_inputs import S3Coordinates
 
 
 class Settings(BaseSettings):

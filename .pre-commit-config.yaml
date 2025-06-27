@@ -17,14 +17,6 @@ repos:
         pass_filenames: false
         language: system
         files: '\.py$'
-  - repo: local
-    hooks:
-      - id: pytest
-        name: Pytest
-        language: system
-        entry: uv run pytest --cov=docling_core --cov-report=xml tests
-        pass_filenames: false
-        files: '\.py$'
   - repo: https://github.com/astral-sh/uv-pre-commit
     rev: 0.6.14
     hooks:
