@@ -82,21 +82,6 @@ class BaseOrchestrator(ABC):
     ) -> Union[list[ConversionResult], None]:
         try:
             task = await self.get_raw_task(task_id=task_id)
-            # if task.is_completed() and docling_serve_settings.single_use_results:
-            #     if task.scratch_dir is not None:
-            #         background_tasks.add_task(
-            #             shutil.rmtree, task.scratch_dir, ignore_errors=True
-            #         )
-
-            #     async def _remove_task_impl():
-            #         await asyncio.sleep(docling_serve_settings.result_removal_delay)
-            #         await self.delete_task(task_id=task.task_id)
-
-            #     async def _remove_task():
-            #         asyncio.create_task(_remove_task_impl())
-
-            #     background_tasks.add_task(_remove_task)
-
             return task.results
         except TaskNotFoundError:
             return None

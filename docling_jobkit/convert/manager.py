@@ -1,3 +1,4 @@
+import enum
 import hashlib
 import json
 import logging
@@ -130,8 +131,13 @@ class DoclingConverterManager:
         self, request: ConvertDocumentsOptions, artifacts_path: Optional[Path]
     ) -> PdfPipelineOptions:
         try:
+            kind = (
+                request.ocr_engine.value
+                if isinstance(request.ocr_engine, enum.Enum)
+                else str(request.ocr_engine)
+            )
             ocr_options: OcrOptions = self.ocr_factory.create_options(  # type: ignore
-                kind=str(request.ocr_engine),
+                kind=kind,
                 force_full_page_ocr=request.force_ocr,
             )
         except ImportError as err:
@@ -231,18 +237,19 @@ class DoclingConverterManager:
     ) -> PdfFormatOption:
         artifacts_path: Optional[Path] = None
         if self.config.artifacts_path is not None:
-            if str(self.config.artifacts_path.absolute()) == "":
+            expanded_path = self.config.artifacts_path.expanduser()
+            if str(expanded_path.absolute()) == "":
                 _log.info(
                     "artifacts_path is an empty path, model weights will be downloaded "
                     "at runtime."
                 )
                 artifacts_path = None
-            elif self.config.artifacts_path.is_dir():
+            elif expanded_path.is_dir():
                 _log.info(
                     "artifacts_path is set to a valid directory. "
                     "No model weights will be downloaded at runtime."
                 )
-                artifacts_path = self.config.artifacts_path
+                artifacts_path = expanded_path
             else:
                 _log.warning(
                     "artifacts_path is set to an invalid directory. "

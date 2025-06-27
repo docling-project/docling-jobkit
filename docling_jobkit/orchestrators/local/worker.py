@@ -65,24 +65,6 @@ class AsyncLocalWorker:
                     # The real processing will happen here
                     return list(results)
 
-                    # TODO: move this to the actual API response
-                    # work_dir = get_scratch() / task_id
-                    # response = process_results(
-                    #     conversion_options=task.options,
-                    #     conv_results=results,
-                    #     work_dir=work_dir,
-                    # )
-
-                    # if work_dir.exists():
-                    #     task.scratch_dir = work_dir
-                    #     if not isinstance(response, FileResponse):
-                    #         _log.warning(
-                    #             f"Task {task_id=} produced content in {work_dir=} but the response is not a file."
-                    #         )
-                    #         shutil.rmtree(work_dir, ignore_errors=True)
-                    #
-                    # return response
-
                 start_time = time.monotonic()
 
                 # Run the prediction in a thread to avoid blocking the event loop.
@@ -102,7 +84,6 @@ class AsyncLocalWorker:
 
                 task.results = response
                 task.sources = []
-                task.options = None
 
                 task.set_status(TaskStatus.SUCCESS)
                 _log.info(
