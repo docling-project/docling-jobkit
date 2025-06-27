@@ -100,7 +100,7 @@ class AsyncLocalWorker:
                 )
                 processing_time = time.monotonic() - start_time
 
-                task.result = response
+                task.results = response
                 task.sources = []
                 task.options = None
 

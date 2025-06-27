@@ -90,7 +90,7 @@ async def test_convert_url(orchestrator: LocalOrchestrator):
     )
 
     await _wait_task_complete(orchestrator, task.task_id)
-    results = await orchestrator.task_result(task_id=task.task_id)
+    results = await orchestrator.task_results(task_id=task.task_id)
 
     assert results is not None
     assert len(results) == 1
@@ -114,7 +114,7 @@ async def test_convert_file(orchestrator: LocalOrchestrator):
     )
 
     await _wait_task_complete(orchestrator, task.task_id)
-    results = await orchestrator.task_result(task_id=task.task_id)
+    results = await orchestrator.task_results(task_id=task.task_id)
 
     assert results is not None
     assert len(results) == 1

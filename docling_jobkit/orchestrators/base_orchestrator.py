@@ -75,7 +75,7 @@ class BaseOrchestrator(ABC):
     async def task_status(self, task_id: str, wait: float = 0.0) -> Task:
         return await self.get_raw_task(task_id=task_id)
 
-    async def task_result(
+    async def task_results(
         # self, task_id: str, background_tasks: BackgroundTasks
         self,
         task_id: str,
@@ -97,7 +97,7 @@ class BaseOrchestrator(ABC):
 
             #     background_tasks.add_task(_remove_task)
 
-            return task.result
+            return task.results
         except TaskNotFoundError:
             return None
 

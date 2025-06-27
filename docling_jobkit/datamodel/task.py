@@ -22,7 +22,7 @@ class Task(BaseModel):
     task_status: TaskStatus = TaskStatus.PENDING
     sources: list[TaskSource] = []
     options: Optional[ConvertDocumentsOptions]
-    result: Optional[list[ConversionResult]] = None
+    results: Optional[list[ConversionResult]] = None
     scratch_dir: Optional[Path] = None
     processing_meta: Optional[TaskProcessingMeta] = None
     created_at: datetime.datetime = Field(
