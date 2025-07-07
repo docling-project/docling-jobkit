@@ -1,3 +1,13 @@
+## [v1.0.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.0.0) - 2025-07-07
+
+### Feature
+
+* Add and refactor orchestrator engines used in docling-serve ([#39](https://github.com/docling-project/docling-jobkit/issues/39)) ([`b9257ac`](https://github.com/docling-project/docling-jobkit/commit/b9257ac1afea9ddb2674c845ff680c3afa0e5f3e))
+
+### Breaking
+
+* Add and refactor orchestrator engines used in docling-serve ([#39](https://github.com/docling-project/docling-jobkit/issues/39)) ([`b9257ac`](https://github.com/docling-project/docling-jobkit/commit/b9257ac1afea9ddb2674c845ff680c3afa0e5f3e))
+
 ## [v0.2.0](https://github.com/docling-project/docling-jobkit/releases/tag/v0.2.0) - 2025-06-25
 
 ### Feature
