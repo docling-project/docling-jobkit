@@ -26,13 +26,14 @@ maintainers = [
 ]
 classifiers = [
     "Operating System :: OS Independent", 
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Typing :: Typed",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Topic :: Software Development :: Build Tools",
@@ -40,35 +41,38 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "ray~=2.30",
-    "docling~=2.28",
+    "docling~=2.38",
+    "pydantic~=2.10",
+    "pydantic-settings~=2.4",
     "typer~=0.12",
     "boto3~=1.35.36",
-    "kfp~=2.8.0",
-    "kfp[kubernetes]",
     "pandas~=2.2.3",
-    "fastparquet~=2024.11.0",
-    "pyarrow~=19.0.1",
-    "httpx~=0.28.1",
+    "fastparquet~=2024.11",
+    "pyarrow~=19.0",
+    "httpx~=0.28",
 ]
 
 [project.optional-dependencies]
+vlm = [
+    "docling[vlm]~=2.38",
+    "mlx-vlm~=0.1.12; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+# asr = [
+#     "docling[asr]~=2.38",
+# ]
 tesserocr = [
-    "tesserocr~=2.7"
+    "tesserocr~=2.7",
 ]
 rapidocr = [
     "rapidocr-onnxruntime~=1.4; python_version<'3.13'",
     "onnxruntime~=1.7",
 ]
-cpu = [
-  "torch>=2.6.0",
-  "torchvision>=0.21.0",
+kfp = [
+    "kfp[kubernetes]>=2.10.0",
 ]
-cu124 = [
-  "torch>=2.6.0",
-  "torchvision>=0.21.0",
+ray = [
+    "ray~=2.30",
 ]
-
 
 [dependency-groups]
 dev = [
@@ -85,32 +89,6 @@ dev = [
 
 [tool.uv]
 package = true
-conflicts = [
-  [
-    { extra = "cpu" },
-    { extra = "cu124" },
-  ],
-]
-
-[tool.uv.sources]
-torch = [
-  { index = "pytorch-cpu", extra = "cpu" },
-  { index = "pytorch-cu124", extra = "cu124" },
-]
-torchvision = [
-  { index = "pytorch-cpu", extra = "cpu" },
-  { index = "pytorch-cu124", extra = "cu124" },
-]
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-cu124"
-url = "https://download.pytorch.org/whl/cu124"
-explicit = true
 
 [tool.hatch.build.targets.sdist]
 include = ["docling_jobkit"]
@@ -212,7 +190,9 @@ module = [
     "tesserocr.*",
     "rapidocr_onnxruntime.*",
     "kfp.*",
+    "kfp_server_api.*",
     "pandas.*",
+    "mlx_vlm.*",
 ]
 ignore_missing_imports = true
 

@@ -40,8 +40,8 @@ def convert_payload(
     from docling.models.factories import get_ocr_factory
 
     from docling_jobkit.connectors.s3_helper import DoclingConvert
-    from docling_jobkit.model.convert import ConvertDocumentsOptions
-    from docling_jobkit.model.s3_inputs import S3Coordinates
+    from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
+    from docling_jobkit.datamodel.s3_inputs import S3Coordinates
 
     logging.basicConfig(level=logging.INFO)
 
@@ -91,7 +91,7 @@ def convert_payload(
         convert_options.do_picture_classification
     )
     pipeline_options.do_picture_description = convert_options.do_picture_description
-    pipeline_options.generate_picture_images = convert_options.generate_picture_images
+    pipeline_options.generate_picture_images = convert_options.include_images
 
     # pipeline_options.accelerator_options = AcceleratorOptions(
     #     num_threads=2, device=AcceleratorDevice.CUDA
@@ -101,8 +101,8 @@ def convert_payload(
         source_s3_coords=source_s3_coords,
         target_s3_coords=target_s3_coords,
         pipeline_options=pipeline_options,
-        allowed_formats=convert_options.from_formats,
-        to_formats=convert_options.to_formats,
+        allowed_formats=[str(v) for v in convert_options.from_formats],
+        to_formats=[str(v) for v in convert_options.to_formats],
         backend=backend,
     )
 
@@ -141,7 +141,7 @@ def compute_batches(
         get_s3_connection,
         get_source_files,
     )
-    from docling_jobkit.model.s3_inputs import S3Coordinates
+    from docling_jobkit.datamodel.s3_inputs import S3Coordinates
 
     # validate inputs
     s3_coords_source = S3Coordinates.model_validate(source)
