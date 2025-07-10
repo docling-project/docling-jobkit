@@ -9,7 +9,7 @@ from docling.datamodel.base_models import InputFormat
 
 from docling_jobkit.convert.manager import DoclingConverterManager
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
-from docling_jobkit.datamodel.task import Task, TaskSource
+from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
 from docling_jobkit.orchestrators.base_orchestrator import BaseOrchestrator
 from docling_jobkit.orchestrators.local.worker import AsyncLocalWorker
 
@@ -33,7 +33,10 @@ class LocalOrchestrator(BaseOrchestrator):
         self.cm = converter_manager
 
     async def enqueue(
-        self, sources: list[TaskSource], options: ConvertDocumentsOptions
+        self,
+        sources: list[TaskSource],
+        options: ConvertDocumentsOptions,
+        target: TaskTarget,
     ) -> Task:
         task_id = str(uuid.uuid4())
         task = Task(task_id=task_id, sources=sources, options=options)

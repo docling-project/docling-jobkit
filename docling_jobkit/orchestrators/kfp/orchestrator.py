@@ -17,8 +17,11 @@ from docling_jobkit.datamodel.callback import (
 )
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.http_inputs import HttpSource
-from docling_jobkit.datamodel.task import Task, TaskSource
+from docling_jobkit.datamodel.s3_inputs import S3Coordinates
+from docling_jobkit.datamodel.targets import S3Target
+from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
 from docling_jobkit.datamodel.task_meta import TaskProcessingMeta, TaskStatus
+from docling_jobkit.kfp_pipeline.docling_s3in_s3out import inputs_s3in_s3out
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
     ProgressInvalid,
@@ -82,7 +85,10 @@ class KfpOrchestrator(BaseOrchestrator):
         )
 
     async def enqueue(
-        self, sources: list[TaskSource], options: ConvertDocumentsOptions
+        self,
+        sources: list[TaskSource],
+        options: ConvertDocumentsOptions,
+        target: TaskTarget,
     ) -> Task:
         callbacks = []
         if self.config.self_callback_endpoint is not None:
@@ -104,20 +110,48 @@ class KfpOrchestrator(BaseOrchestrator):
         CallbacksType = TypeAdapter(list[CallbackSpec])
         SourcesListType = TypeAdapter(list[HttpSource])
         http_sources = [s for s in sources if isinstance(s, HttpSource)]
+        s3_sources = [s3 for s3 in sources if isinstance(s3, S3Coordinates)]
         # hack: since the current kfp backend is not resolving the job_id placeholder,
         # we set the run_name and pass it as argument to the job itself.
         run_name = f"docling-job-{uuid.uuid4()}"
-        kfp_run = self._client.create_run_from_pipeline_func(
-            process,
-            arguments={
-                "batch_size": 10,
-                "sources": SourcesListType.dump_python(http_sources, mode="json"),
-                "options": options.model_dump(mode="json"),
-                "callbacks": CallbacksType.dump_python(callbacks, mode="json"),
-                "run_name": run_name,
-            },
-            run_name=run_name,
-        )
+
+        if len(s3_sources) > 0 and isinstance(target, S3Target):
+            s3_source = s3_sources[0]
+            kfp_run = self._client.create_run_from_pipeline_func(
+                inputs_s3in_s3out,
+                arguments={
+                    "convertion_options": options.model_dump(),
+                    "source": {
+                        "endpoint": s3_source.endpoint,
+                        "access_key": s3_source.access_key.get_secret_value(),
+                        "secret_key": s3_source.secret_key.get_secret_value(),
+                        "bucket": s3_source.bucket,
+                        "key_prefix": s3_source.key_prefix,
+                        "verify_ssl": s3_source.verify_ssl,
+                    },
+                    "target": {
+                        "endpoint": target.endpoint,
+                        "access_key": target.access_key.get_secret_value(),
+                        "secret_key": target.secret_key.get_secret_value(),
+                        "bucket": target.bucket,
+                        "key_prefix": target.key_prefix,
+                        "verify_ssl": target.verify_ssl,
+                    },
+                    "batch_size": 100,
+                },
+            )
+        else:
+            kfp_run = self._client.create_run_from_pipeline_func(
+                process,
+                arguments={
+                    "batch_size": 10,
+                    "sources": SourcesListType.dump_python(http_sources, mode="json"),
+                    "options": options.model_dump(mode="json"),
+                    "callbacks": CallbacksType.dump_python(callbacks, mode="json"),
+                    "run_name": run_name,
+                },
+                run_name=run_name,
+            )
         task_id = kfp_run.run_id
 
         task = Task(task_id=task_id, sources=sources, options=options)
