@@ -17,4 +17,10 @@ class S3Target(S3Coordinates):
     kind: Literal["s3"] = "s3"
 
 
-TaskTarget = Annotated[InBodyTarget | ZipTarget | S3Target, Field(discriminator="kind")]
+class PutTarget(S3Coordinates):
+    kind: Literal["put"] = "put"
+
+
+TaskTarget = Annotated[
+    InBodyTarget | ZipTarget | S3Target | PutTarget, Field(discriminator="kind")
+]
