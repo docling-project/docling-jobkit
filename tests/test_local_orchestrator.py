@@ -15,6 +15,7 @@ from docling_jobkit.convert.manager import (
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
 from docling_jobkit.datamodel.task import TaskSource
+from docling_jobkit.datamodel.task_targets import InBodyTarget
 from docling_jobkit.orchestrators.local.orchestrator import (
     LocalOrchestrator,
     LocalOrchestratorConfig,
@@ -87,6 +88,7 @@ async def test_convert_url(orchestrator: LocalOrchestrator):
     task = await orchestrator.enqueue(
         sources=sources,
         options=options,
+        target=InBodyTarget(),
     )
 
     await _wait_task_complete(orchestrator, task.task_id)
@@ -111,6 +113,7 @@ async def test_convert_file(orchestrator: LocalOrchestrator):
     task = await orchestrator.enqueue(
         sources=sources,
         options=options,
+        target=InBodyTarget(),
     )
 
     await _wait_task_complete(orchestrator, task.task_id)
