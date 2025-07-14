@@ -1,3 +1,9 @@
+## [v1.1.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.1.0) - 2025-07-14
+
+### Feature
+
+* Add task target options for docling-serve v1 ([#41](https://github.com/docling-project/docling-jobkit/issues/41)) ([`2633c96`](https://github.com/docling-project/docling-jobkit/commit/2633c96d363540858c7d775ed76206dda309426c))
+
 ## [v1.0.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.0.0) - 2025-07-07
 
 ### Feature

@@ -1,0 +1,20 @@
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, Field
+
+from docling_jobkit.datamodel.s3_coords import S3Coordinates
+
+
+class InBodyTarget(BaseModel):
+    kind: Literal["inbody"] = "inbody"
+
+
+class ZipTarget(BaseModel):
+    kind: Literal["zip"] = "zip"
+
+
+class S3Target(S3Coordinates):
+    kind: Literal["s3"] = "s3"
+
+
+TaskTarget = Annotated[InBodyTarget | ZipTarget | S3Target, Field(discriminator="kind")]

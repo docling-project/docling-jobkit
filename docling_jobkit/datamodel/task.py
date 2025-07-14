@@ -10,13 +10,11 @@ from docling.datamodel.document import ConversionResult
 
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
-from docling_jobkit.datamodel.s3_inputs import S3Coordinates
-from docling_jobkit.datamodel.targets import InBodyTarget, S3Target, ZipTarget
+from docling_jobkit.datamodel.s3_coords import S3Coordinates
 from docling_jobkit.datamodel.task_meta import TaskProcessingMeta, TaskStatus
+from docling_jobkit.datamodel.task_targets import InBodyTarget, TaskTarget
 
 TaskSource = Union[HttpSource, FileSource, DocumentStream, S3Coordinates]
-
-TaskTarget = Union[InBodyTarget, S3Target, ZipTarget]
 
 
 class Task(BaseModel):
@@ -25,6 +23,7 @@ class Task(BaseModel):
     task_id: str
     task_status: TaskStatus = TaskStatus.PENDING
     sources: list[TaskSource] = []
+    target: TaskTarget = InBodyTarget()
     options: Optional[ConvertDocumentsOptions]
     results: Optional[list[ConversionResult]] = None
     scratch_dir: Optional[Path] = None

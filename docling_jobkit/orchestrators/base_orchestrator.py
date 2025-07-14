@@ -7,7 +7,8 @@ from docling.datamodel.document import ConversionResult
 
 from docling_jobkit.datamodel.callback import ProgressCallbackRequest
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
-from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
+from docling_jobkit.datamodel.task import Task, TaskSource
+from docling_jobkit.datamodel.task_targets import TaskTarget
 
 if TYPE_CHECKING:
     from docling_jobkit.orchestrators.base_notifier import BaseNotifier

@@ -17,10 +17,10 @@ from docling_jobkit.datamodel.callback import (
 )
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.http_inputs import HttpSource
-from docling_jobkit.datamodel.s3_inputs import S3Coordinates
-from docling_jobkit.datamodel.targets import S3Target
-from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
+from docling_jobkit.datamodel.s3_coords import S3Coordinates
+from docling_jobkit.datamodel.task import Task, TaskSource
 from docling_jobkit.datamodel.task_meta import TaskProcessingMeta, TaskStatus
+from docling_jobkit.datamodel.task_targets import S3Target, TaskTarget
 from docling_jobkit.kfp_pipeline.docling_s3in_s3out import inputs_s3in_s3out
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
@@ -154,7 +154,7 @@ class KfpOrchestrator(BaseOrchestrator):
             )
         task_id = kfp_run.run_id
 
-        task = Task(task_id=task_id, sources=sources, options=options)
+        task = Task(task_id=task_id, sources=sources, options=options, target=target)
         await self.init_task_tracking(task)
         return task
 

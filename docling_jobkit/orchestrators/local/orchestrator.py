@@ -39,7 +39,7 @@ class LocalOrchestrator(BaseOrchestrator):
         target: TaskTarget,
     ) -> Task:
         task_id = str(uuid.uuid4())
-        task = Task(task_id=task_id, sources=sources, options=options)
+        task = Task(task_id=task_id, sources=sources, options=options, target=target)
         await self.init_task_tracking(task)
 
         self.queue_list.append(task_id)
