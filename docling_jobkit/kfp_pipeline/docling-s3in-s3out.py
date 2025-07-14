@@ -41,7 +41,7 @@ def convert_payload(
 
     from docling_jobkit.connectors.s3_helper import DoclingConvert
     from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
-    from docling_jobkit.datamodel.s3_inputs import S3Coordinates
+    from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
     logging.basicConfig(level=logging.INFO)
 
@@ -141,7 +141,7 @@ def compute_batches(
         get_s3_connection,
         get_source_files,
     )
-    from docling_jobkit.datamodel.s3_inputs import S3Coordinates
+    from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
     # validate inputs
     s3_coords_source = S3Coordinates.model_validate(source)

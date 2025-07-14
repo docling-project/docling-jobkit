@@ -242,18 +242,6 @@ class ConvertDocumentsOptions(BaseModel):
         ),
     ] = False
 
-    return_as_file: Annotated[
-        bool,
-        Field(
-            description=(
-                "Return the output as a zip file "
-                "(will happen anyway if multiple files are generated). "
-                "Boolean. Optional, defaults to false."
-            ),
-            examples=[False],
-        ),
-    ] = False
-
     do_table_structure: Annotated[
         bool,
         Field(
