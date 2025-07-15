@@ -85,15 +85,6 @@ class AsyncLocalWorker:
                 task.results = response
                 task.sources = []
 
-                # if len(response)>1:
-                #     manifest_dict = {}
-                #     for result in response:
-                #         manifest_dict.setdefault(result.input.document_hash, f"{result.input.file} - {result.status.name}")
-                #     task.results = manifest_dict
-                # else:
-                #     task.results = response[0] if len(response)==1 else {}
-                # task.sources = []
-
                 task.set_status(TaskStatus.SUCCESS)
                 _log.info(
                     f"Worker {self.worker_id} completed job {task_id} "
