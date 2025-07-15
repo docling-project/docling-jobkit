@@ -134,16 +134,18 @@ def generate_batch_keys(
     return batched_keys
 
 
+# TODO: raised default expiration_time raised due to presign being generated
+# in compute batches with new convert manager. This probably is not be enough
 def generate_presign_url(
-    s3_client: BaseClient,
-    source_key: str,
-    s3_source_bucket: str,
-    expiration_time: int = 3600,
+    client: BaseClient,
+    object_key: str,
+    bucket: str,
+    expiration_time: int = 21600,
 ) -> str | None:
     try:
-        return s3_client.generate_presigned_url(
+        return client.generate_presigned_url(
             ClientMethod="get_object",
-            Params={"Bucket": s3_source_bucket, "Key": source_key},
+            Params={"Bucket": bucket, "Key": object_key},
             ExpiresIn=expiration_time,
         )
     except Exception as e:
