@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import sys
+import threading
 from collections.abc import Iterable, Iterator
 from functools import lru_cache
 from pathlib import Path
@@ -104,6 +105,8 @@ class DoclingConverterManager:
             cache_size=self.config.options_cache_size
         )
 
+        self._cache_lock = threading.Lock()
+
     def _create_converter_cache_from_hash(
         self, cache_size: int
     ) -> Callable[[bytes], DocumentConverter]:
@@ -123,9 +126,11 @@ class DoclingConverterManager:
         self._get_converter_from_hash.cache_clear()
 
     def get_converter(self, pdf_format_option: PdfFormatOption) -> DocumentConverter:
-        options_hash = _hash_pdf_format_option(pdf_format_option)
-        self._options_map[options_hash] = pdf_format_option
-        return self._get_converter_from_hash(options_hash)
+        with self._cache_lock:
+            options_hash = _hash_pdf_format_option(pdf_format_option)
+            self._options_map[options_hash] = pdf_format_option
+            converter = self._get_converter_from_hash(options_hash)
+        return converter
 
     def _parse_standard_pdf_opts(
         self, request: ConvertDocumentsOptions, artifacts_path: Optional[Path]
@@ -291,6 +296,8 @@ class DoclingConverterManager:
     ) -> Iterable[ConversionResult]:
         pdf_format_option = self.get_pdf_pipeline_opts(options)
         converter = self.get_converter(pdf_format_option)
+        with self._cache_lock:
+            converter.initialize_pipeline(format=InputFormat.PDF)
         results: Iterator[ConversionResult] = converter.convert_all(
             sources,
             headers=headers,
