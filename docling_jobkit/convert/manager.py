@@ -296,6 +296,8 @@ class DoclingConverterManager:
     ) -> Iterable[ConversionResult]:
         pdf_format_option = self.get_pdf_pipeline_opts(options)
         converter = self.get_converter(pdf_format_option)
+        with self._cache_lock:
+            converter.initialize_pipeline(format=InputFormat.PDF)
         results: Iterator[ConversionResult] = converter.convert_all(
             sources,
             headers=headers,
