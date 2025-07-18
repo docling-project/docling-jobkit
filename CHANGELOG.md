@@ -1,3 +1,9 @@
+## [v1.1.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.1.1) - 2025-07-18
+
+### Fix
+
+* Thread-safe cache of converter options ([#43](https://github.com/docling-project/docling-jobkit/issues/43)) ([`cf12e47`](https://github.com/docling-project/docling-jobkit/commit/cf12e4795dba3184d59c2f513a70aa30a28eeacc))
+
 ## [v1.1.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.1.0) - 2025-07-14
 
 ### Feature
