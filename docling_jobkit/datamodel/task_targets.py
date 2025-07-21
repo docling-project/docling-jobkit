@@ -17,8 +17,9 @@ class S3Target(S3Coordinates):
     kind: Literal["s3"] = "s3"
 
 
-class PutTarget(S3Coordinates):
+class PutTarget(BaseModel):
     kind: Literal["put"] = "put"
+    put_presigned_url: str
 
 
 TaskTarget = Annotated[
