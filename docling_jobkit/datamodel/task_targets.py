@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, Field
 
 from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
@@ -19,7 +19,7 @@ class S3Target(S3Coordinates):
 
 class PutTarget(BaseModel):
     kind: Literal["put"] = "put"
-    put_presigned_url: str
+    url: AnyHttpUrl
 
 
 TaskTarget = Annotated[
