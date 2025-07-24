@@ -1,3 +1,15 @@
+## [v1.2.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.2.0) - 2025-07-24
+
+### Feature
+
+* Add new task source and targets ([#42](https://github.com/docling-project/docling-jobkit/issues/42)) ([`b001914`](https://github.com/docling-project/docling-jobkit/commit/b00191407cf77444d3e0827e44c93a88c6dedaa5))
+
+## [v1.1.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.1.1) - 2025-07-18
+
+### Fix
+
+* Thread-safe cache of converter options ([#43](https://github.com/docling-project/docling-jobkit/issues/43)) ([`cf12e47`](https://github.com/docling-project/docling-jobkit/commit/cf12e4795dba3184d59c2f513a70aa30a28eeacc))
+
 ## [v1.1.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.1.0) - 2025-07-14
 
 ### Feature

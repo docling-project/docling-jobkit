@@ -9,8 +9,7 @@ from docling.datamodel.base_models import InputFormat
 
 from docling_jobkit.convert.manager import DoclingConverterManager
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
-from docling_jobkit.datamodel.task import Task, TaskSource
-from docling_jobkit.datamodel.task_targets import TaskTarget
+from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
 from docling_jobkit.orchestrators.base_orchestrator import BaseOrchestrator
 from docling_jobkit.orchestrators.local.worker import AsyncLocalWorker
 
