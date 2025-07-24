@@ -4,7 +4,7 @@ import os
 from typing import Optional
 from urllib.parse import urlparse, urlunsplit
 
-import ray  # type: ignore
+import ray
 from boto3.resources.base import ServiceResource
 from boto3.session import Session
 from botocore.client import BaseClient

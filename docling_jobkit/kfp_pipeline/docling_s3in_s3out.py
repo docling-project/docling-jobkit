@@ -25,21 +25,6 @@ def convert_payload(
     import os
 
     from docling_jobkit.connectors.s3_helper import ResultsProcessor
-
-    # from typing import Optional
-    # from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
-    # from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBackend
-    # from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
-    # from docling.backend.pdf_backend import PdfDocumentBackend
-    # from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
-    # from docling.datamodel.pipeline_options import (
-    #     OcrOptions,
-    #     PdfBackend,
-    #     PdfPipelineOptions,
-    #     TableFormerMode,
-    # )
-    # from docling.models.factories import get_ocr_factory
-    # from docling_jobkit.connectors.s3_helper import DoclingConvert
     from docling_jobkit.convert.manager import (
         DoclingConverterManager,
         DoclingConverterManagerConfig,
