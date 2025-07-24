@@ -65,6 +65,10 @@ class BaseOrchestrator(ABC):
     async def clear_converters(self):
         pass
 
+    @abstractmethod
+    async def check_connection(self):
+        pass
+
     async def init_task_tracking(self, task: Task):
         task_id = task.task_id
         self.tasks[task.task_id] = task

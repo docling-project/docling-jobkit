@@ -50,6 +50,7 @@ dependencies = [
     "fastparquet~=2024.11",
     "pyarrow~=19.0",
     "httpx~=0.28",
+    "rq~=2.4.1",
 ]
 
 [project.optional-dependencies]

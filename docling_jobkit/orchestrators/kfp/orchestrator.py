@@ -248,3 +248,6 @@ class KfpOrchestrator(BaseOrchestrator):
         # TODO: could be moved to BackgroundTask
         if self.notifier:
             await self.notifier.notify_task_subscribers(task_id=task_id)
+
+    async def check_connection(self):
+        pass
