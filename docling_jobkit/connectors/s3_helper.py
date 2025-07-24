@@ -5,10 +5,9 @@ import tempfile
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any
-from urllib.parse import urlparse, urlunsplit
+from typing import Any, Iterable
+from urllib.parse import urlunsplit
 
-import httpx
 import pandas as pd
 from boto3.resources.base import ServiceResource
 from boto3.session import Session
@@ -17,12 +16,8 @@ from botocore.config import Config
 from botocore.paginate import Paginator
 from pandas import DataFrame
 
-from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
-from docling.backend.pdf_backend import PdfDocumentBackend
-from docling.datamodel.base_models import ConversionStatus, InputFormat
+from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.document import ConversionResult
-from docling.datamodel.pipeline_options import PdfPipelineOptions
-from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.utils.utils import create_hash
 from docling_core.types.doc.base import ImageRefMode
 from docling_core.types.doc.document import (
@@ -139,16 +134,18 @@ def generate_batch_keys(
     return batched_keys
 
 
+# TODO: raised default expiration_time raised due to presign being generated
+# in compute batches with new convert manager. This probably is not be enough
 def generate_presign_url(
-    s3_client: BaseClient,
-    source_key: str,
-    s3_source_bucket: str,
-    expiration_time: int = 3600,
+    client: BaseClient,
+    object_key: str,
+    bucket: str,
+    expiration_time: int = 21600,
 ) -> str | None:
     try:
-        return s3_client.generate_presigned_url(
+        return client.generate_presigned_url(
             ClientMethod="get_object",
-            Params={"Bucket": s3_source_bucket, "Key": source_key},
+            Params={"Bucket": bucket, "Key": object_key},
             ExpiresIn=expiration_time,
         )
     except Exception as e:
@@ -276,94 +273,34 @@ def upload_file(
     return True
 
 
-class DoclingConvert:
+class ResultsProcessor:
     def __init__(
         self,
-        source_s3_coords: S3Coordinates,
         target_s3_coords: S3Coordinates,
-        pipeline_options: PdfPipelineOptions,
-        allowed_formats: list[str] | None = None,
         to_formats: list[str] | None = None,
-        backend: type[PdfDocumentBackend] | None = None,
+        generate_page_images: bool = False,
+        generate_picture_images: bool = False,
         export_parquet_file: bool = True,
     ):
-        self.source_coords = source_s3_coords
-        self.source_s3_client, _ = get_s3_connection(source_s3_coords)
-
         self.target_coords = target_s3_coords
         self.target_s3_client, _ = get_s3_connection(target_s3_coords)
 
-        self.converter = DocumentConverter(
-            format_options={
-                InputFormat.PDF: PdfFormatOption(
-                    pipeline_options=pipeline_options,
-                    backend=backend if backend else DoclingParseV4DocumentBackend,
-                )
-            }
-        )
-        if not allowed_formats:
-            self.allowed_formats = [ext.value for ext in InputFormat]
-        else:
-            self.allowed_formats = [
-                ext.value for ext in InputFormat if ext.value in allowed_formats
-            ]
+        self.export_page_images = generate_page_images
+        self.export_images = generate_picture_images
 
         self.to_formats = to_formats
-
-        self.export_page_images = pipeline_options.generate_page_images
-        self.export_images = pipeline_options.generate_picture_images
         self.export_parquet_file = export_parquet_file
 
-        self.max_file_size = 1073741824  # TODO: be set from ENV
-
-    def convert_documents(self, object_keys):
+    def process_documents(self, results: Iterable[ConversionResult]):
         pd_d = DataFrame()  # DataFrame to append parquet info
         try:
-            for i, key in enumerate(object_keys):
-                url = generate_presign_url(
-                    self.source_s3_client,
-                    key,
-                    self.source_coords.bucket,
-                    expiration_time=36000,
-                )
-                if not url:
-                    continue
-                parsed = urlparse(url)
-                root, ext = os.path.splitext(parsed.path)
-                # This will skip http links that don't have file extension as part of url, arXiv have plenty of docs like this
-                if ext[1:] not in self.allowed_formats:
-                    continue
+            for i, conv_res in enumerate(results):
                 with tempfile.TemporaryDirectory() as tmpdirname:
                     temp_dir = Path(tmpdirname)
-                    try:  # download file to be able to upload it later to s3
-                        file_name = temp_dir / os.path.basename(parsed.path)
-                        r = httpx.get(url, timeout=30)
-                        content_length = r.headers.get("Content-Length", None)
-
-                        if (
-                            not content_length
-                            or int(content_length) < self.max_file_size
-                        ):
-                            with open(file_name, "wb") as writer:
-                                writer.write(r.content)
-                    except Exception as exc:
-                        logging.error(
-                            "An error occurred downloading file.", exc_info=exc
-                        )
-                        yield f"{parsed.path} - FAILURE"
-                        continue
-                    try:
-                        conv_res: ConversionResult = self.converter.convert(file_name)
-                    except Exception as e:
-                        logging.error(
-                            "An error occurred while converting document.", exc_info=e
-                        )
-                        yield f"{parsed.path} - FAILURE"
-                        continue
                     if conv_res.status == ConversionStatus.SUCCESS:
                         s3_target_prefix = self.target_coords.key_prefix
                         doc_hash = conv_res.input.document_hash
-                        name_without_ext = os.path.splitext(file_name.name)[0]
+                        name_without_ext = os.path.splitext(conv_res.input.file)[0]
                         logging.debug(f"Converted {doc_hash} now saving results")
 
                         if os.path.exists(conv_res.input.file):
