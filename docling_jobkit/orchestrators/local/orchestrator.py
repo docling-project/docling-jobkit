@@ -75,3 +75,6 @@ class LocalOrchestrator(BaseOrchestrator):
 
     async def clear_converters(self):
         self.cm.clear_cache()
+
+    async def check_connection(self):
+        pass

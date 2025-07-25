@@ -707,6 +707,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "rq" },
     { name = "typer" },
 ]
 
@@ -758,6 +759,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = "~=2.4" },
     { name = "rapidocr-onnxruntime", marker = "python_full_version < '3.13' and extra == 'rapidocr'", specifier = "~=1.4" },
     { name = "ray", marker = "extra == 'ray'", specifier = "~=2.30" },
+    { name = "rq", specifier = "~=2.4.1" },
     { name = "tesserocr", marker = "extra == 'tesserocr'", specifier = "~=2.7" },
     { name = "typer", specifier = "~=0.12" },
 ]
@@ -3377,6 +3379,18 @@ wheels = [
 ]
 
 [[package]]
+name = "redis"
+version = "6.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "async-timeout", marker = "python_full_version < '3.11.3'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ea/9a/0551e01ba52b944f97480721656578c8a7c46b51b99d66814f85fe3a4f3e/redis-6.2.0.tar.gz", hash = "sha256:e821f129b75dde6cb99dd35e5c76e8c49512a5a0d8dfdc560b2fbd44b85ca977", size = 4639129, upload-time = "2025-05-28T05:01:18.91Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/13/67/e60968d3b0e077495a8fee89cf3f2373db98e528288a48f1ee44967f6e8c/redis-6.2.0-py3-none-any.whl", hash = "sha256:c8ddf316ee0aab65f04a11229e94a64b2618451dab7a67cb2f77eb799d872d5e", size = 278659, upload-time = "2025-05-28T05:01:16.955Z" },
+]
+
+[[package]]
 name = "referencing"
 version = "0.36.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3619,6 +3633,19 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/7a/60/84f821f6bf4e0e710acc5039d91f8f594fae0d93fc368704920d8971680d/rpds_py-0.25.1-pp311-pypy311_pp73-musllinux_1_2_aarch64.whl", hash = "sha256:33358883a4490287e67a2c391dfaea4d9359860281db3292b6886bf0be3d8692", size = 564534, upload-time = "2025-05-21T12:45:42.672Z" },
     { url = "https://files.pythonhosted.org/packages/41/3a/bc654eb15d3b38f9330fe0f545016ba154d89cdabc6177b0295910cd0ebe/rpds_py-0.25.1-pp311-pypy311_pp73-musllinux_1_2_i686.whl", hash = "sha256:1d1fadd539298e70cac2f2cb36f5b8a65f742b9b9f1014dd4ea1f7785e2470bf", size = 592674, upload-time = "2025-05-21T12:45:44.533Z" },
     { url = "https://files.pythonhosted.org/packages/2e/ba/31239736f29e4dfc7a58a45955c5db852864c306131fd6320aea214d5437/rpds_py-0.25.1-pp311-pypy311_pp73-musllinux_1_2_x86_64.whl", hash = "sha256:9a46c2fb2545e21181445515960006e85d22025bd2fe6db23e76daec6eb689fe", size = 558781, upload-time = "2025-05-21T12:45:46.281Z" },
+]
+
+[[package]]
+name = "rq"
+version = "2.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click" },
+    { name = "redis" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9f/1a/76bd814898c4c574bc0e6100c4626247fc08c0194372d4d3b7bfcf752eae/rq-2.4.1.tar.gz", hash = "sha256:40ba01af3edacc008ab376009a3a547278d2bfe02a77cd4434adc0b01788239f", size = 664540, upload-time = "2025-07-20T11:54:01.519Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/c4/ffd7a6d9a706a50ab91c8bd42ff54cd9b228613d6bb80f7728a5144518b1/rq-2.4.1-py3-none-any.whl", hash = "sha256:a3a0839ba3213a9be013b398670caf71d9360a0c8525f343687cf2c2199e5ec8", size = 108014, upload-time = "2025-07-20T11:53:59.355Z" },
 ]
 
 [[package]]
