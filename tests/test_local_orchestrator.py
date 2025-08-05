@@ -7,6 +7,7 @@ import pytest
 import pytest_asyncio
 
 from docling.datamodel.base_models import ConversionStatus
+from docling.utils.model_downloader import download_models
 
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
@@ -23,14 +24,20 @@ from docling_jobkit.orchestrators.local.orchestrator import (
 
 
 @pytest_asyncio.fixture
-async def orchestrator():
+async def artifacts_path():
+    download_path = download_models()
+    return download_path
+
+
+@pytest_asyncio.fixture
+async def orchestrator(artifacts_path: Path):
     # Setup
     config = LocalOrchestratorConfig(
         num_workers=2,
         shared_models=True,
     )
 
-    cm_config = DoclingConverterManagerConfig()
+    cm_config = DoclingConverterManagerConfig(artifacts_path=artifacts_path)
     cm = DoclingConverterManager(config=cm_config)
 
     orchestrator = LocalOrchestrator(config=config, converter_manager=cm)
@@ -48,14 +55,14 @@ async def orchestrator():
 
 
 @pytest_asyncio.fixture
-async def replicated_orchestrator():
+async def replicated_orchestrator(artifacts_path: Path):
     # Setup
     config = LocalOrchestratorConfig(
         num_workers=4,
         shared_models=False,
     )
 
-    cm_config = DoclingConverterManagerConfig()
+    cm_config = DoclingConverterManagerConfig(artifacts_path=artifacts_path)
     cm = DoclingConverterManager(config=cm_config)
 
     orchestrator = LocalOrchestrator(config=config, converter_manager=cm)
