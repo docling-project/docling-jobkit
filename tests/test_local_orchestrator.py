@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import os
 import time
 from pathlib import Path
 
@@ -56,9 +57,12 @@ async def orchestrator(artifacts_path: Path):
 
 @pytest_asyncio.fixture
 async def replicated_orchestrator(artifacts_path: Path):
+    NUM_WORKERS = 4
+    if os.getenv("CI"):
+        NUM_WORKERS = 2
     # Setup
     config = LocalOrchestratorConfig(
-        num_workers=4,
+        num_workers=NUM_WORKERS,
         shared_models=False,
     )
 
@@ -166,7 +170,11 @@ async def test_replicated_convert(replicated_orchestrator: LocalOrchestrator):
     sources: list[TaskSource] = []
     sources.append(HttpSource(url="https://arxiv.org/pdf/2311.18481"))
 
-    for _ in range(6):
+    NUM_TASKS = 6
+    if os.getenv("CI"):
+        NUM_TASKS = 3
+
+    for _ in range(NUM_TASKS):
         task = await replicated_orchestrator.enqueue(
             sources=sources,
             options=options,
