@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 from docling.datamodel.base_models import DocumentStream
 
+from docling_jobkit.convert.manager import DoclingConverterManager
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
 from docling_jobkit.datamodel.task_meta import TaskStatus
 
@@ -15,12 +16,23 @@ _log = logging.getLogger(__name__)
 
 
 class AsyncLocalWorker:
-    def __init__(self, worker_id: int, orchestrator: "LocalOrchestrator"):
+    def __init__(
+        self,
+        worker_id: int,
+        orchestrator: "LocalOrchestrator",
+        use_shared_manager: bool,
+    ):
         self.worker_id = worker_id
         self.orchestrator = orchestrator
+        self.use_shared_manager = use_shared_manager
 
     async def loop(self):
         _log.debug(f"Starting loop for worker {self.worker_id}")
+        cm = (
+            self.orchestrator.cm
+            if self.use_shared_manager
+            else DoclingConverterManager(self.orchestrator.cm.config)
+        )
         while True:
             task_id: str = await self.orchestrator.task_queue.get()
             self.orchestrator.queue_list.remove(task_id)
@@ -56,7 +68,7 @@ class AsyncLocalWorker:
                                 headers = source.headers
 
                     # Note: results are only an iterator->lazy evaluation
-                    results = self.orchestrator.cm.convert_documents(
+                    results = cm.convert_documents(
                         sources=convert_sources,
                         options=task.options,
                         headers=headers,
