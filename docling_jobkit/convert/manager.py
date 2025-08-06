@@ -172,6 +172,9 @@ class DoclingConverterManager:
         pipeline_options.table_structure_options.mode = TableFormerMode(
             request.table_mode
         )
+        pipeline_options.table_structure_options.do_cell_matching = (
+            request.table_cell_matching
+        )
 
         if request.image_export_mode != ImageRefMode.PLACEHOLDER:
             pipeline_options.generate_page_images = True

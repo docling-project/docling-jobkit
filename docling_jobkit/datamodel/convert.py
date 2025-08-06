@@ -212,6 +212,14 @@ class ConvertDocumentsOptions(BaseModel):
         ),
     ] = TableStructureOptions().mode
 
+    table_cell_matching: Annotated[
+        bool,
+        Field(
+            description="If true, matches table cells predictions back to PDF cells. Can break table output if PDF cells are merged across table columns. If false, let table structure model define the text cells, ignore PDF cells.",
+            examples=[TableStructureOptions().do_cell_matching],
+        ),
+    ] = TableStructureOptions().do_cell_matching
+
     pipeline: Annotated[
         ProcessingPipeline,
         Field(description="Choose the pipeline to process PDF or image files."),
