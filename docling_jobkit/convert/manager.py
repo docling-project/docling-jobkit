@@ -30,6 +30,7 @@ from docling.datamodel.pipeline_options import (
     TableFormerMode,
     VlmPipelineOptions,
 )
+from docling.datamodel.pipeline_options_vlm_model import ApiVlmOptions, InlineVlmOptions
 from docling.document_converter import DocumentConverter, FormatOption, PdfFormatOption
 from docling.models.factories import get_ocr_factory
 from docling.pipeline.vlm_pipeline import VlmPipeline
@@ -224,18 +225,44 @@ class DoclingConverterManager:
         pipeline_options = VlmPipelineOptions(
             artifacts_path=artifacts_path,
             document_timeout=request.document_timeout,
+            enable_remote_services=self.config.enable_remote_services,
         )
-        pipeline_options.vlm_options = vlm_model_specs.SMOLDOCLING_TRANSFORMERS
-        if sys.platform == "darwin":
-            try:
-                import mlx_vlm  # noqa: F401
 
-                pipeline_options.vlm_options = vlm_model_specs.SMOLDOCLING_MLX
-            except ImportError:
-                _log.warning(
-                    "To run SmolDocling faster, please install mlx-vlm:\n"
-                    "pip install mlx-vlm"
-                )
+        if request.vlm_pipeline_model in (
+            None,
+            vlm_model_specs.VlmModelType.SMOLDOCLING,
+        ):
+            pipeline_options.vlm_options = vlm_model_specs.SMOLDOCLING_TRANSFORMERS
+            if sys.platform == "darwin":
+                try:
+                    import mlx_vlm  # noqa: F401
+
+                    pipeline_options.vlm_options = vlm_model_specs.SMOLDOCLING_MLX
+                except ImportError:
+                    _log.warning(
+                        "To run SmolDocling faster, please install mlx-vlm:\n"
+                        "pip install mlx-vlm"
+                    )
+
+        elif request.vlm_pipeline_model == vlm_model_specs.VlmModelType.GRANITE_VISION:
+            pipeline_options.vlm_options = vlm_model_specs.GRANITE_VISION_TRANSFORMERS
+
+        elif (
+            request.vlm_pipeline_model
+            == vlm_model_specs.VlmModelType.GRANITE_VISION_OLLAMA
+        ):
+            pipeline_options.vlm_options = vlm_model_specs.GRANITE_VISION_OLLAMA
+
+        elif request.vlm_pipeline_model_local is not None:
+            pipeline_options.vlm_options = InlineVlmOptions.model_validate(
+                request.vlm_pipeline_model_local.model_dump()
+            )
+
+        elif request.vlm_pipeline_model_api is not None:
+            pipeline_options.vlm_options = ApiVlmOptions.model_validate(
+                request.vlm_pipeline_model_api.model_dump()
+            )
+
         return pipeline_options
 
     # Computes the PDF pipeline options and returns the PdfFormatOption and its hash

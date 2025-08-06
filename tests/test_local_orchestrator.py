@@ -1,20 +1,32 @@
 import asyncio
 import base64
+import logging
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 import pytest
 import pytest_asyncio
 
+from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import ConversionStatus
+from docling.datamodel.pipeline_options import (
+    ProcessingPipeline,
+)
+from docling.datamodel.pipeline_options_vlm_model import ResponseFormat
 from docling.utils.model_downloader import download_models
 
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
 )
-from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
+from docling_jobkit.datamodel.convert import (
+    ConvertDocumentsOptions,
+    VlmModelApi,
+    VlmModelLocal,
+)
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
 from docling_jobkit.datamodel.task import TaskSource
 from docling_jobkit.datamodel.task_targets import InBodyTarget
@@ -22,6 +34,10 @@ from docling_jobkit.orchestrators.local.orchestrator import (
     LocalOrchestrator,
     LocalOrchestratorConfig,
 )
+
+
+def pytest_configure(config):
+    logging.getLogger("docling").setLevel(logging.INFO)
 
 
 @pytest_asyncio.fixture
@@ -38,7 +54,10 @@ async def orchestrator(artifacts_path: Path):
         shared_models=True,
     )
 
-    cm_config = DoclingConverterManagerConfig(artifacts_path=artifacts_path)
+    remote_models = not bool(os.getenv("CI"))
+    cm_config = DoclingConverterManagerConfig(
+        enable_remote_services=remote_models, artifacts_path=artifacts_path
+    )
     cm = DoclingConverterManager(config=cm_config)
 
     orchestrator = LocalOrchestrator(config=config, converter_manager=cm)
@@ -115,9 +134,61 @@ async def test_convert_warmup():
     assert len(converter.initialized_pipelines) > 0
 
 
-@pytest.mark.asyncio
-async def test_convert_url(orchestrator: LocalOrchestrator):
+@dataclass
+class TestOption:
+    options: ConvertDocumentsOptions
+    name: str
+    ci: bool
+
+
+def convert_options_gen() -> Iterable[TestOption]:
     options = ConvertDocumentsOptions()
+    yield TestOption(options=options, name="default", ci=True)
+
+    options = ConvertDocumentsOptions(
+        pipeline=ProcessingPipeline.VLM,
+    )
+    yield TestOption(options=options, name="vlm_default", ci=False)
+
+    options = ConvertDocumentsOptions(
+        pipeline=ProcessingPipeline.VLM,
+        vlm_pipeline_model=vlm_model_specs.VlmModelType.SMOLDOCLING,
+    )
+    yield TestOption(options=options, name="vlm_smoldocling", ci=False)
+
+    # options = ConvertDocumentsOptions(
+    #     pipeline=ProcessingPipeline.VLM,
+    #     vlm_pipeline_model=vlm_model_specs.VlmModelType.GRANITE_VISION_OLLAMA
+    # )
+    # yield TestOption(options=options, name="vlm_granite_vision_ollama", ci=False)
+
+    options = ConvertDocumentsOptions(
+        pipeline=ProcessingPipeline.VLM,
+        vlm_pipeline_model_local=VlmModelLocal.from_docling(
+            vlm_model_specs.SMOLDOCLING_MLX
+        ),
+    )
+    yield TestOption(options=options, name="vlm_local_smoldocling_mlx", ci=False)
+
+    options = ConvertDocumentsOptions(
+        pipeline=ProcessingPipeline.VLM,
+        vlm_pipeline_model_api=VlmModelApi(
+            url="http://localhost:1234/v1/chat/completions",
+            params={"model": "ds4sd/SmolDocling-256M-preview-mlx-bf16"},
+            response_format=ResponseFormat.DOCTAGS,
+            prompt="Convert this page to docling.",
+        ),
+    )
+    yield TestOption(options=options, name="vlm_lmstudio_smoldocling_mlx", ci=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("test_option", convert_options_gen(), ids=lambda o: o.name)
+async def test_convert_url(orchestrator: LocalOrchestrator, test_option: TestOption):
+    options = test_option.options
+
+    if os.getenv("CI") and not test_option.ci:
+        pytest.skip("Skipping test in CI")
 
     sources: list[TaskSource] = []
     sources.append(HttpSource(url="https://arxiv.org/pdf/2311.18481"))
