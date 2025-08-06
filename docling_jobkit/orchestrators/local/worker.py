@@ -63,7 +63,8 @@ class AsyncLocalWorker:
                     )
 
                     # The real processing will happen here
-                    return list(results)
+                    processed_results = list(results)
+                    return processed_results
 
                 start_time = time.monotonic()
 
