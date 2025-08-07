@@ -1,68 +1,42 @@
 import logging
-import multiprocessing
-import os
 import uuid
 from subprocess import Popen
 from typing import Optional
 
 from pydantic import BaseModel
 from redis import Redis
-from rq import Queue, Worker
+from rq import Queue
 from rq.job import Job, JobStatus
 
-from docling.datamodel.base_models import InputFormat
-
-from docling_jobkit.convert.manager import (
-    DoclingConverterManager,
-    DoclingConverterManagerConfig,
-)
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.base_orchestrator import BaseOrchestrator
-from docling_jobkit.orchestrators.rq.worker import CustomRQWorker, conversion_task
+from docling_jobkit.orchestrators.rq.worker import conversion_task
 
 _log = logging.getLogger(__name__)
 
 
-def run_worker(conversion_manager_config):
-    # create a new connection in thread, Redis and ConversionManager are not pickle
-    redis_conn = Redis(
-        host=os.environ.get("DOCLING_SERVE_eng_rq_host", "localhost"),
-        port=os.environ.get("DOCLING_SERVE_eng_rq_port", 6379),
-    )
-    queue = Queue(name="conversion_queue", connection=redis_conn, default_timeout=14400)
-    cm = DoclingConverterManager(config=conversion_manager_config)
-    pdf_format_option = cm.get_pdf_pipeline_opts(ConvertDocumentsOptions())
-    converter = cm.get_converter(pdf_format_option)
-    converter.initialize_pipeline(InputFormat.PDF)
-    worker = CustomRQWorker([queue], conversion_manager=cm, connection=redis_conn)
-    worker.work()
-
-
 class RQOrchestratorConfig(BaseModel):
-    num_workers: int = 2
+    redis_host: str = "localhost"
+    redis_port: int = 6379
 
 
 class RQOrchestrator(BaseOrchestrator):
     def __init__(
         self,
         config: RQOrchestratorConfig,
-        converter_manager_config: DoclingConverterManagerConfig,
-        api_only=False,
     ):
         super().__init__()
         self.config = config
-        self.api_only = api_only
         self.worker_processes: list[Popen] = []
         self.redis_conn = Redis(
-            host=os.environ.get("DOCLING_SERVE_eng_rq_host", "localhost"),
-            port=os.environ.get("DOCLING_SERVE_eng_rq_port", 6379),
+            host=self.config.redis_host,
+            port=self.config.redis_port,
         )
         self.task_queue = Queue(
             "conversion_queue", connection=self.redis_conn, default_timeout=14400
         )
-        self.cm_conf = converter_manager_config
 
     async def notify_end_job(self, task_id):
         # TODO: check if this is necessary
@@ -121,10 +95,7 @@ class RQOrchestrator(BaseOrchestrator):
             return None
 
     async def process_queue(self):
-        if not self.api_only:
-            for i in range(self.config.num_workers):
-                _log.info(f"Starting worker {i}")
-                multiprocessing.Process(target=run_worker, args=(self.cm_conf,)).start()
+        pass
 
     async def warm_up_caches(self):
         pass
@@ -135,12 +106,6 @@ class RQOrchestrator(BaseOrchestrator):
             self.redis_conn.ping()
         except Exception:
             raise RuntimeError("No connection to Redis")
-
-        if not self.api_only:
-            # Count the number of workers in redis connection
-            workers = Worker.count(connection=self.redis_conn)
-            if workers == 0:
-                raise RuntimeError("No workers connected to Redis")
 
     async def clear_converters(self):
         pass
