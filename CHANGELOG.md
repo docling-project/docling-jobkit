@@ -1,3 +1,11 @@
+## [v1.3.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.3.0) - 2025-08-06
+
+### Feature
+
+* Vlm models params ([#48](https://github.com/docling-project/docling-jobkit/issues/48)) ([`5b83c13`](https://github.com/docling-project/docling-jobkit/commit/5b83c13de74ef1a3e917c031716e9e242a2d276c))
+* Expose table cell matching parameter ([#47](https://github.com/docling-project/docling-jobkit/issues/47)) ([`961c286`](https://github.com/docling-project/docling-jobkit/commit/961c286ee086ae3f739d8ca307bfe5fd39689489))
+* Option to disable shared models between workers ([#46](https://github.com/docling-project/docling-jobkit/issues/46)) ([`7d652a5`](https://github.com/docling-project/docling-jobkit/commit/7d652a53df21606c9c94c718583a636689048919))
+
 ## [v1.2.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.2.0) - 2025-07-24
 
 ### Feature
