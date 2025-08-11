@@ -11,12 +11,12 @@ import pytest
 import pytest_asyncio
 
 from docling.datamodel.base_models import ConversionStatus
-from docling.utils.model_downloader import download_models
 
 from docling_jobkit.datamodel.convert import (
     ConvertDocumentsOptions,
 )
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
+from docling_jobkit.datamodel.result import ExportResult
 from docling_jobkit.datamodel.task import TaskSource
 from docling_jobkit.datamodel.task_targets import InBodyTarget
 from docling_jobkit.orchestrators.base_orchestrator import BaseOrchestrator
@@ -31,13 +31,7 @@ def pytest_configure(config):
 
 
 @pytest_asyncio.fixture
-async def artifacts_path():
-    download_path = download_models()
-    return download_path
-
-
-@pytest_asyncio.fixture
-async def orchestrator(artifacts_path: Path):
+async def orchestrator():
     # Setup
     config = RQOrchestratorConfig()
     orchestrator = RQOrchestrator(config=config)
@@ -98,13 +92,12 @@ async def test_convert_url(orchestrator: RQOrchestrator, test_option: TestOption
     )
 
     await _wait_task_complete(orchestrator, task.task_id)
-    results = await orchestrator.task_results(task_id=task.task_id)
+    task_result = await orchestrator.task_result(task_id=task.task_id)
 
-    assert results is not None
-    assert len(results) == 1
+    assert task_result is not None
+    assert isinstance(task_result.result, ExportResult)
 
-    result = results[0]
-    assert result.status == ConversionStatus.SUCCESS
+    assert task_result.result.status == ConversionStatus.SUCCESS
 
 
 async def test_convert_file(orchestrator: RQOrchestrator):
@@ -123,10 +116,9 @@ async def test_convert_file(orchestrator: RQOrchestrator):
     )
 
     await _wait_task_complete(orchestrator, task.task_id)
-    results = await orchestrator.task_results(task_id=task.task_id)
+    task_result = await orchestrator.task_result(task_id=task.task_id)
 
-    assert results is not None
-    assert len(results) == 1
+    assert task_result is not None
+    assert isinstance(task_result.result, ExportResult)
 
-    result = results[0]
-    assert result.status == ConversionStatus.SUCCESS
+    assert task_result.result.status == ConversionStatus.SUCCESS

@@ -1,12 +1,15 @@
 import asyncio
 import logging
-import time
+import shutil
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from docling.datamodel.base_models import DocumentStream
 
 from docling_jobkit.convert.manager import DoclingConverterManager
+from docling_jobkit.convert.results import process_results
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
+from docling_jobkit.datamodel.result import ConvertDocumentResult
 from docling_jobkit.datamodel.task_meta import TaskStatus
 
 if TYPE_CHECKING:
@@ -21,10 +24,12 @@ class AsyncLocalWorker:
         worker_id: int,
         orchestrator: "LocalOrchestrator",
         use_shared_manager: bool,
+        scratch_dir: Path,
     ):
         self.worker_id = worker_id
         self.orchestrator = orchestrator
         self.use_shared_manager = use_shared_manager
+        self.scratch_dir = scratch_dir
 
     async def loop(self):
         _log.debug(f"Starting loop for worker {self.worker_id}")
@@ -40,6 +45,7 @@ class AsyncLocalWorker:
             if task_id not in self.orchestrator.tasks:
                 raise RuntimeError(f"Task {task_id} not found.")
             task = self.orchestrator.tasks[task_id]
+            workdir = self.scratch_dir / task_id
 
             try:
                 task.set_status(TaskStatus.STARTED)
@@ -54,7 +60,7 @@ class AsyncLocalWorker:
 
                 # Define a callback function to send progress updates to the client.
                 # TODO: send partial updates, e.g. when a document in the batch is done
-                def run_conversion():
+                def run_conversion() -> ConvertDocumentResult:
                     convert_sources: list[Union[str, DocumentStream]] = []
                     headers: Optional[dict[str, Any]] = None
                     for source in task.sources:
@@ -68,17 +74,21 @@ class AsyncLocalWorker:
                                 headers = source.headers
 
                     # Note: results are only an iterator->lazy evaluation
-                    results = cm.convert_documents(
+                    conv_results = cm.convert_documents(
                         sources=convert_sources,
                         options=task.options,
                         headers=headers,
                     )
 
                     # The real processing will happen here
-                    processed_results = list(results)
-                    return processed_results
+                    processed_results = process_results(
+                        conversion_options=task.options,
+                        target=task.target,
+                        conv_results=conv_results,
+                        work_dir=workdir,
+                    )
 
-                start_time = time.monotonic()
+                    return processed_results
 
                 # Run the prediction in a thread to avoid blocking the event loop.
                 # Get the current event loop
@@ -90,18 +100,16 @@ class AsyncLocalWorker:
                 # response = future.result()
 
                 # Run in a thread
-                response = await asyncio.to_thread(
+                task_result = await asyncio.to_thread(
                     run_conversion,
                 )
-                processing_time = time.monotonic() - start_time
-
-                task.results = response
+                self.orchestrator._task_results[task_id] = task_result
                 task.sources = []
 
                 task.set_status(TaskStatus.SUCCESS)
                 _log.info(
                     f"Worker {self.worker_id} completed job {task_id} "
-                    f"in {processing_time:.2f} seconds"
+                    f"in {task_result.processing_time:.2f} seconds"
                 )
 
             except Exception as e:
@@ -111,7 +119,12 @@ class AsyncLocalWorker:
                 task.set_status(TaskStatus.FAILURE)
 
             finally:
+                if workdir.exists():
+                    _log.debug(f"Cleaning {self.worker_id} workdir for {task_id}")
+                    shutil.rmtree(workdir)
+
                 if self.orchestrator.notifier:
                     await self.orchestrator.notifier.notify_task_subscribers(task_id)
                 self.orchestrator.task_queue.task_done()
+
                 _log.debug(f"Worker {self.worker_id} completely done with {task_id}")

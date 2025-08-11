@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import tempfile
 import uuid
+from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel
@@ -9,8 +11,11 @@ from docling.datamodel.base_models import InputFormat
 
 from docling_jobkit.convert.manager import DoclingConverterManager
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
+from docling_jobkit.datamodel.result import ConvertDocumentResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
-from docling_jobkit.orchestrators.base_orchestrator import BaseOrchestrator
+from docling_jobkit.orchestrators.base_orchestrator import (
+    BaseOrchestrator,
+)
 from docling_jobkit.orchestrators.local.worker import AsyncLocalWorker
 
 _log = logging.getLogger(__name__)
@@ -19,6 +24,7 @@ _log = logging.getLogger(__name__)
 class LocalOrchestratorConfig(BaseModel):
     num_workers: int = 2
     shared_models: bool = False
+    scratch_dir: Optional[Path] = None
 
 
 class LocalOrchestrator(BaseOrchestrator):
@@ -32,6 +38,10 @@ class LocalOrchestrator(BaseOrchestrator):
         self.task_queue: asyncio.Queue[str] = asyncio.Queue()
         self.queue_list: list[str] = []
         self.cm = converter_manager
+        self._task_results: dict[str, ConvertDocumentResult] = {}
+        self.scratch_dir = self.config.scratch_dir or Path(
+            tempfile.mkdtemp(prefix="docling_")
+        )
 
     async def enqueue(
         self,
@@ -54,6 +64,14 @@ class LocalOrchestrator(BaseOrchestrator):
         return (
             self.queue_list.index(task_id) + 1 if task_id in self.queue_list else None
         )
+
+    async def task_result(
+        self,
+        task_id: str,
+    ) -> Optional[ConvertDocumentResult]:
+        if task_id not in self._task_results:
+            return None
+        return self._task_results[task_id]
 
     async def process_queue(self):
         # Create a pool of workers

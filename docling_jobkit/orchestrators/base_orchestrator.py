@@ -1,12 +1,11 @@
 import datetime
 import logging
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Optional, Union
-
-from docling.datamodel.document import ConversionResult
+from typing import TYPE_CHECKING, Optional
 
 from docling_jobkit.datamodel.callback import ProgressCallbackRequest
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
+from docling_jobkit.datamodel.result import ConvertDocumentResult
 from docling_jobkit.datamodel.task import Task, TaskSource
 from docling_jobkit.datamodel.task_targets import TaskTarget
 
@@ -83,16 +82,12 @@ class BaseOrchestrator(ABC):
     async def task_status(self, task_id: str, wait: float = 0.0) -> Task:
         return await self.get_raw_task(task_id=task_id)
 
-    async def task_results(
-        # self, task_id: str, background_tasks: BackgroundTasks
+    @abstractmethod
+    async def task_result(
         self,
         task_id: str,
-    ) -> Union[list[ConversionResult], None]:
-        try:
-            task = await self.get_raw_task(task_id=task_id)
-            return task.results
-        except TaskNotFoundError:
-            return None
+    ) -> Optional[ConvertDocumentResult]:
+        pass
 
     async def delete_task(self, task_id: str):
         _log.info(f"Deleting {task_id=}")
