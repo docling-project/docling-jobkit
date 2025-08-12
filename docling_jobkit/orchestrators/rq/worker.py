@@ -17,9 +17,11 @@ from docling_jobkit.convert.results import process_results
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
 from docling_jobkit.datamodel.result import ConvertDocumentResult
 from docling_jobkit.datamodel.task import Task
+from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.rq.orchestrator import (
     RQOrchestrator,
     RQOrchestratorConfig,
+    _TaskUpdate,
 )
 
 _log = logging.getLogger(__name__)
@@ -34,12 +36,6 @@ class CustomRQWorker(SimpleWorker):
         scratch_dir: Path,
         **kwargs,
     ):
-        ## Approach to init conversion manager in each worker using arg config instead of conversion_manager
-        # cm=DoclingConverterManager(config=conversion_manager_config)
-        # pdf_format_option = cm.get_pdf_pipeline_opts(ConvertDocumentsOptions())
-        # converter = cm.get_converter(pdf_format_option)
-        # converter.initialize_pipeline(InputFormat.PDF)
-
         self.orchestrator_config = orchestrator_config
         self.conversion_manager = DoclingConverterManager(cm_config)
         self.scratch_dir = scratch_dir
@@ -58,7 +54,7 @@ class CustomRQWorker(SimpleWorker):
             return super().perform_job(job, queue)
         except Exception as e:
             # Custom error handling for individual jobs
-            self.logger.error(f"Job {job.id} failed: {e}")
+            self.log.error(f"Job {job.id} failed: {e}")
             raise
 
 
@@ -71,6 +67,19 @@ def conversion_task(
     _log.debug("started task")
     task = Task.model_validate(task_data)
     task_id = task.task_id
+
+    job = get_current_job()
+    assert job is not None
+    conn = job.connection
+
+    # Notify task status
+    conn.publish(
+        orchestrator_config.sub_channel,
+        _TaskUpdate(
+            task_id=task_id,
+            task_status=TaskStatus.STARTED,
+        ).model_dump_json(),
+    )
 
     workdir = scratch_dir / task_id
 
@@ -106,11 +115,29 @@ def conversion_task(
         )
         packed = msgpack.packb(processed_results.model_dump(), use_bin_type=True)
         result_key = f"{orchestrator_config.results_prefix}:{task_id}"
-        job = get_current_job()
-        assert job is not None
-        job.connection.setex(result_key, orchestrator_config.results_ttl, packed)
+        conn.setex(result_key, orchestrator_config.results_ttl, packed)
+
+        # Notify task status
+        conn.publish(
+            orchestrator_config.sub_channel,
+            _TaskUpdate(
+                task_id=task_id,
+                task_status=TaskStatus.SUCCESS,
+                result_key=result_key,
+            ).model_dump_json(),
+        )
 
         _log.debug("ended task")
+    except Exception:
+        # Notify task status
+        conn.publish(
+            orchestrator_config.sub_channel,
+            _TaskUpdate(
+                task_id=task_id,
+                task_status=TaskStatus.FAILURE,
+            ).model_dump_json(),
+        )
+
     finally:
         if workdir.exists():
             shutil.rmtree(workdir)

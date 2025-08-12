@@ -35,17 +35,17 @@ async def orchestrator():
     # Setup
     config = RQOrchestratorConfig()
     orchestrator = RQOrchestrator(config=config)
-    # queue_task = asyncio.create_task(orchestrator.process_queue())
+    queue_task = asyncio.create_task(orchestrator.process_queue())
 
     yield orchestrator
 
     # Teardown
     # Cancel the background queue processor on shutdown
-    # queue_task.cancel()
-    # try:
-    #     await queue_task
-    # except asyncio.CancelledError:
-    #     print("Queue processor cancelled.")
+    queue_task.cancel()
+    try:
+        await queue_task
+    except asyncio.CancelledError:
+        print("Queue processor cancelled.")
 
 
 async def _wait_task_complete(

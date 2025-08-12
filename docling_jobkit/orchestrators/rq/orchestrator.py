@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from pathlib import Path
@@ -14,9 +15,10 @@ from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.result import ConvertDocumentResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
 from docling_jobkit.datamodel.task_meta import TaskStatus
-from docling_jobkit.orchestrators.base_orchestrator import BaseOrchestrator
-
-# from docling_jobkit.orchestrators.rq.worker import conversion_task
+from docling_jobkit.orchestrators.base_orchestrator import (
+    BaseOrchestrator,
+    TaskNotFoundError,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -26,7 +28,14 @@ class RQOrchestratorConfig(BaseModel):
     redis_port: int = 6379
     results_ttl: int = 3_600 * 4
     results_prefix: str = "docling:results"
+    sub_channel: str = "docling:updates"
     scratch_dir: Optional[Path] = None
+
+
+class _TaskUpdate(BaseModel):
+    task_id: str
+    task_status: TaskStatus
+    result_key: Optional[str] = None
 
 
 class RQOrchestrator(BaseOrchestrator):
@@ -84,16 +93,13 @@ class RQOrchestrator(BaseOrchestrator):
     async def queue_size(self) -> int:
         return self._rq_queue.count
 
-    async def _update_task_from_run(self, task_id: str) -> None:
+    async def _update_task_from_rq(self, task_id: str) -> None:
         task = await self.get_raw_task(task_id=task_id)
         if task.is_completed():
             return
 
-        print("GOING TO UPDATE TASK...")
-
         job = Job.fetch(task_id, connection=self._redis_conn)
         status = job.get_status()
-        print(f"{status=}")
 
         if status == JobStatus.FINISHED:
             result = job.latest_result()
@@ -117,7 +123,7 @@ class RQOrchestrator(BaseOrchestrator):
             task.set_status(TaskStatus.FAILURE)
 
     async def task_status(self, task_id: str, wait: float = 0.0) -> Task:
-        await self._update_task_from_run(task_id=task_id)
+        await self._update_task_from_rq(task_id=task_id)
         return await self.get_raw_task(task_id=task_id)
 
     async def get_queue_position(self, task_id: str) -> Optional[int]:
@@ -142,8 +148,46 @@ class RQOrchestrator(BaseOrchestrator):
         )
         return result
 
+    async def _listen_for_updates(self):
+        pubsub = self._async_redis_conn.pubsub()
+
+        # Subscribe to a single channel
+        await pubsub.subscribe(self.config.sub_channel)
+
+        print("Listening for updates...")
+        _log.debug("Listening for updates...")
+
+        # Listen for messages
+        async for message in pubsub.listen():
+            print(f"Message received: {message}")
+            if message["type"] == "message":
+                data = _TaskUpdate.model_validate_json(message["data"])
+                try:
+                    task = await self.get_raw_task(task_id=data.task_id)
+                    if task.is_completed():
+                        _log.debug("Task already completed. No update will be done.")
+                        continue
+
+                    # Update the status
+                    task.set_status(data.task_status)
+                    # Update the results lookup
+                    if (
+                        data.task_status == TaskStatus.SUCCESS
+                        and data.result_key is not None
+                    ):
+                        self._task_result_keys[data.task_id] = data.result_key
+                except TaskNotFoundError:
+                    _log.warning(f"Task {data.task_id} not found.")
+
     async def process_queue(self):
-        pass
+        # Create a pool of workers
+        pubsub_worker = []
+        _log.debug("PubSub worker starting.")
+        pubsub_worker = asyncio.create_task(self._listen_for_updates())
+
+        # Wait for all worker to complete
+        await asyncio.gather(pubsub_worker)
+        _log.debug("PubSub worker completed.")
 
     async def warm_up_caches(self):
         pass
