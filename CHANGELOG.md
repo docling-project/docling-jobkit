@@ -1,3 +1,9 @@
+## [v1.3.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.3.1) - 2025-08-12
+
+### Fix
+
+* Selection logic for vlm providers ([#49](https://github.com/docling-project/docling-jobkit/issues/49)) ([`9054df1`](https://github.com/docling-project/docling-jobkit/commit/9054df1f327d5d61955baf903890adbffa3cbc0e))
+
 ## [v1.3.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.3.0) - 2025-08-06
 
 ### Feature
