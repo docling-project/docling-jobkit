@@ -229,7 +229,7 @@ class DoclingConverterManager:
         )
 
         if request.vlm_pipeline_model in (
-            # None,
+            None,
             vlm_model_specs.VlmModelType.SMOLDOCLING,
         ):
             pipeline_options.vlm_options = vlm_model_specs.SMOLDOCLING_TRANSFORMERS
@@ -253,12 +253,12 @@ class DoclingConverterManager:
         ):
             pipeline_options.vlm_options = vlm_model_specs.GRANITE_VISION_OLLAMA
 
-        elif request.vlm_pipeline_model_local is not None:
+        if request.vlm_pipeline_model_local is not None:
             pipeline_options.vlm_options = InlineVlmOptions.model_validate(
                 request.vlm_pipeline_model_local.model_dump()
             )
 
-        elif request.vlm_pipeline_model_api is not None:
+        if request.vlm_pipeline_model_api is not None:
             pipeline_options.vlm_options = ApiVlmOptions.model_validate(
                 request.vlm_pipeline_model_api.model_dump()
             )
