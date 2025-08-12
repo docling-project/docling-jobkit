@@ -229,7 +229,7 @@ class DoclingConverterManager:
         )
 
         if request.vlm_pipeline_model in (
-            None,
+            # None,
             vlm_model_specs.VlmModelType.SMOLDOCLING,
         ):
             pipeline_options.vlm_options = vlm_model_specs.SMOLDOCLING_TRANSFORMERS
