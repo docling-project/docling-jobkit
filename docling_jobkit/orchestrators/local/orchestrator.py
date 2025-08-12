@@ -78,7 +78,12 @@ class LocalOrchestrator(BaseOrchestrator):
         workers = []
         for i in range(self.config.num_workers):
             _log.debug(f"Starting worker {i}")
-            w = AsyncLocalWorker(i, self, use_shared_manager=self.config.shared_models)
+            w = AsyncLocalWorker(
+                i,
+                self,
+                use_shared_manager=self.config.shared_models,
+                scratch_dir=self.scratch_dir,
+            )
             worker_task = asyncio.create_task(w.loop())
             workers.append(worker_task)
 
