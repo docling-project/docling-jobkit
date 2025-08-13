@@ -1,3 +1,9 @@
+## [v1.4.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.4.0) - 2025-08-13
+
+### Feature
+
+* Add rq orchestrator ([#44](https://github.com/docling-project/docling-jobkit/issues/44)) ([`d7b1c40`](https://github.com/docling-project/docling-jobkit/commit/d7b1c40943303c25bcbf99b70a3cb9f93ed41165))
+
 ## [v1.3.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.3.1) - 2025-08-12
 
 ### Fix
