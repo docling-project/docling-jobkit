@@ -167,12 +167,10 @@ class RQOrchestrator(BaseOrchestrator):
         # Subscribe to a single channel
         await pubsub.subscribe(self.config.sub_channel)
 
-        print("Listening for updates...")
         _log.debug("Listening for updates...")
 
         # Listen for messages
         async for message in pubsub.listen():
-            print(f"Message received: {message}")
             if message["type"] == "message":
                 data = _TaskUpdate.model_validate_json(message["data"])
                 try:
