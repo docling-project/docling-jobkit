@@ -176,16 +176,19 @@ def conversion_task(
     return result_key
 
 
-def run_worker():
+def run_worker(
+    rq_config: Optional[RQOrchestratorConfig] = None,
+    cm_config: Optional[DoclingConverterManagerConfig] = None,
+):
     # create a new connection in thread, Redis and ConversionManager are not pickle
-    config = RQOrchestratorConfig()
-    scratch_dir = config.scratch_dir or Path(tempfile.mkdtemp(prefix="docling_"))
-    redis_conn, rq_queue = RQOrchestrator.make_rq_queue(config)
-    cm_config = DoclingConverterManagerConfig()
+    rq_config = rq_config or RQOrchestratorConfig()
+    scratch_dir = rq_config.scratch_dir or Path(tempfile.mkdtemp(prefix="docling_"))
+    redis_conn, rq_queue = RQOrchestrator.make_rq_queue(rq_config)
+    cm_config = cm_config or DoclingConverterManagerConfig()
     worker = CustomRQWorker(
         [rq_queue],
         connection=redis_conn,
-        orchestrator_config=config,
+        orchestrator_config=rq_config,
         cm_config=cm_config,
         scratch_dir=scratch_dir,
     )
