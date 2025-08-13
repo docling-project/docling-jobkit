@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Optional
 
 import msgpack
+import redis
+import redis.asyncio as async_redis
 from pydantic import BaseModel
-from redis import Redis
-from redis.asyncio import Redis as AsyncRedis
 from rq import Queue
 from rq.job import Job, JobStatus
 
@@ -28,8 +28,7 @@ _log = logging.getLogger(__name__)
 
 
 class RQOrchestratorConfig(BaseModel):
-    redis_host: str = "localhost"
-    redis_port: int = 6379
+    redis_url: str = "redis://localhost:6379/"
     results_ttl: int = 3_600 * 4
     results_prefix: str = "docling:results"
     sub_channel: str = "docling:updates"
@@ -44,11 +43,8 @@ class _TaskUpdate(BaseModel):
 
 class RQOrchestrator(BaseOrchestrator):
     @staticmethod
-    def make_rq_queue(config: RQOrchestratorConfig) -> tuple[Redis, Queue]:
-        conn = Redis(
-            host=config.redis_host,
-            port=config.redis_port,
-        )
+    def make_rq_queue(config: RQOrchestratorConfig) -> tuple[redis.Redis, Queue]:
+        conn = redis.from_url(config.redis_url)
         rq_queue = Queue(
             "convert",
             connection=conn,
@@ -64,10 +60,7 @@ class RQOrchestrator(BaseOrchestrator):
         super().__init__()
         self.config = config
         self._redis_conn, self._rq_queue = self.make_rq_queue(self.config)
-        self._async_redis_conn = AsyncRedis(
-            host=self.config.redis_host,
-            port=self.config.redis_port,
-        )
+        self._async_redis_conn = async_redis.from_url(self.config.redis_url)
         self._task_result_keys: dict[str, str] = {}
 
     async def notify_end_job(self, task_id):
