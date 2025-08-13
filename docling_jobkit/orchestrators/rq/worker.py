@@ -27,6 +27,34 @@ from docling_jobkit.orchestrators.rq.orchestrator import (
 _log = logging.getLogger(__name__)
 
 
+def make_msgpack_safe(obj):
+    """
+    Recursively convert any non-msgpack-serializable types to safe types,
+    keeping bytes unchanged.
+    """
+    from datetime import datetime
+    from decimal import Decimal
+
+    # Types msgpack already supports
+    if obj is None or isinstance(obj, (str, int, float, bool, bytes)):
+        return obj
+
+    # Handle sequences
+    if isinstance(obj, (list, tuple, set)):
+        return [make_msgpack_safe(v) for v in obj]
+
+    # Handle mappings
+    if isinstance(obj, dict):
+        return {make_msgpack_safe(k): make_msgpack_safe(v) for k, v in obj.items()}
+
+    # Known common conversions
+    if isinstance(obj, (datetime, Decimal)):
+        return str(obj)  # ISO for datetime, str for Decimal
+
+    # Fallback: use string representation
+    return str(obj)
+
+
 class CustomRQWorker(SimpleWorker):
     def __init__(
         self,
@@ -113,7 +141,8 @@ def conversion_task(
             conv_results=conv_results,
             work_dir=workdir,
         )
-        packed = msgpack.packb(processed_results.model_dump(), use_bin_type=True)
+        safe_data = make_msgpack_safe(processed_results.model_dump())
+        packed = msgpack.packb(safe_data, use_bin_type=True)
         result_key = f"{orchestrator_config.results_prefix}:{task_id}"
         conn.setex(result_key, orchestrator_config.results_ttl, packed)
 
@@ -128,7 +157,8 @@ def conversion_task(
         )
 
         _log.debug("ended task")
-    except Exception:
+    except Exception as e:
+        _log.error(f"Conversion task {task_id} failed: {e}")
         # Notify task status
         conn.publish(
             orchestrator_config.sub_channel,
@@ -137,6 +167,7 @@ def conversion_task(
                 task_status=TaskStatus.FAILURE,
             ).model_dump_json(),
         )
+        raise e
 
     finally:
         if workdir.exists():

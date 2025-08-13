@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import logging
 import uuid
 from pathlib import Path
@@ -11,7 +12,10 @@ from redis.asyncio import Redis as AsyncRedis
 from rq import Queue
 from rq.job import Job, JobStatus
 
+from docling.datamodel.base_models import DocumentStream
+
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
+from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
 from docling_jobkit.datamodel.result import ConvertDocumentResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
 from docling_jobkit.datamodel.task_meta import TaskStatus
@@ -77,7 +81,16 @@ class RQOrchestrator(BaseOrchestrator):
         target: TaskTarget,
     ) -> Task:
         task_id = str(uuid.uuid4())
-        task = Task(task_id=task_id, sources=sources, options=options, target=target)
+        rq_sources: list[HttpSource | FileSource] = []
+        for source in sources:
+            if isinstance(source, DocumentStream):
+                encoded_doc = base64.b64encode(source.stream.read()).decode()
+                rq_sources.append(
+                    FileSource(filename=source.name, base64_string=encoded_doc)
+                )
+            elif isinstance(source, (HttpSource | FileSource)):
+                rq_sources.append(source)
+        task = Task(task_id=task_id, sources=rq_sources, options=options, target=target)
         self.tasks.update({task.task_id: task})
         task_data = task.model_dump(mode="json")
         self._rq_queue.enqueue(
@@ -144,7 +157,7 @@ class RQOrchestrator(BaseOrchestrator):
         result_key = self._task_result_keys[task_id]
         packed = await self._async_redis_conn.get(result_key)
         result = ConvertDocumentResult.model_validate(
-            msgpack.unpackb(packed, raw=False)
+            msgpack.unpackb(packed, raw=False, strict_map_key=False)
         )
         return result
 
@@ -176,6 +189,14 @@ class RQOrchestrator(BaseOrchestrator):
                         and data.result_key is not None
                     ):
                         self._task_result_keys[data.task_id] = data.result_key
+
+                    if self.notifier:
+                        # Notify clients about task updates
+                        await self.notifier.notify_task_subscribers(task.task_id)
+
+                        # Notify clients about queue updates
+                        await self.notifier.notify_queue_positions()
+
                 except TaskNotFoundError:
                     _log.warning(f"Task {data.task_id} not found.")
 
