@@ -208,6 +208,16 @@ class RQOrchestrator(BaseOrchestrator):
         await asyncio.gather(pubsub_worker)
         _log.debug("PubSub worker completed.")
 
+    async def delete_task(self, task_id: str):
+        _log.info(f"Deleting result of task {task_id=}")
+        if task_id in self._task_result_keys:
+            await self._async_redis_conn.delete(self._task_result_keys[task_id])
+            del self._task_result_keys[task_id]
+            # TODO: consider also deleting the task
+            # job = Job.fetch(task_id, connection=self._redis_conn)
+            # job.delete()
+        await super().delete_task(task_id)
+
     async def warm_up_caches(self):
         pass
 

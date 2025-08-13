@@ -97,6 +97,12 @@ class LocalOrchestrator(BaseOrchestrator):
         converter = self.cm.get_converter(pdf_format_option)
         converter.initialize_pipeline(InputFormat.PDF)
 
+    async def delete_task(self, task_id: str):
+        _log.info(f"Deleting result of task {task_id=}")
+        if task_id in self._task_results:
+            del self._task_results[task_id]
+        await super().delete_task(task_id)
+
     async def clear_converters(self):
         self.cm.clear_cache()
 
