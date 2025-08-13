@@ -1,12 +1,10 @@
 import datetime
 from functools import partial
-from pathlib import Path
 from typing import Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from docling.datamodel.base_models import DocumentStream
-from docling.datamodel.document import ConversionResult
 
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
@@ -25,8 +23,7 @@ class Task(BaseModel):
     sources: list[TaskSource] = []
     target: TaskTarget = InBodyTarget()
     options: Optional[ConvertDocumentsOptions]
-    results: Optional[list[ConversionResult]] = None
-    scratch_dir: Optional[Path] = None
+    # scratch_dir: Optional[Path] = None
     processing_meta: Optional[TaskProcessingMeta] = None
     created_at: datetime.datetime = Field(
         default_factory=partial(datetime.datetime.now, datetime.timezone.utc)

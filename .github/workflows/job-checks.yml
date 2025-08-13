@@ -14,6 +14,16 @@ on:
 jobs:
   run-checks:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     strategy:
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13']
@@ -28,6 +38,10 @@ jobs:
         run: uv sync --frozen --all-extras
       - name: Run styling check
         run: uv run --no-sync pre-commit run --all-files
+      - name: Launch background worker
+        run: |
+          uv run --no-sync python docling_jobkit/orchestrators/rq/worker.py &
+          echo "Worker started in background"
       - name: Testing
         run: |
           uv run --no-sync pytest -v --cov=docling_jobkit --cov-report=xml tests

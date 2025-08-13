@@ -55,20 +55,16 @@ dependencies = [
 [project.optional-dependencies]
 vlm = [
     "docling[vlm]~=2.38",
-    "mlx-vlm~=0.1.12; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 # asr = [
 #     "docling[asr]~=2.38",
 # ]
-tesserocr = [
-    "tesserocr~=2.7",
-]
-rapidocr = [
-    "rapidocr-onnxruntime~=1.4; python_version<'3.13'",
-    "onnxruntime~=1.7",
-]
 kfp = [
     "kfp[kubernetes]>=2.10.0",
+]
+rq = [
+    "rq~=2.4",
+    "msgpack~=1.1",
 ]
 ray = [
     "ray~=2.30",
@@ -192,6 +188,7 @@ module = [
     "kfp.*",
     "kfp_server_api.*",
     "pandas.*",
+    "msgpack.*",
     "mlx_vlm.*",
 ]
 ignore_missing_imports = true

@@ -17,6 +17,7 @@ from docling_jobkit.datamodel.callback import (
 )
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.http_inputs import HttpSource
+from docling_jobkit.datamodel.result import ConvertDocumentResult
 from docling_jobkit.datamodel.s3_coords import S3Coordinates
 from docling_jobkit.datamodel.task import Task, TaskSource
 from docling_jobkit.datamodel.task_meta import TaskProcessingMeta, TaskStatus
@@ -229,6 +230,12 @@ class KfpOrchestrator(BaseOrchestrator):
                 return pos
         return None
 
+    async def task_result(
+        self,
+        task_id: str,
+    ) -> Optional[ConvertDocumentResult]:
+        raise NotImplementedError()
+
     async def process_queue(self):
         return
 
@@ -278,3 +285,6 @@ class KfpOrchestrator(BaseOrchestrator):
         # TODO: could be moved to BackgroundTask
         if self.notifier:
             await self.notifier.notify_task_subscribers(task_id=task_id)
+
+    async def check_connection(self):
+        pass

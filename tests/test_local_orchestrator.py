@@ -28,6 +28,7 @@ from docling_jobkit.datamodel.convert import (
     VlmModelLocal,
 )
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
+from docling_jobkit.datamodel.result import ExportResult
 from docling_jobkit.datamodel.task import TaskSource
 from docling_jobkit.datamodel.task_targets import InBodyTarget
 from docling_jobkit.orchestrators.local.orchestrator import (
@@ -200,13 +201,12 @@ async def test_convert_url(orchestrator: LocalOrchestrator, test_option: TestOpt
     )
 
     await _wait_task_complete(orchestrator, task.task_id)
-    results = await orchestrator.task_results(task_id=task.task_id)
+    task_result = await orchestrator.task_result(task_id=task.task_id)
 
-    assert results is not None
-    assert len(results) == 1
+    assert task_result is not None
+    assert isinstance(task_result.result, ExportResult)
 
-    result = results[0]
-    assert result.status == ConversionStatus.SUCCESS
+    assert task_result.result.status == ConversionStatus.SUCCESS
 
 
 async def test_convert_file(orchestrator: LocalOrchestrator):
@@ -225,13 +225,12 @@ async def test_convert_file(orchestrator: LocalOrchestrator):
     )
 
     await _wait_task_complete(orchestrator, task.task_id)
-    results = await orchestrator.task_results(task_id=task.task_id)
+    task_result = await orchestrator.task_result(task_id=task.task_id)
 
-    assert results is not None
-    assert len(results) == 1
+    assert task_result is not None
+    assert isinstance(task_result.result, ExportResult)
 
-    result = results[0]
-    assert result.status == ConversionStatus.SUCCESS
+    assert task_result.result.status == ConversionStatus.SUCCESS
 
 
 @pytest.mark.asyncio
@@ -253,10 +252,9 @@ async def test_replicated_convert(replicated_orchestrator: LocalOrchestrator):
         )
 
     await _wait_task_complete(replicated_orchestrator, task.task_id)
-    results = await replicated_orchestrator.task_results(task_id=task.task_id)
+    task_result = await replicated_orchestrator.task_result(task_id=task.task_id)
 
-    assert results is not None
-    assert len(results) == 1
+    assert task_result is not None
+    assert isinstance(task_result.result, ExportResult)
 
-    result = results[0]
-    assert result.status == ConversionStatus.SUCCESS
+    assert task_result.result.status == ConversionStatus.SUCCESS
