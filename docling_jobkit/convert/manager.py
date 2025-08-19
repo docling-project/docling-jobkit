@@ -160,6 +160,7 @@ class DoclingConverterManager:
 
         pipeline_options = PdfPipelineOptions(
             artifacts_path=artifacts_path,
+            allow_external_plugins=self.config.allow_external_plugins,
             enable_remote_services=self.config.enable_remote_services,
             document_timeout=request.document_timeout,
             do_ocr=request.do_ocr,
