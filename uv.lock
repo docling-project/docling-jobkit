@@ -751,7 +751,7 @@ wheels = [
 
 [[package]]
 name = "docling-jobkit"
-version = "1.4.0"
+version = "1.4.1"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },

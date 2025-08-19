@@ -1,3 +1,9 @@
+## [v1.4.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.4.1) - 2025-08-19
+
+### Fix
+
+* Propagate allow_external_plugins ([#50](https://github.com/docling-project/docling-jobkit/issues/50)) ([`46653a3`](https://github.com/docling-project/docling-jobkit/commit/46653a3fd60cfbe6baff2ed3a7ccc1d44dae39b4))
+
 ## [v1.4.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.4.0) - 2025-08-13
 
 ### Feature
