@@ -296,6 +296,7 @@ class ResultsProcessor:
         self.scratch_dir = scratch_dir or Path(
             tempfile.mkdtemp(prefix="docling_")
         )
+        self.scratch_dir.mkdir(exist_ok=True, parents=True)
 
     def __del__(self):
         if self.scratch_dir is not None:
