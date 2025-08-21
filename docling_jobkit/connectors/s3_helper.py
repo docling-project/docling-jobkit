@@ -620,12 +620,10 @@ class ResultsProcessor:
             # If the chunk size is 0, it means the current file size has exceeded the limit
             if chunk_size == 0:
                 with tempfile.NamedTemporaryFile(
-                    suffix=f".parquet_{file_index}",
-                    dir=self.scratch_dir
+                    suffix=f".parquet_{file_index}", dir=self.scratch_dir
                 ) as temp_file:
                     pd_dataframe.to_parquet(temp_file)
-                    # current_file_size += os.path.getsize(temp_file)
-                    current_file_size = temp_file.seek(0,2)
+                    current_file_size = temp_file.seek(0, 2)
                     file_index += 1
 
                     parquet_file_name = f"{timestamp}_{file_index}.parquet"
@@ -650,12 +648,10 @@ class ResultsProcessor:
                 pd_dataframe = pd_dataframe.iloc[chunk_size:]
 
                 with tempfile.NamedTemporaryFile(
-                    suffix=f".parquet_{file_index}",
-                    dir=self.scratch_dir
+                    suffix=f".parquet_{file_index}", dir=self.scratch_dir
                 ) as temp_file:
                     current_df.to_parquet(temp_file.name)
-                    # current_file_size += os.path.getsize(temp_file)
-                    current_file_size = temp_file.seek(0,2)
+                    current_file_size = temp_file.seek(0, 2)
                     file_index += 1
 
                     parquet_file_name = f"{timestamp}_{file_index}.parquet"
@@ -676,7 +672,9 @@ class ResultsProcessor:
         logging.info(f"Total parquet files uploaded: {file_index}")
 
         # Export manifest file:
-        with tempfile.NamedTemporaryFile(suffix=".json", dir=self.scratch_dir) as temp_file_json:
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", dir=self.scratch_dir
+        ) as temp_file_json:
             with open(temp_file_json.name, "w") as file:
                 json.dump(manifest, file, indent=4)
             self.upload_file_to_s3(
