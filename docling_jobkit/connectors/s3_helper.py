@@ -623,8 +623,8 @@ class ResultsProcessor:
                     suffix=f".parquet_{file_index}",
                     dir=self.scratch_dir
                 ) as temp_file:
-                    pd_dataframe.to_parquet(temp_file.abspath())
-                    current_file_size += os.path.getsize(temp_file.abspath())
+                    pd_dataframe.to_parquet(temp_file)
+                    current_file_size += os.path.getsize(temp_file)
                     file_index += 1
 
                     parquet_file_name = f"{timestamp}_{file_index}.parquet"
@@ -652,8 +652,8 @@ class ResultsProcessor:
                     suffix=f".parquet_{file_index}",
                     dir=self.scratch_dir
                 ) as temp_file:
-                    current_df.to_parquet(temp_file.abspath())
-                    current_file_size += os.path.getsize(temp_file.abspath())
+                    current_df.to_parquet(temp_file)
+                    current_file_size += os.path.getsize(temp_file)
                     file_index += 1
 
                     parquet_file_name = f"{timestamp}_{file_index}.parquet"
@@ -675,7 +675,7 @@ class ResultsProcessor:
 
         # Export manifest file:
         with tempfile.NamedTemporaryFile(suffix=".json", dir=self.scratch_dir) as temp_file_json:
-            with open(temp_file_json.abspath(), "w") as file:
+            with open(temp_file_json, "w") as file:
                 json.dump(manifest, file, indent=4)
             self.upload_file_to_s3(
                 file=temp_file_json,
