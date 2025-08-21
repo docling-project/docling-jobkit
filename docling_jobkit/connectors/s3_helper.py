@@ -624,7 +624,8 @@ class ResultsProcessor:
                     dir=self.scratch_dir
                 ) as temp_file:
                     pd_dataframe.to_parquet(temp_file)
-                    current_file_size += os.path.getsize(temp_file)
+                    # current_file_size += os.path.getsize(temp_file)
+                    current_file_size = temp_file.seek(0,2)
                     file_index += 1
 
                     parquet_file_name = f"{timestamp}_{file_index}.parquet"
@@ -653,7 +654,8 @@ class ResultsProcessor:
                     dir=self.scratch_dir
                 ) as temp_file:
                     current_df.to_parquet(temp_file)
-                    current_file_size += os.path.getsize(temp_file)
+                    # current_file_size += os.path.getsize(temp_file)
+                    current_file_size = temp_file.seek(0,2)
                     file_index += 1
 
                     parquet_file_name = f"{timestamp}_{file_index}.parquet"
