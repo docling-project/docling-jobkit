@@ -348,7 +348,8 @@ class ResultsProcessor:
                             temp_json_file = temp_dir / f"{name_without_ext}.json"
 
                             conv_res.document.save_as_json(
-                                filename=Path(temp_json_file.name),
+                                # filename=Path(temp_json_file.name),
+                                filename=temp_json_file,
                                 image_mode=ImageRefMode.REFERENCED,
                             )
                             self.upload_file_to_s3(
