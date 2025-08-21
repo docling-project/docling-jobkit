@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import shutil
 import tempfile
 from datetime import datetime
 from io import BytesIO
@@ -281,6 +282,7 @@ class ResultsProcessor:
         generate_page_images: bool = False,
         generate_picture_images: bool = False,
         export_parquet_file: bool = True,
+        scratch_dir: Path | None = None,
     ):
         self.target_coords = target_s3_coords
         self.target_s3_client, _ = get_s3_connection(target_s3_coords)
@@ -291,11 +293,18 @@ class ResultsProcessor:
         self.to_formats = to_formats
         self.export_parquet_file = export_parquet_file
 
+        self.scratch_dir = scratch_dir or Path(tempfile.mkdtemp(prefix="docling_"))
+        self.scratch_dir.mkdir(exist_ok=True, parents=True)
+
+    def __del__(self):
+        if self.scratch_dir is not None:
+            shutil.rmtree(self.scratch_dir, ignore_errors=True)
+
     def process_documents(self, results: Iterable[ConversionResult]):
         pd_d = DataFrame()  # DataFrame to append parquet info
         try:
             for i, conv_res in enumerate(results):
-                with tempfile.TemporaryDirectory() as tmpdirname:
+                with tempfile.TemporaryDirectory(dir=self.scratch_dir) as tmpdirname:
                     temp_dir = Path(tmpdirname)
                     if conv_res.status == ConversionStatus.SUCCESS:
                         s3_target_prefix = self.target_coords.key_prefix
@@ -336,7 +345,7 @@ class ResultsProcessor:
                             temp_json_file = temp_dir / f"{name_without_ext}.json"
 
                             conv_res.document.save_as_json(
-                                filename=Path(temp_json_file.name),
+                                filename=temp_json_file,
                                 image_mode=ImageRefMode.REFERENCED,
                             )
                             self.upload_file_to_s3(
