@@ -631,7 +631,7 @@ class ResultsProcessor:
                     parquet_file_name = f"{timestamp}_{file_index}.parquet"
                     target_key = f"{s3_target_prefix}/parquet/{parquet_file_name}"
                     self.upload_file_to_s3(
-                        file=temp_file,
+                        file=temp_file.name,
                         target_key=target_key,
                         content_type="application/vnd.apache.parquet",
                     )
@@ -653,7 +653,7 @@ class ResultsProcessor:
                     suffix=f".parquet_{file_index}",
                     dir=self.scratch_dir
                 ) as temp_file:
-                    current_df.to_parquet(temp_file)
+                    current_df.to_parquet(temp_file.name)
                     # current_file_size += os.path.getsize(temp_file)
                     current_file_size = temp_file.seek(0,2)
                     file_index += 1
@@ -661,7 +661,7 @@ class ResultsProcessor:
                     parquet_file_name = f"{timestamp}_{file_index}.parquet"
                     target_key = f"{s3_target_prefix}/parquet/{parquet_file_name}"
                     self.upload_file_to_s3(
-                        file=temp_file,
+                        file=temp_file.name,
                         target_key=target_key,
                         content_type="application/vnd.apache.parquet",
                     )
@@ -677,10 +677,10 @@ class ResultsProcessor:
 
         # Export manifest file:
         with tempfile.NamedTemporaryFile(suffix=".json", dir=self.scratch_dir) as temp_file_json:
-            with open(temp_file_json, "w") as file:
+            with open(temp_file_json.name, "w") as file:
                 json.dump(manifest, file, indent=4)
             self.upload_file_to_s3(
-                file=temp_file_json,
+                file=temp_file_json.name,
                 target_key=f"{s3_target_prefix}/manifest/{timestamp}.json",
                 content_type="application/json",
             )
