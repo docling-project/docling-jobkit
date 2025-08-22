@@ -2,9 +2,11 @@ from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from docling.datamodel.document import ConversionStatus, ErrorItem
+from docling.datamodel.base_models import ConversionStatus, ErrorItem
 from docling.utils.profiling import ProfilingItem
-from docling_core.types.doc import DoclingDocument
+from docling_core.types.doc.document import DoclingDocument
+
+from docling_jobkit.datamodel.chunking import ChunkedDocumentResponse
 
 
 class ExportDocumentResponse(BaseModel):
@@ -40,7 +42,8 @@ class RemoteTargetResult(BaseModel):
 
 
 ResultType = Annotated[
-    ExportResult | ZipArchiveResult | RemoteTargetResult, Field(discriminator="kind")
+    ExportResult | ZipArchiveResult | RemoteTargetResult | ChunkedDocumentResponse,
+    Field(discriminator="kind"),
 ]
 
 

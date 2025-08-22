@@ -11,6 +11,8 @@ from docling.datamodel.base_models import OutputFormat
 from docling.datamodel.document import ConversionResult, ConversionStatus
 from docling_core.types.doc import ImageRefMode
 
+from docling_jobkit.convert.chunking import DocumentChunker
+from docling_jobkit.datamodel.chunking import ChunkedDocumentResponse, ChunkingOptions
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.result import (
     ConvertDocumentResult,
@@ -61,6 +63,49 @@ def _export_document_as_content(
             document.doctags_content = new_doc.export_to_doctags()
 
     return document
+
+
+def _export_chunked_document(
+    conv_res: ConversionResult,
+    options: ConvertDocumentsOptions,
+    chunker: DocumentChunker,
+) -> ResultType:
+    """Export a document as chunked response for RAG workflows."""
+    if not options.do_chunking:
+        # Fallback to regular export if chunking is not enabled
+        conv_content = _export_document_as_content(
+            conv_res=conv_res,
+            export_json="json" in options.to_formats,
+            export_html="html" in options.to_formats,
+            export_md="markdown" in options.to_formats,
+            export_txt="text" in options.to_formats,
+            export_doctags="doctags" in options.to_formats,
+            image_mode=options.image_export_mode,
+            md_page_break_placeholder=options.md_page_break_placeholder,
+        )
+        return ExportResult(
+            content=conv_content,
+            status=conv_res.status,
+            timings=conv_res.timings,
+            errors=conv_res.errors,
+        )
+
+    if conv_res.status != ConversionStatus.SUCCESS:
+        # Return failed chunked response
+        return ChunkedDocumentResponse(
+            chunks=[],
+            status=conv_res.status,
+            errors=conv_res.errors,
+            processing_time=0.0,
+            timings=conv_res.timings,
+            chunking_info=None,
+        )
+
+    # Use default chunking options if not provided
+    chunking_options = options.chunking_options or ChunkingOptions()
+
+    # Chunk the document
+    return chunker.chunk_conversion_result(conv_res, chunking_options)
 
 
 def _export_documents_as_files(
@@ -181,24 +226,34 @@ def process_results(
     # Only 1 document was processed, and we are not returning it as a file
     if len(conv_results) == 1 and isinstance(target, InBodyTarget):
         conv_res = conv_results[0]
-        content = _export_document_as_content(
-            conv_res,
-            export_json=export_json,
-            export_html=export_html,
-            export_md=export_md,
-            export_txt=export_txt,
-            export_doctags=export_doctags,
-            image_mode=conversion_options.image_export_mode,
-            md_page_break_placeholder=conversion_options.md_page_break_placeholder,
-        )
 
-        task_result = ExportResult(
-            content=content,
-            status=conv_res.status,
-            # processing_time=processing_time,
-            timings=conv_res.timings,
-            errors=conv_res.errors,
-        )
+        if conversion_options.do_chunking:
+            # Create chunker instance for this request
+            from docling_jobkit.convert.chunking import DocumentChunker
+
+            chunker = DocumentChunker()
+            task_result = _export_chunked_document(
+                conv_res, conversion_options, chunker
+            )
+        else:
+            content = _export_document_as_content(
+                conv_res,
+                export_json=export_json,
+                export_html=export_html,
+                export_md=export_md,
+                export_txt=export_txt,
+                export_doctags=export_doctags,
+                image_mode=conversion_options.image_export_mode,
+                md_page_break_placeholder=conversion_options.md_page_break_placeholder,
+            )
+            task_result = ExportResult(
+                content=content,
+                status=conv_res.status,
+                # processing_time=processing_time,
+                timings=conv_res.timings,
+                errors=conv_res.errors,
+            )
+
         num_succeeded = 1 if conv_res.status == ConversionStatus.SUCCESS else 0
         num_failed = 1 if conv_res.status != ConversionStatus.SUCCESS else 0
 
