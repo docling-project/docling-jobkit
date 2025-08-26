@@ -1,9 +1,11 @@
+import hashlib
+import json
 import logging
 import threading
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from docling.datamodel.base_models import ConversionStatus, ErrorItem
 from docling.datamodel.document import ConversionResult
@@ -19,10 +21,35 @@ from docling_jobkit.datamodel.chunking import (
 _log = logging.getLogger(__name__)
 
 
+class MarkdownTableSerializerProvider:
+    """Serializer provider that uses markdown table format for table serialization."""
+
+    def get_serializer(self, doc):
+        """Get a serializer that uses markdown table format."""
+        from docling_core.transforms.chunker.hierarchical_chunker import (
+            ChunkingDocSerializer,
+        )
+        from docling_core.transforms.serializer.markdown import MarkdownTableSerializer
+
+        return ChunkingDocSerializer(
+            doc=doc,
+            table_serializer=MarkdownTableSerializer(),
+        )
+
+
 class DocumentChunkerConfig(BaseModel):
     """Configuration for DocumentChunker."""
 
-    cache_size: int = 2
+    cache_size: int = Field(
+        default=10,
+        gt=0,
+        le=100,
+        description="Maximum number of chunker instances to cache",
+    )
+    default_tokenizer: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        description="Default tokenizer to use when none is specified",
+    )
 
 
 class DocumentChunker:
@@ -40,15 +67,11 @@ class DocumentChunker:
         def _get_chunker_from_cache(cache_key: str) -> Any:
             try:
                 from docling_core.transforms.chunker.hierarchical_chunker import (
-                    ChunkingDocSerializer,
                     ChunkingSerializerProvider,
                 )
                 from docling_core.transforms.chunker.hybrid_chunker import HybridChunker
                 from docling_core.transforms.chunker.tokenizer.huggingface import (
                     HuggingFaceTokenizer,
-                )
-                from docling_core.transforms.serializer.markdown import (
-                    MarkdownTableSerializer,
                 )
 
                 # Parse cache key back to options
@@ -59,28 +82,15 @@ class DocumentChunker:
                 use_markdown_tables = parts[3] == "True"
 
                 # Create tokenizer
-                if tokenizer:
-                    tokenizer_obj = HuggingFaceTokenizer.from_pretrained(
-                        model_name=tokenizer,
-                        max_tokens=max_tokens,
-                    )
-                else:
-                    tokenizer_obj = HuggingFaceTokenizer.from_pretrained(
-                        model_name="sentence-transformers/all-MiniLM-L6-v2",
-                        max_tokens=max_tokens,
-                    )
+                tokenizer_name = tokenizer or self.config.default_tokenizer
+                tokenizer_obj = HuggingFaceTokenizer.from_pretrained(
+                    model_name=tokenizer_name,
+                    max_tokens=max_tokens,
+                )
 
                 # Create serializer provider based on markdown table option
                 if use_markdown_tables:
-
-                    class MDTableSerializerProvider(ChunkingSerializerProvider):
-                        def get_serializer(self, doc):
-                            return ChunkingDocSerializer(
-                                doc=doc,
-                                table_serializer=MarkdownTableSerializer(),
-                            )
-
-                    serializer_provider: Any = MDTableSerializerProvider()
+                    serializer_provider: Any = MarkdownTableSerializerProvider()
                 else:
                     serializer_provider = ChunkingSerializerProvider()
 
@@ -98,19 +108,39 @@ class DocumentChunker:
                     "Document chunking requires docling-core with chunking dependencies. "
                     "Install with: pip install 'docling-core[chunking]'"
                 ) from e
-            except Exception as e:
-                _log.error(f"Failed to create chunker: {e}")
-                raise
+            except (ValueError, TypeError, AttributeError) as e:
+                _log.error(f"Invalid chunking configuration: {e}")
+                raise ValueError(f"Invalid chunking options: {e}") from e
+            except (OSError, ConnectionError) as e:
+                _log.error(f"Resource or connection error during chunker creation: {e}")
+                raise RuntimeError(
+                    f"Failed to initialize chunker resources: {e}"
+                ) from e
 
         return _get_chunker_from_cache
 
     def _get_chunker(self, options: ChunkingOptions) -> Any:
         """Get or create a cached HybridChunker instance."""
-        # Create a cache key based on chunking options
-        cache_key = f"{options.tokenizer}_{options.max_tokens}_{options.merge_peers}_{options.use_markdown_tables}"
+        # Create a cache key based on chunking options using the same pattern as the repo
+        cache_key = self._generate_cache_key(options)
 
         with self._cache_lock:
             return self._get_chunker_from_cache(cache_key)
+
+    def _generate_cache_key(self, options: ChunkingOptions) -> str:
+        """Generate a deterministic cache key from chunking options."""
+        key_data = {
+            "tokenizer": options.tokenizer,
+            "max_tokens": options.max_tokens,
+            "merge_peers": options.merge_peers,
+            "use_markdown_tables": options.use_markdown_tables,
+        }
+        # Use the same hashing pattern as other cache keys in the repo
+        serialized_data = json.dumps(key_data, sort_keys=True)
+        options_hash = hashlib.sha1(
+            serialized_data.encode(), usedforsecurity=False
+        ).hexdigest()
+        return options_hash
 
     def clear_cache(self):
         """Clear the chunker cache."""
@@ -173,11 +203,11 @@ class DocumentChunker:
                 chunk_item = ChunkedDocumentResponseItem(
                     filename=filename,
                     chunk_index=i,
-                    contextualized_text=chunk.text,
-                    chunk_text=chunk.text if options.include_raw_text else None,
+                    text=chunk.text,
+                    raw_text=chunk.text if options.include_raw_text else None,
                     headings=headings,
                     page_numbers=page_numbers,
-                    metadata=metadata if metadata else None,
+                    metadata=metadata,
                 )
                 chunk_items.append(chunk_item)
 
@@ -185,8 +215,7 @@ class DocumentChunker:
 
             # Create chunking info
             chunking_info = {
-                "tokenizer": options.tokenizer
-                or "sentence-transformers/all-MiniLM-L6-v2",
+                "tokenizer": options.tokenizer or self.config.default_tokenizer,
                 "max_tokens": options.max_tokens,
                 "total_chunks": len(chunk_items),
                 "merge_peers": options.merge_peers,

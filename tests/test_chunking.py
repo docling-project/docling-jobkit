@@ -14,8 +14,22 @@ class TestDocumentChunker:
         """Test that DocumentChunker can be initialized."""
         chunker = DocumentChunker()
         assert chunker is not None
-        assert chunker.config.cache_size == 2  # Default cache size
+        assert chunker.config.cache_size == 10  # Default cache size
+        assert (
+            chunker.config.default_tokenizer == "sentence-transformers/all-MiniLM-L6-v2"
+        )
         assert chunker._get_chunker_from_cache is not None
+
+    def test_chunker_custom_config(self):
+        """Test DocumentChunker with custom configuration."""
+        from docling_jobkit.convert.chunking import DocumentChunkerConfig
+
+        config = DocumentChunkerConfig(
+            cache_size=5, default_tokenizer="custom/tokenizer"
+        )
+        chunker = DocumentChunker(config=config)
+        assert chunker.config.cache_size == 5
+        assert chunker.config.default_tokenizer == "custom/tokenizer"
 
     def test_chunking_options_defaults(self):
         """Test ChunkingOptions with default values."""
@@ -85,7 +99,7 @@ class TestChunkedDocumentResponse:
         chunk = ChunkedDocumentResponseItem(
             filename="test.pdf",
             chunk_index=0,
-            contextualized_text="Test content",
+            text="Test content",
             headings=["Heading 1"],
             page_numbers=[1],
         )
@@ -101,4 +115,39 @@ class TestChunkedDocumentResponse:
 
         assert len(response.chunks) == 1
         assert response.chunks[0].filename == "test.pdf"
-        assert response.chunks[0].contextualized_text == "Test content"
+        assert response.chunks[0].text == "Test content"
+
+    def test_cache_key_generation(self):
+        """Test that cache key generation is deterministic and uses SHA1."""
+        chunker = DocumentChunker()
+
+        options1 = ChunkingOptions(
+            max_tokens=512,
+            tokenizer="test-tokenizer",
+            merge_peers=True,
+            use_markdown_tables=False,
+        )
+        options2 = ChunkingOptions(
+            max_tokens=512,
+            tokenizer="test-tokenizer",
+            merge_peers=True,
+            use_markdown_tables=False,
+        )
+        options3 = ChunkingOptions(
+            max_tokens=1024,  # Different value
+            tokenizer="test-tokenizer",
+            merge_peers=True,
+            use_markdown_tables=False,
+        )
+
+        key1 = chunker._generate_cache_key(options1)
+        key2 = chunker._generate_cache_key(options2)
+        key3 = chunker._generate_cache_key(options3)
+
+        # Same options should generate same key
+        assert key1 == key2
+        # Different options should generate different key
+        assert key1 != key3
+        # Should be a hex string (SHA1 produces 40 character hex string)
+        assert len(key1) == 40
+        assert all(c in "0123456789abcdef" for c in key1)

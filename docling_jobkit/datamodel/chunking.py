@@ -12,7 +12,7 @@ class ChunkingOptions(BaseModel):
     max_tokens: Annotated[
         int,
         Field(
-            description="Maximum number of tokens per chunk.",
+            description="Maximum number of tokens per chunk. Default is 512.",
             gt=0,
             le=32768,  # Reasonable upper limit
         ),
@@ -21,7 +21,7 @@ class ChunkingOptions(BaseModel):
     tokenizer: Annotated[
         Optional[str],
         Field(
-            description="HuggingFace model name for custom tokenization. If not specified, uses 'Qwen/Qwen3-Embedding-0.6B' as default.",
+            description="HuggingFace model name for custom tokenization. If not specified, uses 'sentence-transformers/all-MiniLM-L6-v2' as default.",
             examples=[
                 "Qwen/Qwen3-Embedding-0.6B",
                 "sentence-transformers/all-MiniLM-L6-v2",
@@ -46,19 +46,32 @@ class ChunkingOptions(BaseModel):
     include_raw_text: Annotated[
         bool,
         Field(
-            description="Include both chunk_text and contextualized_text in response. If False, only contextualized_text is included.",
+            description="Include both raw_text and text (contextualized) in response. If False, only text is included.",
         ),
     ] = True
 
 
 class ChunkedDocumentResponseItem(BaseModel):
+    """A single chunk of a document with its metadata and content."""
+
     filename: str
     chunk_index: int
-    contextualized_text: str
-    chunk_text: str | None = None
-    headings: list[str] | None = None
-    page_numbers: list[int] | None = None
-    metadata: dict | None = None
+    text: str = Field(
+        description="The chunk text with structural context (headers, formatting)"
+    )
+    raw_text: str | None = Field(
+        default=None,
+        description="Raw chunk text without additional formatting or context",
+    )
+    headings: list[str] | None = Field(
+        default=None, description="List of headings for this chunk"
+    )
+    page_numbers: list[int] | None = Field(
+        default=None, description="Page numbers where this chunk content appears"
+    )
+    metadata: dict | None = Field(
+        default=None, description="Additional metadata associated with this chunk"
+    )
 
 
 class ChunkedDocumentResponse(BaseModel):
