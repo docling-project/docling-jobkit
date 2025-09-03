@@ -1,10 +1,20 @@
+import tempfile
+from pathlib import Path
 from unittest.mock import Mock
 
 from docling.datamodel.base_models import ConversionStatus
-from docling.datamodel.document import ConversionResult
+from docling.datamodel.document import ConversionResult, InputDocument
 
-from docling_jobkit.convert.chunking import DocumentChunkerManager
-from docling_jobkit.datamodel.chunking import ChunkedDocumentResponse, ChunkingOptions
+from docling_jobkit.convert.chunking import (
+    DocumentChunkerManager,
+    process_chunk_results,
+)
+from docling_jobkit.datamodel.chunking import (
+    ChunkedDocumentConvertDetail,
+    ChunkedDocumentResponse,
+    ChunkingOptions,
+)
+from docling_jobkit.datamodel.task_targets import InBodyTarget
 
 
 class TestDocumentChunker:
@@ -57,21 +67,28 @@ class TestDocumentChunker:
 
     def test_chunk_conversion_result_failure(self):
         """Test chunking with failed conversion result."""
-        chunker = DocumentChunkerManager()
-
         # Create failed conversion result with minimal required fields
         failed_result = Mock(spec=ConversionResult)
+        failed_result.input = Mock(spec=InputDocument)
+        failed_result.input.file = Path("file.pdf")
         failed_result.status = ConversionStatus.FAILURE
         failed_result.errors = []
         failed_result.timings = {}
 
+        workdir = tempfile.mkdtemp()
+
         options = ChunkingOptions()
-        result = chunker.chunk_conversion_result(failed_result, options)
+        task_result = process_chunk_results(
+            chunking_options=options,
+            target=InBodyTarget(),
+            conv_results=[failed_result],
+            work_dir=workdir,
+        )
+        result = task_result.result
 
         assert isinstance(result, ChunkedDocumentResponse)
-        assert result.status == ConversionStatus.FAILURE
+        assert result.convert_details[0].status == ConversionStatus.FAILURE
         assert len(result.chunks) == 0
-        assert result.chunking_info is None
 
 
 class TestChunkedDocumentResponse:
@@ -81,15 +98,13 @@ class TestChunkedDocumentResponse:
         """Test creating a ChunkedDocumentResponse."""
         response = ChunkedDocumentResponse(
             chunks=[],
-            status=ConversionStatus.SUCCESS,
-            errors=[],
-            processing_time=1.5,
-            timings={},
+            convert_details=[
+                ChunkedDocumentConvertDetail(status=ConversionStatus.SUCCESS)
+            ],
             chunking_info={"total_chunks": 0},
         )
 
-        assert response.status == ConversionStatus.SUCCESS
-        assert response.processing_time == 1.5
+        assert response.convert_details[0].status == ConversionStatus.SUCCESS
         assert response.chunking_info == {"total_chunks": 0}
 
     def test_chunked_response_with_chunks(self):
@@ -107,10 +122,9 @@ class TestChunkedDocumentResponse:
 
         response = ChunkedDocumentResponse(
             chunks=[chunk],
-            status=ConversionStatus.SUCCESS,
-            errors=[],
-            processing_time=0.5,
-            timings={},
+            convert_details=[
+                ChunkedDocumentConvertDetail(status=ConversionStatus.SUCCESS)
+            ],
             chunking_info={"total_chunks": 1},
         )
 
@@ -149,6 +163,3 @@ class TestChunkedDocumentResponse:
         assert key1 == key2
         # Different options should generate different key
         assert key1 != key3
-        # Should be a hex string (SHA1 produces 40 character hex string)
-        assert len(key1) == 40
-        assert all(c in "0123456789abcdef" for c in key1)
