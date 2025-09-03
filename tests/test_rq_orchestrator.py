@@ -12,7 +12,10 @@ import pytest_asyncio
 
 from docling.datamodel.base_models import ConversionStatus
 
-from docling_jobkit.datamodel.chunking import ChunkedDocumentResponse, ChunkingOptions
+from docling_jobkit.datamodel.chunking import (
+    BaseChunkerOptions,
+    ChunkedDocumentResponse,
+)
 from docling_jobkit.datamodel.convert import (
     ConvertDocumentsOptions,
 )
@@ -128,7 +131,7 @@ async def test_convert_file(orchestrator: RQOrchestrator):
 
 async def test_chunk_file(orchestrator: RQOrchestrator):
     conversion_options = ConvertDocumentsOptions()
-    chunking_options = ChunkingOptions()
+    chunking_options = BaseChunkerOptions()
 
     doc_filename = Path(__file__).parent / "2206.01062v1-pg4.pdf"
     encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()

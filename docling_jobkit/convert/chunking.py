@@ -23,11 +23,12 @@ from docling_core.transforms.chunker.tokenizer.huggingface import (
 from docling_core.types.doc.document import DoclingDocument
 
 from docling_jobkit.datamodel.chunking import (
+    BaseChunkerOptions,
     ChunkedDocumentConvertDetail,
     ChunkedDocumentResponse,
     ChunkedDocumentResponseItem,
-    ChunkerType,
-    ChunkingOptions,
+    HierarchicalChunkerOptions,
+    HybridChunkerOptions,
 )
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task_targets import InBodyTarget, TaskTarget
@@ -72,7 +73,7 @@ class DocumentChunkerManager:
     def __init__(self, config: Optional[DocumentChunkerConfig] = None):
         self.config = config or DocumentChunkerConfig()
         self._cache_lock = threading.Lock()
-        self._options_map: dict[bytes, ChunkingOptions] = {}
+        self._options_map: dict[bytes, BaseChunkerOptions] = {}
         self._get_chunker_from_cache = self._create_chunker_cache()
 
     def _create_chunker_cache(self):
@@ -91,7 +92,7 @@ class DocumentChunkerManager:
                 else:
                     serializer_provider = ChunkingSerializerProvider()
 
-                if options.chunker == ChunkerType.HYBRID:
+                if isinstance(options, HybridChunkerOptions):
                     # Create tokenizer
                     tokenizer_name = options.tokenizer or self.config.default_tokenizer
                     tokenizer_obj = HuggingFaceTokenizer.from_pretrained(
@@ -104,7 +105,7 @@ class DocumentChunkerManager:
                         merge_peers=options.merge_peers,
                         serializer_provider=serializer_provider,
                     )
-                elif options.chunker == ChunkerType.HIERARCHICAL:
+                elif isinstance(options, HierarchicalChunkerOptions):
                     chunker = HierarchicalChunker(
                         serializer_provider=serializer_provider
                     )
@@ -130,7 +131,7 @@ class DocumentChunkerManager:
 
         return _get_chunker_from_cache
 
-    def _get_chunker(self, options: ChunkingOptions) -> BaseChunker:
+    def _get_chunker(self, options: BaseChunkerOptions) -> BaseChunker:
         """Get or create a cached BaseChunker instance."""
         # Create a cache key based on chunking options using the same pattern as the repo
         cache_key = self._generate_cache_key(options)
@@ -139,9 +140,9 @@ class DocumentChunkerManager:
             self._options_map[cache_key] = options
             return self._get_chunker_from_cache(cache_key)
 
-    def _generate_cache_key(self, options: ChunkingOptions) -> bytes:
+    def _generate_cache_key(self, options: BaseChunkerOptions) -> bytes:
         """Generate a deterministic cache key from chunking options."""
-        serialized_data = options.model_dump_json()
+        serialized_data = options.model_dump_json(serialize_as_any=True)
         options_hash = hashlib.sha1(
             serialized_data.encode(), usedforsecurity=False
         ).digest()
@@ -152,19 +153,11 @@ class DocumentChunkerManager:
         with self._cache_lock:
             self._get_chunker_from_cache.cache_clear()
 
-    def chunking_options(self, options: ChunkingOptions) -> dict:
-        return {
-            "tokenizer": options.tokenizer or self.config.default_tokenizer,
-            "max_tokens": options.max_tokens,
-            "merge_peers": options.merge_peers,
-            "use_markdown_tables": options.use_markdown_tables,
-        }
-
     def chunk_document(
         self,
         document: DoclingDocument,
         filename: str,
-        options: ChunkingOptions,
+        options: BaseChunkerOptions,
     ) -> Iterable[ChunkedDocumentResponseItem]:
         """Chunk a document using chunker from docling-core."""
 
@@ -218,14 +211,14 @@ class DocumentChunkerManager:
 
 
 def process_chunk_results(
-    chunking_options: ChunkingOptions | None,
+    chunking_options: BaseChunkerOptions | None,
     target: TaskTarget,
     conv_results: Iterable[ConversionResult],
     work_dir: Path,
 ) -> DoclingTaskResult:
     # Let's start by processing the documents
     start_time = time.monotonic()
-    chunking_options = chunking_options or ChunkingOptions()
+    chunking_options = chunking_options or HybridChunkerOptions()
 
     # We have some results, let's prepare the response
     task_result: ChunkedDocumentResponse

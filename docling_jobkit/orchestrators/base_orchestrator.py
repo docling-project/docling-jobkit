@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
 
 from docling_jobkit.datamodel.callback import ProgressCallbackRequest
-from docling_jobkit.datamodel.chunking import ChunkingOptions
+from docling_jobkit.datamodel.chunking import BaseChunkerOptions
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource
@@ -45,7 +45,7 @@ class BaseOrchestrator(ABC):
         task_type: TaskType = TaskType.CONVERT,
         options: ConvertDocumentsOptions | None = None,
         convert_options: ConvertDocumentsOptions | None = None,
-        chunking_options: ChunkingOptions | None = None,
+        chunking_options: BaseChunkerOptions | None = None,
     ) -> Task:
         pass
 

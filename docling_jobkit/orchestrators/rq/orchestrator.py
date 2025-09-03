@@ -15,7 +15,7 @@ from rq.job import Job, JobStatus
 
 from docling.datamodel.base_models import DocumentStream
 
-from docling_jobkit.datamodel.chunking import ChunkingOptions
+from docling_jobkit.datamodel.chunking import BaseChunkerOptions
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
 from docling_jobkit.datamodel.result import DoclingTaskResult
@@ -76,7 +76,7 @@ class RQOrchestrator(BaseOrchestrator):
         task_type: TaskType = TaskType.CONVERT,
         options: ConvertDocumentsOptions | None = None,
         convert_options: ConvertDocumentsOptions | None = None,
-        chunking_options: ChunkingOptions | None = None,
+        chunking_options: BaseChunkerOptions | None = None,
     ) -> Task:
         if options is not None and convert_options is None:
             convert_options = options

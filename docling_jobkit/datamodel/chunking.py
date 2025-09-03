@@ -14,10 +14,36 @@ class ChunkerType(str, enum.Enum):
     HYBRID = "hybrid"
 
 
-class ChunkingOptions(BaseModel):
+class BaseChunkerOptions(BaseModel):
     """Configuration options for document chunking using Docling chunkers."""
 
-    chunker: ChunkerType = ChunkerType.HYBRID
+    chunker: ChunkerType
+
+    use_markdown_tables: Annotated[
+        bool,
+        Field(
+            description="Use markdown table format instead of triplets for table serialization.",
+        ),
+    ] = False
+
+    include_raw_text: Annotated[
+        bool,
+        Field(
+            description="Include both raw_text and text (contextualized) in response. If False, only text is included.",
+        ),
+    ] = True
+
+
+class HierarchicalChunkerOptions(BaseChunkerOptions):
+    """Configuration options for the HierarchicalChunker."""
+
+    chunker: Literal[ChunkerType.HIERARCHICAL] = ChunkerType.HIERARCHICAL
+
+
+class HybridChunkerOptions(BaseChunkerOptions):
+    """Configuration options for the HybridChunker."""
+
+    chunker: Literal[ChunkerType.HYBRID] = ChunkerType.HYBRID
 
     max_tokens: Annotated[
         int,
@@ -43,20 +69,6 @@ class ChunkingOptions(BaseModel):
         bool,
         Field(
             description="Merge undersized successive chunks with same headings.",
-        ),
-    ] = True
-
-    use_markdown_tables: Annotated[
-        bool,
-        Field(
-            description="Use markdown table format instead of triplets for table serialization.",
-        ),
-    ] = False
-
-    include_raw_text: Annotated[
-        bool,
-        Field(
-            description="Include both raw_text and text (contextualized) in response. If False, only text is included.",
         ),
     ] = True
 

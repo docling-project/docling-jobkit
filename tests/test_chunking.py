@@ -12,7 +12,8 @@ from docling_jobkit.convert.chunking import (
 from docling_jobkit.datamodel.chunking import (
     ChunkedDocumentConvertDetail,
     ChunkedDocumentResponse,
-    ChunkingOptions,
+    HierarchicalChunkerOptions,
+    HybridChunkerOptions,
 )
 from docling_jobkit.datamodel.task_targets import InBodyTarget
 
@@ -42,8 +43,8 @@ class TestDocumentChunker:
         assert chunker.config.default_tokenizer == "custom/tokenizer"
 
     def test_chunking_options_defaults(self):
-        """Test ChunkingOptions with default values."""
-        options = ChunkingOptions()
+        """Test HybridChunkerOptions with default values."""
+        options = HybridChunkerOptions()
         assert options.max_tokens == 512
         assert options.tokenizer is None
         assert options.use_markdown_tables is False
@@ -51,8 +52,8 @@ class TestDocumentChunker:
         assert options.include_raw_text is True
 
     def test_chunking_options_custom_values(self):
-        """Test ChunkingOptions with custom values."""
-        options = ChunkingOptions(
+        """Test HybridChunkerOptions with custom values."""
+        options = HybridChunkerOptions(
             max_tokens=1024,
             tokenizer="custom/tokenizer",
             use_markdown_tables=True,
@@ -77,7 +78,7 @@ class TestDocumentChunker:
 
         workdir = tempfile.mkdtemp()
 
-        options = ChunkingOptions()
+        options = HybridChunkerOptions()
         task_result = process_chunk_results(
             chunking_options=options,
             target=InBodyTarget(),
@@ -136,30 +137,34 @@ class TestChunkedDocumentResponse:
         """Test that cache key generation is deterministic and uses SHA1."""
         chunker = DocumentChunkerManager()
 
-        options1 = ChunkingOptions(
+        options1 = HybridChunkerOptions(
             max_tokens=512,
             tokenizer="test-tokenizer",
             merge_peers=True,
             use_markdown_tables=False,
         )
-        options2 = ChunkingOptions(
+        options2 = HybridChunkerOptions(
             max_tokens=512,
             tokenizer="test-tokenizer",
             merge_peers=True,
             use_markdown_tables=False,
         )
-        options3 = ChunkingOptions(
+        options3 = HybridChunkerOptions(
             max_tokens=1024,  # Different value
             tokenizer="test-tokenizer",
             merge_peers=True,
             use_markdown_tables=False,
         )
+        options4 = HierarchicalChunkerOptions()
 
         key1 = chunker._generate_cache_key(options1)
         key2 = chunker._generate_cache_key(options2)
         key3 = chunker._generate_cache_key(options3)
+        key4 = chunker._generate_cache_key(options4)
 
         # Same options should generate same key
         assert key1 == key2
         # Different options should generate different key
         assert key1 != key3
+        assert key1 != key4
+        assert key3 != key4

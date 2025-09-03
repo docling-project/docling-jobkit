@@ -22,7 +22,12 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
 )
-from docling_jobkit.datamodel.chunking import ChunkedDocumentResponse, ChunkingOptions
+from docling_jobkit.datamodel.chunking import (
+    BaseChunkerOptions,
+    ChunkedDocumentResponse,
+    HierarchicalChunkerOptions,
+    HybridChunkerOptions,
+)
 from docling_jobkit.datamodel.convert import (
     ConvertDocumentsOptions,
     VlmModelApi,
@@ -262,9 +267,13 @@ async def test_replicated_convert(replicated_orchestrator: LocalOrchestrator):
     assert task_result.result.status == ConversionStatus.SUCCESS
 
 
-async def test_chunk_file(orchestrator: LocalOrchestrator):
+@pytest.mark.parametrize(
+    "chunking_options", [HybridChunkerOptions(), HierarchicalChunkerOptions()]
+)
+async def test_chunk_file(
+    orchestrator: LocalOrchestrator, chunking_options: BaseChunkerOptions
+):
     conversion_options = ConvertDocumentsOptions()
-    chunking_options = ChunkingOptions()
 
     doc_filename = Path(__file__).parent / "2206.01062v1-pg4.pdf"
     encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()
@@ -288,3 +297,9 @@ async def test_chunk_file(orchestrator: LocalOrchestrator):
 
     assert len(task_result.result.convert_details) == 1
     assert len(task_result.result.chunks) > 1
+
+    if isinstance(chunking_options, HybridChunkerOptions):
+        assert task_result.result.chunks[0].num_tokens > 0
+
+    if isinstance(chunking_options, HierarchicalChunkerOptions):
+        assert task_result.result.chunks[0].num_tokens is None
