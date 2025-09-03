@@ -6,11 +6,12 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 from docling.datamodel.base_models import DocumentStream
 
+from docling_jobkit.convert.chunking import process_chunk_results
 from docling_jobkit.convert.manager import DoclingConverterManager
-from docling_jobkit.convert.results import process_results
+from docling_jobkit.convert.results import process_export_results
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
-from docling_jobkit.datamodel.result import ConvertDocumentResult
-from docling_jobkit.datamodel.task_meta import TaskStatus
+from docling_jobkit.datamodel.result import DoclingTaskResult
+from docling_jobkit.datamodel.task_meta import TaskStatus, TaskType
 
 if TYPE_CHECKING:
     from docling_jobkit.orchestrators.local.orchestrator import LocalOrchestrator
@@ -60,7 +61,7 @@ class AsyncLocalWorker:
 
                 # Define a callback function to send progress updates to the client.
                 # TODO: send partial updates, e.g. when a document in the batch is done
-                def run_conversion() -> ConvertDocumentResult:
+                def run_task() -> DoclingTaskResult:
                     convert_sources: list[Union[str, DocumentStream]] = []
                     headers: Optional[dict[str, Any]] = None
                     for source in task.sources:
@@ -76,17 +77,26 @@ class AsyncLocalWorker:
                     # Note: results are only an iterator->lazy evaluation
                     conv_results = cm.convert_documents(
                         sources=convert_sources,
-                        options=task.options,
+                        options=task.convert_options,
                         headers=headers,
                     )
 
                     # The real processing will happen here
-                    processed_results = process_results(
-                        conversion_options=task.options,
-                        target=task.target,
-                        conv_results=conv_results,
-                        work_dir=workdir,
-                    )
+                    processed_results: DoclingTaskResult
+                    if task.task_type == TaskType.CONVERT:
+                        processed_results = process_export_results(
+                            conversion_options=task.convert_options,
+                            target=task.target,
+                            conv_results=conv_results,
+                            work_dir=workdir,
+                        )
+                    elif task.task_type == TaskType.CHUNK:
+                        processed_results = process_chunk_results(
+                            chunking_options=task.chunking_options,
+                            target=task.target,
+                            conv_results=conv_results,
+                            work_dir=workdir,
+                        )
 
                     return processed_results
 
@@ -101,7 +111,7 @@ class AsyncLocalWorker:
 
                 # Run in a thread
                 task_result = await asyncio.to_thread(
-                    run_conversion,
+                    run_task,
                 )
                 self.orchestrator._task_results[task_id] = task_result
                 task.sources = []

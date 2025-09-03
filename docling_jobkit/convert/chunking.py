@@ -2,21 +2,25 @@ import hashlib
 import json
 import logging
 import threading
+import time
 from functools import lru_cache
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
 
 from pydantic import BaseModel, Field
 
 from docling.datamodel.base_models import ConversionStatus, ErrorItem
 from docling.datamodel.document import ConversionResult
-from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
 
 from docling_jobkit.datamodel.chunking import (
+    ChunkedDocumentConvertDetail,
     ChunkedDocumentResponse,
     ChunkedDocumentResponseItem,
     ChunkingOptions,
 )
+from docling_jobkit.datamodel.result import DoclingTaskResult
+from docling_jobkit.datamodel.task_targets import InBodyTarget, TaskTarget
 
 _log = logging.getLogger(__name__)
 
@@ -52,7 +56,7 @@ class DocumentChunkerConfig(BaseModel):
     )
 
 
-class DocumentChunker:
+class DocumentChunkerManager:
     """Handles document chunking for RAG workflows using HybridChunker from docling-core."""
 
     def __init__(self, config: Optional[DocumentChunkerConfig] = None):
@@ -147,128 +151,151 @@ class DocumentChunker:
         with self._cache_lock:
             self._get_chunker_from_cache.cache_clear()
 
+    def chunking_options(self, options: ChunkingOptions) -> dict:
+        return {
+            "tokenizer": options.tokenizer or self.config.default_tokenizer,
+            "max_tokens": options.max_tokens,
+            "merge_peers": options.merge_peers,
+            "use_markdown_tables": options.use_markdown_tables,
+        }
+
     def chunk_document(
         self,
         document: DoclingDocument,
         filename: str,
         options: ChunkingOptions,
-        timings: Optional[Dict[str, ProfilingItem]] = None,
-    ) -> ChunkedDocumentResponse:
+    ) -> Iterable[ChunkedDocumentResponseItem]:
         """Chunk a document using HybridChunker from docling-core."""
-        import time
 
-        start_time = time.time()
+        chunker = self._get_chunker(options)
 
-        try:
-            chunker = self._get_chunker(options)
+        chunks = list(chunker.chunk(document))
 
-            chunks = list(chunker.chunk(document))
+        # Convert chunks to response format
+        chunk_items: list[ChunkedDocumentResponseItem] = []
+        for i, chunk in enumerate(chunks):
+            headings: List[str] = []
+            page_numbers: List[int] = []
+            metadata: Dict[str, Any] = {}
 
-            # Convert chunks to response format
-            chunk_items = []
-            for i, chunk in enumerate(chunks):
-                headings: List[str] = []
-                page_numbers: List[int] = []
-                metadata: Dict[str, Any] = {}
+            if hasattr(chunk, "meta") and chunk.meta:
+                # Extract headings
+                if hasattr(chunk.meta, "headings") and chunk.meta.headings:
+                    headings = [
+                        h.text for h in chunk.meta.headings if hasattr(h, "text")
+                    ]
 
-                if hasattr(chunk, "meta") and chunk.meta:
-                    # Extract headings
-                    if hasattr(chunk.meta, "headings") and chunk.meta.headings:
-                        headings = [
-                            h.text for h in chunk.meta.headings if hasattr(h, "text")
-                        ]
+                # Extract page numbers from doc items
+                if hasattr(chunk.meta, "doc_items") and chunk.meta.doc_items:
+                    page_numbers = []
+                    for item in chunk.meta.doc_items:
+                        if hasattr(item, "prov") and item.prov:
+                            for prov in item.prov:
+                                if (
+                                    hasattr(prov, "page_no")
+                                    and prov.page_no is not None
+                                ):
+                                    page_numbers.append(prov.page_no)
 
-                    # Extract page numbers from doc items
-                    if hasattr(chunk.meta, "doc_items") and chunk.meta.doc_items:
-                        page_numbers = []
-                        for item in chunk.meta.doc_items:
-                            if hasattr(item, "prov") and item.prov:
-                                for prov in item.prov:
-                                    if (
-                                        hasattr(prov, "page_no")
-                                        and prov.page_no is not None
-                                    ):
-                                        page_numbers.append(prov.page_no)
+                    # Remove duplicates and sort
+                    page_numbers = sorted(set(page_numbers))
 
-                        # Remove duplicates and sort
-                        page_numbers = sorted(set(page_numbers))
+                # Store additional metadata
+                if hasattr(chunk.meta, "origin"):
+                    metadata["origin"] = (
+                        str(chunk.meta.origin) if chunk.meta.origin else None
+                    )
 
-                    # Store additional metadata
-                    if hasattr(chunk.meta, "origin"):
-                        metadata["origin"] = (
-                            str(chunk.meta.origin) if chunk.meta.origin else None
-                        )
-
-                # Create chunk item
-                chunk_item = ChunkedDocumentResponseItem(
-                    filename=filename,
-                    chunk_index=i,
-                    text=chunk.text,
-                    raw_text=chunk.text if options.include_raw_text else None,
-                    headings=headings,
-                    page_numbers=page_numbers,
-                    metadata=metadata,
-                )
-                chunk_items.append(chunk_item)
-
-            processing_time = time.time() - start_time
-
-            # Create chunking info
-            chunking_info = {
-                "tokenizer": options.tokenizer or self.config.default_tokenizer,
-                "max_tokens": options.max_tokens,
-                "total_chunks": len(chunk_items),
-                "merge_peers": options.merge_peers,
-                "use_markdown_tables": options.use_markdown_tables,
-            }
-
-            return ChunkedDocumentResponse(
-                chunks=chunk_items,
-                status=ConversionStatus.SUCCESS,
-                errors=[],
-                processing_time=processing_time,
-                timings=timings or {},
-                chunking_info=chunking_info,
+            # Create chunk item
+            chunk_item = ChunkedDocumentResponseItem(
+                filename=filename,
+                chunk_index=i,
+                text=chunk.text,
+                raw_text=chunk.text if options.include_raw_text else None,
+                num_tokens=0,  # TODO
+                headings=headings,
+                page_numbers=page_numbers,
+                metadata=metadata,
             )
+            chunk_items.append(chunk_item)
 
-        except Exception as e:
-            _log.error(f"Document chunking failed for {filename}: {e}")
-            processing_time = time.time() - start_time
+        return chunk_items
 
-            return ChunkedDocumentResponse(
-                chunks=[],
-                status=ConversionStatus.FAILURE,
-                errors=[
+
+def process_chunk_results(
+    chunking_options: ChunkingOptions | None,
+    target: TaskTarget,
+    conv_results: Iterable[ConversionResult],
+    work_dir: Path,
+) -> DoclingTaskResult:
+    # Let's start by processing the documents
+    start_time = time.monotonic()
+    chunking_options = chunking_options or ChunkingOptions()
+
+    # We have some results, let's prepare the response
+    task_result: ChunkedDocumentResponse
+    chunks: list[ChunkedDocumentResponseItem] = []
+    convert_details: list[ChunkedDocumentConvertDetail] = []
+    num_succeeded = 0
+    num_failed = 0
+
+    chunker_manager = DocumentChunkerManager()
+    for conv_res in conv_results:
+        errors = conv_res.errors
+        if conv_res.status == ConversionStatus.SUCCESS:
+            try:
+                chunks.extend(
+                    chunker_manager.chunk_document(
+                        document=conv_res.document,
+                        filename=conv_res.input.file.name,
+                        options=chunking_options,
+                    )
+                )
+                num_succeeded += 1
+            except Exception as e:
+                _log.error(f"Document chunking failed for {conv_res.input.file}: {e}")
+                num_failed += 1
+                errors = [
+                    *errors,
                     ErrorItem(
                         component_type="chunking",
                         module_name=type(e).__name__,
                         error_message=str(e),
-                    )
-                ],
-                processing_time=processing_time,
-                timings=timings or {},
-                chunking_info=None,
-            )
+                    ),
+                ]
 
-    def chunk_conversion_result(
-        self,
-        conv_res: ConversionResult,
-        options: ChunkingOptions,
-    ) -> ChunkedDocumentResponse:
-        """Chunk a conversion result."""
-        if conv_res.status != ConversionStatus.SUCCESS:
-            return ChunkedDocumentResponse(
-                chunks=[],
-                status=conv_res.status,
-                errors=conv_res.errors,
-                processing_time=0.0,
-                timings=conv_res.timings,
-                chunking_info=None,
-            )
+        else:
+            _log.warning(f"Document {conv_res.input.file} failed to convert.")
+            num_failed += 1
 
-        return self.chunk_document(
-            document=conv_res.document,
-            filename=conv_res.input.file.name,
-            options=options,
-            timings=conv_res.timings,
+        convert_details.append(
+            ChunkedDocumentConvertDetail(
+                status=conv_res.status, errors=errors, timings=conv_res.timings
+            )
         )
+
+    num_total = num_succeeded + num_failed
+    processing_time = time.monotonic() - start_time
+    _log.info(
+        f"Processed {num_total} docs generating {len(chunks)} chunks in {processing_time:.2f} seconds."
+    )
+
+    if isinstance(target, InBodyTarget):
+        task_result = ChunkedDocumentResponse(
+            chunks=chunks,
+            convert_details=convert_details,
+            processing_time=processing_time,
+            chunking_info=chunker_manager.chunking_options(options=chunking_options),
+        )
+
+    # Multiple documents were processed, or we are forced returning as a file
+    else:
+        raise NotImplementedError("Saving chunks to a file is not yet supported.")
+
+    return DoclingTaskResult(
+        result=task_result,
+        processing_time=processing_time,
+        num_succeeded=num_succeeded,
+        num_failed=num_failed,
+        num_converted=num_total,
+    )

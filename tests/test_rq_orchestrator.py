@@ -87,7 +87,7 @@ async def test_convert_url(orchestrator: RQOrchestrator, test_option: TestOption
 
     task = await orchestrator.enqueue(
         sources=sources,
-        options=options,
+        convert_options=options,
         target=InBodyTarget(),
     )
 
@@ -111,7 +111,7 @@ async def test_convert_file(orchestrator: RQOrchestrator):
 
     task = await orchestrator.enqueue(
         sources=sources,
-        options=options,
+        convert_options=options,
         target=InBodyTarget(),
     )
 

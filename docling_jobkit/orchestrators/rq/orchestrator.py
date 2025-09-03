@@ -2,6 +2,7 @@ import asyncio
 import base64
 import logging
 import uuid
+import warnings
 from pathlib import Path
 from typing import Optional
 
@@ -14,11 +15,12 @@ from rq.job import Job, JobStatus
 
 from docling.datamodel.base_models import DocumentStream
 
+from docling_jobkit.datamodel.chunking import ChunkingOptions
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
-from docling_jobkit.datamodel.result import ConvertDocumentResult
+from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
-from docling_jobkit.datamodel.task_meta import TaskStatus
+from docling_jobkit.datamodel.task_meta import TaskStatus, TaskType
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
     TaskNotFoundError,
@@ -70,9 +72,20 @@ class RQOrchestrator(BaseOrchestrator):
     async def enqueue(
         self,
         sources: list[TaskSource],
-        options: ConvertDocumentsOptions,
         target: TaskTarget,
+        task_type: TaskType = TaskType.CONVERT,
+        options: ConvertDocumentsOptions | None = None,
+        convert_options: ConvertDocumentsOptions | None = None,
+        chunking_options: ChunkingOptions | None = None,
     ) -> Task:
+        if options is not None and convert_options is None:
+            convert_options = options
+            warnings.warn(
+                "'options' is deprecated and will be removed in a future version. "
+                "Use 'conversion_options' instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         task_id = str(uuid.uuid4())
         rq_sources: list[HttpSource | FileSource] = []
         for source in sources:
@@ -83,11 +96,18 @@ class RQOrchestrator(BaseOrchestrator):
                 )
             elif isinstance(source, (HttpSource | FileSource)):
                 rq_sources.append(source)
-        task = Task(task_id=task_id, sources=rq_sources, options=options, target=target)
+        task = Task(
+            task_id=task_id,
+            task_type=task_type,
+            sources=rq_sources,
+            convert_options=convert_options,
+            chunking_options=chunking_options,
+            target=target,
+        )
         self.tasks.update({task.task_id: task})
         task_data = task.model_dump(mode="json")
         self._rq_queue.enqueue(
-            "docling_jobkit.orchestrators.rq.worker.conversion_task",
+            "docling_jobkit.orchestrators.rq.worker.docling_task",
             kwargs={"task_data": task_data},
             job_id=task_id,
             timeout=14400,
@@ -144,12 +164,12 @@ class RQOrchestrator(BaseOrchestrator):
     async def task_result(
         self,
         task_id: str,
-    ) -> Optional[ConvertDocumentResult]:
+    ) -> Optional[DoclingTaskResult]:
         if task_id not in self._task_result_keys:
             return None
         result_key = self._task_result_keys[task_id]
         packed = await self._async_redis_conn.get(result_key)
-        result = ConvertDocumentResult.model_validate(
+        result = DoclingTaskResult.model_validate(
             msgpack.unpackb(packed, raw=False, strict_map_key=False)
         )
         return result

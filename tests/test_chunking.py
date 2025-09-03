@@ -3,7 +3,7 @@ from unittest.mock import Mock
 from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.document import ConversionResult
 
-from docling_jobkit.convert.chunking import DocumentChunker
+from docling_jobkit.convert.chunking import DocumentChunkerManager
 from docling_jobkit.datamodel.chunking import ChunkedDocumentResponse, ChunkingOptions
 
 
@@ -12,7 +12,7 @@ class TestDocumentChunker:
 
     def test_chunker_initialization(self):
         """Test that DocumentChunker can be initialized."""
-        chunker = DocumentChunker()
+        chunker = DocumentChunkerManager()
         assert chunker is not None
         assert chunker.config.cache_size == 10  # Default cache size
         assert (
@@ -27,7 +27,7 @@ class TestDocumentChunker:
         config = DocumentChunkerConfig(
             cache_size=5, default_tokenizer="custom/tokenizer"
         )
-        chunker = DocumentChunker(config=config)
+        chunker = DocumentChunkerManager(config=config)
         assert chunker.config.cache_size == 5
         assert chunker.config.default_tokenizer == "custom/tokenizer"
 
@@ -57,7 +57,7 @@ class TestDocumentChunker:
 
     def test_chunk_conversion_result_failure(self):
         """Test chunking with failed conversion result."""
-        chunker = DocumentChunker()
+        chunker = DocumentChunkerManager()
 
         # Create failed conversion result with minimal required fields
         failed_result = Mock(spec=ConversionResult)
@@ -100,6 +100,7 @@ class TestChunkedDocumentResponse:
             filename="test.pdf",
             chunk_index=0,
             text="Test content",
+            num_tokens=4,
             headings=["Heading 1"],
             page_numbers=[1],
         )
@@ -119,7 +120,7 @@ class TestChunkedDocumentResponse:
 
     def test_cache_key_generation(self):
         """Test that cache key generation is deterministic and uses SHA1."""
-        chunker = DocumentChunker()
+        chunker = DocumentChunkerManager()
 
         options1 = ChunkingOptions(
             max_tokens=512,

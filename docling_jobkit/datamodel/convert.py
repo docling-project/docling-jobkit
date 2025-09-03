@@ -25,8 +25,6 @@ from docling.datamodel.settings import (
 )
 from docling_core.types.doc import ImageRefMode
 
-from docling_jobkit.datamodel.chunking import ChunkingOptions
-
 
 class PictureDescriptionLocal(BaseModel):
     repo_id: Annotated[
@@ -518,26 +516,6 @@ class ConvertDocumentsOptions(BaseModel):
                     params={"model": "ds4sd/SmolDocling-256M-preview-mlx-bf16"},
                     response_format=ResponseFormat.DOCTAGS,
                     prompt="Convert this page to docling.",
-                )
-            ],
-        ),
-    ] = None
-
-    do_chunking: Annotated[
-        bool,
-        Field(
-            description="If enabled, the document will be chunked for RAG workflows. Boolean. Optional, defaults to false."
-        ),
-    ] = False
-
-    chunking_options: Annotated[
-        Optional[ChunkingOptions],
-        Field(
-            description="Options for document chunking when do_chunking is enabled.",
-            examples=[
-                ChunkingOptions(
-                    max_tokens=1024,
-                    include_raw_text=False,
                 )
             ],
         ),

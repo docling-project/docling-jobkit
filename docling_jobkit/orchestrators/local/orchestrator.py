@@ -2,6 +2,7 @@ import asyncio
 import logging
 import tempfile
 import uuid
+import warnings
 from pathlib import Path
 from typing import Optional
 
@@ -10,9 +11,11 @@ from pydantic import BaseModel
 from docling.datamodel.base_models import InputFormat
 
 from docling_jobkit.convert.manager import DoclingConverterManager
+from docling_jobkit.datamodel.chunking import ChunkingOptions
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
-from docling_jobkit.datamodel.result import ConvertDocumentResult
+from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
+from docling_jobkit.datamodel.task_meta import TaskType
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
 )
@@ -38,7 +41,7 @@ class LocalOrchestrator(BaseOrchestrator):
         self.task_queue: asyncio.Queue[str] = asyncio.Queue()
         self.queue_list: list[str] = []
         self.cm = converter_manager
-        self._task_results: dict[str, ConvertDocumentResult] = {}
+        self._task_results: dict[str, DoclingTaskResult] = {}
         self.scratch_dir = self.config.scratch_dir or Path(
             tempfile.mkdtemp(prefix="docling_")
         )
@@ -46,11 +49,29 @@ class LocalOrchestrator(BaseOrchestrator):
     async def enqueue(
         self,
         sources: list[TaskSource],
-        options: ConvertDocumentsOptions,
         target: TaskTarget,
+        task_type: TaskType = TaskType.CONVERT,
+        options: ConvertDocumentsOptions | None = None,
+        convert_options: ConvertDocumentsOptions | None = None,
+        chunking_options: ChunkingOptions | None = None,
     ) -> Task:
+        if options is not None and convert_options is None:
+            convert_options = options
+            warnings.warn(
+                "'options' is deprecated and will be removed in a future version. "
+                "Use 'conversion_options' instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         task_id = str(uuid.uuid4())
-        task = Task(task_id=task_id, sources=sources, options=options, target=target)
+        task = Task(
+            task_id=task_id,
+            task_type=task_type,
+            sources=sources,
+            convert_options=convert_options,
+            chunking_options=chunking_options,
+            target=target,
+        )
         await self.init_task_tracking(task)
 
         self.queue_list.append(task_id)
@@ -68,7 +89,7 @@ class LocalOrchestrator(BaseOrchestrator):
     async def task_result(
         self,
         task_id: str,
-    ) -> Optional[ConvertDocumentResult]:
+    ) -> Optional[DoclingTaskResult]:
         if task_id not in self._task_results:
             return None
         return self._task_results[task_id]

@@ -63,6 +63,7 @@ class ChunkedDocumentResponseItem(BaseModel):
         default=None,
         description="Raw chunk text without additional formatting or context",
     )
+    num_tokens: int = Field(description="Number of tokens in the text")
     headings: list[str] | None = Field(
         default=None, description="List of headings for this chunk"
     )
@@ -74,11 +75,14 @@ class ChunkedDocumentResponseItem(BaseModel):
     )
 
 
+class ChunkedDocumentConvertDetail(BaseModel):
+    status: ConversionStatus
+    errors: list[ErrorItem] = []
+    timings: dict[str, ProfilingItem] = {}
+
+
 class ChunkedDocumentResponse(BaseModel):
     kind: Literal["ChunkedDocumentResponse"] = "ChunkedDocumentResponse"
     chunks: list[ChunkedDocumentResponseItem]
-    status: ConversionStatus
-    errors: list[ErrorItem] = []
-    processing_time: float
-    timings: dict[str, ProfilingItem] = {}
+    convert_details: list[ChunkedDocumentConvertDetail]
     chunking_info: Optional[dict] = None

@@ -1,3 +1,4 @@
+import warnings
 from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -47,9 +48,20 @@ ResultType = Annotated[
 ]
 
 
-class ConvertDocumentResult(BaseModel):
+class DoclingTaskResult(BaseModel):
     result: ResultType
     processing_time: float
     num_converted: int
     num_succeeded: int
     num_failed: int
+
+
+class ConvertDocumentResult(DoclingTaskResult):
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "ConvertDocumentResult is deprecated and will be removed in a future version. "
+            "Use DoclingTaskResult instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)
