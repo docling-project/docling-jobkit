@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from pydantic import BaseModel, Field
 
-from docling.datamodel.base_models import ConversionStatus, ErrorItem
+from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.document import ConversionResult
 from docling_core.types.doc.document import DoclingDocument
 
@@ -253,16 +253,20 @@ def process_chunk_results(
                 )
                 num_succeeded += 1
             except Exception as e:
-                _log.error(f"Document chunking failed for {conv_res.input.file}: {e}")
+                _log.exception(
+                    f"Document chunking failed for {conv_res.input.file}: {e}",
+                    stack_info=True,
+                )
                 num_failed += 1
-                errors = [
-                    *errors,
-                    ErrorItem(
-                        component_type="chunking",
-                        module_name=type(e).__name__,
-                        error_message=str(e),
-                    ),
-                ]
+                # TODO: for propagating errors we have first to allow other component_type in the Docling class.
+                # errors = [
+                #     *errors,
+                #     ErrorItem(
+                #         component_type="chunking",
+                #         module_name=type(e).__name__,
+                #         error_message=str(e),
+                #     ),
+                # ]
 
         else:
             _log.warning(f"Document {conv_res.input.file} failed to convert.")
