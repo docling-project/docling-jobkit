@@ -137,6 +137,23 @@ More detailed options are described in the [uv documentation](https://docs.astra
 uv add NAME
 ```
 
+### Developing and testing the RQ engine
+
+Here are the setup steps for the local development and testing of the RQ engine.
+
+Launch the local redis container:
+
+```sh
+docker run -d --name redis -p 6379:6379 redis
+```
+
+Launch the workers (to be repeated when developing the worker code):
+
+```sh
+uv run python docling_jobkit/orchestrators/rq/worker.py
+```
+
+
 ## Coding style guidelines
 
 We use the following tools to enforce code style:
