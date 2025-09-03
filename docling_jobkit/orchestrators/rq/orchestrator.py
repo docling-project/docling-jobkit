@@ -105,7 +105,7 @@ class RQOrchestrator(BaseOrchestrator):
             target=target,
         )
         self.tasks.update({task.task_id: task})
-        task_data = task.model_dump(mode="json")
+        task_data = task.model_dump(mode="json", serialize_as_any=True)
         self._rq_queue.enqueue(
             "docling_jobkit.orchestrators.rq.worker.docling_task",
             kwargs={"task_data": task_data},

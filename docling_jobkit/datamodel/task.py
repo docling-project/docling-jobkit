@@ -7,7 +7,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from docling.datamodel.base_models import DocumentStream
 
-from docling_jobkit.datamodel.chunking import BaseChunkerOptions
+from docling_jobkit.datamodel.chunking import (
+    HierarchicalChunkerOptions,
+    HybridChunkerOptions,
+)
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
 from docling_jobkit.datamodel.s3_coords import S3Coordinates
@@ -34,7 +37,10 @@ class Task(BaseModel):
         ),
     ] = None
     convert_options: Optional[ConvertDocumentsOptions] = None
-    chunking_options: Optional[BaseChunkerOptions] = None
+    chunking_options: Annotated[
+        Optional[HybridChunkerOptions | HierarchicalChunkerOptions],
+        Field(discriminator="chunker"),
+    ] = None
     # scratch_dir: Optional[Path] = None
     processing_meta: Optional[TaskProcessingMeta] = None
     created_at: datetime.datetime = Field(
