@@ -1,5 +1,4 @@
 import hashlib
-import json
 import logging
 import threading
 import time
@@ -62,13 +61,14 @@ class DocumentChunkerManager:
     def __init__(self, config: Optional[DocumentChunkerConfig] = None):
         self.config = config or DocumentChunkerConfig()
         self._cache_lock = threading.Lock()
+        self._options_map: dict[bytes, ChunkingOptions] = {}
         self._get_chunker_from_cache = self._create_chunker_cache()
 
     def _create_chunker_cache(self):
         """Create LRU cache for chunker instances."""
 
         @lru_cache(maxsize=self.config.cache_size)
-        def _get_chunker_from_cache(cache_key: str) -> Any:
+        def _get_chunker_from_cache(cache_key: bytes) -> Any:
             try:
                 from docling_core.transforms.chunker.hierarchical_chunker import (
                     ChunkingSerializerProvider,
@@ -78,29 +78,24 @@ class DocumentChunkerManager:
                     HuggingFaceTokenizer,
                 )
 
-                # Parse cache key back to options
-                parts = cache_key.split("_")
-                tokenizer = parts[0] if parts[0] != "None" else None
-                max_tokens = int(parts[1])
-                merge_peers = parts[2] == "True"
-                use_markdown_tables = parts[3] == "True"
+                options = self._options_map[cache_key]
 
                 # Create tokenizer
-                tokenizer_name = tokenizer or self.config.default_tokenizer
+                tokenizer_name = options.tokenizer or self.config.default_tokenizer
                 tokenizer_obj = HuggingFaceTokenizer.from_pretrained(
                     model_name=tokenizer_name,
-                    max_tokens=max_tokens,
+                    max_tokens=options.max_tokens,
                 )
 
                 # Create serializer provider based on markdown table option
-                if use_markdown_tables:
+                if options.use_markdown_tables:
                     serializer_provider: Any = MarkdownTableSerializerProvider()
                 else:
                     serializer_provider = ChunkingSerializerProvider()
 
                 chunker = HybridChunker(
                     tokenizer=tokenizer_obj,
-                    merge_peers=merge_peers,
+                    merge_peers=options.merge_peers,
                     serializer_provider=serializer_provider,
                 )
 
@@ -129,21 +124,15 @@ class DocumentChunkerManager:
         cache_key = self._generate_cache_key(options)
 
         with self._cache_lock:
+            self._options_map[cache_key] = options
             return self._get_chunker_from_cache(cache_key)
 
-    def _generate_cache_key(self, options: ChunkingOptions) -> str:
+    def _generate_cache_key(self, options: ChunkingOptions) -> bytes:
         """Generate a deterministic cache key from chunking options."""
-        key_data = {
-            "tokenizer": options.tokenizer,
-            "max_tokens": options.max_tokens,
-            "merge_peers": options.merge_peers,
-            "use_markdown_tables": options.use_markdown_tables,
-        }
-        # Use the same hashing pattern as other cache keys in the repo
-        serialized_data = json.dumps(key_data, sort_keys=True)
+        serialized_data = options.model_dump_json()
         options_hash = hashlib.sha1(
             serialized_data.encode(), usedforsecurity=False
-        ).hexdigest()
+        ).digest()
         return options_hash
 
     def clear_cache(self):
@@ -239,6 +228,7 @@ def process_chunk_results(
     num_succeeded = 0
     num_failed = 0
 
+    # TODO: DocumentChunkerManager should be initialized outside for really working as a cache
     chunker_manager = DocumentChunkerManager()
     for conv_res in conv_results:
         errors = conv_res.errors
