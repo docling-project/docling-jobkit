@@ -766,9 +766,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-chunking = [
-    { name = "docling" },
-]
 kfp = [
     { name = "kfp", extra = ["kubernetes"] },
 ]
@@ -800,7 +797,6 @@ dev = [
 requires-dist = [
     { name = "boto3", specifier = "~=1.35.36" },
     { name = "docling", specifier = "~=2.38" },
-    { name = "docling", extras = ["chunking"], marker = "extra == 'chunking'", specifier = "~=2.38" },
     { name = "docling", extras = ["vlm"], marker = "extra == 'vlm'", specifier = "~=2.38" },
     { name = "fastparquet", specifier = "~=2024.11" },
     { name = "httpx", specifier = "~=0.28" },
@@ -814,7 +810,7 @@ requires-dist = [
     { name = "rq", marker = "extra == 'rq'", specifier = "~=2.4" },
     { name = "typer", specifier = "~=0.12" },
 ]
-provides-extras = ["vlm", "kfp", "rq", "ray", "chunking"]
+provides-extras = ["vlm", "kfp", "rq", "ray"]
 
 [package.metadata.requires-dev]
 dev = [

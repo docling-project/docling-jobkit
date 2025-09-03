@@ -69,9 +69,6 @@ rq = [
 ray = [
     "ray~=2.30",
 ]
-chunking = [
-    "docling[chunking]~=2.38",
-]
 
 [dependency-groups]
 dev = [

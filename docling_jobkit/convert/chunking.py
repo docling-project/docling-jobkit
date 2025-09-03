@@ -10,6 +10,14 @@ from pydantic import BaseModel, Field
 
 from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.document import ConversionResult
+from docling_core.transforms.chunker.hierarchical_chunker import (
+    ChunkingSerializerProvider,
+    DocChunk,
+)
+from docling_core.transforms.chunker.hybrid_chunker import HybridChunker
+from docling_core.transforms.chunker.tokenizer.huggingface import (
+    HuggingFaceTokenizer,
+)
 from docling_core.types.doc.document import DoclingDocument
 
 from docling_jobkit.datamodel.chunking import (
@@ -68,16 +76,8 @@ class DocumentChunkerManager:
         """Create LRU cache for chunker instances."""
 
         @lru_cache(maxsize=self.config.cache_size)
-        def _get_chunker_from_cache(cache_key: bytes) -> Any:
+        def _get_chunker_from_cache(cache_key: bytes) -> HybridChunker:
             try:
-                from docling_core.transforms.chunker.hierarchical_chunker import (
-                    ChunkingSerializerProvider,
-                )
-                from docling_core.transforms.chunker.hybrid_chunker import HybridChunker
-                from docling_core.transforms.chunker.tokenizer.huggingface import (
-                    HuggingFaceTokenizer,
-                )
-
                 options = self._options_map[cache_key]
 
                 # Create tokenizer
@@ -118,7 +118,7 @@ class DocumentChunkerManager:
 
         return _get_chunker_from_cache
 
-    def _get_chunker(self, options: ChunkingOptions) -> Any:
+    def _get_chunker(self, options: ChunkingOptions) -> HybridChunker:
         """Get or create a cached HybridChunker instance."""
         # Create a cache key based on chunking options using the same pattern as the repo
         cache_key = self._generate_cache_key(options)
@@ -163,46 +163,38 @@ class DocumentChunkerManager:
         # Convert chunks to response format
         chunk_items: list[ChunkedDocumentResponseItem] = []
         for i, chunk in enumerate(chunks):
-            headings: List[str] = []
             page_numbers: List[int] = []
             metadata: Dict[str, Any] = {}
 
-            if hasattr(chunk, "meta") and chunk.meta:
-                # Extract headings
-                if hasattr(chunk.meta, "headings") and chunk.meta.headings:
-                    headings = [
-                        h.text for h in chunk.meta.headings if hasattr(h, "text")
-                    ]
+            doc_chunk = DocChunk.model_validate(chunk)
 
-                # Extract page numbers from doc items
-                if hasattr(chunk.meta, "doc_items") and chunk.meta.doc_items:
-                    page_numbers = []
-                    for item in chunk.meta.doc_items:
-                        if hasattr(item, "prov") and item.prov:
-                            for prov in item.prov:
-                                if (
-                                    hasattr(prov, "page_no")
-                                    and prov.page_no is not None
-                                ):
-                                    page_numbers.append(prov.page_no)
+            # Extract page numbers from doc items
+            page_numbers = []
+            for item in doc_chunk.meta.doc_items:
+                for prov in item.prov:
+                    page_numbers.append(prov.page_no)
 
-                    # Remove duplicates and sort
-                    page_numbers = sorted(set(page_numbers))
+            # Remove duplicates and sort
+            page_numbers = sorted(set(page_numbers))
 
-                # Store additional metadata
-                if hasattr(chunk.meta, "origin"):
-                    metadata["origin"] = (
-                        str(chunk.meta.origin) if chunk.meta.origin else None
-                    )
+            # Store additional metadata
+            if doc_chunk.meta.origin:
+                metadata["origin"] = doc_chunk.meta.origin
+
+            # Get the text
+            text = chunker.contextualize(doc_chunk)
+
+            # Compute the number of tokens
+            num_tokens = chunker.tokenizer.count_tokens(text)
 
             # Create chunk item
             chunk_item = ChunkedDocumentResponseItem(
                 filename=filename,
                 chunk_index=i,
-                text=chunk.text,
-                raw_text=chunk.text if options.include_raw_text else None,
-                num_tokens=0,  # TODO
-                headings=headings,
+                text=text,
+                raw_text=doc_chunk.text if options.include_raw_text else None,
+                num_tokens=num_tokens,
+                headings=doc_chunk.meta.headings,
                 page_numbers=page_numbers,
                 metadata=metadata,
             )
