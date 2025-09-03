@@ -10,9 +10,11 @@ from pydantic import BaseModel, Field
 
 from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.document import ConversionResult
+from docling_core.transforms.chunker import BaseChunker
 from docling_core.transforms.chunker.hierarchical_chunker import (
     ChunkingSerializerProvider,
     DocChunk,
+    HierarchicalChunker,
 )
 from docling_core.transforms.chunker.hybrid_chunker import HybridChunker
 from docling_core.transforms.chunker.tokenizer.huggingface import (
@@ -24,6 +26,7 @@ from docling_jobkit.datamodel.chunking import (
     ChunkedDocumentConvertDetail,
     ChunkedDocumentResponse,
     ChunkedDocumentResponseItem,
+    ChunkerType,
     ChunkingOptions,
 )
 from docling_jobkit.datamodel.result import DoclingTaskResult
@@ -32,7 +35,7 @@ from docling_jobkit.datamodel.task_targets import InBodyTarget, TaskTarget
 _log = logging.getLogger(__name__)
 
 
-class MarkdownTableSerializerProvider:
+class MarkdownTableSerializerProvider(ChunkingSerializerProvider):
     """Serializer provider that uses markdown table format for table serialization."""
 
     def get_serializer(self, doc):
@@ -64,7 +67,7 @@ class DocumentChunkerConfig(BaseModel):
 
 
 class DocumentChunkerManager:
-    """Handles document chunking for RAG workflows using HybridChunker from docling-core."""
+    """Handles document chunking for RAG workflows using chunkers from docling-core."""
 
     def __init__(self, config: Optional[DocumentChunkerConfig] = None):
         self.config = config or DocumentChunkerConfig()
@@ -76,28 +79,37 @@ class DocumentChunkerManager:
         """Create LRU cache for chunker instances."""
 
         @lru_cache(maxsize=self.config.cache_size)
-        def _get_chunker_from_cache(cache_key: bytes) -> HybridChunker:
+        def _get_chunker_from_cache(cache_key: bytes) -> BaseChunker:
             try:
                 options = self._options_map[cache_key]
 
-                # Create tokenizer
-                tokenizer_name = options.tokenizer or self.config.default_tokenizer
-                tokenizer_obj = HuggingFaceTokenizer.from_pretrained(
-                    model_name=tokenizer_name,
-                    max_tokens=options.max_tokens,
-                )
-
                 # Create serializer provider based on markdown table option
                 if options.use_markdown_tables:
-                    serializer_provider: Any = MarkdownTableSerializerProvider()
+                    serializer_provider: ChunkingSerializerProvider = (
+                        MarkdownTableSerializerProvider()
+                    )
                 else:
                     serializer_provider = ChunkingSerializerProvider()
 
-                chunker = HybridChunker(
-                    tokenizer=tokenizer_obj,
-                    merge_peers=options.merge_peers,
-                    serializer_provider=serializer_provider,
-                )
+                if options.chunker == ChunkerType.HYBRID:
+                    # Create tokenizer
+                    tokenizer_name = options.tokenizer or self.config.default_tokenizer
+                    tokenizer_obj = HuggingFaceTokenizer.from_pretrained(
+                        model_name=tokenizer_name,
+                        max_tokens=options.max_tokens,
+                    )
+
+                    chunker: BaseChunker = HybridChunker(
+                        tokenizer=tokenizer_obj,
+                        merge_peers=options.merge_peers,
+                        serializer_provider=serializer_provider,
+                    )
+                elif options.chunker == ChunkerType.HIERARCHICAL:
+                    chunker = HierarchicalChunker(
+                        serializer_provider=serializer_provider
+                    )
+                else:
+                    raise RuntimeError(f"Unknown chunker {options.chunker}.")
 
                 return chunker
 
@@ -118,8 +130,8 @@ class DocumentChunkerManager:
 
         return _get_chunker_from_cache
 
-    def _get_chunker(self, options: ChunkingOptions) -> HybridChunker:
-        """Get or create a cached HybridChunker instance."""
+    def _get_chunker(self, options: ChunkingOptions) -> BaseChunker:
+        """Get or create a cached BaseChunker instance."""
         # Create a cache key based on chunking options using the same pattern as the repo
         cache_key = self._generate_cache_key(options)
 
@@ -154,7 +166,7 @@ class DocumentChunkerManager:
         filename: str,
         options: ChunkingOptions,
     ) -> Iterable[ChunkedDocumentResponseItem]:
-        """Chunk a document using HybridChunker from docling-core."""
+        """Chunk a document using chunker from docling-core."""
 
         chunker = self._get_chunker(options)
 
@@ -185,7 +197,9 @@ class DocumentChunkerManager:
             text = chunker.contextualize(doc_chunk)
 
             # Compute the number of tokens
-            num_tokens = chunker.tokenizer.count_tokens(text)
+            num_tokens: int | None = None
+            if isinstance(chunker, HybridChunker):
+                num_tokens = chunker.tokenizer.count_tokens(text)
 
             # Create chunk item
             chunk_item = ChunkedDocumentResponseItem(
@@ -271,7 +285,7 @@ def process_chunk_results(
             chunks=chunks,
             convert_details=convert_details,
             processing_time=processing_time,
-            chunking_info=chunker_manager.chunking_options(options=chunking_options),
+            chunking_info=chunking_options.model_dump(mode="json"),
         )
 
     # Multiple documents were processed, or we are forced returning as a file
