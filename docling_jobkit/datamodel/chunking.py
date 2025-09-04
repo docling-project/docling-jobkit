@@ -46,16 +46,14 @@ class HybridChunkerOptions(BaseChunkerOptions):
     chunker: Literal[ChunkerType.HYBRID] = ChunkerType.HYBRID
 
     max_tokens: Annotated[
-        int,
+        Optional[int],
         Field(
-            description="Maximum number of tokens per chunk. Default is 512.",
-            gt=0,
-            le=32768,  # Reasonable upper limit
+            description="Maximum number of tokens per chunk. When left to none, the value is automatically extracted from the tokenizer.",
         ),
-    ] = 512
+    ] = None
 
     tokenizer: Annotated[
-        Optional[str],
+        str,
         Field(
             description="HuggingFace model name for custom tokenization. If not specified, uses 'sentence-transformers/all-MiniLM-L6-v2' as default.",
             examples=[
@@ -63,7 +61,7 @@ class HybridChunkerOptions(BaseChunkerOptions):
                 "sentence-transformers/all-MiniLM-L6-v2",
             ],
         ),
-    ] = None
+    ] = "sentence-transformers/all-MiniLM-L6-v2"
 
     merge_peers: Annotated[
         bool,

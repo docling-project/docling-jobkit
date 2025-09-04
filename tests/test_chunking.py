@@ -26,27 +26,21 @@ class TestDocumentChunker:
         chunker = DocumentChunkerManager()
         assert chunker is not None
         assert chunker.config.cache_size == 10  # Default cache size
-        assert (
-            chunker.config.default_tokenizer == "sentence-transformers/all-MiniLM-L6-v2"
-        )
         assert chunker._get_chunker_from_cache is not None
 
     def test_chunker_custom_config(self):
         """Test DocumentChunker with custom configuration."""
         from docling_jobkit.convert.chunking import DocumentChunkerConfig
 
-        config = DocumentChunkerConfig(
-            cache_size=5, default_tokenizer="custom/tokenizer"
-        )
+        config = DocumentChunkerConfig(cache_size=5)
         chunker = DocumentChunkerManager(config=config)
         assert chunker.config.cache_size == 5
-        assert chunker.config.default_tokenizer == "custom/tokenizer"
 
     def test_chunking_options_defaults(self):
         """Test HybridChunkerOptions with default values."""
         options = HybridChunkerOptions()
-        assert options.max_tokens == 512
-        assert options.tokenizer is None
+        assert options.max_tokens is None
+        assert options.tokenizer == "sentence-transformers/all-MiniLM-L6-v2"
         assert options.use_markdown_tables is False
         assert options.merge_peers is True
         assert options.include_raw_text is True

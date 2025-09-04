@@ -61,10 +61,6 @@ class DocumentChunkerConfig(BaseModel):
         le=100,
         description="Maximum number of chunker instances to cache",
     )
-    default_tokenizer: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2",
-        description="Default tokenizer to use when none is specified",
-    )
 
 
 class DocumentChunkerManager:
@@ -94,7 +90,7 @@ class DocumentChunkerManager:
 
                 if isinstance(options, HybridChunkerOptions):
                     # Create tokenizer
-                    tokenizer_name = options.tokenizer or self.config.default_tokenizer
+                    tokenizer_name = options.tokenizer
                     tokenizer_obj = HuggingFaceTokenizer.from_pretrained(
                         model_name=tokenizer_name,
                         max_tokens=options.max_tokens,
