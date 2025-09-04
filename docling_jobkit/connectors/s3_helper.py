@@ -197,15 +197,19 @@ def check_target_has_source_converted(
             s3_target_resource, coords.bucket, converted_prefix
         )
 
-        # Filter-out objects that are already processed
-        target_short_key_list = strip_prefix_postfix(
-            existing_target_objects, prefix=converted_prefix, extension=".json"
-        )
+        # At this point we should be targeting keys in the json "folder"
+        target_short_key_list = []
+        for item in existing_target_objects:
+            clean_name = str(Path(item).stem)
+            target_short_key_list.append(clean_name)
+
         filtered_source_keys = []
         logging.debug("List of source keys:")
         for key in source_objects_list:
             logging.debug("Object key: {}".format(key))
-            clean_key = key.replace(".pdf", "").replace(s3_source_prefix + "/", "")
+            # This covers the case when source docs have "folder" hierarchy in the key
+            # we don't preserve key part between prefix and "file", this part of key is not added as prefix for target
+            clean_key = str(Path(key).stem)
             if clean_key not in target_short_key_list:
                 filtered_source_keys.append(key)
 
