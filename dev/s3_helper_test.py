@@ -1,6 +1,3 @@
-import os
-from pathlib import Path
-
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict, SettingsError
 from typing_extensions import Self
@@ -12,27 +9,22 @@ from docling.backend.pdf_backend import PdfDocumentBackend
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel.pipeline_options import (
     PdfBackend,
-    PdfPipelineOptions,
-    TableFormerMode,
 )
-from docling.models.factories import get_ocr_factory
-from docling.utils.model_downloader import download_models
 
+from docling_jobkit.connectors.s3_helper import (
+    ResultsProcessor,
+    check_target_has_source_converted,
+    generate_presign_url,
+    get_s3_connection,
+    get_source_files,
+)
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
 )
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.s3_coords import S3Coordinates
-from docling.utils.model_downloader import download_models
 
-from docling_jobkit.connectors.s3_helper import (
-    ResultsProcessor,
-    check_target_has_source_converted,
-    get_s3_connection,
-    get_source_files,
-    generate_presign_url
-)
 # from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 # from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
@@ -205,4 +197,3 @@ for item in result_processor.process_documents(
 ):
     results.append(item)
     print(f"Convertion result: {item}")
-
