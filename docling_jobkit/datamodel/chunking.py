@@ -66,3 +66,7 @@ class HybridChunkerOptions(BaseChunkerOptions):
             description="Merge undersized successive chunks with same headings.",
         ),
     ] = True
+
+
+# Union of all chunking options in the factory
+ChunkingOptionType = HybridChunkerOptions | HierarchicalChunkerOptions

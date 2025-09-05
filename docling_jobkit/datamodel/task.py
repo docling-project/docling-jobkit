@@ -8,8 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from docling.datamodel.base_models import DocumentStream
 
 from docling_jobkit.datamodel.chunking import (
-    HierarchicalChunkerOptions,
-    HybridChunkerOptions,
+    ChunkingOptionType,
 )
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
@@ -38,7 +37,7 @@ class Task(BaseModel):
     ] = None
     convert_options: Optional[ConvertDocumentsOptions] = None
     chunking_options: Annotated[
-        Optional[HybridChunkerOptions | HierarchicalChunkerOptions],
+        Optional[ChunkingOptionType],
         Field(discriminator="chunker"),
     ] = None
     # scratch_dir: Optional[Path] = None
