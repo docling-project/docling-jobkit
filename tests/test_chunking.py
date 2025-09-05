@@ -45,7 +45,7 @@ class TestDocumentChunker:
         assert options.tokenizer == "sentence-transformers/all-MiniLM-L6-v2"
         assert options.use_markdown_tables is False
         assert options.merge_peers is True
-        assert options.include_raw_text is True
+        assert options.include_raw_text is False
 
     def test_chunking_options_custom_values(self):
         """Test HybridChunkerOptions with custom values."""
@@ -54,13 +54,13 @@ class TestDocumentChunker:
             tokenizer="custom/tokenizer",
             use_markdown_tables=True,
             merge_peers=False,
-            include_raw_text=False,
+            include_raw_text=True,
         )
         assert options.max_tokens == 1024
         assert options.tokenizer == "custom/tokenizer"
         assert options.use_markdown_tables is True
         assert options.merge_peers is False
-        assert options.include_raw_text is False
+        assert options.include_raw_text is True
 
     def test_chunk_conversion_result_failure(self):
         """Test chunking with failed conversion result."""
