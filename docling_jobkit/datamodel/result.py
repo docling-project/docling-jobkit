@@ -7,8 +7,6 @@ from docling.datamodel.base_models import ConversionStatus, ErrorItem
 from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
 
-from docling_jobkit.datamodel.chunking import ChunkedDocumentResponse
-
 
 class ExportDocumentResponse(BaseModel):
     filename: str
@@ -42,8 +40,47 @@ class RemoteTargetResult(BaseModel):
     kind: Literal["RemoteTargetResult"] = "RemoteTargetResult"
 
 
+class ChunkedDocumentConvertDetail(BaseModel):
+    status: ConversionStatus
+    errors: list[ErrorItem] = []
+    timings: dict[str, ProfilingItem] = {}
+
+
+class ChunkedDocumentResultItem(BaseModel):
+    """A single chunk of a document with its metadata and content."""
+
+    filename: str
+    chunk_index: int
+    text: str = Field(
+        description="The chunk text with structural context (headers, formatting)"
+    )
+    raw_text: str | None = Field(
+        default=None,
+        description="Raw chunk text without additional formatting or context",
+    )
+    num_tokens: int | None = Field(
+        description="Number of tokens in the text, if the chunker is aware of tokens"
+    )
+    headings: list[str] | None = Field(
+        default=None, description="List of headings for this chunk"
+    )
+    page_numbers: list[int] | None = Field(
+        default=None, description="Page numbers where this chunk content appears"
+    )
+    metadata: dict | None = Field(
+        default=None, description="Additional metadata associated with this chunk"
+    )
+
+
+class ChunkedDocumentResult(BaseModel):
+    kind: Literal["ChunkedDocumentResponse"] = "ChunkedDocumentResponse"
+    chunks: list[ChunkedDocumentResultItem]
+    convert_details: list[ChunkedDocumentConvertDetail]
+    chunking_info: Optional[dict] = None
+
+
 ResultType = Annotated[
-    ExportResult | ZipArchiveResult | RemoteTargetResult | ChunkedDocumentResponse,
+    ExportResult | ZipArchiveResult | RemoteTargetResult | ChunkedDocumentResult,
     Field(discriminator="kind"),
 ]
 

@@ -24,7 +24,6 @@ from docling_jobkit.convert.manager import (
 )
 from docling_jobkit.datamodel.chunking import (
     BaseChunkerOptions,
-    ChunkedDocumentResponse,
     HierarchicalChunkerOptions,
     HybridChunkerOptions,
 )
@@ -34,7 +33,7 @@ from docling_jobkit.datamodel.convert import (
     VlmModelLocal,
 )
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
-from docling_jobkit.datamodel.result import ExportResult
+from docling_jobkit.datamodel.result import ChunkedDocumentResult, ExportResult
 from docling_jobkit.datamodel.task import Task, TaskSource
 from docling_jobkit.datamodel.task_meta import TaskType
 from docling_jobkit.datamodel.task_targets import InBodyTarget
@@ -293,7 +292,7 @@ async def test_chunk_file(
     task_result = await orchestrator.task_result(task_id=task.task_id)
 
     assert task_result is not None
-    assert isinstance(task_result.result, ChunkedDocumentResponse)
+    assert isinstance(task_result.result, ChunkedDocumentResult)
 
     assert len(task_result.result.convert_details) == 1
     assert len(task_result.result.chunks) > 1

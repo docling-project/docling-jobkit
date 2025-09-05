@@ -24,13 +24,15 @@ from docling_core.types.doc.document import DoclingDocument
 
 from docling_jobkit.datamodel.chunking import (
     BaseChunkerOptions,
-    ChunkedDocumentConvertDetail,
-    ChunkedDocumentResponse,
-    ChunkedDocumentResponseItem,
     HierarchicalChunkerOptions,
     HybridChunkerOptions,
 )
-from docling_jobkit.datamodel.result import DoclingTaskResult
+from docling_jobkit.datamodel.result import (
+    ChunkedDocumentConvertDetail,
+    ChunkedDocumentResult,
+    ChunkedDocumentResultItem,
+    DoclingTaskResult,
+)
 from docling_jobkit.datamodel.task_targets import InBodyTarget, TaskTarget
 
 _log = logging.getLogger(__name__)
@@ -154,7 +156,7 @@ class DocumentChunkerManager:
         document: DoclingDocument,
         filename: str,
         options: BaseChunkerOptions,
-    ) -> Iterable[ChunkedDocumentResponseItem]:
+    ) -> Iterable[ChunkedDocumentResultItem]:
         """Chunk a document using chunker from docling-core."""
 
         chunker = self._get_chunker(options)
@@ -162,7 +164,7 @@ class DocumentChunkerManager:
         chunks = list(chunker.chunk(document))
 
         # Convert chunks to response format
-        chunk_items: list[ChunkedDocumentResponseItem] = []
+        chunk_items: list[ChunkedDocumentResultItem] = []
         for i, chunk in enumerate(chunks):
             page_numbers: List[int] = []
             metadata: Dict[str, Any] = {}
@@ -191,7 +193,7 @@ class DocumentChunkerManager:
                 num_tokens = chunker.tokenizer.count_tokens(text)
 
             # Create chunk item
-            chunk_item = ChunkedDocumentResponseItem(
+            chunk_item = ChunkedDocumentResultItem(
                 filename=filename,
                 chunk_index=i,
                 text=text,
@@ -217,8 +219,8 @@ def process_chunk_results(
     chunking_options = chunking_options or HybridChunkerOptions()
 
     # We have some results, let's prepare the response
-    task_result: ChunkedDocumentResponse
-    chunks: list[ChunkedDocumentResponseItem] = []
+    task_result: ChunkedDocumentResult
+    chunks: list[ChunkedDocumentResultItem] = []
     convert_details: list[ChunkedDocumentConvertDetail] = []
     num_succeeded = 0
     num_failed = 0
@@ -270,7 +272,7 @@ def process_chunk_results(
     )
 
     if isinstance(target, InBodyTarget):
-        task_result = ChunkedDocumentResponse(
+        task_result = ChunkedDocumentResult(
             chunks=chunks,
             convert_details=convert_details,
             processing_time=processing_time,

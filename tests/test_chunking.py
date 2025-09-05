@@ -10,10 +10,12 @@ from docling_jobkit.convert.chunking import (
     process_chunk_results,
 )
 from docling_jobkit.datamodel.chunking import (
-    ChunkedDocumentConvertDetail,
-    ChunkedDocumentResponse,
     HierarchicalChunkerOptions,
     HybridChunkerOptions,
+)
+from docling_jobkit.datamodel.result import (
+    ChunkedDocumentConvertDetail,
+    ChunkedDocumentResult,
 )
 from docling_jobkit.datamodel.task_targets import InBodyTarget
 
@@ -81,7 +83,7 @@ class TestDocumentChunker:
         )
         result = task_result.result
 
-        assert isinstance(result, ChunkedDocumentResponse)
+        assert isinstance(result, ChunkedDocumentResult)
         assert result.convert_details[0].status == ConversionStatus.FAILURE
         assert len(result.chunks) == 0
 
@@ -91,7 +93,7 @@ class TestChunkedDocumentResponse:
 
     def test_chunked_response_creation(self):
         """Test creating a ChunkedDocumentResponse."""
-        response = ChunkedDocumentResponse(
+        response = ChunkedDocumentResult(
             chunks=[],
             convert_details=[
                 ChunkedDocumentConvertDetail(status=ConversionStatus.SUCCESS)
@@ -104,9 +106,9 @@ class TestChunkedDocumentResponse:
 
     def test_chunked_response_with_chunks(self):
         """Test ChunkedDocumentResponse with actual chunks."""
-        from docling_jobkit.datamodel.chunking import ChunkedDocumentResponseItem
+        from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
 
-        chunk = ChunkedDocumentResponseItem(
+        chunk = ChunkedDocumentResultItem(
             filename="test.pdf",
             chunk_index=0,
             text="Test content",
@@ -115,7 +117,7 @@ class TestChunkedDocumentResponse:
             page_numbers=[1],
         )
 
-        response = ChunkedDocumentResponse(
+        response = ChunkedDocumentResult(
             chunks=[chunk],
             convert_details=[
                 ChunkedDocumentConvertDetail(status=ConversionStatus.SUCCESS)
