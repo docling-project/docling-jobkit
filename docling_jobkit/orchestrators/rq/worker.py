@@ -9,15 +9,16 @@ from rq import SimpleWorker, get_current_job
 
 from docling.datamodel.base_models import DocumentStream
 
+from docling_jobkit.convert.chunking import process_chunk_results
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
 )
-from docling_jobkit.convert.results import process_results
+from docling_jobkit.convert.results import process_export_results
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
-from docling_jobkit.datamodel.result import ConvertDocumentResult
+from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
-from docling_jobkit.datamodel.task_meta import TaskStatus
+from docling_jobkit.datamodel.task_meta import TaskStatus, TaskType
 from docling_jobkit.orchestrators.rq.orchestrator import (
     RQOrchestrator,
     RQOrchestratorConfig,
@@ -86,7 +87,7 @@ class CustomRQWorker(SimpleWorker):
             raise
 
 
-def conversion_task(
+def docling_task(
     task_data: dict,
     conversion_manager: DoclingConverterManager,
     orchestrator_config: RQOrchestratorConfig,
@@ -127,20 +128,27 @@ def conversion_task(
 
         if not conversion_manager:
             raise RuntimeError("No converter")
-        if not task.options:
+        if not task.convert_options:
             raise RuntimeError("No conversion options")
         conv_results = conversion_manager.convert_documents(
             sources=convert_sources,
-            options=task.options,
+            options=task.convert_options,
             headers=headers,
         )
 
-        processed_results: ConvertDocumentResult = process_results(
-            conversion_options=task.options,
-            target=task.target,
-            conv_results=conv_results,
-            work_dir=workdir,
-        )
+        processed_results: DoclingTaskResult
+        if task.task_type == TaskType.CONVERT:
+            processed_results = process_export_results(
+                task=task,
+                conv_results=conv_results,
+                work_dir=workdir,
+            )
+        elif task.task_type == TaskType.CHUNK:
+            processed_results = process_chunk_results(
+                task=task,
+                conv_results=conv_results,
+                work_dir=workdir,
+            )
         safe_data = make_msgpack_safe(processed_results.model_dump())
         packed = msgpack.packb(safe_data, use_bin_type=True)
         result_key = f"{orchestrator_config.results_prefix}:{task_id}"

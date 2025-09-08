@@ -4,9 +4,11 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
 
 from docling_jobkit.datamodel.callback import ProgressCallbackRequest
+from docling_jobkit.datamodel.chunking import BaseChunkerOptions, ChunkingExportOptions
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
-from docling_jobkit.datamodel.result import ConvertDocumentResult
+from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource
+from docling_jobkit.datamodel.task_meta import TaskType
 from docling_jobkit.datamodel.task_targets import TaskTarget
 
 if TYPE_CHECKING:
@@ -39,8 +41,12 @@ class BaseOrchestrator(ABC):
     async def enqueue(
         self,
         sources: list[TaskSource],
-        options: ConvertDocumentsOptions,
         target: TaskTarget,
+        task_type: TaskType = TaskType.CONVERT,
+        options: ConvertDocumentsOptions | None = None,
+        convert_options: ConvertDocumentsOptions | None = None,
+        chunking_options: BaseChunkerOptions | None = None,
+        chunking_export_options: ChunkingExportOptions | None = None,
     ) -> Task:
         pass
 
@@ -86,7 +92,7 @@ class BaseOrchestrator(ABC):
     async def task_result(
         self,
         task_id: str,
-    ) -> Optional[ConvertDocumentResult]:
+    ) -> Optional[DoclingTaskResult]:
         pass
 
     async def delete_task(self, task_id: str):

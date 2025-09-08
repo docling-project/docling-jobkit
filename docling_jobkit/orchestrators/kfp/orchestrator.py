@@ -2,6 +2,7 @@ import datetime
 import json
 import logging
 import uuid
+import warnings
 from pathlib import Path
 from typing import Optional
 
@@ -15,12 +16,13 @@ from docling_jobkit.datamodel.callback import (
     ProgressSetNumDocs,
     ProgressUpdateProcessed,
 )
+from docling_jobkit.datamodel.chunking import BaseChunkerOptions, ChunkingExportOptions
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.http_inputs import HttpSource
-from docling_jobkit.datamodel.result import ConvertDocumentResult
+from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.s3_coords import S3Coordinates
 from docling_jobkit.datamodel.task import Task, TaskSource
-from docling_jobkit.datamodel.task_meta import TaskProcessingMeta, TaskStatus
+from docling_jobkit.datamodel.task_meta import TaskProcessingMeta, TaskStatus, TaskType
 from docling_jobkit.datamodel.task_targets import S3Target, TaskTarget
 from docling_jobkit.kfp_pipeline.docling_s3in_s3out import inputs_s3in_s3out
 from docling_jobkit.orchestrators.base_orchestrator import (
@@ -88,9 +90,23 @@ class KfpOrchestrator(BaseOrchestrator):
     async def enqueue(
         self,
         sources: list[TaskSource],
-        options: ConvertDocumentsOptions,
         target: TaskTarget,
+        task_type: TaskType = TaskType.CONVERT,
+        options: ConvertDocumentsOptions | None = None,
+        convert_options: ConvertDocumentsOptions | None = None,
+        chunking_options: BaseChunkerOptions | None = None,
+        chunking_export_options: ChunkingExportOptions | None = None,
     ) -> Task:
+        if options is not None and convert_options is None:
+            convert_options = options
+            warnings.warn(
+                "'options' is deprecated and will be removed in a future version. "
+                "Use 'conversion_options' instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        if convert_options is None:
+            raise RuntimeError("convert_options is required.")
         callbacks = []
         if self.config.self_callback_endpoint is not None:
             headers = {}
@@ -121,7 +137,7 @@ class KfpOrchestrator(BaseOrchestrator):
             kfp_run = self._client.create_run_from_pipeline_func(
                 inputs_s3in_s3out,
                 arguments={
-                    "convertion_options": options.model_dump(),
+                    "convertion_options": convert_options.model_dump(),
                     "source": {
                         "endpoint": s3_source.endpoint,
                         "access_key": s3_source.access_key.get_secret_value(),
@@ -147,7 +163,7 @@ class KfpOrchestrator(BaseOrchestrator):
                 arguments={
                     "batch_size": 10,
                     "sources": SourcesListType.dump_python(http_sources, mode="json"),
-                    "options": options.model_dump(mode="json"),
+                    "options": convert_options.model_dump(mode="json"),
                     "callbacks": CallbacksType.dump_python(callbacks, mode="json"),
                     "run_name": run_name,
                 },
@@ -233,7 +249,7 @@ class KfpOrchestrator(BaseOrchestrator):
     async def task_result(
         self,
         task_id: str,
-    ) -> Optional[ConvertDocumentResult]:
+    ) -> Optional[DoclingTaskResult]:
         raise NotImplementedError()
 
     async def process_queue(self):

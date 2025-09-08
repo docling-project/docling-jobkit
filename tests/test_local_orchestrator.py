@@ -22,14 +22,20 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
 )
+from docling_jobkit.datamodel.chunking import (
+    BaseChunkerOptions,
+    HierarchicalChunkerOptions,
+    HybridChunkerOptions,
+)
 from docling_jobkit.datamodel.convert import (
     ConvertDocumentsOptions,
     VlmModelApi,
     VlmModelLocal,
 )
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
-from docling_jobkit.datamodel.result import ExportResult
-from docling_jobkit.datamodel.task import TaskSource
+from docling_jobkit.datamodel.result import ChunkedDocumentResult, ExportResult
+from docling_jobkit.datamodel.task import Task, TaskSource
+from docling_jobkit.datamodel.task_meta import TaskType
 from docling_jobkit.datamodel.task_targets import InBodyTarget
 from docling_jobkit.orchestrators.local.orchestrator import (
     LocalOrchestrator,
@@ -196,7 +202,7 @@ async def test_convert_url(orchestrator: LocalOrchestrator, test_option: TestOpt
 
     task = await orchestrator.enqueue(
         sources=sources,
-        options=options,
+        convert_options=options,
         target=InBodyTarget(),
     )
 
@@ -220,7 +226,7 @@ async def test_convert_file(orchestrator: LocalOrchestrator):
 
     task = await orchestrator.enqueue(
         sources=sources,
-        options=options,
+        convert_options=options,
         target=InBodyTarget(),
     )
 
@@ -247,7 +253,7 @@ async def test_replicated_convert(replicated_orchestrator: LocalOrchestrator):
     for _ in range(NUM_TASKS):
         task = await replicated_orchestrator.enqueue(
             sources=sources,
-            options=options,
+            convert_options=options,
             target=InBodyTarget(),
         )
 
@@ -258,3 +264,44 @@ async def test_replicated_convert(replicated_orchestrator: LocalOrchestrator):
     assert isinstance(task_result.result, ExportResult)
 
     assert task_result.result.status == ConversionStatus.SUCCESS
+
+
+@pytest.mark.parametrize(
+    "chunking_options", [HybridChunkerOptions(), HierarchicalChunkerOptions()]
+)
+async def test_chunk_file(
+    orchestrator: LocalOrchestrator, chunking_options: BaseChunkerOptions
+):
+    conversion_options = ConvertDocumentsOptions(to_formats=[])
+
+    doc_filename = Path(__file__).parent / "2206.01062v1-pg4.pdf"
+    encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()
+
+    sources: list[TaskSource] = []
+    sources.append(FileSource(base64_string=encoded_doc, filename=doc_filename.name))
+
+    task: Task = await orchestrator.enqueue(
+        task_type=TaskType.CHUNK,
+        sources=sources,
+        convert_options=conversion_options,
+        chunking_options=chunking_options,
+        target=InBodyTarget(),
+    )
+
+    await _wait_task_complete(orchestrator, task.task_id)
+    task_result = await orchestrator.task_result(task_id=task.task_id)
+
+    assert task_result is not None
+    assert isinstance(task_result.result, ChunkedDocumentResult)
+
+    assert len(task_result.result.documents) == 1
+    assert (
+        task_result.result.documents[0].content.json_content is None
+    )  # by default no document
+    assert len(task_result.result.chunks) > 1
+
+    if isinstance(chunking_options, HybridChunkerOptions):
+        assert task_result.result.chunks[0].num_tokens > 0
+
+    if isinstance(chunking_options, HierarchicalChunkerOptions):
+        assert task_result.result.chunks[0].num_tokens is None

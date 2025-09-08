@@ -10,6 +10,11 @@ class TaskStatus(str, enum.Enum):
     FAILURE = "failure"
 
 
+class TaskType(str, enum.Enum):
+    CONVERT = "convert"
+    CHUNK = "chunk"
+
+
 class TaskProcessingMeta(BaseModel):
     num_docs: int
     num_processed: int = 0
