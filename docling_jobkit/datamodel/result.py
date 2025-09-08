@@ -51,30 +51,41 @@ class ChunkedDocumentResultItem(BaseModel):
 
     filename: str
     chunk_index: int
-    text: str = Field(
-        description="The chunk text with structural context (headers, formatting)"
-    )
-    raw_text: str | None = Field(
-        default=None,
-        description="Raw chunk text without additional formatting or context",
-    )
-    num_tokens: int | None = Field(
-        description="Number of tokens in the text, if the chunker is aware of tokens"
-    )
-    headings: list[str] | None = Field(
-        default=None, description="List of headings for this chunk"
-    )
-    captions: list[str] | None = Field(
-        default=None,
-        description="List of captions for this chunk (e.g. for pictures and tables)",
-    )
-    doc_items: list[str] = Field(description="List of doc items references")
-    page_numbers: list[int] | None = Field(
-        default=None, description="Page numbers where this chunk content appears"
-    )
-    metadata: dict | None = Field(
-        default=None, description="Additional metadata associated with this chunk"
-    )
+    text: Annotated[
+        str,
+        Field(
+            description="The chunk text with structural context (headers, formatting)"
+        ),
+    ]
+    raw_text: Annotated[
+        str | None,
+        Field(
+            description="Raw chunk text without additional formatting or context",
+        ),
+    ] = None
+    num_tokens: Annotated[
+        int | None,
+        Field(
+            description="Number of tokens in the text, if the chunker is aware of tokens"
+        ),
+    ] = None
+    headings: Annotated[
+        list[str] | None, Field(description="List of headings for this chunk")
+    ] = None
+    captions: Annotated[
+        list[str] | None,
+        Field(
+            description="List of captions for this chunk (e.g. for pictures and tables)",
+        ),
+    ] = None
+    doc_items: Annotated[list[str], Field(description="List of doc items references")]
+    page_numbers: Annotated[
+        list[int] | None,
+        Field(description="Page numbers where this chunk content appears"),
+    ] = None
+    metadata: Annotated[
+        dict | None, Field(description="Additional metadata associated with this chunk")
+    ] = None
 
 
 class ChunkedDocumentResult(BaseModel):
