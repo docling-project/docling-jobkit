@@ -11,8 +11,10 @@ import pytest
 import pytest_asyncio
 
 from docling.datamodel.base_models import ConversionStatus
+from docling_core.types.doc import DoclingDocument
 
 from docling_jobkit.datamodel.chunking import (
+    ChunkingExportOptions,
     HybridChunkerOptions,
 )
 from docling_jobkit.datamodel.convert import (
@@ -128,9 +130,11 @@ async def test_convert_file(orchestrator: RQOrchestrator):
     assert task_result.result.status == ConversionStatus.SUCCESS
 
 
-async def test_chunk_file(orchestrator: RQOrchestrator):
+@pytest.mark.parametrize("include_converted_doc", [False, True])
+async def test_chunk_file(orchestrator: RQOrchestrator, include_converted_doc: bool):
     conversion_options = ConvertDocumentsOptions()
     chunking_options = HybridChunkerOptions()
+    export_options = ChunkingExportOptions(include_converted_doc=include_converted_doc)
 
     doc_filename = Path(__file__).parent / "2206.01062v1-pg4.pdf"
     encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()
@@ -143,6 +147,7 @@ async def test_chunk_file(orchestrator: RQOrchestrator):
         sources=sources,
         convert_options=conversion_options,
         chunking_options=chunking_options,
+        chunking_export_options=export_options,
         target=InBodyTarget(),
     )
 
@@ -152,5 +157,12 @@ async def test_chunk_file(orchestrator: RQOrchestrator):
     assert task_result is not None
     assert isinstance(task_result.result, ChunkedDocumentResult)
 
-    assert len(task_result.result.convert_details) == 1
+    assert len(task_result.result.documents) == 1
     assert len(task_result.result.chunks) > 1
+
+    if include_converted_doc:
+        DoclingDocument.model_validate(
+            task_result.result.documents[0].content.json_content
+        )
+    else:
+        task_result.result.documents[0].content.json_content is None

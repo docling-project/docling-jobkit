@@ -272,7 +272,7 @@ async def test_replicated_convert(replicated_orchestrator: LocalOrchestrator):
 async def test_chunk_file(
     orchestrator: LocalOrchestrator, chunking_options: BaseChunkerOptions
 ):
-    conversion_options = ConvertDocumentsOptions()
+    conversion_options = ConvertDocumentsOptions(to_formats=[])
 
     doc_filename = Path(__file__).parent / "2206.01062v1-pg4.pdf"
     encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()
@@ -294,7 +294,10 @@ async def test_chunk_file(
     assert task_result is not None
     assert isinstance(task_result.result, ChunkedDocumentResult)
 
-    assert len(task_result.result.convert_details) == 1
+    assert len(task_result.result.documents) == 1
+    assert (
+        task_result.result.documents[0].content.json_content is None
+    )  # by default no document
     assert len(task_result.result.chunks) > 1
 
     if isinstance(chunking_options, HybridChunkerOptions):

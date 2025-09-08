@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from docling.datamodel.base_models import DocumentStream
 
 from docling_jobkit.datamodel.chunking import (
+    ChunkingExportOptions,
     ChunkingOptionType,
 )
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
@@ -40,6 +41,7 @@ class Task(BaseModel):
         Optional[ChunkingOptionType],
         Field(discriminator="chunker"),
     ] = None
+    chunking_export_options: ChunkingExportOptions = ChunkingExportOptions()
     # scratch_dir: Optional[Path] = None
     processing_meta: Optional[TaskProcessingMeta] = None
     created_at: datetime.datetime = Field(

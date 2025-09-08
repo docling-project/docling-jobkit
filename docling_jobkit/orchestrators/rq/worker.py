@@ -139,15 +139,13 @@ def docling_task(
         processed_results: DoclingTaskResult
         if task.task_type == TaskType.CONVERT:
             processed_results = process_export_results(
-                conversion_options=task.convert_options,
-                target=task.target,
+                task=task,
                 conv_results=conv_results,
                 work_dir=workdir,
             )
         elif task.task_type == TaskType.CHUNK:
             processed_results = process_chunk_results(
-                chunking_options=task.chunking_options,
-                target=task.target,
+                task=task,
                 conv_results=conv_results,
                 work_dir=workdir,
             )

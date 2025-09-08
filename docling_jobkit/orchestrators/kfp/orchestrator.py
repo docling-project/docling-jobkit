@@ -16,7 +16,7 @@ from docling_jobkit.datamodel.callback import (
     ProgressSetNumDocs,
     ProgressUpdateProcessed,
 )
-from docling_jobkit.datamodel.chunking import BaseChunkerOptions
+from docling_jobkit.datamodel.chunking import BaseChunkerOptions, ChunkingExportOptions
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.http_inputs import HttpSource
 from docling_jobkit.datamodel.result import DoclingTaskResult
@@ -95,6 +95,7 @@ class KfpOrchestrator(BaseOrchestrator):
         options: ConvertDocumentsOptions | None = None,
         convert_options: ConvertDocumentsOptions | None = None,
         chunking_options: BaseChunkerOptions | None = None,
+        chunking_export_options: ChunkingExportOptions | None = None,
     ) -> Task:
         if options is not None and convert_options is None:
             convert_options = options

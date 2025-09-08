@@ -4,6 +4,12 @@ from typing import Annotated, Literal, Optional
 from pydantic import BaseModel, Field
 
 
+class ChunkingExportOptions(BaseModel):
+    """Export options for the response of the chunking task."""
+
+    include_converted_doc: bool = False
+
+
 class ChunkerType(str, enum.Enum):
     """Choice of the chunkers available in Docling."""
 

@@ -40,12 +40,6 @@ class RemoteTargetResult(BaseModel):
     kind: Literal["RemoteTargetResult"] = "RemoteTargetResult"
 
 
-class ChunkedDocumentConvertDetail(BaseModel):
-    status: ConversionStatus
-    errors: list[ErrorItem] = []
-    timings: dict[str, ProfilingItem] = {}
-
-
 class ChunkedDocumentResultItem(BaseModel):
     """A single chunk of a document with its metadata and content."""
 
@@ -91,7 +85,7 @@ class ChunkedDocumentResultItem(BaseModel):
 class ChunkedDocumentResult(BaseModel):
     kind: Literal["ChunkedDocumentResponse"] = "ChunkedDocumentResponse"
     chunks: list[ChunkedDocumentResultItem]
-    convert_details: list[ChunkedDocumentConvertDetail]
+    documents: list[ExportResult]
     chunking_info: Optional[dict] = None
 
 

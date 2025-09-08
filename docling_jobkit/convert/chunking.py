@@ -20,20 +20,24 @@ from docling_core.transforms.chunker.hybrid_chunker import HybridChunker
 from docling_core.transforms.chunker.tokenizer.huggingface import (
     HuggingFaceTokenizer,
 )
-from docling_core.types.doc.document import DoclingDocument
+from docling_core.types.doc.document import DoclingDocument, ImageRefMode
 
+from docling_jobkit.convert.results import _export_document_as_content
 from docling_jobkit.datamodel.chunking import (
     BaseChunkerOptions,
     HierarchicalChunkerOptions,
     HybridChunkerOptions,
 )
+from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.result import (
-    ChunkedDocumentConvertDetail,
     ChunkedDocumentResult,
     ChunkedDocumentResultItem,
     DoclingTaskResult,
+    ExportDocumentResponse,
+    ExportResult,
 )
-from docling_jobkit.datamodel.task_targets import InBodyTarget, TaskTarget
+from docling_jobkit.datamodel.task import Task
+from docling_jobkit.datamodel.task_targets import InBodyTarget
 
 _log = logging.getLogger(__name__)
 
@@ -213,19 +217,19 @@ class DocumentChunkerManager:
 
 
 def process_chunk_results(
-    chunking_options: BaseChunkerOptions | None,
-    target: TaskTarget,
+    task: Task,
     conv_results: Iterable[ConversionResult],
     work_dir: Path,
 ) -> DoclingTaskResult:
     # Let's start by processing the documents
     start_time = time.monotonic()
-    chunking_options = chunking_options or HybridChunkerOptions()
+    chunking_options = task.chunking_options or HybridChunkerOptions()
+    conversion_options = task.convert_options or ConvertDocumentsOptions()
 
     # We have some results, let's prepare the response
     task_result: ChunkedDocumentResult
     chunks: list[ChunkedDocumentResultItem] = []
-    convert_details: list[ChunkedDocumentConvertDetail] = []
+    documents: list[ExportResult] = []
     num_succeeded = 0
     num_failed = 0
 
@@ -233,12 +237,13 @@ def process_chunk_results(
     chunker_manager = DocumentChunkerManager()
     for conv_res in conv_results:
         errors = conv_res.errors
+        filename = conv_res.input.file.name
         if conv_res.status == ConversionStatus.SUCCESS:
             try:
                 chunks.extend(
                     chunker_manager.chunk_document(
                         document=conv_res.document,
-                        filename=conv_res.input.file.name,
+                        filename=filename,
                         options=chunking_options,
                     )
                 )
@@ -263,11 +268,34 @@ def process_chunk_results(
             _log.warning(f"Document {conv_res.input.file} failed to convert.")
             num_failed += 1
 
-        convert_details.append(
-            ChunkedDocumentConvertDetail(
-                status=conv_res.status, errors=errors, timings=conv_res.timings
+        if (
+            isinstance(task.target, InBodyTarget)
+            and task.chunking_export_options.include_converted_doc
+        ):
+            if conversion_options.image_export_mode == ImageRefMode.REFERENCED:
+                raise RuntimeError("InBodyTarget cannot use REFERENCED image mode.")
+
+            doc_content = _export_document_as_content(
+                conv_res,
+                export_json=True,
+                export_doctags=False,
+                export_html=False,
+                export_md=False,
+                export_txt=False,
+                image_mode=conversion_options.image_export_mode,
+                md_page_break_placeholder=conversion_options.md_page_break_placeholder,
             )
+        else:
+            doc_content = ExportDocumentResponse(filename=filename)
+
+        doc_result = ExportResult(
+            content=doc_content,
+            status=conv_res.status,
+            timings=conv_res.timings,
+            errors=errors,
         )
+
+        documents.append(doc_result)
 
     num_total = num_succeeded + num_failed
     processing_time = time.monotonic() - start_time
@@ -275,10 +303,10 @@ def process_chunk_results(
         f"Processed {num_total} docs generating {len(chunks)} chunks in {processing_time:.2f} seconds."
     )
 
-    if isinstance(target, InBodyTarget):
+    if isinstance(task.target, InBodyTarget):
         task_result = ChunkedDocumentResult(
             chunks=chunks,
-            convert_details=convert_details,
+            documents=documents,
             processing_time=processing_time,
             chunking_info=chunking_options.model_dump(mode="json"),
         )

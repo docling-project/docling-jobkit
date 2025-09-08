@@ -14,9 +14,12 @@ from docling_jobkit.datamodel.chunking import (
     HybridChunkerOptions,
 )
 from docling_jobkit.datamodel.result import (
-    ChunkedDocumentConvertDetail,
     ChunkedDocumentResult,
+    ExportDocumentResponse,
+    ExportResult,
 )
+from docling_jobkit.datamodel.task import Task
+from docling_jobkit.datamodel.task_meta import TaskType
 from docling_jobkit.datamodel.task_targets import InBodyTarget
 
 
@@ -74,17 +77,21 @@ class TestDocumentChunker:
 
         workdir = tempfile.mkdtemp()
 
-        options = HybridChunkerOptions()
-        task_result = process_chunk_results(
-            chunking_options=options,
+        task = Task(
+            task_id="abc",
+            task_type=TaskType.CHUNK,
+            chunking_options=HybridChunkerOptions(),
             target=InBodyTarget(),
+        )
+        task_result = process_chunk_results(
+            task=task,
             conv_results=[failed_result],
             work_dir=workdir,
         )
         result = task_result.result
 
         assert isinstance(result, ChunkedDocumentResult)
-        assert result.convert_details[0].status == ConversionStatus.FAILURE
+        assert result.documents[0].status == ConversionStatus.FAILURE
         assert len(result.chunks) == 0
 
 
@@ -95,13 +102,16 @@ class TestChunkedDocumentResponse:
         """Test creating a ChunkedDocumentResponse."""
         response = ChunkedDocumentResult(
             chunks=[],
-            convert_details=[
-                ChunkedDocumentConvertDetail(status=ConversionStatus.SUCCESS)
+            documents=[
+                ExportResult(
+                    content=ExportDocumentResponse(filename="file.pdf"),
+                    status=ConversionStatus.SUCCESS,
+                )
             ],
             chunking_info={"total_chunks": 0},
         )
 
-        assert response.convert_details[0].status == ConversionStatus.SUCCESS
+        assert response.documents[0].status == ConversionStatus.SUCCESS
         assert response.chunking_info == {"total_chunks": 0}
 
     def test_chunked_response_with_chunks(self):
@@ -114,13 +124,17 @@ class TestChunkedDocumentResponse:
             text="Test content",
             num_tokens=4,
             headings=["Heading 1"],
+            doc_items=["#/tests/1"],
             page_numbers=[1],
         )
 
         response = ChunkedDocumentResult(
             chunks=[chunk],
-            convert_details=[
-                ChunkedDocumentConvertDetail(status=ConversionStatus.SUCCESS)
+            documents=[
+                ExportResult(
+                    content=ExportDocumentResponse(filename="file.pdf"),
+                    status=ConversionStatus.SUCCESS,
+                )
             ],
             chunking_info={"total_chunks": 1},
         )

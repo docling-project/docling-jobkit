@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from docling.datamodel.base_models import InputFormat
 
 from docling_jobkit.convert.manager import DoclingConverterManager
-from docling_jobkit.datamodel.chunking import BaseChunkerOptions
+from docling_jobkit.datamodel.chunking import BaseChunkerOptions, ChunkingExportOptions
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
@@ -54,6 +54,7 @@ class LocalOrchestrator(BaseOrchestrator):
         options: ConvertDocumentsOptions | None = None,
         convert_options: ConvertDocumentsOptions | None = None,
         chunking_options: BaseChunkerOptions | None = None,
+        chunking_export_options: ChunkingExportOptions | None = None,
     ) -> Task:
         if options is not None and convert_options is None:
             convert_options = options
@@ -64,12 +65,14 @@ class LocalOrchestrator(BaseOrchestrator):
                 stacklevel=2,
             )
         task_id = str(uuid.uuid4())
+        chunking_export_options = chunking_export_options or ChunkingExportOptions()
         task = Task(
             task_id=task_id,
             task_type=task_type,
             sources=sources,
             convert_options=convert_options,
             chunking_options=chunking_options,
+            chunking_export_options=chunking_export_options,
             target=target,
         )
         await self.init_task_tracking(task)

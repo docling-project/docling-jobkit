@@ -11,7 +11,6 @@ from docling.datamodel.base_models import OutputFormat
 from docling.datamodel.document import ConversionResult, ConversionStatus
 from docling_core.types.doc import ImageRefMode
 
-from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.result import (
     DoclingTaskResult,
     ExportDocumentResponse,
@@ -20,7 +19,8 @@ from docling_jobkit.datamodel.result import (
     ResultType,
     ZipArchiveResult,
 )
-from docling_jobkit.datamodel.task_targets import InBodyTarget, PutTarget, TaskTarget
+from docling_jobkit.datamodel.task import Task
+from docling_jobkit.datamodel.task_targets import InBodyTarget, PutTarget
 
 _log = logging.getLogger(__name__)
 
@@ -147,11 +147,14 @@ def _export_documents_as_files(
 
 
 def process_export_results(
-    conversion_options: ConvertDocumentsOptions,
-    target: TaskTarget,
+    task: Task,
     conv_results: Iterable[ConversionResult],
     work_dir: Path,
 ) -> DoclingTaskResult:
+    conversion_options = task.convert_options
+    if conversion_options is None:
+        raise RuntimeError("process_export_results called without task.convert_options")
+
     # Let's start by processing the documents
     start_time = time.monotonic()
 
@@ -179,7 +182,7 @@ def process_export_results(
     export_doctags = OutputFormat.DOCTAGS in conversion_options.to_formats
 
     # Only 1 document was processed, and we are not returning it as a file
-    if len(conv_results) == 1 and isinstance(target, InBodyTarget):
+    if len(conv_results) == 1 and isinstance(task.target, InBodyTarget):
         conv_res = conv_results[0]
 
         content = _export_document_as_content(
@@ -233,10 +236,10 @@ def process_export_results(
             root_dir=output_dir,
         )
 
-        if isinstance(target, PutTarget):
+        if isinstance(task.target, PutTarget):
             try:
                 with file_path.open("rb") as file_data:
-                    r = httpx.put(str(target.url), files={"file": file_data})
+                    r = httpx.put(str(task.target.url), files={"file": file_data})
                     r.raise_for_status()
                 task_result = RemoteTargetResult()
             except Exception as exc:
