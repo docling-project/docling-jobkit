@@ -64,6 +64,11 @@ class ChunkedDocumentResultItem(BaseModel):
     headings: list[str] | None = Field(
         default=None, description="List of headings for this chunk"
     )
+    captions: list[str] | None = Field(
+        default=None,
+        description="List of captions for this chunk (e.g. for pictures and tables)",
+    )
+    doc_items: list[str] = Field(description="List of doc items references")
     page_numbers: list[int] | None = Field(
         default=None, description="Page numbers where this chunk content appears"
     )

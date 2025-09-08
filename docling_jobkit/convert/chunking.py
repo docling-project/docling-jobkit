@@ -171,9 +171,11 @@ class DocumentChunkerManager:
 
             doc_chunk = DocChunk.model_validate(chunk)
 
-            # Extract page numbers from doc items
+            # Extract page numbers and doc_items refs
             page_numbers = []
+            doc_items = []
             for item in doc_chunk.meta.doc_items:
+                doc_items.append(item.self_ref)
                 for prov in item.prov:
                     page_numbers.append(prov.page_no)
 
@@ -200,6 +202,8 @@ class DocumentChunkerManager:
                 raw_text=doc_chunk.text if options.include_raw_text else None,
                 num_tokens=num_tokens,
                 headings=doc_chunk.meta.headings,
+                captions=doc_chunk.meta.captions,
+                doc_items=doc_items,
                 page_numbers=page_numbers,
                 metadata=metadata,
             )
