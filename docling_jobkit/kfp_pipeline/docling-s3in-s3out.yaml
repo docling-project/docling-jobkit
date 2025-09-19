@@ -136,14 +136,14 @@ deploymentSpec:
           \ debugging\n    s3_target_client, s3_target_resource = get_s3_connection(s3_target_coords)\n\
           \    try:\n        s3_target_client.put_object(\n            Body=json.dumps(batch_keys),\n\
           \            Bucket=s3_target_coords.bucket,\n            Key=f\"{s3_target_coords.key_prefix}/buckets.json\"\
-          ,\n            ContentType='application/json'\n        )\n    except Exception\
-          \ as e:\n        print(\"Uploading batch.json to s3 failed\", exc_info=e)\n\
-          \n    with open(dataset.path, \"w\") as out_batches:\n        json.dump(batch_keys,\
-          \ out_batches)\n\n    batch_indices = list(range(len(batch_keys)))\n   \
-          \ outputs = NamedTuple(\"outputs\", [(\"batch_indices\", List[int])])\n\
+          ,\n            ContentType=\"application/json\",\n        )\n    except\
+          \ Exception as e:\n        print(\"Uploading batch.json to s3 failed\",\
+          \ exc_info=e)\n\n    with open(dataset.path, \"w\") as out_batches:\n  \
+          \      json.dump(batch_keys, out_batches)\n\n    batch_indices = list(range(len(batch_keys)))\n\
+          \    outputs = NamedTuple(\"outputs\", [(\"batch_indices\", List[int])])\n\
           \    print(f\"Batches to convert: {len(batch_keys)}\")\n    return outputs(batch_indices)\n\
           \n"
-        image: icr.io/ibm-deepsearch-dev/docling-serve:jobkit-dev-cu124-it1
+        image: ghcr.io/docling-project/docling-serve-cpu:v1.5.1
     exec-convert-payload:
       container:
         args:
@@ -175,7 +175,7 @@ deploymentSpec:
           \ *\n\ndef convert_payload(\n    options: dict,\n    source: dict,\n   \
           \ target: dict,\n    batch_index: int,\n    # source_keys: List[str],\n\
           \    dataset: Input[Dataset],\n) -> list:\n    import json\n    import logging\n\
-          \    import os\n\n    from pathlib import Path\n    from docling_jobkit.connectors.s3_helper\
+          \    from pathlib import Path\n\n    from docling_jobkit.connectors.s3_helper\
           \ import (\n        ResultsProcessor,\n        generate_presign_url,\n \
           \       get_s3_connection,\n    )\n    from docling_jobkit.convert.manager\
           \ import (\n        DoclingConverterManager,\n        DoclingConverterManagerConfig,\n\
@@ -195,10 +195,10 @@ deploymentSpec:
           \        to_formats=[v.value for v in convert_options.to_formats],\n   \
           \     generate_page_images=convert_options.include_images,\n        generate_picture_images=convert_options.include_images,\n\
           \    )\n    for item in result_processor.process_documents(\n        converter.convert_documents(\n\
-          \            presign_filtered_source_keys,\n            options=convert_options\n\
-          \        )\n    ):\n        results.append(item)\n        logging.info(\"\
-          Convertion result: {}\".format(item))\n\n    return results\n\n"
-        image: icr.io/ibm-deepsearch-dev/docling-serve:jobkit-dev-cu124-it1
+          \            presign_filtered_source_keys, options=convert_options\n   \
+          \     )\n    ):\n        results.append(item)\n        logging.info(\"Convertion\
+          \ result: {}\".format(item))\n\n    return results\n\n"
+        image: ghcr.io/docling-project/docling-serve-cpu:v1.5.1
         resources:
           accelerator:
             count: '1'

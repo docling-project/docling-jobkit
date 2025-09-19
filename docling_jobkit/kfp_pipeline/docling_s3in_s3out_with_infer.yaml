@@ -136,11 +136,11 @@ deploymentSpec:
           \ debugging\n    s3_target_client, s3_target_resource = get_s3_connection(s3_target_coords)\n\
           \    try:\n        s3_target_client.put_object(\n            Body=json.dumps(batch_keys),\n\
           \            Bucket=s3_target_coords.bucket,\n            Key=f\"{s3_target_coords.key_prefix}/buckets.json\"\
-          ,\n            ContentType='application/json'\n        )\n    except Exception\
-          \ as e:\n        print(\"Uploading batch.json to s3 failed\", exc_info=e)\n\
-          \n    with open(dataset.path, \"w\") as out_batches:\n        json.dump(batch_keys,\
-          \ out_batches)\n\n    batch_indices = list(range(len(batch_keys)))\n   \
-          \ outputs = NamedTuple(\"outputs\", [(\"batch_indices\", List[int])])\n\
+          ,\n            ContentType=\"application/json\",\n        )\n    except\
+          \ Exception as e:\n        print(\"Uploading batch.json to s3 failed\",\
+          \ exc_info=e)\n\n    with open(dataset.path, \"w\") as out_batches:\n  \
+          \      json.dump(batch_keys, out_batches)\n\n    batch_indices = list(range(len(batch_keys)))\n\
+          \    outputs = NamedTuple(\"outputs\", [(\"batch_indices\", List[int])])\n\
           \    print(f\"Batches to convert: {len(batch_keys)}\")\n    return outputs(batch_indices)\n\
           \n"
         image: ghcr.io/docling-project/docling-serve-cpu:v1.5.1
@@ -175,41 +175,39 @@ deploymentSpec:
           \ *\n\ndef convert_payload(\n    options: dict,\n    source: dict,\n   \
           \ target: dict,\n    batch_index: int,\n    # source_keys: List[str],\n\
           \    dataset: Input[Dataset],\n) -> list:\n    import json\n    import logging\n\
-          \    import os\n\n    from pathlib import Path\n    from docling_jobkit.connectors.s3_helper\
-          \ import (\n        ResultsProcessor,\n        generate_presign_url,\n \
-          \       get_s3_connection,\n    )\n    from docling_jobkit.convert.manager\
+          \    from pathlib import Path\n\n    from docling.datamodel.base_models\
+          \ import ConversionStatus, InputFormat\n    from docling.datamodel.pipeline_options\
+          \ import (\n        VlmPipelineOptions,\n    )\n    from docling.datamodel.pipeline_options_vlm_model\
+          \ import (\n        ApiVlmOptions,\n        ResponseFormat,\n    )\n   \
+          \ from docling.datamodel.settings import settings\n    from docling.document_converter\
+          \ import DocumentConverter, PdfFormatOption\n    from docling.pipeline.vlm_pipeline\
+          \ import VlmPipeline\n    from docling_core.types.doc.base import ImageRefMode\n\
+          \n    from docling_jobkit.connectors.s3_helper import (\n        generate_presign_url,\n\
+          \        get_s3_connection,\n    )\n    from docling_jobkit.convert.manager\
           \ import (\n        DoclingConverterManager,\n        DoclingConverterManagerConfig,\n\
           \    )\n    from docling_jobkit.datamodel.convert import ConvertDocumentsOptions\n\
           \    from docling_jobkit.datamodel.s3_coords import S3Coordinates\n\n  \
-          \  from docling.datamodel.base_models import InputFormat\n    from docling.datamodel.pipeline_options\
-          \ import (\n        VlmPipelineOptions,\n    )\n    from docling.datamodel.pipeline_options_vlm_model\
-          \ import ApiVlmOptions, ResponseFormat\n    from docling.document_converter\
-          \ import DocumentConverter, PdfFormatOption\n    from docling.pipeline.vlm_pipeline\
-          \ import VlmPipeline\n    from docling.datamodel.settings import settings\n\
-          \    from docling.datamodel.base_models import ConversionStatus\n    from\
-          \ docling_core.types.doc.base import ImageRefMode\n\n    def openai_compatible_vlm_options(\n\
-          \        model: str,\n        prompt: str,\n        format: ResponseFormat,\n\
-          \        hostname_and_port,\n        temperature: float = 0.7,\n       \
-          \ max_tokens: int = 4096,\n        api_key: str = \"\",\n        skip_special_tokens=False,\n\
-          \    ):\n        headers = {}\n        if api_key:\n            headers[\"\
-          Authorization\"] = f\"Bearer {api_key}\"\n\n        options = ApiVlmOptions(\n\
-          \            url=f\"http://{hostname_and_port}/v1/chat/completions\",  #\
-          \ LM studio defaults to port 1234, VLLM to 8000\n            params=dict(\n\
-          \                model=model,\n                max_tokens=max_tokens,\n\
-          \                skip_special_tokens=skip_special_tokens,  # needed for\
-          \ VLLM\n            ),\n            headers=headers,\n            prompt=prompt,\n\
+          \  def openai_compatible_vlm_options(\n        model: str,\n        prompt:\
+          \ str,\n        format: ResponseFormat,\n        hostname_and_port,\n  \
+          \      temperature: float = 0.7,\n        max_tokens: int = 4096,\n    \
+          \    api_key: str = \"\",\n        skip_special_tokens=False,\n    ):\n\
+          \        headers = {}\n        if api_key:\n            headers[\"Authorization\"\
+          ] = f\"Bearer {api_key}\"\n\n        options = ApiVlmOptions(\n        \
+          \    url=f\"http://{hostname_and_port}/v1/chat/completions\",  # LM studio\
+          \ defaults to port 1234, VLLM to 8000\n            params = {\n        \
+          \        \"model\": model,\n                \"max_tokens\": max_tokens,\n\
+          \                \"skip_special_tokens\": skip_special_tokens  # needed\
+          \ for VLLM\n            },\n            headers=headers,\n            prompt=prompt,\n\
           \            timeout=90,\n            scale=2.0,\n            temperature=temperature,\n\
           \            response_format=format,\n        )\n        return options\n\
-          \n\n    logging.basicConfig(level=logging.INFO)\n    settings.debug.profile_pipeline_timings\
+          \n    logging.basicConfig(level=logging.INFO)\n    settings.debug.profile_pipeline_timings\
           \ = True\n\n    # validate coords\n    s3_coords_source = S3Coordinates.model_validate(source)\n\
-          \    target_s3_coords = S3Coordinates.model_validate(target)\n\n    s3_source_client,\
-          \ s3_source_resource = get_s3_connection(s3_coords_source)\n\n    convert_options\
-          \ = ConvertDocumentsOptions.model_validate(options)\n\n    config = DoclingConverterManagerConfig()\n\
-          \    # Points to the pvc mounted on the pod\n    config.artifacts_path =\
-          \ Path(\"/modelcache\")\n    converter = DoclingConverterManager(config)\n\
-          \n    with open(dataset.path) as f:\n        batches = json.load(f)\n  \
-          \  source_keys = batches[batch_index]\n\n    presign_filtered_source_keys\
-          \ = [\n        generate_presign_url(s3_source_client, key, s3_coords_source.bucket)\n\
+          \    target_s3_coords = S3Coordinates.model_validate(target)\n    s3_source_client,\
+          \ s3_source_resource = get_s3_connection(s3_coords_source)\n    s3_target_client,\
+          \ s3_target_resource = get_s3_connection(target_s3_coords)\n\n\n    with\
+          \ open(dataset.path) as f:\n        batches = json.load(f)\n    source_keys\
+          \ = batches[batch_index]\n\n    presign_filtered_source_keys = [\n     \
+          \   generate_presign_url(s3_source_client, key, s3_coords_source.bucket)\n\
           \        for key in source_keys\n    ]\n\n    pipeline_options = VlmPipelineOptions(\n\
           \        enable_remote_services=True  # required when calling remote VLM\
           \ endpoints\n    )\n\n    pipeline_options.vlm_options = openai_compatible_vlm_options(\n\
@@ -220,8 +218,7 @@ deploymentSpec:
           \     api_key=\"\",\n    )\n\n    doc_converter = DocumentConverter(\n \
           \       format_options={\n            InputFormat.PDF: PdfFormatOption(\n\
           \                pipeline_options=pipeline_options,\n                pipeline_cls=VlmPipeline,\n\
-          \            )\n        }\n    )\n\n    s3_target_client, s3_target_resource\
-          \ = get_s3_connection(target_s3_coords)\n\n    for item in presign_filtered_source_keys:\n\
+          \            )\n        }\n    )\n\n    for item in presign_filtered_source_keys:\n\
           \        conv_res = doc_converter.convert(item)\n        if conv_res.status\
           \ == ConversionStatus.SUCCESS:\n            filename = conv_res.input.document_hash\n\
           \n            # store doc\n            temp_folder = Path(\"/modelcache/docling-temp\"\
@@ -231,10 +228,10 @@ deploymentSpec:
           \                image_mode=ImageRefMode.EMBEDDED,\n            )\n    \
           \        kwargs = {}\n            kwargs[\"ContentType\"] = \"application/json\"\
           \n            try:\n                s3_target_client.upload_file(\n    \
-          \                Filename=temp_json_file, \n                    Bucket=target_s3_coords.bucket,\
-          \ \n                    Key=f\"{target_s3_coords.key_prefix}/{filename}.json\"\
-          ,\n                    ExtraArgs={**kwargs}\n                )\n       \
-          \         # s3_target_client.put_object(\n                #     Body=json.dumps(conv_res.document.export_to_dict()),\n\
+          \                Filename=temp_json_file,\n                    Bucket=target_s3_coords.bucket,\n\
+          \                    Key=f\"{target_s3_coords.key_prefix}/{filename}.json\"\
+          ,\n                    ExtraArgs={**kwargs},\n                )\n      \
+          \          # s3_target_client.put_object(\n                #     Body=json.dumps(conv_res.document.export_to_dict()),\n\
           \                #     Bucket=target_s3_coords.bucket,\n               \
           \ #     Key=f\"{target_s3_coords.key_prefix}/{filename}.json\",\n      \
           \          #     ContentType='\"application/json\"'\n                # )\n\
@@ -242,24 +239,15 @@ deploymentSpec:
           \ to s3 failed\", exc_info=e)\n\n            # clean-up\n            temp_json_file.unlink()\n\
           \n            # store timings\n            timings = {}\n            for\
           \ key in conv_res.timings.keys():\n                timings[key] = {\n  \
-          \                  \"scope\" : conv_res.timings[key].scope.name,\n     \
-          \               \"count\" : conv_res.timings[key].count,\n             \
-          \       \"times\" : conv_res.timings[key].times\n                }\n   \
-          \         try:\n                s3_target_client.put_object(\n         \
-          \           Body=json.dumps(timings),\n                    Bucket=target_s3_coords.bucket,\n\
+          \                  \"scope\": conv_res.timings[key].scope.name,\n      \
+          \              \"count\": conv_res.timings[key].count,\n               \
+          \     \"times\": conv_res.timings[key].times,\n                }\n     \
+          \       try:\n                s3_target_client.put_object(\n           \
+          \         Body=json.dumps(timings),\n                    Bucket=target_s3_coords.bucket,\n\
           \                    Key=f\"{target_s3_coords.key_prefix}/{filename}.timings.json\"\
-          ,\n                    ContentType='application/json'\n                )\n\
-          \            except Exception as e:\n                print(\"Uploading timings\
-          \ to s3 failed\", exc_info=e)\n\n    # print(result.document.export_to_markdown())\n\
-          \n\n    results = []\n    # result_processor = ResultsProcessor(\n    #\
-          \     target_s3_coords=target_s3_coords,\n    #     to_formats=[v.value\
-          \ for v in convert_options.to_formats],\n    #     generate_page_images=convert_options.include_images,\n\
-          \    #     generate_picture_images=convert_options.include_images,\n   \
-          \ # )\n    # for item in result_processor.process_documents(\n    #    \
-          \ converter.convert_documents(\n    #         presign_filtered_source_keys,\n\
-          \    #         options=convert_options\n    #     )\n    # ):\n    #   \
-          \  results.append(item)\n    #     logging.info(\"Convertion result: {}\"\
-          .format(item))\n\n    return results\n\n"
+          ,\n                    ContentType=\"application/json\",\n             \
+          \   )\n            except Exception as e:\n                print(\"Uploading\
+          \ timings to s3 failed\", exc_info=e)\n\n    return []\n\n"
         image: ghcr.io/docling-project/docling-serve-cpu:v1.5.1
         resources:
           cpuLimit: 1.0

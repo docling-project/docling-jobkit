@@ -12,7 +12,6 @@ from kfp.dsl import Dataset, Input, Output
         "boto3~=1.35.36",
         "git+https://github.com/docling-project/docling-jobkit@main",
     ],
-    # base_image="icr.io/ibm-deepsearch-dev/docling-serve:jobkit-dev-cu124-it1",  # base docling-serve image with fixed permissions
     base_image="ghcr.io/docling-project/docling-serve-cpu:v1.5.1",
 )
 def convert_payload(
@@ -25,31 +24,26 @@ def convert_payload(
 ) -> list:
     import json
     import logging
-    import os
-
     from pathlib import Path
-    from docling_jobkit.connectors.s3_helper import (
-        ResultsProcessor,
-        generate_presign_url,
-        get_s3_connection,
-    )
-    from docling_jobkit.convert.manager import (
-        DoclingConverterManager,
-        DoclingConverterManagerConfig,
-    )
-    from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
-    from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
-    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.base_models import ConversionStatus, InputFormat
     from docling.datamodel.pipeline_options import (
         VlmPipelineOptions,
     )
-    from docling.datamodel.pipeline_options_vlm_model import ApiVlmOptions, ResponseFormat
+    from docling.datamodel.pipeline_options_vlm_model import (
+        ApiVlmOptions,
+        ResponseFormat,
+    )
+    from docling.datamodel.settings import settings
     from docling.document_converter import DocumentConverter, PdfFormatOption
     from docling.pipeline.vlm_pipeline import VlmPipeline
-    from docling.datamodel.settings import settings
-    from docling.datamodel.base_models import ConversionStatus
     from docling_core.types.doc.base import ImageRefMode
+
+    from docling_jobkit.connectors.s3_helper import (
+        generate_presign_url,
+        get_s3_connection,
+    )
+    from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
     def openai_compatible_vlm_options(
         model: str,
@@ -67,11 +61,11 @@ def convert_payload(
 
         options = ApiVlmOptions(
             url=f"http://{hostname_and_port}/v1/chat/completions",  # LM studio defaults to port 1234, VLLM to 8000
-            params=dict(
-                model=model,
-                max_tokens=max_tokens,
-                skip_special_tokens=skip_special_tokens,  # needed for VLLM
-            ),
+            params={
+                "model": model,
+                "max_tokens": max_tokens,
+                "skip_special_tokens": skip_special_tokens,  # needed for VLLM
+            },
             headers=headers,
             prompt=prompt,
             timeout=90,
@@ -81,22 +75,14 @@ def convert_payload(
         )
         return options
 
-
     logging.basicConfig(level=logging.INFO)
     settings.debug.profile_pipeline_timings = True
 
     # validate coords
     s3_coords_source = S3Coordinates.model_validate(source)
     target_s3_coords = S3Coordinates.model_validate(target)
-
     s3_source_client, s3_source_resource = get_s3_connection(s3_coords_source)
-
-    convert_options = ConvertDocumentsOptions.model_validate(options)
-
-    config = DoclingConverterManagerConfig()
-    # Points to the pvc mounted on the pod
-    config.artifacts_path = Path("/modelcache")
-    converter = DoclingConverterManager(config)
+    s3_target_client, s3_target_resource = get_s3_connection(target_s3_coords)
 
     with open(dataset.path) as f:
         batches = json.load(f)
@@ -128,10 +114,8 @@ def convert_payload(
         }
     )
 
-    s3_target_client, s3_target_resource = get_s3_connection(target_s3_coords)
-
     for item in presign_filtered_source_keys:
-        conv_res = doc_converter.convert(item)
+        conv_res = doc_converter.convert(str(item))
         if conv_res.status == ConversionStatus.SUCCESS:
             filename = conv_res.input.document_hash
 
@@ -147,10 +131,10 @@ def convert_payload(
             kwargs["ContentType"] = "application/json"
             try:
                 s3_target_client.upload_file(
-                    Filename=temp_json_file, 
-                    Bucket=target_s3_coords.bucket, 
+                    Filename=temp_json_file,
+                    Bucket=target_s3_coords.bucket,
                     Key=f"{target_s3_coords.key_prefix}/{filename}.json",
-                    ExtraArgs={**kwargs}
+                    ExtraArgs={**kwargs},
                 )
                 # s3_target_client.put_object(
                 #     Body=json.dumps(conv_res.document.export_to_dict()),
@@ -159,49 +143,30 @@ def convert_payload(
                 #     ContentType='"application/json"'
                 # )
             except Exception as e:
-                print("Uploading document to s3 failed", exc_info=e)
-            
+                logging.error("Uploading document to s3 failed: {}".format(e))
+
             # clean-up
             temp_json_file.unlink()
-            
+
             # store timings
             timings = {}
             for key in conv_res.timings.keys():
                 timings[key] = {
-                    "scope" : conv_res.timings[key].scope.name,
-                    "count" : conv_res.timings[key].count,
-                    "times" : conv_res.timings[key].times
+                    "scope": conv_res.timings[key].scope.name,
+                    "count": conv_res.timings[key].count,
+                    "times": conv_res.timings[key].times,
                 }
             try:
                 s3_target_client.put_object(
                     Body=json.dumps(timings),
                     Bucket=target_s3_coords.bucket,
                     Key=f"{target_s3_coords.key_prefix}/{filename}.timings.json",
-                    ContentType='application/json'
+                    ContentType="application/json",
                 )
             except Exception as e:
-                print("Uploading timings to s3 failed", exc_info=e)
-    
-    # print(result.document.export_to_markdown())
+                logging.error("Uploading timings to s3 failed: {}".format(e))
 
-
-    results = []
-    # result_processor = ResultsProcessor(
-    #     target_s3_coords=target_s3_coords,
-    #     to_formats=[v.value for v in convert_options.to_formats],
-    #     generate_page_images=convert_options.include_images,
-    #     generate_picture_images=convert_options.include_images,
-    # )
-    # for item in result_processor.process_documents(
-    #     converter.convert_documents(
-    #         presign_filtered_source_keys,
-    #         options=convert_options
-    #     )
-    # ):
-    #     results.append(item)
-    #     logging.info("Convertion result: {}".format(item))
-
-    return results
+    return []
 
 
 @dsl.component(
@@ -210,7 +175,6 @@ def convert_payload(
         "boto3~=1.35.36",
         "git+https://github.com/docling-project/docling-jobkit@main",
     ],
-    # base_image="icr.io/ibm-deepsearch-dev/docling-serve:jobkit-dev-cu124-it1",
     base_image="ghcr.io/docling-project/docling-serve-cpu:v1.5.1",
 )
 def compute_batches(
@@ -220,6 +184,7 @@ def compute_batches(
     batch_size: int = 10,
 ) -> NamedTuple("outputs", [("batch_indices", List[int])]):  # type: ignore[valid-type]
     import json
+    import logging
     from typing import NamedTuple
 
     from docling_jobkit.connectors.s3_helper import (
@@ -229,6 +194,8 @@ def compute_batches(
         get_source_files,
     )
     from docling_jobkit.datamodel.s3_coords import S3Coordinates
+
+    logging.basicConfig(level=logging.INFO)
 
     # validate inputs
     s3_coords_source = S3Coordinates.model_validate(source)
@@ -253,10 +220,10 @@ def compute_batches(
             Body=json.dumps(batch_keys),
             Bucket=s3_target_coords.bucket,
             Key=f"{s3_target_coords.key_prefix}/buckets.json",
-            ContentType='application/json'
+            ContentType="application/json",
         )
     except Exception as e:
-        print("Uploading batch.json to s3 failed", exc_info=e)
+        logging.error("Uploading batch.json to s3 failed: {}".format(e))
 
     with open(dataset.path, "w") as out_batches:
         json.dump(batch_keys, out_batches)
@@ -345,8 +312,8 @@ def docling_s3in_s3out_with_infer(
         # All models should be preloaded to pvc, multi access pvc can be used by all pods in parallel
         kubernetes.mount_pvc(
             converter,
-            pvc_name='docling-model-cache-pvc-multi',
-            mount_path='/modelcache',
+            pvc_name="docling-model-cache-pvc-multi",
+            mount_path="/modelcache",
         )
 
         # For enabling document conversion using GPU
@@ -375,49 +342,6 @@ def docling_s3in_s3out_with_infer(
 ### Compile pipeline into a yaml
 from kfp import compiler
 
-compiler.Compiler().compile(docling_s3in_s3out_with_infer, "docling_s3in_s3out_with_infer.yaml")
-
-
-### Start pipeline run programatically
-# import kfp
-# import os
-
-# # TIP: you may need to authenticate with the KFP instance
-# kfp_client = kfp.Client(
-#     host = os.environ["KFP_FULL_URL"],
-#     existing_token = os.environ["OPENSHIFT_TOKEN"],
-#     verify_ssl = False,
-# )
-
-# kfp_client.create_run_from_pipeline_func(
-#     inputs_s3in_s3out,
-#     arguments=dict(
-#         convertion_options = {
-#             "from_formats": [
-#                 "pdf",
-#             ],
-#             "to_formats": ["md", "json", "html", "text", "doctags"],
-#             "image_export_mode": "placeholder",
-#             "do_ocr": True,
-#             "force_ocr": True,
-#             "ocr_engine": "easyocr",
-#         },
-#         source = {
-#             "endpoint": os.environ["S3_SOURCE_ENDPOINT"],
-#             "access_key": os.environ["S3_SOURCE_ACCESS_KEY"],
-#             "secret_key": os.environ["S3_SOURCE_SECRET_KEY"],
-#             "bucket": os.environ["S3_SOURCE_BUCKET"],
-#             "key_prefix": os.environ["S3_SOURCE_PREFIX"],
-#             "verify_ssl": True,
-#         },
-#         target = {
-#             "endpoint": os.environ["S3_TARGET_ENDPOINT"],
-#             "access_key": os.environ["S3_TARGET_ACCESS_KEY"],
-#             "secret_key": os.environ["S3_TARGET_SECRET_KEY"],
-#             "bucket": os.environ["S3_TARGET_BUCKET"],
-#             "key_prefix": os.environ["S3_TARGET_PREFIX"],
-#             "verify_ssl": True,
-#         },
-#         batch_size = 100,
-#     )
-# )
+compiler.Compiler().compile(
+    docling_s3in_s3out_with_infer, "docling_s3in_s3out_with_infer.yaml"
+)

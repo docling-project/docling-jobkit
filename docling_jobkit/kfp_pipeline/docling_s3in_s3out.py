@@ -12,7 +12,7 @@ from kfp.dsl import Dataset, Input, Output
         "boto3~=1.35.36",
         "git+https://github.com/docling-project/docling-jobkit@main",
     ],
-    base_image="icr.io/ibm-deepsearch-dev/docling-serve:jobkit-dev-cu124-it1",  # base docling-serve image with fixed permissions
+    base_image="ghcr.io/docling-project/docling-serve-cpu:v1.5.1",  # base docling-serve image with fixed permissions
 )
 def convert_payload(
     options: dict,
@@ -24,9 +24,8 @@ def convert_payload(
 ) -> list:
     import json
     import logging
-    import os
-
     from pathlib import Path
+
     from docling_jobkit.connectors.s3_helper import (
         ResultsProcessor,
         generate_presign_url,
@@ -72,8 +71,7 @@ def convert_payload(
     )
     for item in result_processor.process_documents(
         converter.convert_documents(
-            presign_filtered_source_keys,
-            options=convert_options
+            presign_filtered_source_keys, options=convert_options
         )
     ):
         results.append(item)
@@ -88,7 +86,7 @@ def convert_payload(
         "boto3~=1.35.36",
         "git+https://github.com/docling-project/docling-jobkit@main",
     ],
-    base_image="icr.io/ibm-deepsearch-dev/docling-serve:jobkit-dev-cu124-it1",
+    base_image="ghcr.io/docling-project/docling-serve-cpu:v1.5.1",
 )
 def compute_batches(
     source: dict,
@@ -97,6 +95,7 @@ def compute_batches(
     batch_size: int = 10,
 ) -> NamedTuple("outputs", [("batch_indices", List[int])]):  # type: ignore[valid-type]
     import json
+    import logging
     from typing import NamedTuple
 
     from docling_jobkit.connectors.s3_helper import (
@@ -106,6 +105,8 @@ def compute_batches(
         get_source_files,
     )
     from docling_jobkit.datamodel.s3_coords import S3Coordinates
+
+    logging.basicConfig(level=logging.INFO)
 
     # validate inputs
     s3_coords_source = S3Coordinates.model_validate(source)
@@ -130,10 +131,10 @@ def compute_batches(
             Body=json.dumps(batch_keys),
             Bucket=s3_target_coords.bucket,
             Key=f"{s3_target_coords.key_prefix}/buckets.json",
-            ContentType='application/json'
+            ContentType="application/json",
         )
     except Exception as e:
-        print("Uploading batch.json to s3 failed", exc_info=e)
+        logging.error("Uploading batch.json to s3 failed: {}".format(e))
 
     with open(dataset.path, "w") as out_batches:
         json.dump(batch_keys, out_batches)
@@ -222,8 +223,8 @@ def inputs_s3in_s3out(
         # All models should be preloaded to pvc, multi access pvc can be used by all pods in parallel
         kubernetes.mount_pvc(
             converter,
-            pvc_name='docling-model-cache-pvc-multi',
-            mount_path='/modelcache',
+            pvc_name="docling-model-cache-pvc-multi",
+            mount_path="/modelcache",
         )
 
         # For enabling document conversion using GPU
