@@ -12,7 +12,8 @@ from kfp.dsl import Dataset, Input, Output
         "boto3~=1.35.36",
         "git+https://github.com/docling-project/docling-jobkit@main",
     ],
-    base_image="icr.io/ibm-deepsearch-dev/docling-serve:jobkit-dev-cu124-it1",  # base docling-serve image with fixed permissions
+    # base_image="icr.io/ibm-deepsearch-dev/docling-serve:jobkit-dev-cu124-it1",  # base docling-serve image with fixed permissions
+    base_image="ghcr.io/docling-project/docling-serve-cpu:v1.5.1",
 )
 def convert_payload(
     options: dict,
@@ -39,7 +40,50 @@ def convert_payload(
     from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
     from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import (
+        VlmPipelineOptions,
+    )
+    from docling.datamodel.pipeline_options_vlm_model import ApiVlmOptions, ResponseFormat
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.pipeline.vlm_pipeline import VlmPipeline
+    from docling.datamodel.settings import settings
+    from docling.datamodel.base_models import ConversionStatus
+    from docling_core.types.doc.base import ImageRefMode
+
+    def openai_compatible_vlm_options(
+        model: str,
+        prompt: str,
+        format: ResponseFormat,
+        hostname_and_port,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        api_key: str = "",
+        skip_special_tokens=False,
+    ):
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        options = ApiVlmOptions(
+            url=f"http://{hostname_and_port}/v1/chat/completions",  # LM studio defaults to port 1234, VLLM to 8000
+            params=dict(
+                model=model,
+                max_tokens=max_tokens,
+                skip_special_tokens=skip_special_tokens,  # needed for VLLM
+            ),
+            headers=headers,
+            prompt=prompt,
+            timeout=90,
+            scale=2.0,
+            temperature=temperature,
+            response_format=format,
+        )
+        return options
+
+
     logging.basicConfig(level=logging.INFO)
+    settings.debug.profile_pipeline_timings = True
 
     # validate coords
     s3_coords_source = S3Coordinates.model_validate(source)
@@ -63,21 +107,99 @@ def convert_payload(
         for key in source_keys
     ]
 
-    results = []
-    result_processor = ResultsProcessor(
-        target_s3_coords=target_s3_coords,
-        to_formats=[v.value for v in convert_options.to_formats],
-        generate_page_images=convert_options.include_images,
-        generate_picture_images=convert_options.include_images,
+    pipeline_options = VlmPipelineOptions(
+        enable_remote_services=True  # required when calling remote VLM endpoints
     )
-    for item in result_processor.process_documents(
-        converter.convert_documents(
-            presign_filtered_source_keys,
-            options=convert_options
-        )
-    ):
-        results.append(item)
-        logging.info("Convertion result: {}".format(item))
+
+    pipeline_options.vlm_options = openai_compatible_vlm_options(
+        model="ibm-granite/granite-docling-258M",  # For VLLM use "ibm-granite/granite-docling-258M"
+        hostname_and_port="vllm-gpu.deep-search.svc.cluster.local:8000",  # LM studio defaults to port 1234, VLLM to 8000
+        prompt="Convert this page to docling.",
+        format=ResponseFormat.DOCTAGS,
+        api_key="",
+    )
+
+    doc_converter = DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_options=pipeline_options,
+                pipeline_cls=VlmPipeline,
+            )
+        }
+    )
+
+    s3_target_client, s3_target_resource = get_s3_connection(target_s3_coords)
+
+    for item in presign_filtered_source_keys:
+        conv_res = doc_converter.convert(item)
+        if conv_res.status == ConversionStatus.SUCCESS:
+            filename = conv_res.input.document_hash
+
+            # store doc
+            temp_folder = Path("/modelcache/docling-temp")
+            temp_folder.mkdir(parents=True, exist_ok=True)
+            temp_json_file = temp_folder / f"{filename}.temp.json"
+            conv_res.document.save_as_json(
+                filename=temp_json_file,
+                image_mode=ImageRefMode.EMBEDDED,
+            )
+            kwargs = {}
+            kwargs["ContentType"] = "application/json"
+            try:
+                s3_target_client.upload_file(
+                    Filename=temp_json_file, 
+                    Bucket=target_s3_coords.bucket, 
+                    Key=f"{target_s3_coords.key_prefix}/{filename}.json",
+                    ExtraArgs={**kwargs}
+                )
+                # s3_target_client.put_object(
+                #     Body=json.dumps(conv_res.document.export_to_dict()),
+                #     Bucket=target_s3_coords.bucket,
+                #     Key=f"{target_s3_coords.key_prefix}/{filename}.json",
+                #     ContentType='"application/json"'
+                # )
+            except Exception as e:
+                print("Uploading document to s3 failed", exc_info=e)
+            
+            # clean-up
+            temp_json_file.unlink()
+            
+            # store timings
+            timings = {}
+            for key in conv_res.timings.keys():
+                timings[key] = {
+                    "scope" : conv_res.timings[key].scope.name,
+                    "count" : conv_res.timings[key].count,
+                    "times" : conv_res.timings[key].times
+                }
+            try:
+                s3_target_client.put_object(
+                    Body=json.dumps(timings),
+                    Bucket=target_s3_coords.bucket,
+                    Key=f"{target_s3_coords.key_prefix}/{filename}.timings.json",
+                    ContentType='application/json'
+                )
+            except Exception as e:
+                print("Uploading timings to s3 failed", exc_info=e)
+    
+    # print(result.document.export_to_markdown())
+
+
+    results = []
+    # result_processor = ResultsProcessor(
+    #     target_s3_coords=target_s3_coords,
+    #     to_formats=[v.value for v in convert_options.to_formats],
+    #     generate_page_images=convert_options.include_images,
+    #     generate_picture_images=convert_options.include_images,
+    # )
+    # for item in result_processor.process_documents(
+    #     converter.convert_documents(
+    #         presign_filtered_source_keys,
+    #         options=convert_options
+    #     )
+    # ):
+    #     results.append(item)
+    #     logging.info("Convertion result: {}".format(item))
 
     return results
 
@@ -88,7 +210,8 @@ def convert_payload(
         "boto3~=1.35.36",
         "git+https://github.com/docling-project/docling-jobkit@main",
     ],
-    base_image="icr.io/ibm-deepsearch-dev/docling-serve:jobkit-dev-cu124-it1",
+    # base_image="icr.io/ibm-deepsearch-dev/docling-serve:jobkit-dev-cu124-it1",
+    base_image="ghcr.io/docling-project/docling-serve-cpu:v1.5.1",
 )
 def compute_batches(
     source: dict,
@@ -145,7 +268,7 @@ def compute_batches(
 
 
 @dsl.pipeline
-def inputs_s3in_s3out(
+def docling_s3in_s3out_with_infer(
     convertion_options: dict = {
         "from_formats": [
             "docx",
@@ -229,8 +352,8 @@ def inputs_s3in_s3out(
         # For enabling document conversion using GPU
         # currently unable to properly pass input parameters into pipeline, therefore node selector and tolerations are hardcoded
 
-        converter.set_accelerator_type("nvidia.com/gpu")
-        converter.set_accelerator_limit("1")
+        # converter.set_accelerator_type("nvidia.com/gpu")
+        # converter.set_accelerator_limit("1")
 
         # kubernetes.add_node_selector(
         #     task=converter,
@@ -252,7 +375,7 @@ def inputs_s3in_s3out(
 ### Compile pipeline into a yaml
 from kfp import compiler
 
-compiler.Compiler().compile(inputs_s3in_s3out, "docling-s3in-s3out.yaml")
+compiler.Compiler().compile(docling_s3in_s3out_with_infer, "docling_s3in_s3out_with_infer.yaml")
 
 
 ### Start pipeline run programatically
