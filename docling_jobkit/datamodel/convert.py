@@ -324,7 +324,7 @@ class ConvertDocumentsOptions(BaseModel):
             description=(
                 "Mode to use for table structure, String. "
                 f"Allowed values: {', '.join([v.value for v in TableFormerMode])}. "
-                "Optional, defaults to fast."
+                "Optional, defaults to accurate."
             ),
             examples=[TableStructureOptions().mode],
             # pattern="fast|accurate",
