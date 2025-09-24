@@ -28,9 +28,9 @@ jobs:
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install uv and set the python version
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
@@ -41,10 +41,16 @@ jobs:
       - name: Launch background worker
         run: |
           uv run --no-sync python docling_jobkit/orchestrators/rq/worker.py &
-          echo "Worker started in background"
+          echo "Worker started in background with PID $!"
+          echo "WORKER_PID=$!" >> $GITHUB_ENV
       - name: Testing
         run: |
           uv run --no-sync pytest -v --cov=docling_jobkit --cov-report=xml tests
+      - name: Terminate background worker
+        if: always()
+        run: |
+          kill ${{ env.WORKER_PID }}
+          echo "Worker with PID ${{ env.WORKER_PID }} terminated."
       - name: Upload coverage to Codecov
         if: inputs.push_coverage
         uses: codecov/codecov-action@v5

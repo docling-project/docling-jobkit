@@ -1,3 +1,15 @@
+## [v1.5.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.5.0) - 2025-09-08
+
+### Feature
+
+* Add chunking task ([#54](https://github.com/docling-project/docling-jobkit/issues/54)) ([`3b9b11c`](https://github.com/docling-project/docling-jobkit/commit/3b9b11cf9fc636da1cd8d4de89b59cf9e7b09d04))
+
+### Fix
+
+* Fixes name cleaning of doc on s3 for batching ([#55](https://github.com/docling-project/docling-jobkit/issues/55)) ([`9b7276c`](https://github.com/docling-project/docling-jobkit/commit/9b7276c1d5c69dd99dd5d0d4362ab718136a2dc5))
+* Fix for parquet file generation with s3 connector and temporary storage ([#52](https://github.com/docling-project/docling-jobkit/issues/52)) ([`1180c07`](https://github.com/docling-project/docling-jobkit/commit/1180c07f41b731fa8b29d482c367fa72b7933f25))
+* Fixing s3_connector scratch directory ([#51](https://github.com/docling-project/docling-jobkit/issues/51)) ([`74710d0`](https://github.com/docling-project/docling-jobkit/commit/74710d065cfebea60d00a6ef1305f4a397d294a1))
+
 ## [v1.4.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.4.1) - 2025-08-19
 
 ### Fix

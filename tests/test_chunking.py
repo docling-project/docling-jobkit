@@ -1,0 +1,180 @@
+import tempfile
+from pathlib import Path
+from unittest.mock import Mock
+
+from docling.datamodel.base_models import ConversionStatus
+from docling.datamodel.document import ConversionResult, InputDocument
+
+from docling_jobkit.convert.chunking import (
+    DocumentChunkerManager,
+    process_chunk_results,
+)
+from docling_jobkit.datamodel.chunking import (
+    HierarchicalChunkerOptions,
+    HybridChunkerOptions,
+)
+from docling_jobkit.datamodel.result import (
+    ChunkedDocumentResult,
+    ExportDocumentResponse,
+    ExportResult,
+)
+from docling_jobkit.datamodel.task import Task
+from docling_jobkit.datamodel.task_meta import TaskType
+from docling_jobkit.datamodel.task_targets import InBodyTarget
+
+
+class TestDocumentChunker:
+    """Test cases for DocumentChunker functionality."""
+
+    def test_chunker_initialization(self):
+        """Test that DocumentChunker can be initialized."""
+        chunker = DocumentChunkerManager()
+        assert chunker is not None
+        assert chunker.config.cache_size == 10  # Default cache size
+        assert chunker._get_chunker_from_cache is not None
+
+    def test_chunker_custom_config(self):
+        """Test DocumentChunker with custom configuration."""
+        from docling_jobkit.convert.chunking import DocumentChunkerConfig
+
+        config = DocumentChunkerConfig(cache_size=5)
+        chunker = DocumentChunkerManager(config=config)
+        assert chunker.config.cache_size == 5
+
+    def test_chunking_options_defaults(self):
+        """Test HybridChunkerOptions with default values."""
+        options = HybridChunkerOptions()
+        assert options.max_tokens is None
+        assert options.tokenizer == "sentence-transformers/all-MiniLM-L6-v2"
+        assert options.use_markdown_tables is False
+        assert options.merge_peers is True
+        assert options.include_raw_text is False
+
+    def test_chunking_options_custom_values(self):
+        """Test HybridChunkerOptions with custom values."""
+        options = HybridChunkerOptions(
+            max_tokens=1024,
+            tokenizer="custom/tokenizer",
+            use_markdown_tables=True,
+            merge_peers=False,
+            include_raw_text=True,
+        )
+        assert options.max_tokens == 1024
+        assert options.tokenizer == "custom/tokenizer"
+        assert options.use_markdown_tables is True
+        assert options.merge_peers is False
+        assert options.include_raw_text is True
+
+    def test_chunk_conversion_result_failure(self):
+        """Test chunking with failed conversion result."""
+        # Create failed conversion result with minimal required fields
+        failed_result = Mock(spec=ConversionResult)
+        failed_result.input = Mock(spec=InputDocument)
+        failed_result.input.file = Path("file.pdf")
+        failed_result.status = ConversionStatus.FAILURE
+        failed_result.errors = []
+        failed_result.timings = {}
+
+        workdir = tempfile.mkdtemp()
+
+        task = Task(
+            task_id="abc",
+            task_type=TaskType.CHUNK,
+            chunking_options=HybridChunkerOptions(),
+            target=InBodyTarget(),
+        )
+        task_result = process_chunk_results(
+            task=task,
+            conv_results=[failed_result],
+            work_dir=workdir,
+        )
+        result = task_result.result
+
+        assert isinstance(result, ChunkedDocumentResult)
+        assert result.documents[0].status == ConversionStatus.FAILURE
+        assert len(result.chunks) == 0
+
+
+class TestChunkedDocumentResponse:
+    """Test cases for ChunkedDocumentResponse model."""
+
+    def test_chunked_response_creation(self):
+        """Test creating a ChunkedDocumentResponse."""
+        response = ChunkedDocumentResult(
+            chunks=[],
+            documents=[
+                ExportResult(
+                    content=ExportDocumentResponse(filename="file.pdf"),
+                    status=ConversionStatus.SUCCESS,
+                )
+            ],
+            chunking_info={"total_chunks": 0},
+        )
+
+        assert response.documents[0].status == ConversionStatus.SUCCESS
+        assert response.chunking_info == {"total_chunks": 0}
+
+    def test_chunked_response_with_chunks(self):
+        """Test ChunkedDocumentResponse with actual chunks."""
+        from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
+
+        chunk = ChunkedDocumentResultItem(
+            filename="test.pdf",
+            chunk_index=0,
+            text="Test content",
+            num_tokens=4,
+            headings=["Heading 1"],
+            doc_items=["#/tests/1"],
+            page_numbers=[1],
+        )
+
+        response = ChunkedDocumentResult(
+            chunks=[chunk],
+            documents=[
+                ExportResult(
+                    content=ExportDocumentResponse(filename="file.pdf"),
+                    status=ConversionStatus.SUCCESS,
+                )
+            ],
+            chunking_info={"total_chunks": 1},
+        )
+
+        assert len(response.chunks) == 1
+        assert response.chunks[0].filename == "test.pdf"
+        assert response.chunks[0].text == "Test content"
+
+    def test_cache_key_generation(self):
+        """Test that cache key generation is deterministic and uses SHA1."""
+        chunker = DocumentChunkerManager()
+
+        options1 = HybridChunkerOptions(
+            max_tokens=512,
+            tokenizer="test-tokenizer",
+            merge_peers=True,
+            use_markdown_tables=False,
+        )
+        options2 = HybridChunkerOptions(
+            max_tokens=512,
+            tokenizer="test-tokenizer",
+            merge_peers=True,
+            use_markdown_tables=False,
+        )
+        options3 = HybridChunkerOptions(
+            max_tokens=1024,  # Different value
+            tokenizer="test-tokenizer",
+            merge_peers=True,
+            use_markdown_tables=False,
+        )
+        options4 = HierarchicalChunkerOptions()
+
+        key1 = chunker._generate_cache_key(options1)
+        key2 = chunker._generate_cache_key(options2)
+        key3 = chunker._generate_cache_key(options3)
+        key4 = chunker._generate_cache_key(options4)
+
+        # Same options should generate same key
+        assert key1 == key2
+        # Different options should generate different key
+        assert key1 != key3
+        assert key1 != key4
+        assert key3 != key4

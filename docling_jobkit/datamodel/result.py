@@ -1,10 +1,11 @@
+import warnings
 from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from docling.datamodel.document import ConversionStatus, ErrorItem
+from docling.datamodel.base_models import ConversionStatus, ErrorItem
 from docling.utils.profiling import ProfilingItem
-from docling_core.types.doc import DoclingDocument
+from docling_core.types.doc.document import DoclingDocument
 
 
 class ExportDocumentResponse(BaseModel):
@@ -39,14 +40,75 @@ class RemoteTargetResult(BaseModel):
     kind: Literal["RemoteTargetResult"] = "RemoteTargetResult"
 
 
+class ChunkedDocumentResultItem(BaseModel):
+    """A single chunk of a document with its metadata and content."""
+
+    filename: str
+    chunk_index: int
+    text: Annotated[
+        str,
+        Field(
+            description="The chunk text with structural context (headers, formatting)"
+        ),
+    ]
+    raw_text: Annotated[
+        str | None,
+        Field(
+            description="Raw chunk text without additional formatting or context",
+        ),
+    ] = None
+    num_tokens: Annotated[
+        int | None,
+        Field(
+            description="Number of tokens in the text, if the chunker is aware of tokens"
+        ),
+    ] = None
+    headings: Annotated[
+        list[str] | None, Field(description="List of headings for this chunk")
+    ] = None
+    captions: Annotated[
+        list[str] | None,
+        Field(
+            description="List of captions for this chunk (e.g. for pictures and tables)",
+        ),
+    ] = None
+    doc_items: Annotated[list[str], Field(description="List of doc items references")]
+    page_numbers: Annotated[
+        list[int] | None,
+        Field(description="Page numbers where this chunk content appears"),
+    ] = None
+    metadata: Annotated[
+        dict | None, Field(description="Additional metadata associated with this chunk")
+    ] = None
+
+
+class ChunkedDocumentResult(BaseModel):
+    kind: Literal["ChunkedDocumentResponse"] = "ChunkedDocumentResponse"
+    chunks: list[ChunkedDocumentResultItem]
+    documents: list[ExportResult]
+    chunking_info: Optional[dict] = None
+
+
 ResultType = Annotated[
-    ExportResult | ZipArchiveResult | RemoteTargetResult, Field(discriminator="kind")
+    ExportResult | ZipArchiveResult | RemoteTargetResult | ChunkedDocumentResult,
+    Field(discriminator="kind"),
 ]
 
 
-class ConvertDocumentResult(BaseModel):
+class DoclingTaskResult(BaseModel):
     result: ResultType
     processing_time: float
     num_converted: int
     num_succeeded: int
     num_failed: int
+
+
+class ConvertDocumentResult(DoclingTaskResult):
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "ConvertDocumentResult is deprecated and will be removed in a future version. "
+            "Use DoclingTaskResult instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)
