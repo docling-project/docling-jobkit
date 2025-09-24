@@ -12,7 +12,6 @@ from docling.datamodel.pipeline_options import (
 )
 
 from docling_jobkit.connectors.s3_helper import (
-    ResultsProcessor,
     check_target_has_source_converted,
     generate_presign_url,
     get_s3_connection,
@@ -22,6 +21,7 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
 )
+from docling_jobkit.convert.results_processor import ResultsProcessor
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.s3_coords import S3Coordinates
 

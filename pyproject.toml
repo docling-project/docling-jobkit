@@ -45,11 +45,12 @@ dependencies = [
     "pydantic~=2.10",
     "pydantic-settings~=2.4",
     "typer~=0.12",
-    "boto3~=1.35.36",
-    "pandas~=2.2.3",
+    "boto3~=1.35",
+    "pandas~=2.2",
     "fastparquet~=2024.11",
     "pyarrow~=19.0",
     "httpx~=0.28",
+    "typer>=0.12.5",
 ]
 
 [project.optional-dependencies]
@@ -80,7 +81,9 @@ dev = [
     "pytest-check~=2.4",
     "pytest-cov>=6.1.1",
     "python-semantic-release~=7.32",
+    "boto3-stubs[s3]~=1.35",
     "ruff>=0.9.6",
+    "types-pyyaml>=6.0.12.20250915",
 ]
 
 [tool.uv]
@@ -91,6 +94,7 @@ include = ["docling_jobkit"]
 
 [project.scripts]
 docling-ray-job = "docling_jobkit.ray_job.main:main"
+docling-jobkit-local = "docling_jobkit.cli.local:app"
 
 [project.urls]
 Homepage = "https://github.com/docling-project/docling-jobkit"
