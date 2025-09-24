@@ -58,8 +58,12 @@ def convert_payload(
     source_keys = batches[batch_index]
 
     presign_filtered_source_keys = [
-        generate_presign_url(s3_source_client, key, s3_coords_source.bucket)
-        for key in source_keys
+        url
+        for url in [
+            generate_presign_url(s3_source_client, key, s3_coords_source.bucket)
+            for key in source_keys
+        ]
+        if url is not None
     ]
 
     results = []
