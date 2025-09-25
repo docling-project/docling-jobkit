@@ -1,0 +1,14 @@
+options:
+  do_ocr: false
+sources:
+  - kind: google_drive
+    path_id: 1Sndwe4i7NJSxAqmz7X6udm83xWJg5V1C
+    token_path: "./dev/google_drive/google_drive_token.json" 
+    credentials_path: "./dev/google_drive/google_drive_credentials.json"   
+target:
+  kind: s3
+  endpoint: localhost:9000
+  verify_ssl: false
+  bucket: docling-target
+  access_key: minioadmin
+  secret_key: minioadmin
