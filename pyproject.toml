@@ -70,6 +70,10 @@ rq = [
 ray = [
     "ray~=2.30",
 ]
+gdrive = [
+    "google-api-python-client>=2.183.0",
+    "google-auth-oauthlib>=1.2.2",
+]
 
 [dependency-groups]
 dev = [
@@ -194,6 +198,8 @@ module = [
     "pandas.*",
     "msgpack.*",
     "mlx_vlm.*",
+    "googleapiclient.*", 
+    "google_auth_oauthlib.*",
 ]
 ignore_missing_imports = true
 
