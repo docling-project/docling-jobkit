@@ -27,14 +27,15 @@ def convert_payload(
     from pathlib import Path
 
     from docling_jobkit.connectors.s3_helper import (
-        ResultsProcessor,
         generate_presign_url,
         get_s3_connection,
     )
+    from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
     from docling_jobkit.convert.manager import (
         DoclingConverterManager,
         DoclingConverterManagerConfig,
     )
+    from docling_jobkit.convert.results_processor import ResultsProcessor
     from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
     from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
@@ -67,19 +68,20 @@ def convert_payload(
     ]
 
     results = []
-    result_processor = ResultsProcessor(
-        target_s3_coords=target_s3_coords,
-        to_formats=[v.value for v in convert_options.to_formats],
-        generate_page_images=convert_options.include_images,
-        generate_picture_images=convert_options.include_images,
-    )
-    for item in result_processor.process_documents(
-        converter.convert_documents(
-            presign_filtered_source_keys, options=convert_options
+    with S3TargetProcessor(target_s3_coords) as target_processor:
+        result_processor = ResultsProcessor(
+            target_processor=target_processor,
+            to_formats=[v.value for v in convert_options.to_formats],
+            generate_page_images=convert_options.include_images,
+            generate_picture_images=convert_options.include_images,
         )
-    ):
-        results.append(item)
-        logging.info("Convertion result: {}".format(item))
+        for item in result_processor.process_documents(
+            converter.convert_documents(
+                presign_filtered_source_keys, options=convert_options
+            )
+        ):
+            results.append(item)
+            logging.info("Convertion result: {}".format(item))
 
     return results
 

@@ -5,12 +5,11 @@ from typing import Optional
 from urllib.parse import urlparse, urlunsplit
 
 import ray
-from boto3.resources.base import ServiceResource
 from boto3.session import Session
-from botocore.client import BaseClient
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from botocore.paginate import Paginator
+from mypy_boto3_s3 import S3Client, S3ServiceResource
 from pydantic import BaseModel
 from ray._raylet import ObjectRefGenerator  # type: ignore
 
@@ -62,7 +61,7 @@ def get_s3_connection(coords: S3Coordinates):
     path = "/"
     endpoint = urlunsplit((scheme, coords.endpoint, path, "", ""))
 
-    client: BaseClient = session.client(
+    client: S3Client = session.client(
         "s3",
         endpoint_url=endpoint,
         verify=coords.verify_ssl,
@@ -71,7 +70,7 @@ def get_s3_connection(coords: S3Coordinates):
         config=config,
     )
 
-    resource: ServiceResource = session.resource(
+    resource: S3ServiceResource = session.resource(
         "s3",
         endpoint_url=endpoint,
         verify=coords.verify_ssl,
@@ -94,7 +93,7 @@ def count_s3_objects(paginator: Paginator, bucket_name: str, prefix: str):
 
 
 def get_keys_s3_objects_as_set(
-    s3_resource: ServiceResource, bucket_name: str, prefix: str
+    s3_resource: S3ServiceResource, bucket_name: str, prefix: str
 ):
     bucket = s3_resource.Bucket(bucket_name)
     folder_objects = list(bucket.objects.filter(Prefix=prefix))
@@ -111,7 +110,7 @@ def strip_prefix_postfix(source_set, prefix="", extension=""):
     return output
 
 
-def generate_presigns_url(s3_client: BaseClient, source_keys: list):
+def generate_presigns_url(s3_client: S3Client, source_keys: list):
     presigned_urls = []
     counter = 0
     sub_array = []
