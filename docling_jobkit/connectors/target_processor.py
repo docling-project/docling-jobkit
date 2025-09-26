@@ -22,22 +22,6 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         self._finalize()
         self._initialized = False
 
-    def initialize(self) -> None:
-        """
-        Public method to initialize the processor (e.g. set up connections).
-        """
-        if not self._initialized:
-            self._initialize()
-            self._initialized = True
-
-    def finalize(self) -> None:
-        """
-        Public method to finalize the processor (e.g. close connections).
-        """
-        if self._initialized:
-            self._finalize()
-            self._initialized = False
-
     @abstractmethod
     def _initialize(self) -> None:
         """
