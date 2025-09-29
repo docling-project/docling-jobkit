@@ -159,9 +159,9 @@ def convert_options_gen() -> Iterable[TestOption]:
 
     options = ConvertDocumentsOptions(
         pipeline=ProcessingPipeline.VLM,
-        vlm_pipeline_model=vlm_model_specs.VlmModelType.SMOLDOCLING,
+        vlm_pipeline_model=vlm_model_specs.VlmModelType.GRANITEDOCLING,
     )
-    yield TestOption(options=options, name="vlm_smoldocling", ci=False)
+    yield TestOption(options=options, name="vlm_granitedocling", ci=False)
 
     # options = ConvertDocumentsOptions(
     #     pipeline=ProcessingPipeline.VLM,
@@ -172,21 +172,21 @@ def convert_options_gen() -> Iterable[TestOption]:
     options = ConvertDocumentsOptions(
         pipeline=ProcessingPipeline.VLM,
         vlm_pipeline_model_local=VlmModelLocal.from_docling(
-            vlm_model_specs.SMOLDOCLING_MLX
+            vlm_model_specs.GRANITEDOCLING_MLX
         ),
     )
-    yield TestOption(options=options, name="vlm_local_smoldocling_mlx", ci=False)
+    yield TestOption(options=options, name="vlm_local_granitedocling_mlx", ci=False)
 
     options = ConvertDocumentsOptions(
         pipeline=ProcessingPipeline.VLM,
         vlm_pipeline_model_api=VlmModelApi(
             url="http://localhost:1234/v1/chat/completions",
-            params={"model": "ds4sd/SmolDocling-256M-preview-mlx-bf16"},
+            params={"model": "ibm-granite/granite-docling-258M-mlx"},
             response_format=ResponseFormat.DOCTAGS,
             prompt="Convert this page to docling.",
         ),
     )
-    yield TestOption(options=options, name="vlm_lmstudio_smoldocling_mlx", ci=False)
+    yield TestOption(options=options, name="vlm_lmstudio_granitedocling_mlx", ci=False)
 
 
 @pytest.mark.asyncio
