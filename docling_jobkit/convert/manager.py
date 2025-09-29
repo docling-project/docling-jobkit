@@ -231,17 +231,17 @@ class DoclingConverterManager:
 
         if request.vlm_pipeline_model in (
             None,
-            vlm_model_specs.VlmModelType.SMOLDOCLING,
+            vlm_model_specs.VlmModelType.GRANITEDOCLING,
         ):
-            pipeline_options.vlm_options = vlm_model_specs.SMOLDOCLING_TRANSFORMERS
+            pipeline_options.vlm_options = vlm_model_specs.GRANITEDOCLING_TRANSFORMERS
             if sys.platform == "darwin":
                 try:
                     import mlx_vlm  # noqa: F401
 
-                    pipeline_options.vlm_options = vlm_model_specs.SMOLDOCLING_MLX
+                    pipeline_options.vlm_options = vlm_model_specs.GRANITEDOCLING_MLX
                 except ImportError:
                     _log.warning(
-                        "To run SmolDocling faster, please install mlx-vlm:\n"
+                        "To run GraniteDocling faster, please install mlx-vlm:\n"
                         "pip install mlx-vlm"
                     )
 

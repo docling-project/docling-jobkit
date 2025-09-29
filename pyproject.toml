@@ -41,7 +41,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "docling~=2.38",
+    "docling~=2.53",
     "pydantic~=2.10",
     "pydantic-settings~=2.4",
     "typer~=0.12",
@@ -55,10 +55,10 @@ dependencies = [
 
 [project.optional-dependencies]
 vlm = [
-    "docling[vlm]~=2.38",
+    "docling[vlm]~=2.53",
 ]
 # asr = [
-#     "docling[asr]~=2.38",
+#     "docling[asr]~=2.53",
 # ]
 kfp = [
     "kfp[kubernetes]>=2.10.0",

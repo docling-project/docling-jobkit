@@ -89,12 +89,12 @@ def test_options_validator():
     if sys.platform == "darwin":
         assert (
             pipeline_opts.pipeline_options.vlm_options
-            == vlm_model_specs.SMOLDOCLING_MLX
+            == vlm_model_specs.GRANITEDOCLING_MLX
         )
     else:
         assert (
             pipeline_opts.pipeline_options.vlm_options
-            == vlm_model_specs.SMOLDOCLING_TRANSFORMERS
+            == vlm_model_specs.GRANITEDOCLING_TRANSFORMERS
         )
 
 
