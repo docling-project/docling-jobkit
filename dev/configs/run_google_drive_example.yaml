@@ -1,0 +1,12 @@
+options:
+  do_ocr: false
+sources:
+  - kind: google_drive
+    path_id: 1osslv5IhPnuMDMcIkyEJGOf3J88cPl55
+    token_path: "./dev/google_drive/google_drive_token.json" 
+    credentials_path: "./dev/google_drive/google_drive_credentials.json"   
+target:
+  kind: google_drive
+  path_id: 19eEXsv5aHnJ7owWbOTuObLd-Ur9x0bmn
+  token_path: "./dev/google_drive/google_drive_token.json" 
+  credentials_path: "./dev/google_drive/google_drive_credentials.json"   
