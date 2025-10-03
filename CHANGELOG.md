@@ -1,3 +1,15 @@
+## [v1.6.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.6.0) - 2025-10-03
+
+### Feature
+
+* Create connectors to import/export documents from/to Google Drive ([#62](https://github.com/docling-project/docling-jobkit/issues/62)) ([`08cf076`](https://github.com/docling-project/docling-jobkit/commit/08cf0768e995652620fe905de9803be7bcf6d7a9))
+* **docling:** Update docling version with support for GraniteDocling ([#63](https://github.com/docling-project/docling-jobkit/issues/63)) ([`291b757`](https://github.com/docling-project/docling-jobkit/commit/291b757f50f92ae3da10facb50d6a967836ba583))
+* Kubeflow pipeline using docling with remote inference server ([#57](https://github.com/docling-project/docling-jobkit/issues/57)) ([`2188b96`](https://github.com/docling-project/docling-jobkit/commit/2188b9699ac72c9ed6492a86eed0b619e5b5320a))
+
+### Documentation
+
+* Fix description of default table structure mode ([#58](https://github.com/docling-project/docling-jobkit/issues/58)) ([`0d88e9e`](https://github.com/docling-project/docling-jobkit/commit/0d88e9e36bb8406a9e0caa6eafd2dfe06576bdac))
+
 ## [v1.5.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.5.0) - 2025-09-08
 
 ### Feature
