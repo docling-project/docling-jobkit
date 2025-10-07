@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict, SettingsError
 from typing_extensions import Self
@@ -17,6 +19,7 @@ from docling_jobkit.connectors.s3_helper import (
     get_s3_connection,
     get_source_files,
 )
+from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
@@ -24,7 +27,6 @@ from docling_jobkit.convert.manager import (
 from docling_jobkit.convert.results_processor import ResultsProcessor
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.s3_coords import S3Coordinates
-from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
 
 # from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 # from docling_jobkit.datamodel.s3_coords import S3Coordinates
@@ -146,7 +148,7 @@ s3_target_coords = S3Coordinates.model_validate(s3_target)
 input_convertion_options: dict = {
     "from_formats": settings.from_formats,
     "to_formats": settings.to_formats,
-    "image_export_mode": "placeholder",
+    "image_export_mode": "referenced",
     "do_ocr": settings.do_ocr,
     "force_ocr": False,
     "ocr_engine": settings.ocr_kind,
@@ -187,14 +189,18 @@ converter = DoclingConverterManager(config)
 
 
 results = []
-result_processor = ResultsProcessor(
-    target_processor=S3TargetProcessor(coords=s3_target_coords),
-    to_formats=[v.value for v in convert_options.to_formats],
-    generate_page_images=convert_options.include_images,
-    generate_picture_images=convert_options.include_images,
-)
-for item in result_processor.process_documents(
-    converter.convert_documents(presign_filtered_source_keys, options=convert_options)
-):
-    results.append(item)
-    print(f"Convertion result: {item}")
+with S3TargetProcessor(coords=s3_target_coords) as target_processor:
+    result_processor = ResultsProcessor(
+        target_processor=target_processor,
+        to_formats=[v.value for v in convert_options.to_formats],
+        generate_page_images=convert_options.include_images,
+        generate_picture_images=convert_options.include_images,
+        scratch_dir=Path("/Users/vku/Documents/cloud/docling-jobkit/docling_temp"),
+    )
+    for item in result_processor.process_documents(
+        converter.convert_documents(
+            presign_filtered_source_keys, options=convert_options
+        )
+    ):
+        results.append(item)
+        print(f"Convertion result: {item}")

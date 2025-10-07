@@ -17,7 +17,6 @@ from docling.utils.utils import create_hash
 from docling_core.types.doc.base import ImageRefMode
 from docling_core.types.doc.document import (
     DocItem,
-    DoclingDocument,
     PageItem,
     PictureClassificationData,
     PictureItem,
@@ -90,11 +89,14 @@ class ResultsProcessor:
                             temp_json_file = temp_dir / f"{name_without_ext}.json"
 
                             # saving artifacts to `images` needs to be consistent with upload_pictures()
-                            image_artifacts_path = Path(f"./images/{name_without_ext}_artifacts")
+                            # artifacts_dir have to be passed as relative folder to properly save references
+                            image_artifacts_path = (
+                                f"images/{name_without_ext}_artifacts"
+                            )
                             conv_res.document.save_as_json(
                                 filename=temp_json_file,
                                 image_mode=ImageRefMode.REFERENCED,
-                                artifacts_dir=image_artifacts_path
+                                artifacts_dir=Path(f"./{image_artifacts_path}"),
                             )
                             self._target_processor.upload_file(
                                 filename=temp_json_file,
@@ -155,11 +157,9 @@ class ResultsProcessor:
                         if self.export_images:
                             # Export pictures
                             self.upload_pictures(
-                                # conv_res.document,
-                                # conv_res.input.document_hash,
-                                artifacts_dir=image_artifacts_path
+                                artifacts_dir=temp_dir / image_artifacts_path,
+                                object_key_prefix=image_artifacts_path,
                             )
-
 
                         if self.export_parquet_file:
                             logging.info("saving document info in dataframe...")
@@ -200,7 +200,7 @@ class ResultsProcessor:
                         target_filename=page_path_suffix,
                         content_type="application/png",
                     )
-                    page.image.uri = Path(".." + page_path_suffix)
+                    page.image.uri = Path(page_path_suffix)
 
             except Exception as exc:
                 logging.error(
@@ -209,16 +209,11 @@ class ResultsProcessor:
                     exc,
                 )
 
-    def upload_pictures(
-        self,
-        # document: DoclingDocument,
-        # doc_hash: str,
-        artifacts_dir: Path
-    ):
+    def upload_pictures(self, artifacts_dir: Path, object_key_prefix: str):
         images = [item for item in artifacts_dir.iterdir() if item.is_file()]
         for image in images:
+            target_key = f"{object_key_prefix}/{image.name}"
             try:
-                target_key = image.as_posix()
                 self._target_processor.upload_file(
                     filename=image,
                     target_filename=target_key,
@@ -230,31 +225,6 @@ class ResultsProcessor:
                     target_key,
                     exc,
                 )
-        # picture_number = 0
-        # for element, _level in document.iterate_items():
-        #     if isinstance(element, PictureItem):
-        #         if element.image and element.image.pil_image:
-        #             try:
-        #                 element_hash = create_hash(f"{doc_hash}_img_{picture_number}")
-        #                 element_dpi = element.image.dpi
-        #                 element_path_suffix = f"images/{element_hash}_{element_dpi}.png"
-        #                 buf = BytesIO()
-        #                 element.image.pil_image.save(buf, format="PNG")
-        #                 buf.seek(0)
-        #                 self._target_processor.upload_object(
-        #                     obj=buf,
-        #                     target_filename=element_path_suffix,
-        #                     content_type="application/png",
-        #                 )
-        #                 element.image.uri = Path(".." + element_path_suffix)
-
-        #             except Exception as exc:
-        #                 logging.error(
-        #                     "Upload picture with hash %r raised error: %r",
-        #                     element_hash,
-        #                     exc,
-        #                 )
-        #             picture_number += 1
 
     def document_to_dataframe(
         self, conv_res: ConversionResult, pd_dataframe: DataFrame, filename: str
