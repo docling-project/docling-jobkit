@@ -24,6 +24,7 @@ from docling_jobkit.convert.manager import (
 from docling_jobkit.convert.results_processor import ResultsProcessor
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.s3_coords import S3Coordinates
+from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
 
 # from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 # from docling_jobkit.datamodel.s3_coords import S3Coordinates
@@ -187,7 +188,7 @@ converter = DoclingConverterManager(config)
 
 results = []
 result_processor = ResultsProcessor(
-    target_s3_coords=s3_target_coords,
+    target_processor=S3TargetProcessor(coords=s3_target_coords),
     to_formats=[v.value for v in convert_options.to_formats],
     generate_page_images=convert_options.include_images,
     generate_picture_images=convert_options.include_images,
