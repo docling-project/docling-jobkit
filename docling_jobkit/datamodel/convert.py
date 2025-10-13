@@ -291,7 +291,7 @@ class ConvertDocumentsOptions(BaseModel):
         Field(
             description=("The OCR engine to use. String. "),
         ),
-    ] = "easyocr"
+    ] = "auto"
 
     ocr_lang: Annotated[
         Optional[list[str]],

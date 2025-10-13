@@ -49,7 +49,7 @@ def pytest_configure(config):
 
 @pytest_asyncio.fixture
 async def artifacts_path():
-    download_path = download_models()
+    download_path = download_models(with_easyocr=False)
     return download_path
 
 

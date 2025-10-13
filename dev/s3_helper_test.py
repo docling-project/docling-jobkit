@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     batch_size: int = Field(validation_alias="BATCH_SIZE")
 
     do_ocr: bool = Field(True, validation_alias="SETTINGS_DO_OCR")
-    ocr_kind: str = Field("easyocr", validation_alias="SETTINGS_OCR_KIND")
+    ocr_kind: str = Field("auto", validation_alias="SETTINGS_OCR_KIND")
     do_table_structure: bool = Field(
         True, validation_alias="SETTINGS_DO_TABLE_STRUCTURE"
     )
