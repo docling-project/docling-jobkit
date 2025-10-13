@@ -3,6 +3,8 @@ import logging
 import os
 import shutil
 import tempfile
+import tarfile
+import glob
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -39,6 +41,9 @@ class ResultsProcessor:
         generate_picture_images: bool = False,
         export_parquet_file: bool = True,
         scratch_dir: Path | None = None,
+        gzip_artifacts: bool = False,
+        max_page_count_per_gzip: int = 50,
+        max_total_size_per_gzip: int = 209715200 #200MB
     ):
         self._target_processor = target_processor
 
@@ -50,6 +55,10 @@ class ResultsProcessor:
 
         self.scratch_dir = scratch_dir or Path(tempfile.mkdtemp(prefix="docling_"))
         self.scratch_dir.mkdir(exist_ok=True, parents=True)
+
+        self.gzip_artifacts = gzip_artifacts
+        self.max_page_count_per_gzip = max_page_count_per_gzip
+        self.max_total_size_per_gzip = max_total_size_per_gzip
 
     def __del__(self):
         if self.scratch_dir is not None:
@@ -77,8 +86,9 @@ class ResultsProcessor:
                         if self.export_page_images:
                             # Export pages images:
                             self.upload_page_images(
-                                conv_res.document.pages,
-                                conv_res.input.document_hash,
+                                pages=conv_res.document.pages,
+                                doc_hash=conv_res.input.document_hash,
+                                referenced_path=f"pages/{name_without_ext}_artifacts"
                             )
 
                         if self.to_formats is None or (
@@ -159,6 +169,7 @@ class ResultsProcessor:
                             self.upload_pictures(
                                 artifacts_dir=temp_dir / image_artifacts_path,
                                 object_key_prefix=image_artifacts_path,
+                                doc_identifier=name_without_ext
                             )
 
                         if self.export_parquet_file:
@@ -185,46 +196,135 @@ class ResultsProcessor:
         self,
         pages: dict[int, PageItem],
         doc_hash: str,
+        referenced_path: str
     ):
+        gzip_artifacts = self.gzip_artifacts
+        max_pages = self.max_page_count_per_gzip
+        max_size = self.max_total_size_per_gzip
+        
+        pages_temp_dir = self.scratch_dir / f"pages/{doc_hash}"
+        pages_temp_dir.mkdir(exist_ok=True, parents=True)
+
+        # collect pages and update references in the document
         for page_no, page in pages.items():
-            try:
-                if page.image and page.image.pil_image:
-                    page_hash = create_hash(f"{doc_hash}_page_no_{page_no}")
-                    page_dpi = page.image.dpi
-                    page_path_suffix = f"pages/{page_hash}_{page_dpi}.png"
-                    buf = BytesIO()
-                    page.image.pil_image.save(buf, format="PNG")
-                    buf.seek(0)
-                    self._target_processor.upload_object(
-                        obj=buf,
-                        target_filename=page_path_suffix,
-                        content_type="application/png",
-                    )
-                    page.image.uri = Path(page_path_suffix)
+            if page.image and page.image.pil_image:
+                page_dpi = page.image.dpi
+                filename = f"page_no_{str(page_no).zfill(4)}_{doc_hash}_{page_dpi}.png"
+                page_path_suffix = f"{referenced_path}/{filename}"
+                page.image.uri = Path(page_path_suffix)
+                
+                temp_file_path = pages_temp_dir / filename
+                page.image.pil_image.save(temp_file_path, format="PNG")
 
-            except Exception as exc:
-                logging.error(
-                    "Upload image of page with hash %r raised error: %r",
-                    page_hash,
-                    exc,
-                )
+                # upload page image
+                if not gzip_artifacts:
+                    try:
+                        self._target_processor.upload_file(
+                            filename=temp_file_path,
+                            target_filename=page_path_suffix,
+                            content_type="image/png",
+                        )
+                    except Exception as exc:
+                        logging.error(
+                            "Upload of page image %r raised error: %r",
+                            page_path_suffix,
+                            exc,
+                        )
 
-    def upload_pictures(self, artifacts_dir: Path, object_key_prefix: str):
+        # pack pages into archives
+        if gzip_artifacts: 
+            pack_counter: int = 1
+            page_counter: int = 0
+            size_counter: int = 0
+            start_page: int = 1
+            files = sorted(glob.glob(f"{pages_temp_dir}/*.png"))
+            total_files = len(files)
+            archive = None
+            for idx, filename in enumerate(files):
+                archive_path = pages_temp_dir / f"pages_{doc_hash}_{pack_counter}.gz"
+                if not archive:
+                    archive = tarfile.open(archive_path, mode="w:gz")
+                
+                archive.add(name=filename, arcname=Path(filename).name, recursive=False)
+
+                page_counter += 1
+                size_counter += os.path.getsize(filename)
+                
+                if page_counter >= max_pages or \
+                    size_counter >= max_size or \
+                    idx+1 == total_files:
+                    archive.close()
+                    archive = None
+                    # upload archive
+                    try:
+                        end_page = idx+1
+                        target_key = f"{referenced_path}/pages_{doc_hash}_{start_page}_to_{end_page}.gz"
+                        self._target_processor.upload_file(
+                            filename=archive_path,
+                            target_filename=target_key,
+                            content_type="application/x-gzip",
+                        )
+                    except Exception as exc:
+                        logging.error(
+                            "Upload of pages archive %r raised error: %r",
+                            target_key,
+                            exc,
+                        )
+                    start_page = end_page + 1
+                    pack_counter += 1
+                    page_counter = 0
+                    size_counter = 0
+            # safeguard for exiting archiving early
+            if archive:
+                archive.close()
+
+        # cleanup temp dir
+        shutil.rmtree(pages_temp_dir, ignore_errors=True)
+
+    def upload_pictures(
+        self, 
+        artifacts_dir: Path, 
+        object_key_prefix: str,
+        doc_identifier: str
+    ):
+        gzip_artifacts = self.gzip_artifacts
         images = [item for item in artifacts_dir.iterdir() if item.is_file()]
-        for image in images:
-            target_key = f"{object_key_prefix}/{image.name}"
-            try:
-                self._target_processor.upload_file(
-                    filename=image,
-                    target_filename=target_key,
-                    content_type="application/png",
-                )
-            except Exception as exc:
-                logging.error(
-                    "Upload picture with key %r raised error: %r",
-                    target_key,
-                    exc,
-                )
+        if len(images) > 0:
+            if gzip_artifacts:
+                archive_path = artifacts_dir / f"images_{doc_identifier}.gz"
+                with tarfile.open(archive_path, mode="w:gz") as archive:
+                    for image in images:
+                        archive.add(name=image, arcname=image.name, recursive=False)
+                # push archived images
+                try:
+                    target_key = f"{object_key_prefix}/images_{doc_identifier}.gz"
+                    self._target_processor.upload_file(
+                        filename=archive_path,
+                        target_filename=target_key,
+                        content_type="application/x-gzip",
+                    )
+                except Exception as exc:
+                    logging.error(
+                        "Upload of images archive %r raised error: %r",
+                        target_key,
+                        exc,
+                    )
+            else:
+                for image in images:
+                    target_key = f"{object_key_prefix}/{image.name}"
+                    try:
+                        self._target_processor.upload_file(
+                            filename=image,
+                            target_filename=target_key,
+                            content_type="image/png",
+                        )
+                    except Exception as exc:
+                        logging.error(
+                            "Upload picture with key %r raised error: %r",
+                            target_key,
+                            exc,
+                        )
+
 
     def document_to_dataframe(
         self, conv_res: ConversionResult, pd_dataframe: DataFrame, filename: str

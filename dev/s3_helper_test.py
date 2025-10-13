@@ -195,7 +195,10 @@ with S3TargetProcessor(coords=s3_target_coords) as target_processor:
         to_formats=[v.value for v in convert_options.to_formats],
         generate_page_images=convert_options.include_images,
         generate_picture_images=convert_options.include_images,
-        scratch_dir=Path("/Users/vku/Documents/cloud/docling-jobkit/docling_temp"),
+        scratch_dir=Path("./dev/docling_temp"),
+        gzip_artifacts=True,
+        max_page_count_per_gzip = 5,
+        max_total_size_per_gzip = 1048576 #1MB
     )
     for item in result_processor.process_documents(
         converter.convert_documents(
