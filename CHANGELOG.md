@@ -1,3 +1,13 @@
+## [v1.7.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.7.0) - 2025-10-21
+
+### Feature
+
+* Use new docling auto-ocr ([#64](https://github.com/docling-project/docling-jobkit/issues/64)) ([`6d7a4d2`](https://github.com/docling-project/docling-jobkit/commit/6d7a4d23a532bb64397fb96559bcd8715ba3da78))
+
+### Documentation
+
+* Param typo ([#67](https://github.com/docling-project/docling-jobkit/issues/67)) ([`448abc2`](https://github.com/docling-project/docling-jobkit/commit/448abc29bba0c5eee09387c0621b40d2543c66f4))
+
 ## [v1.6.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.6.0) - 2025-10-03
 
 ### Feature
