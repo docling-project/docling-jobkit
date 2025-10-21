@@ -402,7 +402,7 @@ class ConvertDocumentsOptions(BaseModel):
     md_page_break_placeholder: Annotated[
         str,
         Field(
-            description="Add this placeholder betweek pages in the markdown output.",
+            description="Add this placeholder between pages in the markdown output.",
             examples=["<!-- page-break -->", ""],
         ),
     ] = ""
