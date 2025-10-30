@@ -1,3 +1,9 @@
+## [v1.7.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.7.1) - 2025-10-30
+
+### Fix
+
+* Missing temperature parameter for vlm pipeline models ([#69](https://github.com/docling-project/docling-jobkit/issues/69)) ([`5b1914c`](https://github.com/docling-project/docling-jobkit/commit/5b1914c91c620681af75fa1d00e3cc230db5bfc4))
+
 ## [v1.7.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.7.0) - 2025-10-21
 
 ### Feature
