@@ -69,7 +69,7 @@ rq = [
     "msgpack~=1.1",
 ]
 ray = [
-    "ray~=2.30",
+    'ray~=2.30 ; python_version < "3.14"',
 ]
 gdrive = [
     "google-api-python-client>=2.183.0",
