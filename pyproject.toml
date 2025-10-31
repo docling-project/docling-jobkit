@@ -34,6 +34,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Topic :: Software Development :: Build Tools",
@@ -102,7 +103,7 @@ docling-jobkit-local = "docling_jobkit.cli.local:app"
 
 [project.urls]
 Homepage = "https://github.com/docling-project/docling-jobkit"
-# Documentation = "https://ds4sd.github.io/docling"
+Documentation = "https://docling-project.github.io/docling/usage/jobkit/"
 Repository = "https://github.com/docling-project/docling-jobkit"
 Issues = "https://github.com/docling-project/docling-jobkit/issues"
 Changelog = "https://github.com/docling-project/docling-jobkit/blob/main/CHANGELOG.md"
