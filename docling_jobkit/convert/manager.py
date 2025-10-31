@@ -50,6 +50,13 @@ class DoclingConverterManagerConfig(BaseModel):
     max_num_pages: int = sys.maxsize
     max_file_size: int = sys.maxsize
 
+    # Threading pipeline
+    queue_max_size: Optional[int] = None
+    ocr_batch_size: Optional[int] = None
+    layout_batch_size: Optional[int] = None
+    table_batch_size: Optional[int] = None
+    batch_polling_interval_seconds: Optional[float] = None
+
 
 # Custom serializer for PdfFormatOption
 # (model_dump_json does not work with some classes)
@@ -201,6 +208,17 @@ class DoclingConverterManager:
         pipeline_options.picture_description_options.picture_area_threshold = (
             request.picture_description_area_threshold
         )
+
+        # Forward the definition of the following attributes, if they are not none
+        for attr in (
+            "queue_max_size",
+            "ocr_batch_size",
+            "layout_batch_size",
+            "table_batch_size",
+            "batch_polling_interval_seconds",
+        ):
+            if value := getattr(self.config, attr):
+                setattr(pipeline_options, attr, value)
 
         return pipeline_options
 
