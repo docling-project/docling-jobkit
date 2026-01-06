@@ -7,6 +7,7 @@ from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBacke
 from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
+from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import (
     PdfBackend,
     PdfPipelineOptions,
@@ -112,6 +113,12 @@ def test_options_cache_key():
     opts.do_picture_description = True
     pipeline_opts = m.get_pdf_pipeline_opts(opts)
     hash = _hash_pdf_format_option(pipeline_opts)
+    assert hash not in hashes
+    hashes.add(hash)
+
+    opts = ConvertDocumentsOptions(pipeline=ProcessingPipeline.VLM)
+    pipeline_opts = m.get_pdf_pipeline_opts(opts)
+    hash = _hash_pdf_format_option(pipeline_opts)
     # pprint(pipeline_opts.pipeline_options.model_dump(serialize_as_any=True))
     assert hash not in hashes
     hashes.add(hash)
@@ -144,3 +151,13 @@ def test_options_cache_key():
     # pprint(pipeline_opts.pipeline_options.model_dump(serialize_as_any=True))
     assert hash not in hashes
     hashes.add(hash)
+
+
+def test_image_pipeline_uses_vlm_pipeline_when_requested():
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+    opts = ConvertDocumentsOptions(pipeline=ProcessingPipeline.VLM)
+    pipeline_opts = m.get_pdf_pipeline_opts(opts)
+    converter = m.get_converter(pipeline_opts)
+    img_opt = converter.format_to_options[InputFormat.IMAGE]
+    assert img_opt.pipeline_cls == VlmPipeline
+    assert isinstance(img_opt.pipeline_options, VlmPipelineOptions)

@@ -31,7 +31,12 @@ from docling.datamodel.pipeline_options import (
     VlmPipelineOptions,
 )
 from docling.datamodel.pipeline_options_vlm_model import ApiVlmOptions, InlineVlmOptions
-from docling.document_converter import DocumentConverter, FormatOption, PdfFormatOption
+from docling.document_converter import (
+    DocumentConverter,
+    FormatOption,
+    ImageFormatOption,
+    PdfFormatOption,
+)
 from docling.models.factories import get_ocr_factory
 from docling.pipeline.vlm_pipeline import VlmPipeline
 from docling_core.types.doc import ImageRefMode
@@ -68,12 +73,26 @@ def _hash_pdf_format_option(pdf_format_option: PdfFormatOption) -> bytes:
         data["pipeline_options"] = pdf_format_option.pipeline_options.model_dump(
             serialize_as_any=True, mode="json"
         )
+        data["pipeline_options_type"] = (
+            f"{pdf_format_option.pipeline_options.__class__.__module__}."
+            f"{pdf_format_option.pipeline_options.__class__.__qualname__}"
+        )
+    else:
+        data["pipeline_options_type"] = None
 
     # Replace `pipeline_cls` with a string representation
-    data["pipeline_cls"] = repr(data["pipeline_cls"])
+    pipeline_cls = pdf_format_option.pipeline_cls
+    data["pipeline_cls"] = (
+        f"{pipeline_cls.__module__}.{pipeline_cls.__qualname__}"
+        if pipeline_cls is not None
+        else "None"
+    )
 
     # Replace `backend` with a string representation
-    data["backend"] = repr(data["backend"])
+    backend = pdf_format_option.backend
+    data["backend"] = (
+        f"{backend.__module__}.{backend.__qualname__}" if backend is not None else "None"
+    )
 
     # Serialize the dictionary to JSON with sorted keys to have consistent hashes
     serialized_data = json.dumps(data, sort_keys=True)
@@ -121,9 +140,19 @@ class DoclingConverterManager:
         @lru_cache(maxsize=cache_size)
         def _get_converter_from_hash(options_hash: bytes) -> DocumentConverter:
             pdf_format_option = self._options_map[options_hash]
+            image_format_option: FormatOption = pdf_format_option
+            if isinstance(pdf_format_option.pipeline_cls, type) and issubclass(
+                pdf_format_option.pipeline_cls, VlmPipeline
+            ):
+                image_format_option = ImageFormatOption(
+                    pipeline_cls=pdf_format_option.pipeline_cls,
+                    pipeline_options=pdf_format_option.pipeline_options,
+                    backend_options=pdf_format_option.backend_options,
+                )
+
             format_options: dict[InputFormat, FormatOption] = {
                 InputFormat.PDF: pdf_format_option,
-                InputFormat.IMAGE: pdf_format_option,
+                InputFormat.IMAGE: image_format_option,
             }
 
             return DocumentConverter(format_options=format_options)
@@ -281,6 +310,27 @@ class DoclingConverterManager:
             pipeline_options.vlm_options = ApiVlmOptions.model_validate(
                 request.vlm_pipeline_model_api.model_dump()
             )
+
+        pipeline_options.do_picture_classification = request.do_picture_classification
+        pipeline_options.do_picture_description = request.do_picture_description
+
+        if request.picture_description_local is not None:
+            pipeline_options.picture_description_options = (
+                PictureDescriptionVlmOptions.model_validate(
+                    request.picture_description_local.model_dump()
+                )
+            )
+
+        if request.picture_description_api is not None:
+            pipeline_options.picture_description_options = (
+                PictureDescriptionApiOptions.model_validate(
+                    request.picture_description_api.model_dump()
+                )
+            )
+
+        pipeline_options.picture_description_options.picture_area_threshold = (
+            request.picture_description_area_threshold
+        )
 
         return pipeline_options
 
