@@ -91,7 +91,9 @@ def _hash_pdf_format_option(pdf_format_option: PdfFormatOption) -> bytes:
     # Replace `backend` with a string representation
     backend = pdf_format_option.backend
     data["backend"] = (
-        f"{backend.__module__}.{backend.__qualname__}" if backend is not None else "None"
+        f"{backend.__module__}.{backend.__qualname__}"
+        if backend is not None
+        else "None"
     )
 
     # Serialize the dictionary to JSON with sorted keys to have consistent hashes
