@@ -1,4 +1,4 @@
-from typing import Iterator
+from typing import Iterator, TypedDict
 
 from docling.datamodel.base_models import DocumentStream
 
@@ -6,7 +6,12 @@ from docling_jobkit.connectors.source_processor import BaseSourceProcessor
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
 
 
-class HttpSourceProcessor(BaseSourceProcessor):
+class HttpFileIdentifier(TypedDict):
+    source: HttpSource | FileSource
+    index: int
+
+
+class HttpSourceProcessor(BaseSourceProcessor[HttpFileIdentifier]):
     def __init__(self, source: HttpSource | FileSource):
         super().__init__()
         self._source = source
@@ -16,6 +21,19 @@ class HttpSourceProcessor(BaseSourceProcessor):
 
     def _finalize(self):
         pass
+
+    def _list_document_ids(self) -> Iterator[HttpFileIdentifier]:
+        """Yield a single identifier for the HTTP/File source."""
+        yield HttpFileIdentifier(source=self._source, index=0)
+
+    def _fetch_document_by_id(self, identifier: HttpFileIdentifier) -> DocumentStream:
+        """Fetch document from the identifier."""
+        source = identifier["source"]
+        if isinstance(source, FileSource):
+            return source.to_document_stream()
+        elif isinstance(source, HttpSource):
+            # TODO: fetch, e.g. using the helpers in docling-core
+            raise NotImplementedError()
 
     def _fetch_documents(self) -> Iterator[DocumentStream]:
         if isinstance(self._source, FileSource):

@@ -16,7 +16,11 @@ from ray._raylet import ObjectRefGenerator  # type: ignore
 from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
 from docling.datamodel.base_models import ConversionStatus, InputFormat
 from docling.datamodel.document import ConversionResult
-from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
+from docling.datamodel.pipeline_options import (
+    PdfPipelineOptions,
+    TableFormerMode,
+    TableStructureOptions,
+)
 from docling.document_converter import DocumentConverter, PdfFormatOption
 
 # Load credentials
@@ -224,8 +228,8 @@ class DoclingConvert:
         pipeline_options = PdfPipelineOptions()
         pipeline_options.do_ocr = do_ocr
         pipeline_options.do_table_structure = do_table_structure
-        pipeline_options.table_structure_options.mode = TableFormerMode(
-            table_structure_mode
+        pipeline_options.table_structure_options = TableStructureOptions(
+            mode=TableFormerMode(table_structure_mode)
         )
         pipeline_options.generate_page_images = generate_page_images
 

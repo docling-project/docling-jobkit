@@ -28,6 +28,7 @@ from docling.datamodel.pipeline_options import (
     PictureDescriptionVlmOptions,
     ProcessingPipeline,
     TableFormerMode,
+    TableStructureOptions,
     VlmPipelineOptions,
 )
 from docling.datamodel.pipeline_options_vlm_model import ApiVlmOptions, InlineVlmOptions
@@ -209,11 +210,9 @@ class DoclingConverterManager:
             do_picture_classification=request.do_picture_classification,
             do_picture_description=request.do_picture_description,
         )
-        pipeline_options.table_structure_options.mode = TableFormerMode(
-            request.table_mode
-        )
-        pipeline_options.table_structure_options.do_cell_matching = (
-            request.table_cell_matching
+        pipeline_options.table_structure_options = TableStructureOptions(
+            mode=TableFormerMode(request.table_mode),
+            do_cell_matching=request.table_cell_matching,
         )
 
         if request.image_export_mode != ImageRefMode.PLACEHOLDER:

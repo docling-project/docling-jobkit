@@ -13,7 +13,7 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBa
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
 
 
-class FileInfoType(TypedDict):
+class GoogleDriveFileIdentifier(TypedDict):
     id: str
     name: str
     mimeType: str
@@ -120,7 +120,7 @@ def _yield_children(service: Resource, folder_id: str):
 def _yield_files_infos(
     service: Resource,
     coords: GoogleDriveCoordinates,
-) -> Iterable[FileInfoType]:
+) -> Iterable[GoogleDriveFileIdentifier]:
     """
     Depth-first traversal of Google Drive.
     Yields dicts: {id, name, mimeType, path}
@@ -136,7 +136,7 @@ def _yield_files_infos(
         .execute()
     )
 
-    info: FileInfoType
+    info: GoogleDriveFileIdentifier
     if not (root_meta.get("mimeType") == "application/vnd.google-apps.folder"):
         info = {
             "id": root_meta["id"],
@@ -167,13 +167,13 @@ def _yield_files_infos(
 def get_source_files_infos(
     service: Resource,
     coords: GoogleDriveCoordinates,
-) -> List[FileInfoType]:
+) -> List[GoogleDriveFileIdentifier]:
     return list(_yield_files_infos(service, coords))
 
 
 def download_file(
     service: Resource,
-    file_info: FileInfoType,
+    file_info: GoogleDriveFileIdentifier,
     file_stream: BytesIO,
 ) -> None:
     """
