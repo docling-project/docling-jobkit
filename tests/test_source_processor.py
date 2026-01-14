@@ -1,7 +1,7 @@
 from io import BytesIO
 from typing import Generator, Iterator, List
 
-from docling.datamodel.base_models import DocumentStream
+from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
@@ -34,8 +34,8 @@ class MockSourceProcessor(BaseSourceProcessor):
         return len(self._all_ids)
 
     # ---- Simulated fetch ----
-    def _fetch_document_by_id(self, doc_id: str) -> DocumentStream:
-        return DocumentStream(name=doc_id, stream=BytesIO(b"content"))
+    def _fetch_document_by_id(self, identifier: str) -> DocumentStream:
+        return DocumentStream(name=identifier, stream=BytesIO(b"content"))
 
     # ---- Only used for full streaming ----
     def _fetch_documents(self) -> Iterator[DocumentStream]:

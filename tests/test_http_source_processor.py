@@ -1,4 +1,4 @@
-from docling.datamodel.base_models import DocumentStream
+from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.http_source_processor import HttpSourceProcessor
 from docling_jobkit.datamodel.http_inputs import FileSource

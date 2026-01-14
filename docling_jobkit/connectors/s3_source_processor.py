@@ -1,7 +1,7 @@
 from io import BytesIO
 from typing import Iterator, TypedDict
 
-from docling.datamodel.base_models import DocumentStream
+from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.s3_helper import get_s3_connection
 from docling_jobkit.connectors.source_processor import BaseSourceProcessor
@@ -32,10 +32,11 @@ class S3SourceProcessor(BaseSourceProcessor[S3FileIdentifier]):
             Prefix=self._coords.key_prefix,
         ):
             for obj in page.get("Contents", []):
+                last_modified = obj.get("LastModified", None)
                 yield S3FileIdentifier(
-                    key=obj["Key"],
+                    key=obj["Key"],  # type: ignore[typeddict-item]  # Key is always present in S3 list_objects_v2 response
                     size=obj.get("Size", 0),
-                    last_modified=obj.get("LastModified", None),
+                    last_modified=last_modified.isoformat() if last_modified else None,
                 )
 
     def _count_documents(self) -> int:
@@ -57,29 +58,6 @@ class S3SourceProcessor(BaseSourceProcessor[S3FileIdentifier]):
         )
         buffer.seek(0)
         return DocumentStream(name=identifier["key"], stream=buffer)
-
-    # def _fetch_documents(self) -> Iterator[DocumentStream]:
-    #     # get list of object_keys
-    #     object_keys = get_source_files(
-    #         s3_source_client=self._client,
-    #         s3_source_resource=self._resource,
-    #         s3_coords=self._coords,
-    #     )
-
-    #     # download and yield one document at the time
-    #     for obj_key in object_keys:
-    #         # todo. stream is BytesIO
-    #         buffer = BytesIO()
-    #         self._client.download_fileobj(
-    #             Bucket=self._coords.bucket,
-    #             Key=obj_key,
-    #             Fileobj=buffer,
-    #         )
-    #         buffer.seek(0)
-    #         yield DocumentStream(
-    #             name=obj_key,
-    #             stream=buffer,
-    #         )
 
     def _fetch_documents(self):
         for key in self._list_document_ids():
