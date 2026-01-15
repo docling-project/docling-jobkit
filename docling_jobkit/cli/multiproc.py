@@ -130,8 +130,13 @@ def _process_source(
                 console.print("[yellow]No documents found in source[/yellow]")
             return batch_results
 
+        # Calculate total number of documents across all chunks
+        total_documents = sum(len(list(chunk.ids)) for chunk in chunks)
+
         if not quiet:
-            console.print(f"Found {num_chunks} batches to process")
+            console.print(
+                f"Found {total_documents} documents in {num_chunks} batches to process"
+            )
 
         # Prepare arguments for each batch
         batch_args = [
@@ -157,12 +162,13 @@ def _process_source(
             console=console,
             disable=quiet,
         ) as progress:
-            task = progress.add_task("Processing batches...", total=num_chunks)
+            task = progress.add_task("Processing documents...", total=total_documents)
 
             with mp.Pool(processes=num_processes) as pool:
                 for batch_result in pool.starmap(process_batch, batch_args):
                     batch_results.append(batch_result)
-                    progress.update(task, advance=1)
+                    # Update progress by the number of documents in this batch
+                    progress.update(task, advance=batch_result.num_documents)
 
     return batch_results
 
