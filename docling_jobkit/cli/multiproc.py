@@ -371,6 +371,15 @@ def convert(
             help="Suppress progress bar and detailed output",
         ),
     ] = False,
+    verbose: Annotated[
+        int,
+        typer.Option(
+            "--verbose",
+            "-v",
+            count=True,
+            help="Set the verbosity level. -v for info logging, -vv for debug logging.",
+        ),
+    ] = 0,
 ):
     """
     Convert documents using multiprocessing for parallel batch processing.
@@ -378,6 +387,20 @@ def convert(
     Each batch of documents is processed in a separate subprocess, allowing
     for efficient parallel processing of large document collections.
     """
+    # Configure logging based on verbosity level
+    # Default: WARNING (no -v flag)
+    # -v: INFO level
+    # -vv or more: DEBUG level
+    if verbose == 0:
+        log_level = logging.WARNING
+    elif verbose == 1:
+        log_level = logging.INFO
+    else:
+        log_level = logging.DEBUG
+
+    logging.basicConfig(level=log_level, force=True)
+    logging.getLogger().setLevel(log_level)
+
     # Determine number of processes
     if num_processes is None:
         num_processes = min(mp.cpu_count(), 4)
