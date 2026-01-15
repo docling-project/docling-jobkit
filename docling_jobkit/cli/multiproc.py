@@ -101,6 +101,7 @@ def _process_source(
     enable_remote_services: bool,
     allow_external_plugins: bool,
     quiet: bool,
+    log_level: int,
 ) -> list[BatchResult]:
     """Process a single source and return batch results."""
     if not quiet:
@@ -149,6 +150,7 @@ def _process_source(
                 artifacts_path,
                 enable_remote_services,
                 allow_external_plugins,
+                log_level,
             )
             for chunk in chunks
         ]
@@ -226,6 +228,7 @@ def process_batch(
     artifacts_path: Optional[Path],
     enable_remote_services: bool,
     allow_external_plugins: bool,
+    log_level: int,
 ) -> BatchResult:
     """
     Process a single batch of documents in a subprocess.
@@ -249,6 +252,10 @@ def process_batch(
     Returns:
         BatchResult with processing statistics and any errors
     """
+    # Configure logging for this subprocess
+    logging.basicConfig(level=log_level, force=True)
+    logging.getLogger().setLevel(log_level)
+
     start_time = time.time()
     num_succeeded = 0
     num_failed = 0
@@ -436,6 +443,7 @@ def convert(
             enable_remote_services=enable_remote_services,
             allow_external_plugins=allow_external_plugins,
             quiet=quiet,
+            log_level=log_level,
         )
         all_batch_results.extend(batch_results)
 
