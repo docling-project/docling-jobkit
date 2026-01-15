@@ -151,6 +151,3 @@ def test_s3_iterate_documents(minio_coords):
                 assert content == b"%PDF", f"Invalid PDF header for {doc.name}"
 
         print(f"\nIterated through {len(docs)} documents successfully")
-
-
-# Made with Bob

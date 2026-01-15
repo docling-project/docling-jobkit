@@ -72,6 +72,3 @@ def test_http_file_source_iterate_documents():
         assert isinstance(docs[0], DocumentStream)
         assert docs[0].name == "iterate.pdf"
         assert docs[0].stream.read() == content
-
-
-# Made with Bob
