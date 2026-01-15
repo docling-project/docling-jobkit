@@ -344,7 +344,7 @@ def convert(
         typer.Option(
             "--num-processes",
             "-n",
-            help="Number of parallel processes (default: CPU count)",
+            help="Number of parallel processes (default: 4 or less depending on CPU count)",
         ),
     ] = None,
     artifacts_path: Annotated[
@@ -380,7 +380,7 @@ def convert(
     """
     # Determine number of processes
     if num_processes is None:
-        num_processes = mp.cpu_count()
+        num_processes = min(mp.cpu_count(), 4)
 
     if not quiet:
         console.print("[bold blue]Docling Jobkit Multiproc[/bold blue]")
