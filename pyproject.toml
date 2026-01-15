@@ -99,6 +99,7 @@ include = ["docling_jobkit"]
 [project.scripts]
 docling-ray-job = "docling_jobkit.ray_job.main:main"
 docling-jobkit-local = "docling_jobkit.cli.local:app"
+docling-jobkit-multiproc = "docling_jobkit.cli.multiproc:app"
 
 [project.urls]
 Homepage = "https://github.com/docling-project/docling-jobkit"
