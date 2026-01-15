@@ -1,5 +1,6 @@
 import logging
 import multiprocessing as mp
+import queue
 import time
 from pathlib import Path
 from typing import Annotated, Any, Optional
@@ -102,6 +103,7 @@ def _process_source(
     allow_external_plugins: bool,
     quiet: bool,
     log_level: int,
+    progress_queue: Optional[Any] = None,
 ) -> list[BatchResult]:
     """Process a single source and return batch results."""
     if not quiet:
@@ -151,6 +153,7 @@ def _process_source(
                 enable_remote_services,
                 allow_external_plugins,
                 log_level,
+                progress_queue,
             )
             for chunk in chunks
         ]
@@ -167,10 +170,37 @@ def _process_source(
             task = progress.add_task("Processing documents...", total=total_documents)
 
             with mp.Pool(processes=num_processes) as pool:
-                for batch_result in pool.starmap(process_batch, batch_args):
-                    batch_results.append(batch_result)
-                    # Update progress by the number of documents in this batch
-                    progress.update(task, advance=batch_result.num_documents)
+                # Start async processing
+                async_results = [
+                    pool.apply_async(process_batch, args) for args in batch_args
+                ]
+
+                # Track which results have been collected
+                collected_indices = set()
+                completed_batches = 0
+
+                # Monitor progress queue while batches are processing
+                while completed_batches < len(batch_args):
+                    try:
+                        # Check for progress updates (non-blocking with timeout)
+                        if progress_queue:
+                            try:
+                                msg = progress_queue.get(timeout=0.1)
+                                if msg == "document_completed":
+                                    progress.update(task, advance=1)
+                            except queue.Empty:
+                                pass
+
+                        # Check if any batch has completed
+                        for idx, async_result in enumerate(async_results):
+                            if idx not in collected_indices and async_result.ready():
+                                batch_result = async_result.get()
+                                batch_results.append(batch_result)
+                                collected_indices.add(idx)
+                                completed_batches += 1
+                    except KeyboardInterrupt:
+                        pool.terminate()
+                        raise
 
     return batch_results
 
@@ -229,6 +259,7 @@ def process_batch(
     enable_remote_services: bool,
     allow_external_plugins: bool,
     log_level: int,
+    progress_queue: Optional[Any] = None,
 ) -> BatchResult:
     """
     Process a single batch of documents in a subprocess.
@@ -310,6 +341,10 @@ def process_batch(
                     else:
                         num_failed += 1
                         failed_documents.append(item)
+
+                    # Send progress update after each document
+                    if progress_queue:
+                        progress_queue.put("document_completed")
 
         processing_time = time.time() - start_time
 
@@ -427,6 +462,10 @@ def convert(
     # Load and validate config file
     config = _load_config(config_file)
 
+    # Create a queue for progress updates from worker processes
+    manager = mp.Manager()
+    progress_queue = manager.Queue()
+
     # Process each source
     all_batch_results: list[BatchResult] = []
     overall_start_time = time.time()
@@ -444,6 +483,7 @@ def convert(
             allow_external_plugins=allow_external_plugins,
             quiet=quiet,
             log_level=log_level,
+            progress_queue=progress_queue,
         )
         all_batch_results.extend(batch_results)
 
