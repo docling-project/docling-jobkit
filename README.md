@@ -5,6 +5,57 @@ Running a distributed job processing documents with Docling.
 
 ## How to use it
 
+### Local Multiprocessing CLI
+
+The `docling-jobkit-multiproc` CLI enables parallel batch processing of documents using Python's multiprocessing. Each batch of documents is processed in a separate subprocess, allowing efficient parallel processing on a single machine.
+
+#### Usage
+
+```bash
+# Basic usage with default settings (batch_size=10, num_processes=CPU count)
+docling-jobkit-multiproc config.yaml
+
+# Custom batch size and number of processes
+docling-jobkit-multiproc config.yaml --batch-size 20 --num-processes 4
+
+# With model artifacts
+docling-jobkit-multiproc config.yaml --artifacts-path /path/to/models
+
+# Quiet mode (suppress progress bar)
+docling-jobkit-multiproc config.yaml --quiet
+
+# Full options
+docling-jobkit-multiproc config.yaml \
+  --batch-size 30 \
+  --num-processes 8 \
+  --artifacts-path /path/to/models \
+  --enable-remote-services \
+  --allow-external-plugins
+```
+
+#### Configuration
+
+The configuration file format is the same as `docling-jobkit-local`. See `dev/configs/run_multiproc_s3_example.yaml` for an example.
+
+**Note:** Only S3 and Google Drive sources support batch processing. File and HTTP sources do not support chunking.
+
+#### CLI Options
+
+- `--batch-size, -b`: Number of documents to process in each batch (default: 10)
+- `--num-processes, -n`: Number of parallel processes (default: CPU count)
+- `--artifacts-path`: Path to model artifacts directory
+- `--enable-remote-services`: Enable models connecting to remote services
+- `--allow-external-plugins`: Enable loading modules from third-party plugins
+- `--quiet, -q`: Suppress progress bar and detailed output
+
+### Local Sequential CLI
+
+The `docling-jobkit-local` CLI processes documents sequentially in a single process.
+
+```bash
+docling-jobkit-local config.yaml
+```
+
 ## Kubeflow pipeline with Docling Jobkit
 
 ### Using Kubeflow pipeline web dashboard UI
