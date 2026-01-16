@@ -35,9 +35,11 @@ docling-jobkit-multiproc config.yaml \
 
 #### Configuration
 
-The configuration file format is the same as `docling-jobkit-local`. See `dev/configs/run_multiproc_s3_example.yaml` for an example.
+The configuration file format is the same as `docling-jobkit-local`. See example configurations:
+- S3 source/target: `dev/configs/run_multiproc_s3_example.yaml`
+- Local path source/target: `dev/configs/run_local_folder_example.yaml`
 
-**Note:** Only S3 and Google Drive sources support batch processing. File and HTTP sources do not support chunking.
+**Note:** Only S3, Google Drive, and local_path sources support batch processing. File and HTTP sources do not support chunking.
 
 #### CLI Options
 
@@ -55,6 +57,24 @@ The `docling-jobkit-local` CLI processes documents sequentially in a single proc
 ```bash
 docling-jobkit-local config.yaml
 ```
+
+### Using Local Path Sources and Targets
+
+Both CLIs support local file system sources and targets. Example configuration:
+
+```yaml
+sources:
+  - kind: local_path
+    path: ./input_documents/
+    recursive: true  # optional, default true
+    pattern: "*.pdf"  # optional glob pattern
+
+target:
+  kind: local_path
+  path: ./output_documents/
+```
+
+See `dev/configs/run_local_folder_example.yaml` for a complete example.
 
 ## Kubeflow pipeline with Docling Jobkit
 
