@@ -10,28 +10,21 @@ options:
   #   - md
 
 sources:
-  # Example 1: Process all PDFs in a folder recursively
+  # Example 1: Process all files in a folder recursively
   - kind: local_path
     path: ./input_documents/
-    pattern: "*.pdf"
-    recursive: true
+    recursive: true  # this is also the default
   
-  # Example 2: Process a single file
-  - kind: local_path
-    path: ./sample_document.pdf
-    # pattern and recursive are ignored for single files
-  
-  # Example 3: Process only PDFs in immediate directory (non-recursive)
-  - kind: local_path
-    path: ./more_documents/
-    pattern: "*.pdf"
-    recursive: false
-  
-  # Example 4: Process multiple file types with glob pattern
-  - kind: local_path
-    path: ./mixed_documents/
-    pattern: "*.{pdf,docx,pptx}"
-    recursive: true
+  # Example 2: Process a single file (uncomment and adjust path as needed)
+  # - kind: local_path
+  #   path: ./input_documents/2206.00785.pdf
+  #   # pattern and recursive are ignored for single files
+    
+  # Example 3: Process multiple file types with glob pattern (uncomment to use)
+  # - kind: local_path
+  #   path: ./input_documents/
+  #   pattern: "*.{pdf,docx,pptx}"
+  #   recursive: true
 
 target:
   kind: local_path
