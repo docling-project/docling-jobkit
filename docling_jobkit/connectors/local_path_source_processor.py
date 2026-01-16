@@ -7,6 +7,42 @@ from docling_jobkit.connectors.source_processor import BaseSourceProcessor
 from docling_jobkit.datamodel.task_sources import TaskLocalPathSource
 
 
+def _should_ignore_file(file_path: Path) -> bool:
+    """
+    Check if a file should be ignored based on common patterns for
+    hidden files, temporary files, and system metadata files.
+
+    Returns True if the file should be ignored, False otherwise.
+    """
+    name = file_path.name
+
+    # Hidden files (starting with .)
+    if name.startswith("."):
+        return True
+
+    # Vim temporary files
+    if name.endswith(("~", ".swp", ".swo")):
+        return True
+
+    # Emacs temporary files
+    if name.startswith("#") and name.endswith("#"):
+        return True
+
+    # Microsoft Office temporary files
+    if name.startswith("~$"):
+        return True
+
+    # Windows thumbnail cache
+    if name.lower() == "thumbs.db":
+        return True
+
+    # Desktop.ini (Windows)
+    if name.lower() == "desktop.ini":
+        return True
+
+    return False
+
+
 class LocalPathFileIdentifier(TypedDict):
     path: Path
     size: int
@@ -53,7 +89,8 @@ class LocalPathSourceProcessor(BaseSourceProcessor[LocalPathFileIdentifier]):
 
             for file_path in files:
                 # Only yield actual files, not directories
-                if file_path.is_file():
+                # Skip hidden files, temporary files, and system metadata
+                if file_path.is_file() and not _should_ignore_file(file_path):
                     stat = file_path.stat()
                     yield LocalPathFileIdentifier(
                         path=file_path,
