@@ -18,9 +18,15 @@ from docling_jobkit.datamodel.task_sources import (
     TaskFileSource,
     TaskGoogleDriveSource,
     TaskHttpSource,
+    TaskLocalPathSource,
     TaskS3Source,
 )
-from docling_jobkit.datamodel.task_targets import GoogleDriveTarget, S3Target, ZipTarget
+from docling_jobkit.datamodel.task_targets import (
+    GoogleDriveTarget,
+    LocalPathTarget,
+    S3Target,
+    ZipTarget,
+)
 
 console = Console()
 err_console = Console(stderr=True)
@@ -34,12 +40,17 @@ app = typer.Typer(
 )
 
 JobTaskSource = Annotated[
-    TaskFileSource | TaskHttpSource | TaskS3Source | TaskGoogleDriveSource,
+    TaskFileSource
+    | TaskHttpSource
+    | TaskLocalPathSource
+    | TaskS3Source
+    | TaskGoogleDriveSource,
     Field(discriminator="kind"),
 ]
 
 JobTaskTarget = Annotated[
-    ZipTarget | S3Target | GoogleDriveTarget, Field(discriminator="kind")
+    ZipTarget | LocalPathTarget | S3Target | GoogleDriveTarget,
+    Field(discriminator="kind"),
 ]
 
 

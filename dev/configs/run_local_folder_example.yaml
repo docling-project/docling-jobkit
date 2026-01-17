@@ -1,0 +1,31 @@
+# Example configuration for docling-jobkit-multiproc
+# This demonstrates parallel batch processing with local path sources and target
+
+options:
+  do_ocr: false
+  # Uncomment to enable additional features:
+  # do_table_structure: true
+  # to_formats:
+  #   - json
+  #   - md
+
+sources:
+  # Example 1: Process all files in a folder recursively
+  - kind: local_path
+    path: ./input_documents/
+    recursive: true  # this is also the default
+  
+  # Example 2: Process a single file (uncomment and adjust path as needed)
+  # - kind: local_path
+  #   path: ./input_documents/2206.00785.pdf
+  #   # pattern and recursive are ignored for single files
+    
+  # Example 3: Process multiple file types with glob pattern (uncomment to use)
+  # - kind: local_path
+  #   path: ./input_documents/
+  #   pattern: "*.{pdf,docx,pptx}"
+  #   recursive: true
+
+target:
+  kind: local_path
+  path: ./output_documents/
