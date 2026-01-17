@@ -1,3 +1,15 @@
+## [v1.8.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.8.1) - 2026-01-06
+
+### Fix
+
+* Isolate VLM pipeline options to avoid cache collisions ([#73](https://github.com/docling-project/docling-jobkit/issues/73)) ([`eaea195`](https://github.com/docling-project/docling-jobkit/commit/eaea1954170e4633f6d7e05048e3fe139b3157ca))
+
+## [v1.8.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.8.0) - 2025-10-31
+
+### Feature
+
+* Expose new standard pipeline with threads and its parameters ([#70](https://github.com/docling-project/docling-jobkit/issues/70)) ([`b72f7f8`](https://github.com/docling-project/docling-jobkit/commit/b72f7f857938eb71d3a2a03419d95bc9bb2cbbe4))
+
 ## [v1.7.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.7.1) - 2025-10-30
 
 ### Fix
