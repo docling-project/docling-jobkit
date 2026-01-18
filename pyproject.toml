@@ -45,13 +45,10 @@ dependencies = [
     "docling~=2.60",
     "pydantic~=2.10",
     "pydantic-settings~=2.4",
-    "typer~=0.12",
     "boto3~=1.35",
     "pandas~=2.2",
-    "fastparquet~=2024.11",
-    "pyarrow~=19.0",
-    "httpx~=0.28",
-    "typer>=0.12.5",
+    "httpx>=0.28,<1",
+    "typer>=0.12.5,<1",
 ]
 
 [project.optional-dependencies]
