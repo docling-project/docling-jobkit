@@ -1,3 +1,8 @@
+import sys
+
+if sys.version_info >= (3, 14):
+    raise ImportError("ray support is not yet available for Python 3.14.")
+
 import argparse
 import json
 import os

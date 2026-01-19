@@ -34,6 +34,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Topic :: Software Development :: Build Tools",
@@ -44,13 +45,10 @@ dependencies = [
     "docling~=2.60",
     "pydantic~=2.10",
     "pydantic-settings~=2.4",
-    "typer~=0.12",
     "boto3~=1.35",
     "pandas~=2.2",
-    "fastparquet~=2024.11",
-    "pyarrow~=19.0",
-    "httpx~=0.28",
-    "typer>=0.12.5",
+    "httpx>=0.28,<1",
+    "typer>=0.12.5,<1",
 ]
 
 [project.optional-dependencies]
@@ -68,7 +66,7 @@ rq = [
     "msgpack~=1.1",
 ]
 ray = [
-    "ray~=2.30",
+    'ray~=2.30 ; python_version < "3.14"',
 ]
 gdrive = [
     "google-api-python-client>=2.183.0",
@@ -103,7 +101,7 @@ docling-jobkit-multiproc = "docling_jobkit.cli.multiproc:app"
 
 [project.urls]
 Homepage = "https://github.com/docling-project/docling-jobkit"
-# Documentation = "https://ds4sd.github.io/docling"
+Documentation = "https://docling-project.github.io/docling/usage/jobkit/"
 Repository = "https://github.com/docling-project/docling-jobkit"
 Issues = "https://github.com/docling-project/docling-jobkit/issues"
 Changelog = "https://github.com/docling-project/docling-jobkit/blob/main/CHANGELOG.md"
@@ -199,10 +197,16 @@ module = [
     "pandas.*",
     "msgpack.*",
     "mlx_vlm.*",
-    "googleapiclient.*", 
+    "googleapiclient.*",
     "google_auth_oauthlib.*",
+    "ray.*",
 ]
 ignore_missing_imports = true
+
+# Skip ray_job module on Python 3.14+ where ray is not supported
+[[tool.mypy.overrides]]
+module = "docling_jobkit.ray_job.*"
+ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
