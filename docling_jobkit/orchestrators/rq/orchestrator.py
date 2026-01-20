@@ -226,12 +226,22 @@ class RQOrchestrator(BaseOrchestrator):
 
     async def delete_task(self, task_id: str):
         _log.info(f"Deleting result of task {task_id=}")
+
+        # Delete the result data from Redis if it exists
         if task_id in self._task_result_keys:
             await self._async_redis_conn.delete(self._task_result_keys[task_id])
             del self._task_result_keys[task_id]
-            # TODO: consider also deleting the task
-            # job = Job.fetch(task_id, connection=self._redis_conn)
-            # job.delete()
+
+        # Delete the RQ job itself to free up Redis memory
+        # This includes the job metadata and result stream
+        try:
+            job = Job.fetch(task_id, connection=self._redis_conn)
+            job.delete()
+            _log.debug(f"Deleted RQ job {task_id=}")
+        except Exception as e:
+            # Job may not exist or already be deleted - this is not an error
+            _log.debug(f"Could not delete RQ job {task_id=}: {e}")
+
         await super().delete_task(task_id)
 
     async def warm_up_caches(self):
