@@ -44,6 +44,7 @@ class LocalOrchestrator(BaseOrchestrator):
         self.queue_list: list[str] = []
         self.cm = converter_manager
         self.chunker_manager = DocumentChunkerManager()
+        self.worker_cms = []
         self._task_results: dict[str, DoclingTaskResult] = {}
         self.scratch_dir = self.config.scratch_dir or Path(
             tempfile.mkdtemp(prefix="docling_")
@@ -133,6 +134,8 @@ class LocalOrchestrator(BaseOrchestrator):
     async def clear_converters(self):
         self.cm.clear_cache()
         self.chunker_manager.clear_cache()
+        for cm in self.worker_cms:
+            cm.clear_cache()
         gc.collect()
 
     async def check_connection(self):

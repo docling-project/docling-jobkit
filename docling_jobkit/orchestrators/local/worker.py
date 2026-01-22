@@ -34,11 +34,11 @@ class AsyncLocalWorker:
 
     async def loop(self):
         _log.debug(f"Starting loop for worker {self.worker_id}")
-        cm = (
-            self.orchestrator.cm
-            if self.use_shared_manager
-            else DoclingConverterManager(self.orchestrator.cm.config)
-        )
+        if self.use_shared_manager:
+            cm = self.orchestrator.cm
+        else:
+            cm = DoclingConverterManager(self.orchestrator.cm.config)
+            self.orchestrator.worker_cms.append(cm)
         while True:
             task_id: str = await self.orchestrator.task_queue.get()
             self.orchestrator.queue_list.remove(task_id)
