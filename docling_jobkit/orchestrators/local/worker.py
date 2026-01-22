@@ -94,6 +94,7 @@ class AsyncLocalWorker:
                             task=task,
                             conv_results=conv_results,
                             work_dir=workdir,
+                            chunker_manager=self.orchestrator.chunker_manager,
                         )
 
                     return processed_results

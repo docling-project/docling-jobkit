@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from docling.datamodel.base_models import InputFormat
 
+from docling_jobkit.convert.chunking import DocumentChunkerManager
 from docling_jobkit.convert.manager import DoclingConverterManager
 from docling_jobkit.datamodel.chunking import BaseChunkerOptions, ChunkingExportOptions
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
@@ -42,6 +43,7 @@ class LocalOrchestrator(BaseOrchestrator):
         self.task_queue: asyncio.Queue[str] = asyncio.Queue()
         self.queue_list: list[str] = []
         self.cm = converter_manager
+        self.chunker_manager = DocumentChunkerManager()
         self._task_results: dict[str, DoclingTaskResult] = {}
         self.scratch_dir = self.config.scratch_dir or Path(
             tempfile.mkdtemp(prefix="docling_")
@@ -130,6 +132,7 @@ class LocalOrchestrator(BaseOrchestrator):
 
     async def clear_converters(self):
         self.cm.clear_cache()
+        self.chunker_manager.clear_cache()
         gc.collect()
 
     async def check_connection(self):

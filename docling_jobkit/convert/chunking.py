@@ -220,6 +220,7 @@ def process_chunk_results(
     task: Task,
     conv_results: Iterable[ConversionResult],
     work_dir: Path,
+    chunker_manager: Optional[DocumentChunkerManager] = None,
 ) -> DoclingTaskResult:
     # Let's start by processing the documents
     start_time = time.monotonic()
@@ -234,7 +235,7 @@ def process_chunk_results(
     num_failed = 0
 
     # TODO: DocumentChunkerManager should be initialized outside for really working as a cache
-    chunker_manager = DocumentChunkerManager()
+    chunker_manager = chunker_manager or DocumentChunkerManager()
     for conv_res in conv_results:
         errors = conv_res.errors
         filename = conv_res.input.file.name
