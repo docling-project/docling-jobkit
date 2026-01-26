@@ -44,7 +44,7 @@ class LocalOrchestrator(BaseOrchestrator):
         self.queue_list: list[str] = []
         self.cm = converter_manager
         self.chunker_manager = DocumentChunkerManager()
-        self.worker_cms = []
+        self.worker_cms: list[DoclingConverterManager] = []
         self._task_results: dict[str, DoclingTaskResult] = {}
         self.scratch_dir = self.config.scratch_dir or Path(
             tempfile.mkdtemp(prefix="docling_")
