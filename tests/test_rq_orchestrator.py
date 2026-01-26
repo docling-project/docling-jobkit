@@ -21,7 +21,11 @@ from docling_jobkit.datamodel.convert import (
     ConvertDocumentsOptions,
 )
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
-from docling_jobkit.datamodel.result import ChunkedDocumentResult, ExportDocumentResponse, ExportResult
+from docling_jobkit.datamodel.result import (
+    ChunkedDocumentResult,
+    ExportDocumentResponse,
+    ExportResult,
+)
 from docling_jobkit.datamodel.task import Task, TaskSource
 from docling_jobkit.datamodel.task_meta import TaskType
 from docling_jobkit.datamodel.task_targets import InBodyTarget
@@ -171,9 +175,9 @@ async def test_chunk_file(orchestrator: RQOrchestrator, include_converted_doc: b
 @pytest.mark.asyncio
 async def test_delete_task_cleans_up_job(orchestrator: RQOrchestrator):
     """Test that delete_task removes both result data and RQ job from Redis."""
-    from rq.job import Job
-    from unittest.mock import Mock
+
     import msgpack
+    from rq.job import Job
 
     options = ConvertDocumentsOptions()
 
@@ -204,9 +208,7 @@ async def test_delete_task_cleans_up_job(orchestrator: RQOrchestrator):
     )
     packed = msgpack.packb(mock_result.model_dump(), use_bin_type=True)
     await orchestrator._async_redis_conn.setex(
-        result_key,
-        orchestrator.config.results_ttl,
-        packed
+        result_key, orchestrator.config.results_ttl, packed
     )
     orchestrator._task_result_keys[task.task_id] = result_key
 

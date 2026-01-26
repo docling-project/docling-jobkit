@@ -308,8 +308,6 @@ async def test_chunk_file(
         assert task_result.result.chunks[0].num_tokens is None
 
 
-
-
 @pytest.mark.asyncio
 async def test_clear_converters_clears_caches():
     """Test that clear_converters clears all caches including chunker_manager and worker_cms."""
@@ -345,23 +343,35 @@ async def test_clear_converters_clears_caches():
     await _wait_task_complete(orchestrator, task.task_id, max_wait=30)
 
     # Verify worker_cms list is populated (workers with non-shared models)
-    assert len(orchestrator.worker_cms) > 0, "worker_cms should be populated with worker converter managers"
+    assert len(orchestrator.worker_cms) > 0, (
+        "worker_cms should be populated with worker converter managers"
+    )
 
     # Check that caches have items before clearing
-    chunker_cache_info_before = orchestrator.chunker_manager._get_chunker_from_cache.cache_info()
-    assert chunker_cache_info_before.currsize > 0, "Chunker cache should have items before clearing"
+    chunker_cache_info_before = (
+        orchestrator.chunker_manager._get_chunker_from_cache.cache_info()
+    )
+    assert chunker_cache_info_before.currsize > 0, (
+        "Chunker cache should have items before clearing"
+    )
 
     # Call clear_converters
     await orchestrator.clear_converters()
 
     # Verify chunker cache is cleared
-    chunker_cache_info_after = orchestrator.chunker_manager._get_chunker_from_cache.cache_info()
-    assert chunker_cache_info_after.currsize == 0, "Chunker cache should be empty after clearing"
+    chunker_cache_info_after = (
+        orchestrator.chunker_manager._get_chunker_from_cache.cache_info()
+    )
+    assert chunker_cache_info_after.currsize == 0, (
+        "Chunker cache should be empty after clearing"
+    )
 
     # Verify worker converter manager caches are cleared
     for worker_cm in orchestrator.worker_cms:
         worker_cache_info = worker_cm._get_converter_from_hash.cache_info()
-        assert worker_cache_info.currsize == 0, "Worker converter cache should be empty after clearing"
+        assert worker_cache_info.currsize == 0, (
+            "Worker converter cache should be empty after clearing"
+        )
 
     # Cleanup
     queue_task.cancel()
@@ -390,13 +400,18 @@ async def test_chunker_manager_shared_across_workers():
     queue_task = asyncio.create_task(orchestrator.process_queue())
 
     # Patch process_chunk_results to capture the call arguments
-    with patch('docling_jobkit.orchestrators.local.worker.process_chunk_results', wraps=process_chunk_results) as mock_process:
+    with patch(
+        "docling_jobkit.orchestrators.local.worker.process_chunk_results",
+        wraps=process_chunk_results,
+    ) as mock_process:
         # Enqueue a chunking task
         doc_filename = Path(__file__).parent / "2206.01062v1-pg4.pdf"
         encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()
 
         sources: list[TaskSource] = []
-        sources.append(FileSource(base64_string=encoded_doc, filename=doc_filename.name))
+        sources.append(
+            FileSource(base64_string=encoded_doc, filename=doc_filename.name)
+        )
 
         task = await orchestrator.enqueue(
             task_type=TaskType.CHUNK,
@@ -416,9 +431,12 @@ async def test_chunker_manager_shared_across_workers():
         # Verify process_chunk_results was called with the orchestrator's chunker_manager
         assert mock_process.called, "process_chunk_results should have been called"
         call_kwargs = mock_process.call_args.kwargs
-        assert 'chunker_manager' in call_kwargs, "chunker_manager should be passed as kwarg"
-        assert call_kwargs['chunker_manager'] is expected_chunker_manager, \
+        assert "chunker_manager" in call_kwargs, (
+            "chunker_manager should be passed as kwarg"
+        )
+        assert call_kwargs["chunker_manager"] is expected_chunker_manager, (
             "The same chunker_manager instance from orchestrator should be passed to process_chunk_results"
+        )
 
     # Cleanup
     queue_task.cancel()
@@ -461,11 +479,15 @@ async def test_worker_cms_tracking():
     await _wait_task_complete(orchestrator, task.task_id, max_wait=30)
 
     # Verify worker_cms is populated
-    assert len(orchestrator.worker_cms) > 0, "worker_cms should contain converter managers from workers"
+    assert len(orchestrator.worker_cms) > 0, (
+        "worker_cms should contain converter managers from workers"
+    )
 
     # Verify each worker_cm is a DoclingConverterManager instance
     for worker_cm in orchestrator.worker_cms:
-        assert isinstance(worker_cm, DoclingConverterManager), "Each worker_cm should be a DoclingConverterManager"
+        assert isinstance(worker_cm, DoclingConverterManager), (
+            "Each worker_cm should be a DoclingConverterManager"
+        )
 
     # Cleanup
     queue_task.cancel()
