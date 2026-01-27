@@ -18,6 +18,7 @@ from docling.datamodel.pipeline_options import (
 from docling.datamodel.pipeline_options_vlm_model import ResponseFormat
 from docling.utils.model_downloader import download_models
 
+from docling_jobkit.convert.chunking import process_chunk_results
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
@@ -305,3 +306,192 @@ async def test_chunk_file(
 
     if isinstance(chunking_options, HierarchicalChunkerOptions):
         assert task_result.result.chunks[0].num_tokens is None
+
+
+@pytest.mark.asyncio
+async def test_clear_converters_clears_caches():
+    """Test that clear_converters clears all caches including chunker_manager and worker_cms."""
+    cm_config = DoclingConverterManagerConfig()
+    cm = DoclingConverterManager(config=cm_config)
+
+    config = LocalOrchestratorConfig(num_workers=2, shared_models=False)
+    orchestrator = LocalOrchestrator(config=config, converter_manager=cm)
+
+    # Verify chunker_manager exists
+    assert orchestrator.chunker_manager is not None
+    assert orchestrator.worker_cms == []
+
+    # Start queue processing to initialize workers
+    queue_task = asyncio.create_task(orchestrator.process_queue())
+
+    # Enqueue a chunking task to populate caches
+    doc_filename = Path(__file__).parent / "2206.01062v1-pg4.pdf"
+    encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()
+
+    sources: list[TaskSource] = []
+    sources.append(FileSource(base64_string=encoded_doc, filename=doc_filename.name))
+
+    task = await orchestrator.enqueue(
+        task_type=TaskType.CHUNK,
+        sources=sources,
+        convert_options=ConvertDocumentsOptions(to_formats=[]),
+        chunking_options=HybridChunkerOptions(),
+        target=InBodyTarget(),
+    )
+
+    # Wait for task to complete
+    await _wait_task_complete(orchestrator, task.task_id, max_wait=30)
+
+    # Verify worker_cms list is populated (workers with non-shared models)
+    assert len(orchestrator.worker_cms) > 0, (
+        "worker_cms should be populated with worker converter managers"
+    )
+
+    # Check that caches have items before clearing
+    chunker_cache_info_before = (
+        orchestrator.chunker_manager._get_chunker_from_cache.cache_info()
+    )
+    assert chunker_cache_info_before.currsize > 0, (
+        "Chunker cache should have items before clearing"
+    )
+
+    # Call clear_converters
+    await orchestrator.clear_converters()
+
+    # Verify chunker cache is cleared
+    chunker_cache_info_after = (
+        orchestrator.chunker_manager._get_chunker_from_cache.cache_info()
+    )
+    assert chunker_cache_info_after.currsize == 0, (
+        "Chunker cache should be empty after clearing"
+    )
+
+    # Verify worker converter manager caches are cleared
+    for worker_cm in orchestrator.worker_cms:
+        worker_cache_info = worker_cm._get_converter_from_hash.cache_info()
+        assert worker_cache_info.currsize == 0, (
+            "Worker converter cache should be empty after clearing"
+        )
+
+    # Cleanup
+    queue_task.cancel()
+    try:
+        await queue_task
+    except asyncio.CancelledError:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_chunker_manager_shared_across_workers():
+    """Test that chunker_manager is passed to process_chunk_results in workers."""
+    from unittest.mock import patch
+
+    cm_config = DoclingConverterManagerConfig()
+    cm = DoclingConverterManager(config=cm_config)
+
+    config = LocalOrchestratorConfig(num_workers=2, shared_models=True)
+    orchestrator = LocalOrchestrator(config=config, converter_manager=cm)
+
+    # Verify chunker_manager is initialized
+    assert orchestrator.chunker_manager is not None
+    expected_chunker_manager = orchestrator.chunker_manager
+
+    # Start queue processing
+    queue_task = asyncio.create_task(orchestrator.process_queue())
+
+    # Patch process_chunk_results to capture the call arguments
+    with patch(
+        "docling_jobkit.orchestrators.local.worker.process_chunk_results",
+        wraps=process_chunk_results,
+    ) as mock_process:
+        # Enqueue a chunking task
+        doc_filename = Path(__file__).parent / "2206.01062v1-pg4.pdf"
+        encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()
+
+        sources: list[TaskSource] = []
+        sources.append(
+            FileSource(base64_string=encoded_doc, filename=doc_filename.name)
+        )
+
+        task = await orchestrator.enqueue(
+            task_type=TaskType.CHUNK,
+            sources=sources,
+            convert_options=ConvertDocumentsOptions(to_formats=[]),
+            chunking_options=HybridChunkerOptions(),
+            target=InBodyTarget(),
+        )
+
+        await _wait_task_complete(orchestrator, task.task_id, max_wait=30)
+        task_result = await orchestrator.task_result(task_id=task.task_id)
+
+        # Verify task completed successfully
+        assert task_result is not None
+        assert isinstance(task_result.result, ChunkedDocumentResult)
+
+        # Verify process_chunk_results was called with the orchestrator's chunker_manager
+        assert mock_process.called, "process_chunk_results should have been called"
+        call_kwargs = mock_process.call_args.kwargs
+        assert "chunker_manager" in call_kwargs, (
+            "chunker_manager should be passed as kwarg"
+        )
+        assert call_kwargs["chunker_manager"] is expected_chunker_manager, (
+            "The same chunker_manager instance from orchestrator should be passed to process_chunk_results"
+        )
+
+    # Cleanup
+    queue_task.cancel()
+    try:
+        await queue_task
+    except asyncio.CancelledError:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_worker_cms_tracking():
+    """Test that worker_cms list tracks converter managers for non-shared workers."""
+    cm_config = DoclingConverterManagerConfig()
+    cm = DoclingConverterManager(config=cm_config)
+
+    # Use non-shared models to trigger worker_cms tracking
+    config = LocalOrchestratorConfig(num_workers=2, shared_models=False)
+    orchestrator = LocalOrchestrator(config=config, converter_manager=cm)
+
+    # Initially empty
+    assert orchestrator.worker_cms == []
+
+    # Start queue processing
+    queue_task = asyncio.create_task(orchestrator.process_queue())
+
+    # Enqueue a task to trigger worker initialization
+    doc_filename = Path(__file__).parent / "2206.01062v1-pg4.pdf"
+    encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()
+
+    sources: list[TaskSource] = []
+    sources.append(FileSource(base64_string=encoded_doc, filename=doc_filename.name))
+
+    task = await orchestrator.enqueue(
+        sources=sources,
+        convert_options=ConvertDocumentsOptions(),
+        target=InBodyTarget(),
+    )
+
+    # Wait for task to complete
+    await _wait_task_complete(orchestrator, task.task_id, max_wait=30)
+
+    # Verify worker_cms is populated
+    assert len(orchestrator.worker_cms) > 0, (
+        "worker_cms should contain converter managers from workers"
+    )
+
+    # Verify each worker_cm is a DoclingConverterManager instance
+    for worker_cm in orchestrator.worker_cms:
+        assert isinstance(worker_cm, DoclingConverterManager), (
+            "Each worker_cm should be a DoclingConverterManager"
+        )
+
+    # Cleanup
+    queue_task.cancel()
+    try:
+        await queue_task
+    except asyncio.CancelledError:
+        pass

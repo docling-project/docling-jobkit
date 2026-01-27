@@ -21,7 +21,11 @@ from docling_jobkit.datamodel.convert import (
     ConvertDocumentsOptions,
 )
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
-from docling_jobkit.datamodel.result import ChunkedDocumentResult, ExportResult
+from docling_jobkit.datamodel.result import (
+    ChunkedDocumentResult,
+    ExportDocumentResponse,
+    ExportResult,
+)
 from docling_jobkit.datamodel.task import Task, TaskSource
 from docling_jobkit.datamodel.task_meta import TaskType
 from docling_jobkit.datamodel.task_targets import InBodyTarget
@@ -166,3 +170,77 @@ async def test_chunk_file(orchestrator: RQOrchestrator, include_converted_doc: b
         )
     else:
         task_result.result.documents[0].content.json_content is None
+
+
+@pytest.mark.asyncio
+async def test_delete_task_cleans_up_job(orchestrator: RQOrchestrator):
+    """Test that delete_task removes both result data and RQ job from Redis."""
+
+    import msgpack
+    from rq.job import Job
+
+    options = ConvertDocumentsOptions()
+
+    doc_filename = Path(__file__).parent / "2206.01062v1-pg4.pdf"
+    encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()
+
+    sources: list[TaskSource] = []
+    sources.append(FileSource(base64_string=encoded_doc, filename=doc_filename.name))
+
+    # Enqueue a task (this creates the job in Redis but won't process it without a worker)
+    task = await orchestrator.enqueue(
+        sources=sources,
+        convert_options=options,
+        target=InBodyTarget(),
+    )
+
+    # Verify the RQ job exists in Redis
+    job = Job.fetch(task.task_id, connection=orchestrator._redis_conn)
+    assert job is not None, "Job should exist in Redis after enqueue"
+    assert job.id == task.task_id
+
+    # Simulate a completed task by adding a result key
+    # (normally this would be done by the worker)
+    result_key = f"{orchestrator.config.results_prefix}:{task.task_id}"
+    mock_result = ExportResult(
+        content=ExportDocumentResponse(filename="test.pdf"),
+        status=ConversionStatus.SUCCESS,
+    )
+    packed = msgpack.packb(mock_result.model_dump(), use_bin_type=True)
+    await orchestrator._async_redis_conn.setex(
+        result_key, orchestrator.config.results_ttl, packed
+    )
+    orchestrator._task_result_keys[task.task_id] = result_key
+
+    # Verify result key exists in the tracking dict
+    assert task.task_id in orchestrator._task_result_keys
+
+    # Verify result data exists in Redis
+    result_data = await orchestrator._async_redis_conn.get(result_key)
+    assert result_data is not None, "Result data should exist in Redis"
+
+    # Delete the task
+    await orchestrator.delete_task(task.task_id)
+
+    # Verify result key is removed from tracking dict
+    assert task.task_id not in orchestrator._task_result_keys
+
+    # Verify result data is deleted from Redis
+    result_data = await orchestrator._async_redis_conn.get(result_key)
+    assert result_data is None, "Result data should be deleted from Redis"
+
+    # Verify the RQ job is deleted from Redis
+    try:
+        Job.fetch(task.task_id, connection=orchestrator._redis_conn)
+        assert False, "Job should have been deleted from Redis"
+    except Exception:
+        # Expected: job should not exist anymore
+        pass
+
+    # Verify task is removed from orchestrator's task tracking
+    try:
+        await orchestrator.get_raw_task(task_id=task.task_id)
+        assert False, "Task should have been removed from orchestrator"
+    except Exception:
+        # Expected: task should not exist anymore
+        pass
