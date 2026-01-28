@@ -1,3 +1,17 @@
+## [v1.9.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.9.0) - 2026-01-28
+
+### Feature
+
+* Python 3.14 support ([#71](https://github.com/docling-project/docling-jobkit/issues/71)) ([`5e25748`](https://github.com/docling-project/docling-jobkit/commit/5e257484a2a9a5f3002abe64c4e73600702cf7a4))
+* Add local filesystem path processors for source and target ([#81](https://github.com/docling-project/docling-jobkit/issues/81)) ([`750b496`](https://github.com/docling-project/docling-jobkit/commit/750b496da180b70d607114cd899819afbbafc8bb))
+* Docling-jobkit-multiproc cli running parallel subprocesses ([#80](https://github.com/docling-project/docling-jobkit/issues/80)) ([`ad08d41`](https://github.com/docling-project/docling-jobkit/commit/ad08d41a327bfe9063ff32bf57ed20fd3627cee7))
+* Batching Support for Source Processors ([#79](https://github.com/docling-project/docling-jobkit/issues/79)) ([`f109e53`](https://github.com/docling-project/docling-jobkit/commit/f109e5362b9714655e862bbac29e6b6f2c1902a3))
+
+### Fix
+
+* Set result_ttl for RQ ([#83](https://github.com/docling-project/docling-jobkit/issues/83)) ([`e0d4b9a`](https://github.com/docling-project/docling-jobkit/commit/e0d4b9afe112939dffe9c2b7f558196195761507))
+* Memory leak fixes in RQ and Local engines ([#82](https://github.com/docling-project/docling-jobkit/issues/82)) ([`f3c74d7`](https://github.com/docling-project/docling-jobkit/commit/f3c74d74aefd11bea0b8e11c5fec3512564e3219))
+
 ## [v1.8.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.8.1) - 2026-01-06
 
 ### Fix
