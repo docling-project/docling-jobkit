@@ -69,6 +69,9 @@ class CustomRQWorker(SimpleWorker):
         self.conversion_manager = DoclingConverterManager(cm_config)
         self.scratch_dir = scratch_dir
 
+        if "default_result_ttl" not in kwargs:
+            kwargs["default_result_ttl"] = self.orchestrator_config.results_ttl
+
         # Call parent class constructor
         super().__init__(*args, **kwargs)
 
