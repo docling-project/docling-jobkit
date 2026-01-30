@@ -38,7 +38,7 @@ class ResultsProcessor:
         to_formats: list[str] | None = None,
         generate_page_images: bool = False,
         generate_picture_images: bool = False,
-        export_parquet_file: bool = True,
+        export_parquet_file: bool = False,
         scratch_dir: Path | None = None,
     ):
         self._target_processor = target_processor
