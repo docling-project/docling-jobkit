@@ -1,3 +1,9 @@
+## [v1.9.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.9.1) - 2026-01-30
+
+### Fix
+
+* Disable un-requested parquet generation ([#85](https://github.com/docling-project/docling-jobkit/issues/85)) ([`dcee4ad`](https://github.com/docling-project/docling-jobkit/commit/dcee4ad86947327422eea3e65a2756d0e0b95fbe))
+
 ## [v1.9.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.9.0) - 2026-01-28
 
 ### Feature
