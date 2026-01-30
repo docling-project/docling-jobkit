@@ -2,6 +2,7 @@ import asyncio
 import base64
 import logging
 import os
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,8 +12,12 @@ import pytest
 import pytest_asyncio
 
 from docling.datamodel.base_models import ConversionStatus
+from docling.document_converter import PdfFormatOption
 from docling_core.types.doc import DoclingDocument
 
+from docling_jobkit.convert.manager import (
+    DoclingConverterManagerConfig,
+)
 from docling_jobkit.datamodel.chunking import (
     ChunkingExportOptions,
     HybridChunkerOptions,
@@ -34,6 +39,7 @@ from docling_jobkit.orchestrators.rq.orchestrator import (
     RQOrchestrator,
     RQOrchestratorConfig,
 )
+from docling_jobkit.orchestrators.rq.worker import CustomRQWorker
 
 
 def pytest_configure(config):
@@ -244,3 +250,37 @@ async def test_delete_task_cleans_up_job(orchestrator: RQOrchestrator):
     except Exception:
         # Expected: task should not exist anymore
         pass
+
+
+@pytest.mark.asyncio
+async def test_clear_converters_clears_worker_cache():
+    """Test that clear_converters enqueues a job that clears the worker's converter cache."""
+    config = RQOrchestratorConfig()
+    orchestrator = RQOrchestrator(config=config)
+    with tempfile.TemporaryDirectory(prefix="docling_test_") as scratch_dir:
+        cm_config = DoclingConverterManagerConfig()
+        worker = CustomRQWorker(
+            [orchestrator._rq_queue],
+            connection=orchestrator._redis_conn,
+            orchestrator_config=config,
+            cm_config=cm_config,
+            scratch_dir=scratch_dir,
+        )
+
+        # Populate the converter cache by calling get_converter
+        pdf_option = PdfFormatOption()
+        worker.conversion_manager.get_converter(pdf_option)
+        cache_info = worker.conversion_manager._get_converter_from_hash.cache_info()
+        assert cache_info.currsize > 0, "Cache should have items before clearing"
+
+        # Enqueue the clear_converters job via the orchestrator
+        await orchestrator.clear_converters()
+
+        # Process the job with the worker in burst mode
+        worker.work(burst=True)
+
+        # Verify the cache was cleared
+        cache_info = worker.conversion_manager._get_converter_from_hash.cache_info()
+        assert cache_info.currsize == 0, (
+            "Worker converter cache should be empty after clear_converters"
+        )

@@ -255,4 +255,6 @@ class RQOrchestrator(BaseOrchestrator):
             raise RuntimeError("No connection to Redis")
 
     async def clear_converters(self):
-        pass
+        self._rq_queue.enqueue(
+            "docling_jobkit.orchestrators.rq.worker.clear_cache_task",
+        )

@@ -187,6 +187,16 @@ def docling_task(
     return result_key
 
 
+def clear_cache_task(conversion_manager: DoclingConverterManager, **_):
+    """RQ job that clears the converter cache on the worker."""
+    _log.info("Clearing converter cache on worker")
+    conversion_manager.clear_cache()
+    import gc
+
+    gc.collect()
+    _log.info("Converter cache cleared")
+
+
 def run_worker(
     rq_config: Optional[RQOrchestratorConfig] = None,
     cm_config: Optional[DoclingConverterManagerConfig] = None,
