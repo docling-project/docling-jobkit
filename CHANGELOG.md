@@ -1,3 +1,10 @@
+## [v1.10.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.10.0) - 2026-02-05
+
+### Feature
+
+* Add charts extraction ([#87](https://github.com/docling-project/docling-jobkit/issues/87)) ([`605d6ee`](https://github.com/docling-project/docling-jobkit/commit/605d6ee4e90d2ec6a2b0b51c0cd83aafeeb2b6e5))
+* Implement clear_cache_task in RQ worker and invoke it on clear_converters ([#86](https://github.com/docling-project/docling-jobkit/issues/86)) ([`ded0ea3`](https://github.com/docling-project/docling-jobkit/commit/ded0ea396cf262d6c25b77efc3df588e49492122))
+
 ## [v1.9.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.9.1) - 2026-01-30
 
 ### Fix
