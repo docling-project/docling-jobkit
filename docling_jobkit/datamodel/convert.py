@@ -454,6 +454,17 @@ class ConvertDocumentsOptions(BaseModel):
         ),
     ] = False
 
+    do_chart_extraction: Annotated[
+        bool,
+        Field(
+            description=(
+                "If enabled, extract numberic data from charts. "
+                "Boolean. Optional, defaults to false."
+            ),
+            examples=[False],
+        ),
+    ] = False
+
     do_picture_description: Annotated[
         bool,
         Field(
