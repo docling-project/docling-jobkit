@@ -458,7 +458,7 @@ class ConvertDocumentsOptions(BaseModel):
         bool,
         Field(
             description=(
-                "If enabled, extract numberic data from charts. "
+                "If enabled, extract numeric data from charts. "
                 "Boolean. Optional, defaults to false."
             ),
             examples=[False],
