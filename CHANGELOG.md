@@ -1,3 +1,9 @@
+## [v1.10.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.10.1) - 2026-02-06
+
+### Fix
+
+* Docs typo ([#88](https://github.com/docling-project/docling-jobkit/issues/88)) ([`35ed93d`](https://github.com/docling-project/docling-jobkit/commit/35ed93d724f2a8f6a094ec9d98ea5788f7f9e2a7))
+
 ## [v1.10.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.10.0) - 2026-02-05
 
 ### Feature
