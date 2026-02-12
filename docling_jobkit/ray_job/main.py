@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import sys
 
 if sys.version_info >= (3, 14):
@@ -6,7 +8,7 @@ if sys.version_info >= (3, 14):
 import argparse
 import json
 import os
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from urllib.parse import urlparse, urlunsplit
 
 import ray
@@ -14,9 +16,11 @@ from boto3.session import Session
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from botocore.paginate import Paginator
-from mypy_boto3_s3 import S3Client, S3ServiceResource
 from pydantic import BaseModel
 from ray._raylet import ObjectRefGenerator  # type: ignore
+
+if TYPE_CHECKING:
+    from mypy_boto3_s3 import S3Client, S3ServiceResource
 
 from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
 from docling.datamodel.base_models import ConversionStatus, InputFormat

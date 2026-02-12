@@ -1,6 +1,3 @@
-from docling_jobkit.connectors.google_drive_source_processor import (
-    GoogleDriveSourceProcessor,
-)
 from docling_jobkit.connectors.http_source_processor import HttpSourceProcessor
 from docling_jobkit.connectors.local_path_source_processor import (
     LocalPathSourceProcessor,
@@ -23,6 +20,10 @@ def get_source_processor(source: TaskSource) -> BaseSourceProcessor:
     elif isinstance(source, TaskS3Source):
         return S3SourceProcessor(source)
     elif isinstance(source, TaskGoogleDriveSource):
+        from docling_jobkit.connectors.google_drive_source_processor import (
+            GoogleDriveSourceProcessor,
+        )
+
         return GoogleDriveSourceProcessor(source)
     elif isinstance(source, TaskLocalPathSource):
         return LocalPathSourceProcessor(source)
