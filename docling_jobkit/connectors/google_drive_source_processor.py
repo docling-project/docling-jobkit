@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 from io import BytesIO
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
 from docling.datamodel.base_models import DocumentStream
 
-from docling_jobkit.connectors.google_drive_helper import GoogleDriveFileIdentifier
+if TYPE_CHECKING:
+    from docling_jobkit.connectors.google_drive_helper import GoogleDriveFileIdentifier
+
 from docling_jobkit.connectors.source_processor import BaseSourceProcessor
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
 

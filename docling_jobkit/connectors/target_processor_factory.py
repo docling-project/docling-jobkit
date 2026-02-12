@@ -1,6 +1,3 @@
-from docling_jobkit.connectors.google_drive_target_processor import (
-    GoogleDriveTargetProcessor,
-)
 from docling_jobkit.connectors.local_path_target_processor import (
     LocalPathTargetProcessor,
 )
@@ -18,6 +15,10 @@ def get_target_processor(target: TaskTarget) -> BaseTargetProcessor:
     if isinstance(target, S3Target):
         return S3TargetProcessor(target)
     if isinstance(target, GoogleDriveTarget):
+        from docling_jobkit.connectors.google_drive_target_processor import (
+            GoogleDriveTargetProcessor,
+        )
+
         return GoogleDriveTargetProcessor(target)
     if isinstance(target, LocalPathTarget):
         return LocalPathTargetProcessor(target)

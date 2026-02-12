@@ -1,12 +1,17 @@
+from __future__ import annotations
+
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlunsplit
 
 from boto3.session import Session
 from botocore.config import Config
-from mypy_boto3_s3 import S3Client
-from mypy_boto3_s3.paginator import ListObjectsV2Paginator
-from mypy_boto3_s3.service_resource import S3ServiceResource
+
+if TYPE_CHECKING:
+    from mypy_boto3_s3 import S3Client
+    from mypy_boto3_s3.paginator import ListObjectsV2Paginator
+    from mypy_boto3_s3.service_resource import S3ServiceResource
 
 from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
