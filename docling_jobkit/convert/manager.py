@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
 from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBackend
@@ -29,6 +29,7 @@ from docling.datamodel.pipeline_options import (
     ProcessingPipeline,
     TableFormerMode,
     TableStructureOptions,
+    VlmConvertOptions,
     VlmPipelineOptions,
 )
 from docling.datamodel.pipeline_options_vlm_model import ApiVlmOptions, InlineVlmOptions
@@ -62,6 +63,74 @@ class DoclingConverterManagerConfig(BaseModel):
     layout_batch_size: Optional[int] = None
     table_batch_size: Optional[int] = None
     batch_polling_interval_seconds: Optional[float] = None
+
+    # === NEW: Preset and Engine Control ===
+
+    # VLM Pipeline Control
+    default_vlm_preset: str = Field(
+        default="granite_docling",
+        description='Default VLM preset to use when user specifies "default".',
+    )
+    allowed_vlm_presets: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed VLM preset IDs. None means all presets are allowed.",
+    )
+    custom_vlm_presets: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Custom VLM presets defined by admin. Maps preset ID to VlmConvertOptions.",
+    )
+    allowed_vlm_engines: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed VLM engine types. None means all engines are allowed.",
+    )
+    allow_custom_vlm_config: bool = Field(
+        default=False,
+        description="Whether users can specify custom VLM engine configurations.",
+    )
+
+    # Picture Description Control
+    default_picture_description_preset: str = Field(
+        default="smolvlm",
+        description='Default picture description preset to use when user specifies "default".',
+    )
+    allowed_picture_description_presets: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed picture description preset IDs. None means all are allowed.",
+    )
+    custom_picture_description_presets: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Custom picture description presets. Maps preset ID to PictureDescriptionVlmOptions.",
+    )
+    allowed_picture_description_engines: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed picture description engine types. None means all are allowed.",
+    )
+    allow_custom_picture_description_config: bool = Field(
+        default=False,
+        description="Whether users can specify custom picture description configurations.",
+    )
+
+    # Code/Formula Control
+    default_code_formula_preset: str = Field(
+        default="default",
+        description='Default code/formula preset to use when user specifies "default".',
+    )
+    allowed_code_formula_presets: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed code/formula preset IDs. None means all are allowed.",
+    )
+    custom_code_formula_presets: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Custom code/formula presets. Maps preset ID to CodeFormulaVlmOptions.",
+    )
+    allowed_code_formula_engines: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed code/formula engine types. None means all are allowed.",
+    )
+    allow_custom_code_formula_config: bool = Field(
+        default=False,
+        description="Whether users can specify custom code/formula configurations.",
+    )
 
 
 # Custom serializer for PdfFormatOption
@@ -137,6 +206,9 @@ class DoclingConverterManager:
 
         self._cache_lock = threading.Lock()
 
+        # Build preset registries
+        self._build_preset_registries()
+
     def _create_converter_cache_from_hash(
         self, cache_size: int
     ) -> Callable[[bytes], DocumentConverter]:
@@ -164,6 +236,303 @@ class DoclingConverterManager:
 
     def clear_cache(self):
         self._get_converter_from_hash.cache_clear()
+
+    def _build_preset_registries(self):
+        """Build internal registries of allowed presets."""
+        # VLM Pipeline Registry
+        self.vlm_preset_registry: dict[str, dict[str, Any]] = {}
+
+        # ALWAYS add "default" preset (stable, guaranteed)
+        self.vlm_preset_registry["default"] = {
+            "source": "docling",
+            "preset_id": self.config.default_vlm_preset,
+        }
+
+        # Add Docling built-in presets (if allowed)
+        if self.config.allowed_vlm_presets is None:
+            # Allow all Docling presets
+            for preset_id in VlmConvertOptions.list_preset_ids():
+                if preset_id != self.config.default_vlm_preset:
+                    self.vlm_preset_registry[preset_id] = {
+                        "source": "docling",
+                        "preset_id": preset_id,
+                    }
+        else:
+            # Only allow specified presets
+            for preset_id in self.config.allowed_vlm_presets:
+                if preset_id != self.config.default_vlm_preset:
+                    self.vlm_preset_registry[preset_id] = {
+                        "source": "docling",
+                        "preset_id": preset_id,
+                    }
+
+        # Add custom presets (always allowed)
+        for preset_id, preset_options in self.config.custom_vlm_presets.items():
+            self.vlm_preset_registry[preset_id] = {
+                "source": "custom",
+                "options": preset_options,
+            }
+
+        # Picture Description Registry
+        self.picture_description_preset_registry: dict[str, dict[str, Any]] = {}
+
+        self.picture_description_preset_registry["default"] = {
+            "source": "docling",
+            "preset_id": self.config.default_picture_description_preset,
+        }
+
+        # Add allowed presets if specified
+        if self.config.allowed_picture_description_presets is not None:
+            for preset_id in self.config.allowed_picture_description_presets:
+                if preset_id != "default":
+                    self.picture_description_preset_registry[preset_id] = {
+                        "source": "docling",
+                        "preset_id": preset_id,
+                    }
+
+        # Add custom presets
+        for (
+            preset_id,
+            preset_options,
+        ) in self.config.custom_picture_description_presets.items():
+            self.picture_description_preset_registry[preset_id] = {
+                "source": "custom",
+                "options": preset_options,
+            }
+
+        # Code/Formula Registry
+        self.code_formula_preset_registry: dict[str, dict[str, Any]] = {}
+
+        self.code_formula_preset_registry["default"] = {
+            "source": "docling",
+            "preset_id": self.config.default_code_formula_preset,
+        }
+
+        # Add allowed presets if specified
+        if self.config.allowed_code_formula_presets is not None:
+            for preset_id in self.config.allowed_code_formula_presets:
+                if preset_id != "default":
+                    self.code_formula_preset_registry[preset_id] = {
+                        "source": "docling",
+                        "preset_id": preset_id,
+                    }
+
+        # Add custom presets
+        for (
+            preset_id,
+            preset_options,
+        ) in self.config.custom_code_formula_presets.items():
+            self.code_formula_preset_registry[preset_id] = {
+                "source": "custom",
+                "options": preset_options,
+            }
+
+    def _validate_vlm_preset(self, preset_id: str) -> None:
+        """Validate that VLM preset is allowed."""
+        if preset_id not in self.vlm_preset_registry:
+            allowed = list(self.vlm_preset_registry.keys())
+            raise ValueError(
+                f"VLM preset '{preset_id}' is not allowed. "
+                f"Allowed presets: {', '.join(allowed)}"
+            )
+
+    def _validate_picture_description_preset(self, preset_id: str) -> None:
+        """Validate that picture description preset is allowed."""
+        if preset_id not in self.picture_description_preset_registry:
+            allowed = list(self.picture_description_preset_registry.keys())
+            raise ValueError(
+                f"Picture description preset '{preset_id}' is not allowed. "
+                f"Allowed presets: {', '.join(allowed)}"
+            )
+
+    def _validate_code_formula_preset(self, preset_id: str) -> None:
+        """Validate that code/formula preset is allowed."""
+        if preset_id not in self.code_formula_preset_registry:
+            allowed = list(self.code_formula_preset_registry.keys())
+            raise ValueError(
+                f"Code/formula preset '{preset_id}' is not allowed. "
+                f"Allowed presets: {', '.join(allowed)}"
+            )
+
+    def _validate_custom_config_allowed(self, config_type: str) -> None:
+        """Validate that custom configuration is allowed."""
+        if config_type == "vlm" and not self.config.allow_custom_vlm_config:
+            raise ValueError(
+                "Custom VLM configuration is not allowed. "
+                "Please use a preset or contact your administrator."
+            )
+        elif (
+            config_type == "picture_description"
+            and not self.config.allow_custom_picture_description_config
+        ):
+            raise ValueError(
+                "Custom picture description configuration is not allowed. "
+                "Please use a preset or contact your administrator."
+            )
+        elif (
+            config_type == "code_formula"
+            and not self.config.allow_custom_code_formula_config
+        ):
+            raise ValueError(
+                "Custom code/formula configuration is not allowed. "
+                "Please use a preset or contact your administrator."
+            )
+
+    def _validate_engine_allowed(
+        self, engine_type: str, allowed_engines: Optional[list[str]]
+    ) -> None:
+        """Validate that engine type is allowed."""
+        if allowed_engines is not None and engine_type not in allowed_engines:
+            raise ValueError(
+                f"Engine '{engine_type}' is not allowed. "
+                f"Allowed engines: {', '.join(allowed_engines)}"
+            )
+
+    def _get_vlm_options_from_preset(self, preset_id: str) -> VlmConvertOptions:
+        """Get VLM options from preset, respecting engine restrictions."""
+        self._validate_vlm_preset(preset_id)
+
+        preset_info = self.vlm_preset_registry[preset_id]
+
+        if preset_info["source"] == "docling":
+            # Use Docling built-in preset
+            options = VlmConvertOptions.from_preset(preset_info["preset_id"])
+
+            # Validate engine is allowed
+            if self.config.allowed_vlm_engines is not None:
+                engine_type = options.engine_options.engine_type
+                self._validate_engine_allowed(
+                    engine_type, self.config.allowed_vlm_engines
+                )
+
+            return options
+        else:  # custom preset
+            # Use admin-configured preset
+            preset_options = preset_info["options"]
+
+            # Validate engine is allowed
+            if self.config.allowed_vlm_engines is not None:
+                engine_type = preset_options.engine_options.engine_type
+                self._validate_engine_allowed(
+                    engine_type, self.config.allowed_vlm_engines
+                )
+
+            return preset_options
+
+    def _get_picture_description_options_from_preset(self, preset_id: str) -> Any:
+        """Get picture description options from preset."""
+        self._validate_picture_description_preset(preset_id)
+
+        preset_info = self.picture_description_preset_registry[preset_id]
+
+        if preset_info["source"] == "docling":
+            # For now, return the preset_id to be handled by legacy code
+            # TODO: Update when PictureDescriptionVlmOptions has from_preset method
+            return preset_info["preset_id"]
+        else:
+            # Return custom preset options
+            return preset_info["options"]
+
+    def _get_code_formula_options_from_preset(self, preset_id: str) -> Any:
+        """Get code/formula options from preset."""
+        self._validate_code_formula_preset(preset_id)
+
+        preset_info = self.code_formula_preset_registry[preset_id]
+
+        if preset_info["source"] == "docling":
+            # For now, return the preset_id to be handled by legacy code
+            # TODO: Update when CodeFormulaVlmOptions has from_preset method
+            return preset_info["preset_id"]
+        else:
+            # Return custom preset options
+            return preset_info["options"]
+
+    def _parse_vlm_options(
+        self, request: ConvertDocumentsOptions
+    ) -> Optional[VlmConvertOptions]:
+        """Parse VLM options from preset OR custom config."""
+        # Option 1: Preset (recommended)
+        if request.vlm_pipeline_preset:
+            return self._get_vlm_options_from_preset(request.vlm_pipeline_preset)
+
+        # Option 2: Custom config (if allowed)
+        if request.vlm_pipeline_custom_config:
+            self._validate_custom_config_allowed("vlm")
+
+            # Validate engine is allowed (handle both dict and object types)
+            if self.config.allowed_vlm_engines is not None:
+                if isinstance(request.vlm_pipeline_custom_config, dict):
+                    engine_type = request.vlm_pipeline_custom_config.get(
+                        "engine_type", ""
+                    )
+                else:
+                    engine_type = request.vlm_pipeline_custom_config.engine_type
+                self._validate_engine_allowed(
+                    engine_type, self.config.allowed_vlm_engines
+                )
+
+            # Return the custom config as-is (it will be validated by Docling)
+            # Type is already Union of engine options or dict
+            return request.vlm_pipeline_custom_config  # type: ignore
+
+        # Option 3: No new-style config specified
+        return None
+
+    def _parse_picture_description_options(
+        self, request: ConvertDocumentsOptions
+    ) -> Optional[Any]:
+        """Parse picture description options from preset OR custom config."""
+        if request.picture_description_preset:
+            return self._get_picture_description_options_from_preset(
+                request.picture_description_preset
+            )
+
+        if request.picture_description_custom_config:
+            self._validate_custom_config_allowed("picture_description")
+
+            if self.config.allowed_picture_description_engines is not None:
+                if isinstance(request.picture_description_custom_config, dict):
+                    engine_type = request.picture_description_custom_config.get(
+                        "engine_type", ""
+                    )
+                else:
+                    engine_type = request.picture_description_custom_config.engine_type
+                self._validate_engine_allowed(
+                    engine_type, self.config.allowed_picture_description_engines
+                )
+
+            # Return the custom config as-is
+            return request.picture_description_custom_config
+
+        return None
+
+    def _parse_code_formula_options(
+        self, request: ConvertDocumentsOptions
+    ) -> Optional[Any]:
+        """Parse code/formula options from preset OR custom config."""
+        if request.code_formula_preset:
+            return self._get_code_formula_options_from_preset(
+                request.code_formula_preset
+            )
+
+        if request.code_formula_custom_config:
+            self._validate_custom_config_allowed("code_formula")
+
+            if self.config.allowed_code_formula_engines is not None:
+                if isinstance(request.code_formula_custom_config, dict):
+                    engine_type = request.code_formula_custom_config.get(
+                        "engine_type", ""
+                    )
+                else:
+                    engine_type = request.code_formula_custom_config.engine_type
+                self._validate_engine_allowed(
+                    engine_type, self.config.allowed_code_formula_engines
+                )
+
+            # Return the custom config as-is
+            return request.code_formula_custom_config
+
+        return None
 
     def get_converter(self, pdf_format_option: PdfFormatOption) -> DocumentConverter:
         with self._cache_lock:
@@ -223,19 +592,40 @@ class DoclingConverterManager:
             if request.images_scale:
                 pipeline_options.images_scale = request.images_scale
 
-        if request.picture_description_local is not None:
-            pipeline_options.picture_description_options = (
-                PictureDescriptionVlmOptions.model_validate(
-                    request.picture_description_local.model_dump()
+        # === NEW ENGINE-BASED APPROACH for Picture Description ===
+        new_picture_desc_options = self._parse_picture_description_options(request)
+        if new_picture_desc_options is not None:
+            # New-style configuration provided
+            if isinstance(new_picture_desc_options, dict):
+                pipeline_options.picture_description_options = (
+                    PictureDescriptionVlmOptions.model_validate(
+                        new_picture_desc_options
+                    )
                 )
-            )
+            elif isinstance(new_picture_desc_options, str):
+                # Preset ID - for now, keep legacy behavior
+                # TODO: Update when PictureDescriptionVlmOptions has from_preset
+                pass
+            else:
+                # Already an options object
+                pipeline_options.picture_description_options = new_picture_desc_options
+        else:
+            # === LEGACY APPROACH for Picture Description ===
+            if request.picture_description_local is not None:
+                pipeline_options.picture_description_options = (
+                    PictureDescriptionVlmOptions.model_validate(
+                        request.picture_description_local.model_dump()
+                    )
+                )
 
-        if request.picture_description_api is not None:
-            pipeline_options.picture_description_options = (
-                PictureDescriptionApiOptions.model_validate(
-                    request.picture_description_api.model_dump()
+            if request.picture_description_api is not None:
+                pipeline_options.picture_description_options = (
+                    PictureDescriptionApiOptions.model_validate(
+                        request.picture_description_api.model_dump()
+                    )
                 )
-            )
+
+        # Set picture area threshold (common to both approaches)
         pipeline_options.picture_description_options.picture_area_threshold = (
             request.picture_description_area_threshold
         )
@@ -278,58 +668,104 @@ class DoclingConverterManager:
             enable_remote_services=self.config.enable_remote_services,
         )
 
-        if request.vlm_pipeline_model in (
-            None,
-            vlm_model_specs.VlmModelType.GRANITEDOCLING,
-        ):
-            pipeline_options.vlm_options = vlm_model_specs.GRANITEDOCLING_TRANSFORMERS
-            if sys.platform == "darwin":
-                try:
-                    import mlx_vlm  # noqa: F401
+        # === NEW ENGINE-BASED APPROACH ===
+        # Try new preset/custom config approach first
+        new_vlm_options = self._parse_vlm_options(request)
+        if new_vlm_options is not None:
+            # New-style configuration provided
+            if isinstance(new_vlm_options, dict):
+                # Convert dict to VlmConvertOptions
+                pipeline_options.vlm_options = VlmConvertOptions.model_validate(
+                    new_vlm_options
+                )
+            else:
+                # Already a VlmConvertOptions object
+                pipeline_options.vlm_options = new_vlm_options
+        else:
+            # === LEGACY APPROACH (Backwards Compatibility) ===
+            # Fall back to legacy configuration
+            if request.vlm_pipeline_model in (
+                None,
+                vlm_model_specs.VlmModelType.GRANITEDOCLING,
+            ):
+                pipeline_options.vlm_options = (
+                    vlm_model_specs.GRANITEDOCLING_TRANSFORMERS
+                )
+                if sys.platform == "darwin":
+                    try:
+                        import mlx_vlm  # noqa: F401
 
-                    pipeline_options.vlm_options = vlm_model_specs.GRANITEDOCLING_MLX
-                except ImportError:
-                    _log.warning(
-                        "To run GraniteDocling faster, please install mlx-vlm:\n"
-                        "pip install mlx-vlm"
-                    )
+                        pipeline_options.vlm_options = (
+                            vlm_model_specs.GRANITEDOCLING_MLX
+                        )
+                    except ImportError:
+                        _log.warning(
+                            "To run GraniteDocling faster, please install mlx-vlm:\n"
+                            "pip install mlx-vlm"
+                        )
 
-        elif request.vlm_pipeline_model == vlm_model_specs.VlmModelType.GRANITE_VISION:
-            pipeline_options.vlm_options = vlm_model_specs.GRANITE_VISION_TRANSFORMERS
+            elif (
+                request.vlm_pipeline_model
+                == vlm_model_specs.VlmModelType.GRANITE_VISION
+            ):
+                pipeline_options.vlm_options = (
+                    vlm_model_specs.GRANITE_VISION_TRANSFORMERS
+                )
 
-        elif (
-            request.vlm_pipeline_model
-            == vlm_model_specs.VlmModelType.GRANITE_VISION_OLLAMA
-        ):
-            pipeline_options.vlm_options = vlm_model_specs.GRANITE_VISION_OLLAMA
+            elif (
+                request.vlm_pipeline_model
+                == vlm_model_specs.VlmModelType.GRANITE_VISION_OLLAMA
+            ):
+                pipeline_options.vlm_options = vlm_model_specs.GRANITE_VISION_OLLAMA
 
-        if request.vlm_pipeline_model_local is not None:
-            pipeline_options.vlm_options = InlineVlmOptions.model_validate(
-                request.vlm_pipeline_model_local.model_dump()
-            )
+            if request.vlm_pipeline_model_local is not None:
+                pipeline_options.vlm_options = InlineVlmOptions.model_validate(
+                    request.vlm_pipeline_model_local.model_dump()
+                )
 
-        if request.vlm_pipeline_model_api is not None:
-            pipeline_options.vlm_options = ApiVlmOptions.model_validate(
-                request.vlm_pipeline_model_api.model_dump()
-            )
+            if request.vlm_pipeline_model_api is not None:
+                pipeline_options.vlm_options = ApiVlmOptions.model_validate(
+                    request.vlm_pipeline_model_api.model_dump()
+                )
 
+        # Picture classification and description (common to both approaches)
         pipeline_options.do_picture_classification = request.do_picture_classification
         pipeline_options.do_picture_description = request.do_picture_description
 
-        if request.picture_description_local is not None:
-            pipeline_options.picture_description_options = (
-                PictureDescriptionVlmOptions.model_validate(
-                    request.picture_description_local.model_dump()
+        # === NEW ENGINE-BASED APPROACH for Picture Description ===
+        new_picture_desc_options = self._parse_picture_description_options(request)
+        if new_picture_desc_options is not None:
+            # New-style configuration provided
+            if isinstance(new_picture_desc_options, dict):
+                pipeline_options.picture_description_options = (
+                    PictureDescriptionVlmOptions.model_validate(
+                        new_picture_desc_options
+                    )
                 )
-            )
-
-        if request.picture_description_api is not None:
-            pipeline_options.picture_description_options = (
-                PictureDescriptionApiOptions.model_validate(
-                    request.picture_description_api.model_dump()
+            elif isinstance(new_picture_desc_options, str):
+                # Preset ID - for now, keep legacy behavior
+                # TODO: Update when PictureDescriptionVlmOptions has from_preset
+                pass
+            else:
+                # Already an options object
+                pipeline_options.picture_description_options = new_picture_desc_options
+        else:
+            # === LEGACY APPROACH for Picture Description ===
+            if request.picture_description_local is not None:
+                pipeline_options.picture_description_options = (
+                    PictureDescriptionVlmOptions.model_validate(
+                        request.picture_description_local.model_dump()
+                    )
                 )
-            )
 
+            if request.picture_description_api is not None:
+                pipeline_options.picture_description_options = (
+                    PictureDescriptionApiOptions.model_validate(
+                        request.picture_description_api.model_dump()
+                    )
+                )
+
+        # Set picture area threshold (common to both approaches)
         pipeline_options.picture_description_options.picture_area_threshold = (
             request.picture_description_area_threshold
         )

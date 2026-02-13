@@ -935,8 +935,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = "~=1.35" },
-    { name = "docling", specifier = "~=2.72" },
-    { name = "docling", extras = ["vlm"], marker = "extra == 'vlm'", specifier = "~=2.60" },
+    { name = "docling", specifier = ">=2.73.0,<3.0.0" },
+    { name = "docling", extras = ["vlm"], marker = "extra == 'vlm'", specifier = ">=2.73.0,<3.0.0" },
     { name = "google-api-python-client", marker = "extra == 'gdrive'", specifier = ">=2.183.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'gdrive'", specifier = ">=1.2.2" },
     { name = "httpx", specifier = ">=0.28,<1" },

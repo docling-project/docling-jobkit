@@ -1,11 +1,14 @@
 # Define the input options for the API
-from typing import Annotated, Any, Optional
+import warnings
+from typing import Annotated, Any, Optional, Union
 
 from pydantic import AnyUrl, BaseModel, Field, PositiveInt, model_validator
 from typing_extensions import Self
 
 from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import InputFormat, OutputFormat
+
+# Import new engine system (available in docling>=2.73.0)
 from docling.datamodel.pipeline_options import (
     PdfBackend,
     PictureDescriptionBaseOptions,
@@ -13,6 +16,8 @@ from docling.datamodel.pipeline_options import (
     TableFormerMode,
     TableStructureOptions,
 )
+
+# Import legacy types for backwards compatibility
 from docling.datamodel.pipeline_options_vlm_model import (
     InferenceFramework,
     InlineVlmOptions,
@@ -22,6 +27,11 @@ from docling.datamodel.pipeline_options_vlm_model import (
 from docling.datamodel.settings import (
     DEFAULT_PAGE_RANGE,
     PageRange,
+)
+from docling.datamodel.vlm_engine_options import (
+    ApiVlmEngineOptions,
+    MlxVlmEngineOptions,
+    TransformersVlmEngineOptions,
 )
 from docling_core.types.doc import ImageRefMode
 
@@ -546,6 +556,84 @@ class ConvertDocumentsOptions(BaseModel):
         ),
     ] = None
 
+    # === NEW: Preset Selection OR Custom Config ===
+
+    # Option 1: Use preset (recommended)
+    vlm_pipeline_preset: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description='Preset ID to use (e.g., "default", "granite_docling"). '
+            'Use "default" for stable, admin-controlled configuration.',
+            examples=["default", "granite_docling"],
+        ),
+    ] = None
+
+    picture_description_preset: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Preset ID for picture description.",
+            examples=["default", "smolvlm", "granite_vision"],
+        ),
+    ] = None
+
+    code_formula_preset: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Preset ID for code/formula extraction.",
+            examples=["default"],
+        ),
+    ] = None
+
+    # Option 2: Custom engine configuration (if allowed by config)
+    vlm_pipeline_custom_config: Annotated[
+        Optional[
+            Union[
+                TransformersVlmEngineOptions,
+                MlxVlmEngineOptions,
+                ApiVlmEngineOptions,
+                dict,  # For backwards compatibility
+            ]
+        ],
+        Field(
+            default=None,
+            description="Custom engine configuration. Only available if admin allows it. "
+            "Can specify any engine type: Transformers, MLX, API.",
+        ),
+    ] = None
+
+    picture_description_custom_config: Annotated[
+        Optional[
+            Union[
+                TransformersVlmEngineOptions,
+                MlxVlmEngineOptions,
+                ApiVlmEngineOptions,
+                dict,
+            ]
+        ],
+        Field(
+            default=None,
+            description="Custom engine configuration for picture description.",
+        ),
+    ] = None
+
+    code_formula_custom_config: Annotated[
+        Optional[
+            Union[
+                TransformersVlmEngineOptions,
+                MlxVlmEngineOptions,
+                ApiVlmEngineOptions,
+                dict,
+            ]
+        ],
+        Field(
+            default=None,
+            description="Custom engine configuration for code/formula extraction.",
+        ),
+    ] = None
+
     @model_validator(mode="after")
     def picture_description_exclusivity(self) -> Self:
         # Validate picture description options
@@ -575,6 +663,90 @@ class ConvertDocumentsOptions(BaseModel):
         if num_not_nan > 1:
             raise ValueError(
                 "The parameters vlm_pipeline_model, vlm_pipeline_model_local and vlm_pipeline_model_api are mutually exclusive, only one of them can be set."
+            )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_vlm_pipeline_options(self) -> Self:
+        """Ensure preset and custom config are mutually exclusive for VLM pipeline."""
+        if self.vlm_pipeline_preset and self.vlm_pipeline_custom_config:
+            raise ValueError(
+                "Cannot specify both vlm_pipeline_preset and vlm_pipeline_custom_config. "
+                "Please use one or the other."
+            )
+
+        # Check if using legacy fields with new fields
+        legacy_set = (
+            self.vlm_pipeline_model is not None
+            or self.vlm_pipeline_model_local is not None
+            or self.vlm_pipeline_model_api is not None
+        )
+        new_set = (
+            self.vlm_pipeline_preset is not None
+            or self.vlm_pipeline_custom_config is not None
+        )
+
+        if legacy_set and new_set:
+            raise ValueError(
+                "Cannot mix legacy VLM options (vlm_pipeline_model*) with new options "
+                "(vlm_pipeline_preset/custom_config). Please use only one approach."
+            )
+
+        if legacy_set:
+            warnings.warn(
+                "vlm_pipeline_model, vlm_pipeline_model_local, and vlm_pipeline_model_api "
+                "are deprecated. Please migrate to vlm_pipeline_preset or "
+                "vlm_pipeline_custom_config. See MIGRATION_GUIDE.md for details.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_picture_description_options(self) -> Self:
+        """Ensure preset and custom config are mutually exclusive for picture description."""
+        if self.picture_description_preset and self.picture_description_custom_config:
+            raise ValueError(
+                "Cannot specify both picture_description_preset and "
+                "picture_description_custom_config."
+            )
+
+        # Check if using legacy fields with new fields
+        legacy_set = (
+            self.picture_description_local is not None
+            or self.picture_description_api is not None
+        )
+        new_set = (
+            self.picture_description_preset is not None
+            or self.picture_description_custom_config is not None
+        )
+
+        if legacy_set and new_set:
+            raise ValueError(
+                "Cannot mix legacy picture description options (picture_description_local/api) "
+                "with new options (picture_description_preset/custom_config). "
+                "Please use only one approach."
+            )
+
+        if legacy_set:
+            warnings.warn(
+                "picture_description_local and picture_description_api are deprecated. "
+                "Please migrate to picture_description_preset or "
+                "picture_description_custom_config. See MIGRATION_GUIDE.md for details.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_code_formula_options(self) -> Self:
+        """Ensure preset and custom config are mutually exclusive for code/formula."""
+        if self.code_formula_preset and self.code_formula_custom_config:
+            raise ValueError(
+                "Cannot specify both code_formula_preset and code_formula_custom_config."
             )
 
         return self
