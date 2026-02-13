@@ -100,6 +100,10 @@ def test_options_validator():
 
 
 def test_options_cache_key():
+    """Test cache key generation with deprecated picture_description_api field.
+
+    This test uses deprecated fields and should trigger deprecation warnings.
+    """
     hashes = set()
 
     m = DoclingConverterManager(config=DoclingConverterManagerConfig())
@@ -123,32 +127,122 @@ def test_options_cache_key():
     assert hash not in hashes
     hashes.add(hash)
 
-    opts.picture_description_api = PictureDescriptionApi(
-        url="http://localhost",
-        params={"model": "mymodel"},
-        prompt="Hello 1",
-    )
+    # DEPRECATED: Using picture_description_api (should trigger warning)
+    with pytest.warns(DeprecationWarning):
+        opts.picture_description_api = PictureDescriptionApi(
+            url="http://localhost",
+            params={"model": "mymodel"},
+            prompt="Hello 1",
+        )
     pipeline_opts = m.get_pdf_pipeline_opts(opts)
     hash = _hash_pdf_format_option(pipeline_opts)
     # pprint(pipeline_opts.pipeline_options.model_dump(serialize_as_any=True))
     assert hash not in hashes
     hashes.add(hash)
 
-    opts.picture_description_api = PictureDescriptionApi(
-        url="http://localhost",
-        params={"model": "your-model"},
-        prompt="Hello 1",
-    )
+    # DEPRECATED: Modifying picture_description_api
+    with pytest.warns(DeprecationWarning):
+        opts.picture_description_api = PictureDescriptionApi(
+            url="http://localhost",
+            params={"model": "your-model"},
+            prompt="Hello 1",
+        )
     pipeline_opts = m.get_pdf_pipeline_opts(opts)
     hash = _hash_pdf_format_option(pipeline_opts)
     # pprint(pipeline_opts.pipeline_options.model_dump(serialize_as_any=True))
     assert hash not in hashes
     hashes.add(hash)
 
+    # Modifying existing deprecated field (no new warning needed)
     opts.picture_description_api.prompt = "World"
     pipeline_opts = m.get_pdf_pipeline_opts(opts)
     hash = _hash_pdf_format_option(pipeline_opts)
     # pprint(pipeline_opts.pipeline_options.model_dump(serialize_as_any=True))
+    assert hash not in hashes
+    hashes.add(hash)
+
+
+def test_options_cache_key_with_presets():
+    """Test cache key generation with new preset system.
+
+    This test uses the new preset and custom_config fields.
+    """
+    hashes = set()
+
+    m = DoclingConverterManager(
+        config=DoclingConverterManagerConfig(
+            default_picture_description_preset="smolvlm",
+        )
+    )
+
+    # Base configuration
+    opts = ConvertDocumentsOptions()
+    pipeline_opts = m.get_pdf_pipeline_opts(opts)
+    hash = _hash_pdf_format_option(pipeline_opts)
+    assert hash not in hashes
+    hashes.add(hash)
+
+    # VLM pipeline with default preset
+    opts = ConvertDocumentsOptions(
+        pipeline=ProcessingPipeline.VLM,
+        vlm_pipeline_preset="default",
+    )
+    pipeline_opts = m.get_pdf_pipeline_opts(opts)
+    hash = _hash_pdf_format_option(pipeline_opts)
+    assert hash not in hashes
+    hashes.add(hash)
+
+    # Picture description with preset
+    opts = ConvertDocumentsOptions(
+        pipeline=ProcessingPipeline.VLM,
+        picture_description_preset="default",
+    )
+    pipeline_opts = m.get_pdf_pipeline_opts(opts)
+    hash = _hash_pdf_format_option(pipeline_opts)
+    assert hash not in hashes
+    hashes.add(hash)
+
+    # Picture description with custom config (API)
+    opts = ConvertDocumentsOptions(
+        pipeline=ProcessingPipeline.VLM,
+        picture_description_custom_config={
+            "engine_type": "api_generic",
+            "url": "http://localhost:8000",
+            "params": {"model": "custom-model-1"},
+            "prompt": "Describe this image",
+        },
+    )
+    pipeline_opts = m.get_pdf_pipeline_opts(opts)
+    hash = _hash_pdf_format_option(pipeline_opts)
+    assert hash not in hashes
+    hashes.add(hash)
+
+    # Picture description with different custom config
+    opts = ConvertDocumentsOptions(
+        pipeline=ProcessingPipeline.VLM,
+        picture_description_custom_config={
+            "engine_type": "api_generic",
+            "url": "http://localhost:8000",
+            "params": {"model": "custom-model-2"},  # Different model
+            "prompt": "Describe this image",
+        },
+    )
+    pipeline_opts = m.get_pdf_pipeline_opts(opts)
+    hash = _hash_pdf_format_option(pipeline_opts)
+    assert hash not in hashes
+    hashes.add(hash)
+
+    # VLM with custom config (Transformers)
+    opts = ConvertDocumentsOptions(
+        pipeline=ProcessingPipeline.VLM,
+        vlm_pipeline_custom_config={
+            "engine_type": "transformers",
+            "repo_id": "test-model",
+            "response_format": "doctags",
+        },
+    )
+    pipeline_opts = m.get_pdf_pipeline_opts(opts)
+    hash = _hash_pdf_format_option(pipeline_opts)
     assert hash not in hashes
     hashes.add(hash)
 
