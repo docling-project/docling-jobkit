@@ -5,7 +5,7 @@ import logging
 import re
 import sys
 import threading
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional, TypedDict, Union
@@ -21,6 +21,7 @@ from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.pipeline_options import (
+    CodeFormulaVlmOptions,
     OcrOptions,
     PdfBackend,
     PdfPipelineOptions,
@@ -56,14 +57,38 @@ class DoclingPresetInfo(TypedDict):
     preset_id: str
 
 
-class CustomPresetInfo(TypedDict):
-    """Info for a custom admin-defined preset."""
+class VlmCustomPresetInfo(TypedDict):
+    """Info for a custom VLM preset."""
 
     source: Literal["custom"]
-    options: Any
+    options: VlmConvertOptions
 
 
-PresetInfo = Union[DoclingPresetInfo, CustomPresetInfo]
+class PictureDescriptionCustomPresetInfo(TypedDict):
+    """Info for a custom picture description preset."""
+
+    source: Literal["custom"]
+    options: PictureDescriptionVlmOptions
+
+
+class CodeFormulaCustomPresetInfo(TypedDict):
+    """Info for a custom code/formula preset."""
+
+    source: Literal["custom"]
+    options: CodeFormulaVlmOptions
+
+
+# Registry-specific types
+VlmPresetInfo = Union[DoclingPresetInfo, VlmCustomPresetInfo]
+PictureDescriptionPresetInfo = Union[
+    DoclingPresetInfo, PictureDescriptionCustomPresetInfo
+]
+CodeFormulaPresetInfo = Union[DoclingPresetInfo, CodeFormulaCustomPresetInfo]
+
+# Generic preset info type for shared functions
+AnyPresetInfo = Union[
+    VlmPresetInfo, PictureDescriptionPresetInfo, CodeFormulaPresetInfo
+]
 
 
 class DoclingConverterManagerConfig(BaseModel):
@@ -258,7 +283,7 @@ class DoclingConverterManager:
     def _build_preset_registries(self):
         """Build internal registries of allowed presets."""
         # VLM Pipeline Registry
-        self.vlm_preset_registry: dict[str, PresetInfo] = {}
+        self.vlm_preset_registry: dict[str, VlmPresetInfo] = {}
 
         # ALWAYS add "default" preset (stable, guaranteed)
         self.vlm_preset_registry["default"] = {
@@ -292,7 +317,9 @@ class DoclingConverterManager:
             }
 
         # Picture Description Registry
-        self.picture_description_preset_registry: dict[str, PresetInfo] = {}
+        self.picture_description_preset_registry: dict[
+            str, PictureDescriptionPresetInfo
+        ] = {}
 
         self.picture_description_preset_registry["default"] = {
             "source": "docling",
@@ -319,7 +346,7 @@ class DoclingConverterManager:
             }
 
         # Code/Formula Registry
-        self.code_formula_preset_registry: dict[str, PresetInfo] = {}
+        self.code_formula_preset_registry: dict[str, CodeFormulaPresetInfo] = {}
 
         self.code_formula_preset_registry["default"] = {
             "source": "docling",
@@ -346,7 +373,10 @@ class DoclingConverterManager:
             }
 
     def _validate_preset(
-        self, preset_id: str, registry: dict[str, PresetInfo], preset_type: str
+        self,
+        preset_id: str,
+        registry: Mapping[str, AnyPresetInfo],
+        preset_type: str,
     ) -> None:
         """Generic preset validation."""
         if preset_id not in registry:
@@ -393,7 +423,7 @@ class DoclingConverterManager:
     def _get_options_from_preset(
         self,
         preset_id: str,
-        registry: dict[str, PresetInfo],
+        registry: Mapping[str, AnyPresetInfo],
         preset_type: str,
         allowed_engines: Optional[list[str]],
         from_preset_func: Optional[Callable[[str], Any]] = None,
@@ -421,8 +451,8 @@ class DoclingConverterManager:
                 options = from_preset_func(preset_info["preset_id"])
 
                 # Validate engine is allowed
-                if allowed_engines is not None:
-                    engine_type = options.engine_options.engine_type
+                if allowed_engines is not None and hasattr(options, "engine_options"):
+                    engine_type = getattr(options.engine_options, "engine_type")
                     self._validate_engine_allowed(engine_type, allowed_engines)
 
                 return options
@@ -434,9 +464,12 @@ class DoclingConverterManager:
             # Use admin-configured preset
             preset_options = preset_info["options"]
 
-            # Validate engine is allowed
-            if allowed_engines is not None:
-                engine_type = preset_options.engine_options.engine_type
+            # Validate engine is allowed (only for options that have engine_options)
+            if allowed_engines is not None and hasattr(
+                preset_options, "engine_options"
+            ):
+                engine_options = getattr(preset_options, "engine_options")
+                engine_type = getattr(engine_options, "engine_type")
                 self._validate_engine_allowed(engine_type, allowed_engines)
 
             return preset_options
