@@ -55,6 +55,7 @@ class DoclingConverterManagerConfig(BaseModel):
 
     max_num_pages: int = sys.maxsize
     max_file_size: int = sys.maxsize
+    raises_on_error: bool = False
 
     # Threading pipeline
     queue_max_size: Optional[int] = None
@@ -405,6 +406,7 @@ class DoclingConverterManager:
             page_range=options.page_range,
             max_file_size=self.config.max_file_size,
             max_num_pages=self.config.max_num_pages,
+            raises_on_error=self.config.raises_on_error,
         )
 
         return results

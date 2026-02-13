@@ -108,6 +108,7 @@ def _process_source(
     artifacts_path: Optional[Path],
     enable_remote_services: bool,
     allow_external_plugins: bool,
+    raises_on_error: bool,
     quiet: bool,
     log_level: int,
     progress_queue: Optional[Any] = None,
@@ -159,6 +160,7 @@ def _process_source(
                 artifacts_path,
                 enable_remote_services,
                 allow_external_plugins,
+                raises_on_error,
                 log_level,
                 progress_queue,
             )
@@ -265,6 +267,7 @@ def process_batch(
     artifacts_path: Optional[Path],
     enable_remote_services: bool,
     allow_external_plugins: bool,
+    raises_on_error: bool,
     log_level: int,
     progress_queue: Optional[Any] = None,
 ) -> BatchResult:
@@ -305,6 +308,7 @@ def process_batch(
             artifacts_path=artifacts_path,
             enable_remote_services=enable_remote_services,
             allow_external_plugins=allow_external_plugins,
+            raises_on_error=raises_on_error,
             options_cache_size=1,
         )
         manager = DoclingConverterManager(config=cm_config)
@@ -418,6 +422,13 @@ def convert(
             ..., help="Must be enabled for loading modules from third-party plugins."
         ),
     ] = False,
+    raises_on_error: Annotated[
+        bool,
+        typer.Option(
+            ...,
+            help="If enabled, raise an exception when a document conversion fails. If disabled, continue processing remaining documents.",
+        ),
+    ] = False,
     quiet: Annotated[
         bool,
         typer.Option(
@@ -488,6 +499,7 @@ def convert(
             artifacts_path=artifacts_path,
             enable_remote_services=enable_remote_services,
             allow_external_plugins=allow_external_plugins,
+            raises_on_error=raises_on_error,
             quiet=quiet,
             log_level=log_level,
             progress_queue=progress_queue,
