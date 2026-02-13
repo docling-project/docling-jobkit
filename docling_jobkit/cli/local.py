@@ -84,13 +84,6 @@ def convert(
             ..., help="Must be enabled for loading modules from third-party plugins."
         ),
     ] = False,
-    raises_on_error: Annotated[
-        bool,
-        typer.Option(
-            ...,
-            help="If enabled, raise an exception when a document conversion fails. If disabled, continue processing remaining documents.",
-        ),
-    ] = False,
 ):
     # Open and validate config file
     try:
@@ -107,7 +100,6 @@ def convert(
         artifacts_path=artifacts_path,
         enable_remote_services=enable_remote_services,
         allow_external_plugins=allow_external_plugins,
-        raises_on_error=raises_on_error,
         options_cache_size=1,
     )
     manager = DoclingConverterManager(config=cm_config)
