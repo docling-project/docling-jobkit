@@ -405,6 +405,7 @@ class DoclingConverterManager:
             page_range=options.page_range,
             max_file_size=self.config.max_file_size,
             max_num_pages=self.config.max_num_pages,
+            raises_on_error=options.abort_on_error,
         )
 
         return results
