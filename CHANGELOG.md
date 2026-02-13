@@ -1,3 +1,10 @@
+## [v1.10.2](https://github.com/docling-project/docling-jobkit/releases/tag/v1.10.2) - 2026-02-13
+
+### Fix
+
+* Respect `abort_on_error` option ([#91](https://github.com/docling-project/docling-jobkit/issues/91)) ([`528df51`](https://github.com/docling-project/docling-jobkit/commit/528df51e26c2b83359374fc4664e01c3f8fe44e0))
+* Do not require optional deps ([#89](https://github.com/docling-project/docling-jobkit/issues/89)) ([`c28233d`](https://github.com/docling-project/docling-jobkit/commit/c28233d0aa406692509a639745bb360c30523e23))
+
 ## [v1.10.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.10.1) - 2026-02-06
 
 ### Fix
