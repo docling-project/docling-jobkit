@@ -64,7 +64,12 @@ async def orchestrator(artifacts_path: Path):
 
     remote_models = not bool(os.getenv("CI"))
     cm_config = DoclingConverterManagerConfig(
-        enable_remote_services=remote_models, artifacts_path=artifacts_path
+        enable_remote_services=remote_models,
+        artifacts_path=artifacts_path,
+        # Enable custom configs for testing both preset and custom config paths
+        allow_custom_vlm_config=True,
+        allow_custom_picture_description_config=True,
+        allow_custom_code_formula_config=True,
     )
     cm = DoclingConverterManager(config=cm_config)
 
@@ -93,7 +98,13 @@ async def replicated_orchestrator(artifacts_path: Path):
         shared_models=False,
     )
 
-    cm_config = DoclingConverterManagerConfig(artifacts_path=artifacts_path)
+    cm_config = DoclingConverterManagerConfig(
+        artifacts_path=artifacts_path,
+        # Enable custom configs for testing
+        allow_custom_vlm_config=True,
+        allow_custom_picture_description_config=True,
+        allow_custom_code_formula_config=True,
+    )
     cm = DoclingConverterManager(config=cm_config)
 
     orchestrator = LocalOrchestrator(config=config, converter_manager=cm)

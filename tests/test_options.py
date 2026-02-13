@@ -172,6 +172,10 @@ def test_options_cache_key_with_presets():
     m = DoclingConverterManager(
         config=DoclingConverterManagerConfig(
             default_picture_description_preset="smolvlm",
+            # Enable custom configs for testing
+            allow_custom_vlm_config=True,
+            allow_custom_picture_description_config=True,
+            allow_custom_code_formula_config=True,
         )
     )
 
