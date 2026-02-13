@@ -8,7 +8,7 @@ import threading
 from collections.abc import Iterable, Iterator
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Literal, Optional, TypedDict, Union
 
 from pydantic import BaseModel, Field
 
@@ -46,6 +46,24 @@ from docling_core.types.doc import ImageRefMode
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 
 _log = logging.getLogger(__name__)
+
+
+# Type definitions for preset registries
+class DoclingPresetInfo(TypedDict):
+    """Info for a Docling built-in preset."""
+
+    source: Literal["docling"]
+    preset_id: str
+
+
+class CustomPresetInfo(TypedDict):
+    """Info for a custom admin-defined preset."""
+
+    source: Literal["custom"]
+    options: Any
+
+
+PresetInfo = Union[DoclingPresetInfo, CustomPresetInfo]
 
 
 class DoclingConverterManagerConfig(BaseModel):
@@ -240,7 +258,7 @@ class DoclingConverterManager:
     def _build_preset_registries(self):
         """Build internal registries of allowed presets."""
         # VLM Pipeline Registry
-        self.vlm_preset_registry: dict[str, dict[str, Any]] = {}
+        self.vlm_preset_registry: dict[str, PresetInfo] = {}
 
         # ALWAYS add "default" preset (stable, guaranteed)
         self.vlm_preset_registry["default"] = {
@@ -274,7 +292,7 @@ class DoclingConverterManager:
             }
 
         # Picture Description Registry
-        self.picture_description_preset_registry: dict[str, dict[str, Any]] = {}
+        self.picture_description_preset_registry: dict[str, PresetInfo] = {}
 
         self.picture_description_preset_registry["default"] = {
             "source": "docling",
@@ -301,7 +319,7 @@ class DoclingConverterManager:
             }
 
         # Code/Formula Registry
-        self.code_formula_preset_registry: dict[str, dict[str, Any]] = {}
+        self.code_formula_preset_registry: dict[str, PresetInfo] = {}
 
         self.code_formula_preset_registry["default"] = {
             "source": "docling",
@@ -327,30 +345,14 @@ class DoclingConverterManager:
                 "options": preset_options,
             }
 
-    def _validate_vlm_preset(self, preset_id: str) -> None:
-        """Validate that VLM preset is allowed."""
-        if preset_id not in self.vlm_preset_registry:
-            allowed = list(self.vlm_preset_registry.keys())
+    def _validate_preset(
+        self, preset_id: str, registry: dict[str, PresetInfo], preset_type: str
+    ) -> None:
+        """Generic preset validation."""
+        if preset_id not in registry:
+            allowed = list(registry.keys())
             raise ValueError(
-                f"VLM preset '{preset_id}' is not allowed. "
-                f"Allowed presets: {', '.join(allowed)}"
-            )
-
-    def _validate_picture_description_preset(self, preset_id: str) -> None:
-        """Validate that picture description preset is allowed."""
-        if preset_id not in self.picture_description_preset_registry:
-            allowed = list(self.picture_description_preset_registry.keys())
-            raise ValueError(
-                f"Picture description preset '{preset_id}' is not allowed. "
-                f"Allowed presets: {', '.join(allowed)}"
-            )
-
-    def _validate_code_formula_preset(self, preset_id: str) -> None:
-        """Validate that code/formula preset is allowed."""
-        if preset_id not in self.code_formula_preset_registry:
-            allowed = list(self.code_formula_preset_registry.keys())
-            raise ValueError(
-                f"Code/formula preset '{preset_id}' is not allowed. "
+                f"{preset_type} preset '{preset_id}' is not allowed. "
                 f"Allowed presets: {', '.join(allowed)}"
             )
 
@@ -388,64 +390,56 @@ class DoclingConverterManager:
                 f"Allowed engines: {', '.join(allowed_engines)}"
             )
 
-    def _get_vlm_options_from_preset(self, preset_id: str) -> VlmConvertOptions:
-        """Get VLM options from preset, respecting engine restrictions."""
-        self._validate_vlm_preset(preset_id)
+    def _get_options_from_preset(
+        self,
+        preset_id: str,
+        registry: dict[str, PresetInfo],
+        preset_type: str,
+        allowed_engines: Optional[list[str]],
+        from_preset_func: Optional[Callable[[str], Any]] = None,
+    ) -> Any:
+        """Generic method to get options from preset with engine validation.
 
-        preset_info = self.vlm_preset_registry[preset_id]
+        Args:
+            preset_id: The preset identifier
+            registry: The preset registry to look up
+            preset_type: Human-readable type name for error messages
+            allowed_engines: List of allowed engine types (None means all allowed)
+            from_preset_func: Optional function to create options from preset_id (e.g., VlmConvertOptions.from_preset)
+
+        Returns:
+            Options object or preset_id string (for legacy handling)
+        """
+        # Validate preset is allowed
+        self._validate_preset(preset_id, registry, preset_type)
+
+        preset_info = registry[preset_id]
 
         if preset_info["source"] == "docling":
             # Use Docling built-in preset
-            options = VlmConvertOptions.from_preset(preset_info["preset_id"])
+            if from_preset_func is not None:
+                options = from_preset_func(preset_info["preset_id"])
 
-            # Validate engine is allowed
-            if self.config.allowed_vlm_engines is not None:
-                engine_type = options.engine_options.engine_type
-                self._validate_engine_allowed(
-                    engine_type, self.config.allowed_vlm_engines
-                )
+                # Validate engine is allowed
+                if allowed_engines is not None:
+                    engine_type = options.engine_options.engine_type
+                    self._validate_engine_allowed(engine_type, allowed_engines)
 
-            return options
+                return options
+            else:
+                # Return preset_id for legacy handling
+                # TODO: Update when all options have from_preset method
+                return preset_info["preset_id"]
         else:  # custom preset
             # Use admin-configured preset
             preset_options = preset_info["options"]
 
             # Validate engine is allowed
-            if self.config.allowed_vlm_engines is not None:
+            if allowed_engines is not None:
                 engine_type = preset_options.engine_options.engine_type
-                self._validate_engine_allowed(
-                    engine_type, self.config.allowed_vlm_engines
-                )
+                self._validate_engine_allowed(engine_type, allowed_engines)
 
             return preset_options
-
-    def _get_picture_description_options_from_preset(self, preset_id: str) -> Any:
-        """Get picture description options from preset."""
-        self._validate_picture_description_preset(preset_id)
-
-        preset_info = self.picture_description_preset_registry[preset_id]
-
-        if preset_info["source"] == "docling":
-            # For now, return the preset_id to be handled by legacy code
-            # TODO: Update when PictureDescriptionVlmOptions has from_preset method
-            return preset_info["preset_id"]
-        else:
-            # Return custom preset options
-            return preset_info["options"]
-
-    def _get_code_formula_options_from_preset(self, preset_id: str) -> Any:
-        """Get code/formula options from preset."""
-        self._validate_code_formula_preset(preset_id)
-
-        preset_info = self.code_formula_preset_registry[preset_id]
-
-        if preset_info["source"] == "docling":
-            # For now, return the preset_id to be handled by legacy code
-            # TODO: Update when CodeFormulaVlmOptions has from_preset method
-            return preset_info["preset_id"]
-        else:
-            # Return custom preset options
-            return preset_info["options"]
 
     def _parse_vlm_options(
         self, request: ConvertDocumentsOptions
@@ -453,7 +447,13 @@ class DoclingConverterManager:
         """Parse VLM options from preset OR custom config."""
         # Option 1: Preset (recommended)
         if request.vlm_pipeline_preset:
-            return self._get_vlm_options_from_preset(request.vlm_pipeline_preset)
+            return self._get_options_from_preset(
+                request.vlm_pipeline_preset,
+                self.vlm_preset_registry,
+                "VLM",
+                self.config.allowed_vlm_engines,
+                VlmConvertOptions.from_preset,
+            )
 
         # Option 2: Custom config (if allowed)
         if request.vlm_pipeline_custom_config:
@@ -483,8 +483,12 @@ class DoclingConverterManager:
     ) -> Optional[Any]:
         """Parse picture description options from preset OR custom config."""
         if request.picture_description_preset:
-            return self._get_picture_description_options_from_preset(
-                request.picture_description_preset
+            return self._get_options_from_preset(
+                request.picture_description_preset,
+                self.picture_description_preset_registry,
+                "Picture description",
+                self.config.allowed_picture_description_engines,
+                None,  # No from_preset method yet
             )
 
         if request.picture_description_custom_config:
@@ -511,8 +515,12 @@ class DoclingConverterManager:
     ) -> Optional[Any]:
         """Parse code/formula options from preset OR custom config."""
         if request.code_formula_preset:
-            return self._get_code_formula_options_from_preset(
-                request.code_formula_preset
+            return self._get_options_from_preset(
+                request.code_formula_preset,
+                self.code_formula_preset_registry,
+                "Code/formula",
+                self.config.allowed_code_formula_engines,
+                None,  # No from_preset method yet
             )
 
         if request.code_formula_custom_config:
