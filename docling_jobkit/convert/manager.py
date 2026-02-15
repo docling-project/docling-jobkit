@@ -8,7 +8,7 @@ import threading
 from collections.abc import Iterable, Iterator, Mapping
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Literal, Optional, TypedDict, Union
+from typing import Any, Callable, Literal, Optional, Type, TypedDict, Union
 
 from pydantic import BaseModel, Field
 
@@ -34,6 +34,14 @@ from docling.datamodel.pipeline_options import (
     VlmPipelineOptions,
 )
 from docling.datamodel.pipeline_options_vlm_model import ApiVlmOptions, InlineVlmOptions
+from docling.datamodel.vlm_engine_options import (
+    ApiVlmEngineOptions,
+    AutoInlineVlmEngineOptions,
+    BaseVlmEngineOptions,
+    MlxVlmEngineOptions,
+    TransformersVlmEngineOptions,
+    VllmVlmEngineOptions,
+)
 from docling.document_converter import (
     DocumentConverter,
     FormatOption,
@@ -41,6 +49,7 @@ from docling.document_converter import (
     PdfFormatOption,
 )
 from docling.models.factories import get_ocr_factory
+from docling.models.inference_engines.vlm.base import VlmEngineType
 from docling.pipeline.vlm_pipeline import VlmPipeline
 from docling_core.types.doc import ImageRefMode
 
@@ -474,6 +483,44 @@ class DoclingConverterManager:
 
             return preset_options
 
+    def _instantiate_engine_options(
+        self, engine_options_dict: dict
+    ) -> BaseVlmEngineOptions:
+        """Instantiate the correct engine options class based on engine_type.
+
+        Pydantic doesn't automatically discriminate BaseVlmEngineOptions subclasses,
+        so we need to manually instantiate the correct class based on engine_type.
+        """
+        engine_type = engine_options_dict.get("engine_type")
+
+        if not engine_type:
+            raise ValueError("engine_options must contain 'engine_type' field")
+
+        # Map engine_type to the correct class
+        engine_class_map: dict[VlmEngineType, Type[BaseVlmEngineOptions]] = {
+            VlmEngineType.MLX: MlxVlmEngineOptions,
+            VlmEngineType.TRANSFORMERS: TransformersVlmEngineOptions,
+            VlmEngineType.VLLM: VllmVlmEngineOptions,
+            VlmEngineType.API: ApiVlmEngineOptions,
+            VlmEngineType.API_OLLAMA: ApiVlmEngineOptions,
+            VlmEngineType.API_LMSTUDIO: ApiVlmEngineOptions,
+            VlmEngineType.API_OPENAI: ApiVlmEngineOptions,
+            VlmEngineType.AUTO_INLINE: AutoInlineVlmEngineOptions,
+        }
+
+        # Handle string engine_type (convert to enum if needed)
+        if isinstance(engine_type, str):
+            try:
+                engine_type = VlmEngineType(engine_type)
+            except ValueError:
+                raise ValueError(f"Invalid engine_type: {engine_type}")
+
+        engine_class = engine_class_map.get(engine_type)
+        if not engine_class:
+            raise ValueError(f"Unsupported engine_type: {engine_type}")
+
+        return engine_class.model_validate(engine_options_dict)
+
     def _parse_vlm_options(
         self, request: ConvertDocumentsOptions
     ) -> Optional[VlmConvertOptions]:
@@ -492,21 +539,45 @@ class DoclingConverterManager:
         if request.vlm_pipeline_custom_config:
             self._validate_custom_config_allowed("vlm")
 
-            # Validate engine is allowed (handle both dict and object types)
-            if self.config.allowed_vlm_engines is not None:
-                if isinstance(request.vlm_pipeline_custom_config, dict):
-                    engine_type = request.vlm_pipeline_custom_config.get(
-                        "engine_type", ""
+            # If it's already a VlmConvertOptions object, validate and return
+            if isinstance(request.vlm_pipeline_custom_config, VlmConvertOptions):
+                # Validate engine is allowed
+                if self.config.allowed_vlm_engines is not None:
+                    engine_type = (
+                        request.vlm_pipeline_custom_config.engine_options.engine_type
                     )
-                else:
-                    engine_type = request.vlm_pipeline_custom_config.engine_type
-                self._validate_engine_allowed(
-                    engine_type, self.config.allowed_vlm_engines
-                )
+                    self._validate_engine_allowed(
+                        engine_type, self.config.allowed_vlm_engines
+                    )
+                return request.vlm_pipeline_custom_config
 
-            # Return the custom config as-is (it will be validated by Docling)
-            # Type is already Union of engine options or dict
-            return request.vlm_pipeline_custom_config  # type: ignore
+            # If it's a dict, convert it to VlmConvertOptions
+            if isinstance(request.vlm_pipeline_custom_config, dict):
+                config_dict = request.vlm_pipeline_custom_config.copy()
+
+                # Validate engine is allowed
+                if self.config.allowed_vlm_engines is not None:
+                    engine_options_dict = config_dict.get("engine_options", {})
+                    engine_type = engine_options_dict.get("engine_type", "")
+                    self._validate_engine_allowed(
+                        engine_type, self.config.allowed_vlm_engines
+                    )
+
+                # Instantiate the correct engine options class
+                if "engine_options" in config_dict and isinstance(
+                    config_dict["engine_options"], dict
+                ):
+                    config_dict["engine_options"] = self._instantiate_engine_options(
+                        config_dict["engine_options"]
+                    )
+
+                # Convert dict to VlmConvertOptions
+                return VlmConvertOptions.model_validate(config_dict)
+
+            # Should not reach here, but handle gracefully
+            raise ValueError(
+                f"Invalid vlm_pipeline_custom_config type: {type(request.vlm_pipeline_custom_config)}"
+            )
 
         # Option 3: No new-style config specified
         return None
@@ -527,19 +598,46 @@ class DoclingConverterManager:
         if request.picture_description_custom_config:
             self._validate_custom_config_allowed("picture_description")
 
-            if self.config.allowed_picture_description_engines is not None:
-                if isinstance(request.picture_description_custom_config, dict):
-                    engine_type = request.picture_description_custom_config.get(
-                        "engine_type", ""
-                    )
-                else:
-                    engine_type = request.picture_description_custom_config.engine_type
-                self._validate_engine_allowed(
-                    engine_type, self.config.allowed_picture_description_engines
-                )
+            # If it's already a PictureDescriptionVlmEngineOptions object, validate and return
+            from docling.datamodel.pipeline_options import (
+                PictureDescriptionVlmEngineOptions,
+            )
 
-            # Return the custom config as-is
-            return request.picture_description_custom_config
+            if isinstance(
+                request.picture_description_custom_config,
+                PictureDescriptionVlmEngineOptions,
+            ):
+                if self.config.allowed_picture_description_engines is not None:
+                    engine_type = request.picture_description_custom_config.engine_options.engine_type
+                    self._validate_engine_allowed(
+                        engine_type, self.config.allowed_picture_description_engines
+                    )
+                return request.picture_description_custom_config
+
+            # If it's a dict, convert it to PictureDescriptionVlmEngineOptions
+            if isinstance(request.picture_description_custom_config, dict):
+                config_dict = request.picture_description_custom_config.copy()
+
+                if self.config.allowed_picture_description_engines is not None:
+                    engine_options_dict = config_dict.get("engine_options", {})
+                    engine_type = engine_options_dict.get("engine_type", "")
+                    self._validate_engine_allowed(
+                        engine_type, self.config.allowed_picture_description_engines
+                    )
+
+                # Instantiate the correct engine options class
+                if "engine_options" in config_dict and isinstance(
+                    config_dict["engine_options"], dict
+                ):
+                    config_dict["engine_options"] = self._instantiate_engine_options(
+                        config_dict["engine_options"]
+                    )
+
+                return PictureDescriptionVlmEngineOptions.model_validate(config_dict)
+
+            raise ValueError(
+                f"Invalid picture_description_custom_config type: {type(request.picture_description_custom_config)}"
+            )
 
         return None
 
@@ -559,19 +657,43 @@ class DoclingConverterManager:
         if request.code_formula_custom_config:
             self._validate_custom_config_allowed("code_formula")
 
-            if self.config.allowed_code_formula_engines is not None:
-                if isinstance(request.code_formula_custom_config, dict):
-                    engine_type = request.code_formula_custom_config.get(
-                        "engine_type", ""
-                    )
-                else:
-                    engine_type = request.code_formula_custom_config.engine_type
-                self._validate_engine_allowed(
-                    engine_type, self.config.allowed_code_formula_engines
-                )
+            # If it's already a CodeFormulaVlmOptions object, validate and return
+            from docling.datamodel.pipeline_options import CodeFormulaVlmOptions
 
-            # Return the custom config as-is
-            return request.code_formula_custom_config
+            if isinstance(request.code_formula_custom_config, CodeFormulaVlmOptions):
+                if self.config.allowed_code_formula_engines is not None:
+                    engine_type = (
+                        request.code_formula_custom_config.engine_options.engine_type
+                    )
+                    self._validate_engine_allowed(
+                        engine_type, self.config.allowed_code_formula_engines
+                    )
+                return request.code_formula_custom_config
+
+            # If it's a dict, convert it to CodeFormulaVlmOptions
+            if isinstance(request.code_formula_custom_config, dict):
+                config_dict = request.code_formula_custom_config.copy()
+
+                if self.config.allowed_code_formula_engines is not None:
+                    engine_options_dict = config_dict.get("engine_options", {})
+                    engine_type = engine_options_dict.get("engine_type", "")
+                    self._validate_engine_allowed(
+                        engine_type, self.config.allowed_code_formula_engines
+                    )
+
+                # Instantiate the correct engine options class
+                if "engine_options" in config_dict and isinstance(
+                    config_dict["engine_options"], dict
+                ):
+                    config_dict["engine_options"] = self._instantiate_engine_options(
+                        config_dict["engine_options"]
+                    )
+
+                return CodeFormulaVlmOptions.model_validate(config_dict)
+
+            raise ValueError(
+                f"Invalid code_formula_custom_config type: {type(request.code_formula_custom_config)}"
+            )
 
         return None
 
@@ -876,6 +998,7 @@ class DoclingConverterManager:
         converter = self.get_converter(pdf_format_option)
         with self._cache_lock:
             converter.initialize_pipeline(format=InputFormat.PDF)
+
         results: Iterator[ConversionResult] = converter.convert_all(
             sources,
             headers=headers,

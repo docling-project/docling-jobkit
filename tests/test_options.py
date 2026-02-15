@@ -197,23 +197,22 @@ def test_options_cache_key_with_presets():
     hashes.add(hash)
 
     # Picture description with preset
-    opts = ConvertDocumentsOptions(
-        pipeline=ProcessingPipeline.VLM,
-        picture_description_preset="default",
-    )
-    pipeline_opts = m.get_pdf_pipeline_opts(opts)
-    hash = _hash_pdf_format_option(pipeline_opts)
-    assert hash not in hashes
-    hashes.add(hash)
-
-    # Picture description with custom config (API)
+    # Picture description with custom config (PictureDescriptionVlmEngineOptions as dict)
     opts = ConvertDocumentsOptions(
         pipeline=ProcessingPipeline.VLM,
         picture_description_custom_config={
-            "engine_type": "api_generic",
-            "url": "http://localhost:8000",
-            "params": {"model": "custom-model-1"},
-            "prompt": "Describe this image",
+            "model_spec": {
+                "name": "Custom Picture Model 1",
+                "default_repo_id": "custom-model-1",
+                "prompt": "Describe this image",
+                "response_format": "markdown",
+            },
+            "engine_options": {
+                "engine_type": "api",
+                "url": "http://localhost:8000",
+                "params": {"model": "custom-model-1"},
+            },
+            "scale": 2.0,
         },
     )
     pipeline_opts = m.get_pdf_pipeline_opts(opts)
@@ -225,10 +224,18 @@ def test_options_cache_key_with_presets():
     opts = ConvertDocumentsOptions(
         pipeline=ProcessingPipeline.VLM,
         picture_description_custom_config={
-            "engine_type": "api_generic",
-            "url": "http://localhost:8000",
-            "params": {"model": "custom-model-2"},  # Different model
-            "prompt": "Describe this image",
+            "model_spec": {
+                "name": "Custom Picture Model 2",
+                "default_repo_id": "custom-model-2",  # Different model
+                "prompt": "Describe this image",
+                "response_format": "markdown",
+            },
+            "engine_options": {
+                "engine_type": "api",
+                "url": "http://localhost:8000",
+                "params": {"model": "custom-model-2"},
+            },
+            "scale": 2.0,
         },
     )
     pipeline_opts = m.get_pdf_pipeline_opts(opts)
@@ -236,14 +243,32 @@ def test_options_cache_key_with_presets():
     assert hash not in hashes
     hashes.add(hash)
 
-    # VLM with custom config (Transformers)
+    # VLM with custom config (VlmConvertOptions as dict)
     opts = ConvertDocumentsOptions(
         pipeline=ProcessingPipeline.VLM,
         vlm_pipeline_custom_config={
-            "engine_type": "transformers",
-            "repo_id": "test-model",
-            "response_format": "doctags",
+            "model_spec": {
+                "name": "Custom Test Model",
+                "default_repo_id": "test-model",
+                "prompt": "Convert this page to docling.",
+                "response_format": "doctags",
+            },
+            "engine_options": {
+                "engine_type": "transformers",
+                "device": None,
+                "load_in_8bit": True,
+            },
+            "scale": 2.0,
+            "batch_size": 1,
         },
+    )
+    pipeline_opts = m.get_pdf_pipeline_opts(opts)
+    hash = _hash_pdf_format_option(pipeline_opts)
+    assert hash not in hashes
+    hashes.add(hash)
+    opts = ConvertDocumentsOptions(
+        pipeline=ProcessingPipeline.VLM,
+        picture_description_preset="default",
     )
     pipeline_opts = m.get_pdf_pipeline_opts(opts)
     hash = _hash_pdf_format_option(pipeline_opts)

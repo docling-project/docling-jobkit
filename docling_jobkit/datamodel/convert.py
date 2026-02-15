@@ -2,7 +2,13 @@
 import warnings
 from typing import Annotated, Any, Optional, Union
 
-from pydantic import AnyUrl, BaseModel, Field, PositiveInt, model_validator
+from pydantic import (
+    AnyUrl,
+    BaseModel,
+    Field,
+    PositiveInt,
+    model_validator,
+)
 from typing_extensions import Self
 
 from docling.datamodel import vlm_model_specs
@@ -10,11 +16,14 @@ from docling.datamodel.base_models import InputFormat, OutputFormat
 
 # Import new engine system (available in docling>=2.73.0)
 from docling.datamodel.pipeline_options import (
+    CodeFormulaVlmOptions,
     PdfBackend,
     PictureDescriptionBaseOptions,
+    PictureDescriptionVlmEngineOptions,
     ProcessingPipeline,
     TableFormerMode,
     TableStructureOptions,
+    VlmConvertOptions,
 )
 
 # Import legacy types for backwards compatibility
@@ -27,11 +36,6 @@ from docling.datamodel.pipeline_options_vlm_model import (
 from docling.datamodel.settings import (
     DEFAULT_PAGE_RANGE,
     PageRange,
-)
-from docling.datamodel.vlm_engine_options import (
-    ApiVlmEngineOptions,
-    MlxVlmEngineOptions,
-    TransformersVlmEngineOptions,
 )
 from docling_core.types.doc import ImageRefMode
 
@@ -587,52 +591,47 @@ class ConvertDocumentsOptions(BaseModel):
         ),
     ] = None
 
-    # Option 2: Custom engine configuration (if allowed by config)
+    # Option 2: Custom configuration (if allowed by config)
     vlm_pipeline_custom_config: Annotated[
-        Optional[
-            Union[
-                TransformersVlmEngineOptions,
-                MlxVlmEngineOptions,
-                ApiVlmEngineOptions,
-                dict,  # For backwards compatibility
-            ]
-        ],
+        Optional[Union[VlmConvertOptions, dict]],
         Field(
             default=None,
-            description="Custom engine configuration. Only available if admin allows it. "
-            "Can specify any engine type: Transformers, MLX, API.",
+            description="Custom VLM configuration including model spec and engine options. "
+            "Only available if admin allows it. Must include 'model_spec' and 'engine_options'.",
         ),
     ] = None
 
     picture_description_custom_config: Annotated[
-        Optional[
-            Union[
-                TransformersVlmEngineOptions,
-                MlxVlmEngineOptions,
-                ApiVlmEngineOptions,
-                dict,
-            ]
-        ],
+        Optional[Union[PictureDescriptionVlmEngineOptions, dict]],
         Field(
             default=None,
-            description="Custom engine configuration for picture description.",
+            description="Custom picture description configuration including model spec and engine options.",
         ),
     ] = None
 
     code_formula_custom_config: Annotated[
-        Optional[
-            Union[
-                TransformersVlmEngineOptions,
-                MlxVlmEngineOptions,
-                ApiVlmEngineOptions,
-                dict,
-            ]
-        ],
+        Optional[Union[CodeFormulaVlmOptions, dict]],
         Field(
             default=None,
-            description="Custom engine configuration for code/formula extraction.",
+            description="Custom code/formula extraction configuration including model spec and engine options.",
         ),
     ] = None
+
+    # @field_serializer(
+    #     "vlm_pipeline_custom_config",
+    #     "picture_description_custom_config",
+    #     "code_formula_custom_config",
+    # )
+    # def serialize_custom_configs(self, value: Any) -> Optional[dict]:
+    #     """Serialize custom config objects to dicts for worker serialization.
+
+    #     This ensures that Pydantic model objects are converted to dicts before
+    #     being passed to workers, avoiding serialization issues with complex types.
+    #     """
+    #     if value is None or isinstance(value, dict):
+    #         return value
+    #     # Convert Pydantic model to dict
+    #     return value.model_dump()
 
     @model_validator(mode="after")
     def picture_description_exclusivity(self) -> Self:
@@ -697,7 +696,7 @@ class ConvertDocumentsOptions(BaseModel):
             warnings.warn(
                 "vlm_pipeline_model, vlm_pipeline_model_local, and vlm_pipeline_model_api "
                 "are deprecated. Please migrate to vlm_pipeline_preset or "
-                "vlm_pipeline_custom_config. See MIGRATION_GUIDE.md for details.",
+                "vlm_pipeline_custom_config.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -734,7 +733,7 @@ class ConvertDocumentsOptions(BaseModel):
             warnings.warn(
                 "picture_description_local and picture_description_api are deprecated. "
                 "Please migrate to picture_description_preset or "
-                "picture_description_custom_config. See MIGRATION_GUIDE.md for details.",
+                "picture_description_custom_config.",
                 DeprecationWarning,
                 stacklevel=2,
             )

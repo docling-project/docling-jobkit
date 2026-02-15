@@ -201,13 +201,22 @@ def convert_options_gen() -> Iterable[TestOption]:
         options=options, name="vlm_local_granitedocling_mlx_DEPRECATED", ci=False
     )
 
-    # NEW: VLM with custom MLX config
+    # NEW: VLM with custom MLX config (VlmConvertOptions as dict)
     options = ConvertDocumentsOptions(
         pipeline=ProcessingPipeline.VLM,
         vlm_pipeline_custom_config={
-            "engine_type": "mlx",
-            "repo_id": "ibm-granite/granite-docling-258M-mlx",
-            "response_format": "doctags",
+            "model_spec": {
+                "name": "Custom Granite Docling MLX",
+                "default_repo_id": "ibm-granite/granite-docling-258M-mlx",
+                "prompt": "Convert this page to docling.",
+                "response_format": "doctags",
+            },
+            "engine_options": {
+                "engine_type": "mlx",
+                "trust_remote_code": False,
+            },
+            "scale": 2.0,
+            "batch_size": 1,
         },
     )
     yield TestOption(options=options, name="vlm_custom_mlx_config", ci=False)
@@ -226,15 +235,23 @@ def convert_options_gen() -> Iterable[TestOption]:
         options=options, name="vlm_lmstudio_granitedocling_mlx_DEPRECATED", ci=False
     )
 
-    # NEW: VLM with custom API config
+    # NEW: VLM with custom API config (VlmConvertOptions as dict)
     options = ConvertDocumentsOptions(
         pipeline=ProcessingPipeline.VLM,
         vlm_pipeline_custom_config={
-            "engine_type": "api_generic",
-            "url": "http://localhost:1234/v1/chat/completions",
-            "params": {"model": "ibm-granite/granite-docling-258M-mlx"},
-            "response_format": "doctags",
-            "prompt": "Convert this page to docling.",
+            "model_spec": {
+                "name": "Custom Granite Docling API",
+                "default_repo_id": "ibm-granite/granite-docling-258M-mlx",
+                "prompt": "Convert this page to docling.",
+                "response_format": "doctags",
+            },
+            "engine_options": {
+                "engine_type": "api",
+                "url": "http://localhost:1234/v1/chat/completions",
+                "params": {"model": "ibm-granite/granite-docling-258M-mlx"},
+            },
+            "scale": 2.0,
+            "batch_size": 1,
         },
     )
     yield TestOption(options=options, name="vlm_custom_api_config", ci=False)
