@@ -265,9 +265,20 @@ class TestOptionsParsingCustomConfig:
 
         request = ConvertDocumentsOptions(
             vlm_pipeline_custom_config={
-                "engine_type": "transformers",
-                "repo_id": "test-model",
-            },
+                "model_spec": {
+                    "name": "Custom Test Model",
+                    "default_repo_id": "test-model",
+                    "prompt": "Convert this page to docling.",
+                    "response_format": "doctags",
+                },
+                "engine_options": {
+                    "engine_type": "transformers",
+                    "device": None,
+                    "load_in_8bit": True,
+                },
+                "scale": 2.0,
+                "batch_size": 1,
+            }
         )
 
         options = manager._parse_vlm_options(request)
