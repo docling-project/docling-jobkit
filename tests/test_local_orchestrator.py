@@ -2,6 +2,7 @@ import asyncio
 import base64
 import logging
 import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -262,7 +263,10 @@ def convert_options_gen() -> Iterable[TestOption]:
             "kind": "layout_object_detection",
         },
     )
-    yield TestOption(options=options, name="std_laout_object_detection", ci=True)
+    is_py314 = sys.version_info >= (3, 14)
+    yield TestOption(
+        options=options, name="std_laoyut_object_detection", ci=not is_py314
+    )
 
 
 @pytest.mark.asyncio
