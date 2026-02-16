@@ -5,6 +5,7 @@ from typing import Annotated, Any, Optional, Union
 from pydantic import (
     AnyUrl,
     BaseModel,
+    ConfigDict,
     Field,
     PositiveInt,
     field_validator,
@@ -251,6 +252,8 @@ class VlmModelApi(BaseModel):
 
 
 class ConvertDocumentsOptions(BaseModel):
+    model_config = ConfigDict(validate_assignment=True)
+
     from_formats: Annotated[
         list[InputFormat],
         Field(

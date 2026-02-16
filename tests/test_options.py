@@ -143,15 +143,15 @@ def test_options_cache_key():
     assert hash not in hashes
     hashes.add(hash)
 
-    # DEPRECATED: Modifying picture_description_api (create new object with different config)
+    # DEPRECATED: Modifying picture_description_api
     with pytest.warns(DeprecationWarning):
         opts = ConvertDocumentsOptions(
             pipeline=ProcessingPipeline.VLM,
-            picture_description_api=PictureDescriptionApi(
-                url="http://localhost",
-                params={"model": "your-model"},
-                prompt="Hello 1",
-            ),
+        )
+        opts.picture_description_api = PictureDescriptionApi(
+            url="http://localhost",
+            params={"model": "your-model"},
+            prompt="Hello 1",
         )
     pipeline_opts = m.get_pdf_pipeline_opts(opts)
     hash = _hash_pdf_format_option(pipeline_opts)
