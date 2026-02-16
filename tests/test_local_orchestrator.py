@@ -256,6 +256,14 @@ def convert_options_gen() -> Iterable[TestOption]:
     )
     yield TestOption(options=options, name="vlm_custom_api_config", ci=False)
 
+    options = ConvertDocumentsOptions(
+        pipeline=ProcessingPipeline.VLM,
+        layout_custom_config={
+            "kind": "layout_object_detection",
+        },
+    )
+    yield TestOption(options=options, name="std_laout_object_detection", ci=True)
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("test_option", convert_options_gen(), ids=lambda o: o.name)

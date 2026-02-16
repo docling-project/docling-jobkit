@@ -626,6 +626,59 @@ class ConvertDocumentsOptions(BaseModel):
         ),
     ] = None
 
+    # === NEW: Kind Selection for Pipeline Stages ===
+
+    # Table Structure Configuration
+    table_structure_custom_config: Annotated[
+        Optional[dict[str, Any]],
+        Field(
+            default=None,
+            description=(
+                "Custom configuration for table structure model. Use this to specify a "
+                "non-default kind with its options. The 'kind' field in the config dict "
+                "determines which table structure implementation to use. "
+                "If not specified, uses the default kind with preset configuration."
+            ),
+            examples=[
+                {
+                    "kind": "custom_table_model",
+                    "model_path": "/path/to/model",
+                    "confidence_threshold": 0.8,
+                },
+                {
+                    "kind": "docling_tableformer",
+                    "mode": "fast",
+                    "do_cell_matching": False,
+                },
+            ],
+        ),
+    ] = None
+
+    # Layout Configuration
+    layout_custom_config: Annotated[
+        Optional[dict[str, Any]],
+        Field(
+            default=None,
+            description=(
+                "Custom configuration for layout model. Use this to specify a "
+                "non-default kind with its options. The 'kind' field in the config dict "
+                "determines which layout implementation to use. "
+                "If not specified, uses the default kind with preset configuration."
+            ),
+            examples=[
+                {
+                    "kind": "custom_layout_model",
+                    "model_path": "/path/to/model",
+                    "device": "cuda",
+                },
+                {
+                    "kind": "docling_layout_default",
+                    "model_name": "egret_large",
+                },
+            ],
+        ),
+    ] = None
+
     # Field validators for deprecated fields - trigger warnings on assignment
     @field_validator("picture_description_api", mode="before")
     @classmethod

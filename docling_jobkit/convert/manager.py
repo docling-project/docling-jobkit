@@ -48,7 +48,11 @@ from docling.document_converter import (
     ImageFormatOption,
     PdfFormatOption,
 )
-from docling.models.factories import get_ocr_factory
+from docling.models.factories import (
+    get_layout_factory,
+    get_ocr_factory,
+    get_table_structure_factory,
+)
 from docling.models.inference_engines.vlm.base import VlmEngineType
 from docling.pipeline.vlm_pipeline import VlmPipeline
 from docling_core.types.doc import ImageRefMode
@@ -184,6 +188,56 @@ class DoclingConverterManagerConfig(BaseModel):
         description="Whether users can specify custom code/formula configurations.",
     )
 
+    # === NEW: Kind Selection Control ===
+
+    # Table Structure Control
+    default_table_structure_kind: str = Field(
+        default="docling_tableformer",
+        description=(
+            "Default table structure kind used when user doesn't provide custom config. "
+            "This kind will use preset/default configuration."
+        ),
+    )
+
+    allowed_table_structure_kinds: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "List of allowed table structure kinds (pre-filter before factory). "
+            "If None, all kinds from factory are allowed. "
+            "The default_table_structure_kind is always implicitly allowed. "
+            "Use this to block specific plugin kinds for security or policy reasons. "
+            "Users can provide custom configs for any allowed kind."
+        ),
+        examples=[["docling_tableformer", "approved_plugin_kind"]],
+    )
+
+    # Layout Control
+    default_layout_kind: str = Field(
+        default="docling_layout_default",
+        description=(
+            "Default layout kind used when user doesn't provide custom config. "
+            "This kind will use preset/default configuration."
+        ),
+    )
+
+    allowed_layout_kinds: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "List of allowed layout kinds (pre-filter before factory). "
+            "If None, all kinds from factory are allowed. "
+            "The default_layout_kind is always implicitly allowed. "
+            "Use this to block specific plugin kinds for security or policy reasons. "
+            "Users can provide custom configs for any allowed kind."
+        ),
+        examples=[
+            [
+                "docling_layout_default",
+                "layout_object_detection",
+                "approved_plugin_kind",
+            ]
+        ],
+    )
+
 
 # Custom serializer for PdfFormatOption
 # (model_dump_json does not work with some classes)
@@ -251,6 +305,16 @@ class DoclingConverterManager:
         self.ocr_factory = get_ocr_factory(
             allow_external_plugins=self.config.allow_external_plugins
         )
+
+        # Initialize factories for kind selection
+        self.table_structure_factory = get_table_structure_factory(
+            allow_external_plugins=self.config.allow_external_plugins
+        )
+
+        self.layout_factory = get_layout_factory(
+            allow_external_plugins=self.config.allow_external_plugins
+        )
+
         self._options_map: dict[bytes, PdfFormatOption] = {}
         self._get_converter_from_hash = self._create_converter_cache_from_hash(
             cache_size=self.config.options_cache_size
@@ -260,6 +324,9 @@ class DoclingConverterManager:
 
         # Build preset registries
         self._build_preset_registries()
+
+        # Build kind registries
+        self._build_kind_registries()
 
     def _create_converter_cache_from_hash(
         self, cache_size: int
@@ -380,6 +447,51 @@ class DoclingConverterManager:
                 "source": "custom",
                 "options": preset_options,
             }
+
+    def _build_kind_registries(self):
+        """Build registries of available kinds from factories."""
+        # Table Structure Kinds
+        self.available_table_structure_kinds = (
+            self.table_structure_factory.registered_kind
+        )
+
+        # Layout Kinds
+        self.available_layout_kinds = self.layout_factory.registered_kind
+
+    def _validate_kind_available(
+        self, kind: str, available_kinds: list[str], stage_name: str
+    ) -> None:
+        """Validate that a kind is available from the factory."""
+        if kind not in available_kinds:
+            raise ValueError(
+                f"{stage_name} kind '{kind}' is not available. "
+                f"Available kinds: {', '.join(available_kinds)}. "
+                f"If this is a plugin, ensure it is properly installed."
+            )
+
+    def _validate_kind_allowed(
+        self,
+        kind: str,
+        allowed_kinds: Optional[list[str]],
+        default_kind: str,
+        stage_name: str,
+    ) -> None:
+        """Validate that a kind is allowed by admin configuration (pre-filter)."""
+        # Default kind is always allowed
+        if kind == default_kind:
+            return
+
+        # If no allowlist, all kinds are allowed
+        if allowed_kinds is None:
+            return
+
+        # Check if kind is in allowlist
+        if kind not in allowed_kinds:
+            raise ValueError(
+                f"{stage_name} kind '{kind}' is not allowed by administrator. "
+                f"Allowed kinds: {', '.join([default_kind, *allowed_kinds])}. "
+                f"Contact your administrator to enable this kind."
+            )
 
     def _validate_preset(
         self,
@@ -697,6 +809,82 @@ class DoclingConverterManager:
 
         return None
 
+    def _parse_table_structure_options(self, request: ConvertDocumentsOptions) -> Any:
+        """Parse table structure options - preset for default kind, custom config for others."""
+
+        if request.table_structure_custom_config:
+            # Custom config provided - validate and use it
+            config_dict = request.table_structure_custom_config.copy()
+            kind = config_dict.get("kind")
+
+            if not kind:
+                raise ValueError(
+                    "table_structure_custom_config must include a 'kind' field "
+                    "specifying which table structure implementation to use."
+                )
+
+            # Validate kind is allowed (pre-filter before factory)
+            self._validate_kind_allowed(
+                kind,
+                self.config.allowed_table_structure_kinds,
+                self.config.default_table_structure_kind,
+                "table structure",
+            )
+
+            # Validate kind is available from factory
+            self._validate_kind_available(
+                kind, self.available_table_structure_kinds, "table structure"
+            )
+
+            # Create options using factory with custom config
+            return self.table_structure_factory.create_options(
+                kind=kind, **{k: v for k, v in config_dict.items() if k != "kind"}
+            )
+
+        else:
+            # Use default kind with legacy fields (table_mode, table_cell_matching)
+            kind = self.config.default_table_structure_kind
+            return self.table_structure_factory.create_options(
+                kind=kind,
+                mode=TableFormerMode(request.table_mode),
+                do_cell_matching=request.table_cell_matching,
+            )
+
+    def _parse_layout_options(self, request: ConvertDocumentsOptions) -> Any:
+        """Parse layout options - preset for default kind, custom config for others."""
+
+        if request.layout_custom_config:
+            # Custom config provided - validate and use it
+            config_dict = request.layout_custom_config.copy()
+            kind = config_dict.get("kind")
+
+            if not kind:
+                raise ValueError(
+                    "layout_custom_config must include a 'kind' field "
+                    "specifying which layout implementation to use."
+                )
+
+            # Validate kind is allowed (pre-filter before factory)
+            self._validate_kind_allowed(
+                kind,
+                self.config.allowed_layout_kinds,
+                self.config.default_layout_kind,
+                "layout",
+            )
+
+            # Validate kind is available from factory
+            self._validate_kind_available(kind, self.available_layout_kinds, "layout")
+
+            # Create options using factory with custom config
+            return self.layout_factory.create_options(
+                kind=kind, **{k: v for k, v in config_dict.items() if k != "kind"}
+            )
+
+        else:
+            # Use default kind with preset/default configuration
+            kind = self.config.default_layout_kind
+            return self.layout_factory.create_options(kind=kind)
+
     def get_converter(self, pdf_format_option: PdfFormatOption) -> DocumentConverter:
         with self._cache_lock:
             options_hash = _hash_pdf_format_option(pdf_format_option)
@@ -743,10 +931,25 @@ class DoclingConverterManager:
             do_chart_extraction=request.do_chart_extraction,
             do_picture_description=request.do_picture_description,
         )
-        pipeline_options.table_structure_options = TableStructureOptions(
-            mode=TableFormerMode(request.table_mode),
-            do_cell_matching=request.table_cell_matching,
-        )
+        # === NEW KIND-BASED APPROACH for Table Structure ===
+        # Try new custom config approach first, fall back to legacy fields
+        if request.table_structure_custom_config:
+            pipeline_options.table_structure_options = (
+                self._parse_table_structure_options(request)
+            )
+        else:
+            # Legacy approach - use table_mode and table_cell_matching fields
+            pipeline_options.table_structure_options = TableStructureOptions(
+                mode=TableFormerMode(request.table_mode),
+                do_cell_matching=request.table_cell_matching,
+            )
+
+        # === NEW KIND-BASED APPROACH for Layout ===
+        # Try new custom config approach first
+        if request.layout_custom_config:
+            pipeline_options.layout_options = self._parse_layout_options(request)
+        # If no custom config, use default (factory will handle it)
+        # Note: Layout options are optional, so we don't set them if not specified
 
         if request.image_export_mode != ImageRefMode.PLACEHOLDER:
             pipeline_options.generate_page_images = True
