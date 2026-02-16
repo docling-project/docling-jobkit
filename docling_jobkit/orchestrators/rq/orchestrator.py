@@ -205,11 +205,13 @@ class RQOrchestrator(BaseOrchestrator):
                         self._task_result_keys[data.task_id] = data.result_key
 
                     if self.notifier:
-                        # Notify clients about task updates
-                        await self.notifier.notify_task_subscribers(task.task_id)
-
-                        # Notify clients about queue updates
-                        await self.notifier.notify_queue_positions()
+                        try:
+                            await self.notifier.notify_task_subscribers(task.task_id)
+                            await self.notifier.notify_queue_positions()
+                        except Exception as e:
+                            _log.error(
+                                f"Notifier error for task {data.task_id}: {e}"
+                            )
 
                 except TaskNotFoundError:
                     _log.warning(f"Task {data.task_id} not found.")
