@@ -505,7 +505,8 @@ class ConvertDocumentsOptions(BaseModel):
     picture_description_local: Annotated[
         Optional[PictureDescriptionLocal],
         Field(
-            description="Options for running a local vision-language model in the picture description. The parameters refer to a model hosted on Hugging Face. This parameter is mutually exclusive with picture_description_api.",
+            deprecated=True,
+            description="DEPRECATED: Options for running a local vision-language model in the picture description. The parameters refer to a model hosted on Hugging Face. This parameter is mutually exclusive with picture_description_api. Please migrate to picture_description_preset or picture_description_custom_config.",
             examples=[
                 PictureDescriptionLocal(repo_id="ibm-granite/granite-vision-3.2-2b"),
                 PictureDescriptionLocal(repo_id="HuggingFaceTB/SmolVLM-256M-Instruct"),
@@ -516,7 +517,8 @@ class ConvertDocumentsOptions(BaseModel):
     picture_description_api: Annotated[
         Optional[PictureDescriptionApi],
         Field(
-            description="API details for using a vision-language model in the picture description. This parameter is mutually exclusive with picture_description_local.",
+            deprecated=True,
+            description="DEPRECATED: API details for using a vision-language model in the picture description. This parameter is mutually exclusive with picture_description_local. Please migrate to picture_description_preset or picture_description_custom_config.",
             examples=[
                 PictureDescriptionApi(
                     url="http://localhost:1234/v1/chat/completions",
@@ -533,14 +535,16 @@ class ConvertDocumentsOptions(BaseModel):
     vlm_pipeline_model: Annotated[
         Optional[vlm_model_specs.VlmModelType],
         Field(
-            description="Preset of local and API models for the vlm pipeline. This parameter is mutually exclusive with vlm_pipeline_model_local and vlm_pipeline_model_api. Use the other options for more parameters.",
+            deprecated=True,
+            description="DEPRECATED: Preset of local and API models for the vlm pipeline. This parameter is mutually exclusive with vlm_pipeline_model_local and vlm_pipeline_model_api. Use the other options for more parameters. Please migrate to vlm_pipeline_preset or vlm_pipeline_custom_config.",
             examples=[vlm_model_specs.VlmModelType.GRANITEDOCLING],
         ),
     ] = None
     vlm_pipeline_model_local: Annotated[
         Optional[VlmModelLocal],
         Field(
-            description="Options for running a local vision-language model for the vlm pipeline. The parameters refer to a model hosted on Hugging Face. This parameter is mutually exclusive with vlm_pipeline_model_api and vlm_pipeline_model.",
+            deprecated=True,
+            description="DEPRECATED: Options for running a local vision-language model for the vlm pipeline. The parameters refer to a model hosted on Hugging Face. This parameter is mutually exclusive with vlm_pipeline_model_api and vlm_pipeline_model. Please migrate to vlm_pipeline_preset or vlm_pipeline_custom_config.",
             examples=[
                 VlmModelLocal.from_docling(vlm_model_specs.GRANITEDOCLING_TRANSFORMERS),
                 VlmModelLocal.from_docling(vlm_model_specs.GRANITEDOCLING_MLX),
@@ -552,7 +556,8 @@ class ConvertDocumentsOptions(BaseModel):
     vlm_pipeline_model_api: Annotated[
         Optional[VlmModelApi],
         Field(
-            description="API details for using a vision-language model for the vlm pipeline. This parameter is mutually exclusive with vlm_pipeline_model_local and vlm_pipeline_model.",
+            deprecated=True,
+            description="DEPRECATED: API details for using a vision-language model for the vlm pipeline. This parameter is mutually exclusive with vlm_pipeline_model_local and vlm_pipeline_model. Please migrate to vlm_pipeline_preset or vlm_pipeline_custom_config.",
             examples=[
                 VlmModelApi(
                     url="http://localhost:1234/v1/chat/completions",
@@ -620,22 +625,6 @@ class ConvertDocumentsOptions(BaseModel):
             description="Custom code/formula extraction configuration including model spec and engine options.",
         ),
     ] = None
-
-    # @field_serializer(
-    #     "vlm_pipeline_custom_config",
-    #     "picture_description_custom_config",
-    #     "code_formula_custom_config",
-    # )
-    # def serialize_custom_configs(self, value: Any) -> Optional[dict]:
-    #     """Serialize custom config objects to dicts for worker serialization.
-
-    #     This ensures that Pydantic model objects are converted to dicts before
-    #     being passed to workers, avoiding serialization issues with complex types.
-    #     """
-    #     if value is None or isinstance(value, dict):
-    #         return value
-    #     # Convert Pydantic model to dict
-    #     return value.model_dump()
 
     # Field validators for deprecated fields - trigger warnings on assignment
     @field_validator("picture_description_api", mode="before")
