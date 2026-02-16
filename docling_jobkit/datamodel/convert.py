@@ -7,6 +7,7 @@ from pydantic import (
     BaseModel,
     Field,
     PositiveInt,
+    field_validator,
     model_validator,
 )
 from typing_extensions import Self
@@ -633,6 +634,74 @@ class ConvertDocumentsOptions(BaseModel):
     #     # Convert Pydantic model to dict
     #     return value.model_dump()
 
+    # Field validators for deprecated fields - trigger warnings on assignment
+    @field_validator("picture_description_api", mode="before")
+    @classmethod
+    def validate_picture_description_api(cls, v):
+        """Emit deprecation warning when picture_description_api is set."""
+        if v is not None:
+            warnings.warn(
+                "picture_description_api is deprecated. "
+                "Please migrate to picture_description_preset or "
+                "picture_description_custom_config.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return v
+
+    @field_validator("picture_description_local", mode="before")
+    @classmethod
+    def validate_picture_description_local(cls, v):
+        """Emit deprecation warning when picture_description_local is set."""
+        if v is not None:
+            warnings.warn(
+                "picture_description_local is deprecated. "
+                "Please migrate to picture_description_preset or "
+                "picture_description_custom_config.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return v
+
+    @field_validator("vlm_pipeline_model", mode="before")
+    @classmethod
+    def validate_vlm_pipeline_model(cls, v):
+        """Emit deprecation warning when vlm_pipeline_model is set."""
+        if v is not None:
+            warnings.warn(
+                "vlm_pipeline_model is deprecated. "
+                "Please migrate to vlm_pipeline_preset or vlm_pipeline_custom_config.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return v
+
+    @field_validator("vlm_pipeline_model_local", mode="before")
+    @classmethod
+    def validate_vlm_pipeline_model_local(cls, v):
+        """Emit deprecation warning when vlm_pipeline_model_local is set."""
+        if v is not None:
+            warnings.warn(
+                "vlm_pipeline_model_local is deprecated. "
+                "Please migrate to vlm_pipeline_preset or vlm_pipeline_custom_config.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return v
+
+    @field_validator("vlm_pipeline_model_api", mode="before")
+    @classmethod
+    def validate_vlm_pipeline_model_api(cls, v):
+        """Emit deprecation warning when vlm_pipeline_model_api is set."""
+        if v is not None:
+            warnings.warn(
+                "vlm_pipeline_model_api is deprecated. "
+                "Please migrate to vlm_pipeline_preset or vlm_pipeline_custom_config.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return v
+
     @model_validator(mode="after")
     def picture_description_exclusivity(self) -> Self:
         # Validate picture description options
@@ -692,14 +761,8 @@ class ConvertDocumentsOptions(BaseModel):
                 "(vlm_pipeline_preset/custom_config). Please use only one approach."
             )
 
-        if legacy_set:
-            warnings.warn(
-                "vlm_pipeline_model, vlm_pipeline_model_local, and vlm_pipeline_model_api "
-                "are deprecated. Please migrate to vlm_pipeline_preset or "
-                "vlm_pipeline_custom_config.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
+        # Note: Deprecation warnings are now emitted by field validators
+        # when the fields are set, not here in the model validator
 
         return self
 
@@ -729,14 +792,8 @@ class ConvertDocumentsOptions(BaseModel):
                 "Please use only one approach."
             )
 
-        if legacy_set:
-            warnings.warn(
-                "picture_description_local and picture_description_api are deprecated. "
-                "Please migrate to picture_description_preset or "
-                "picture_description_custom_config.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
+        # Note: Deprecation warnings are now emitted by field validators
+        # when the fields are set, not here in the model validator
 
         return self
 

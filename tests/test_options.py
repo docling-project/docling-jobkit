@@ -127,12 +127,15 @@ def test_options_cache_key():
     assert hash not in hashes
     hashes.add(hash)
 
-    # DEPRECATED: Using picture_description_api (should trigger warning)
+    # DEPRECATED: Using picture_description_api (should trigger warning during object creation)
     with pytest.warns(DeprecationWarning):
-        opts.picture_description_api = PictureDescriptionApi(
-            url="http://localhost",
-            params={"model": "mymodel"},
-            prompt="Hello 1",
+        opts = ConvertDocumentsOptions(
+            pipeline=ProcessingPipeline.VLM,
+            picture_description_api=PictureDescriptionApi(
+                url="http://localhost",
+                params={"model": "mymodel"},
+                prompt="Hello 1",
+            ),
         )
     pipeline_opts = m.get_pdf_pipeline_opts(opts)
     hash = _hash_pdf_format_option(pipeline_opts)
@@ -140,12 +143,15 @@ def test_options_cache_key():
     assert hash not in hashes
     hashes.add(hash)
 
-    # DEPRECATED: Modifying picture_description_api
+    # DEPRECATED: Modifying picture_description_api (create new object with different config)
     with pytest.warns(DeprecationWarning):
-        opts.picture_description_api = PictureDescriptionApi(
-            url="http://localhost",
-            params={"model": "your-model"},
-            prompt="Hello 1",
+        opts = ConvertDocumentsOptions(
+            pipeline=ProcessingPipeline.VLM,
+            picture_description_api=PictureDescriptionApi(
+                url="http://localhost",
+                params={"model": "your-model"},
+                prompt="Hello 1",
+            ),
         )
     pipeline_opts = m.get_pdf_pipeline_opts(opts)
     hash = _hash_pdf_format_option(pipeline_opts)
@@ -153,7 +159,7 @@ def test_options_cache_key():
     assert hash not in hashes
     hashes.add(hash)
 
-    # Modifying existing deprecated field (no new warning needed)
+    # Modifying existing deprecated field (no new warning needed - just modify the nested object)
     opts.picture_description_api.prompt = "World"
     pipeline_opts = m.get_pdf_pipeline_opts(opts)
     hash = _hash_pdf_format_option(pipeline_opts)
