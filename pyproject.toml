@@ -55,6 +55,9 @@ dependencies = [
 vlm = [
     "docling[vlm]>=2.73.0,<3.0.0",
 ]
+onnxruntime = [
+    "docling[onnxruntime]>=2.73.0,<3.0.0",
+]
 # asr = [
 #     "docling[asr]~=2.53",
 # ]
@@ -87,6 +90,11 @@ dev = [
     "ruff>=0.9.6",
     "types-pyyaml>=6.0.12.20250915",
 ]
+
+[tool.uv.sources]
+docling = { git = "https://github.com/docling-project/docling/", rev = "fix-improve-deserialization" }
+# docling = { path = "../docling", editable = true }
+
 
 [tool.uv]
 package = true

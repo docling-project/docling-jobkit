@@ -14,9 +14,12 @@ import pytest_asyncio
 from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.pipeline_options import (
+    LayoutObjectDetectionOptions,
     ProcessingPipeline,
 )
 from docling.datamodel.pipeline_options_vlm_model import ResponseFormat
+from docling.datamodel.stage_model_specs import ObjectDetectionModelSpec
+from docling.models.utils.hf_model_download import download_hf_model
 from docling.utils.model_downloader import download_models
 
 from docling_jobkit.convert.chunking import process_chunk_results
@@ -49,9 +52,25 @@ def pytest_configure(config):
     logging.getLogger("docling").setLevel(logging.INFO)
 
 
+def get_model_repos(model_spec: ObjectDetectionModelSpec):
+    yield model_spec.repo_id
+    for k, v in model_spec.engine_overrides.items():
+        if v.repo_id is not None:
+            yield v.repo_id
+
+
 @pytest_asyncio.fixture
 async def artifacts_path():
     download_path = download_models(with_easyocr=False)
+
+    # Extra models
+    model = LayoutObjectDetectionOptions.get_preset("layout_heron_default")
+    for repo_id in get_model_repos(model.model_spec):
+        repo_cache_folder = repo_id.replace("/", "--")
+        download_hf_model(
+            repo_id=repo_id,
+            local_dir=download_path / repo_cache_folder,
+        )
     return download_path
 
 
@@ -258,9 +277,12 @@ def convert_options_gen() -> Iterable[TestOption]:
     yield TestOption(options=options, name="vlm_custom_api_config", ci=False)
 
     options = ConvertDocumentsOptions(
-        pipeline=ProcessingPipeline.VLM,
+        pipeline=ProcessingPipeline.STANDARD,
         layout_custom_config={
             "kind": "layout_object_detection",
+            "engine_options": {
+                "engine_type": "onnxruntime",
+            },
         },
     )
     is_py314 = sys.version_info >= (3, 14)
