@@ -344,11 +344,11 @@ class ConvertDocumentsOptions(BaseModel):
             description=(
                 "The PDF backend to use. String. "
                 f"Allowed values: {', '.join([v.value for v in PdfBackend])}. "
-                f"Optional, defaults to {PdfBackend.DLPARSE_V4.value}."
+                f"Optional, defaults to {PdfBackend.DOCLING_PARSE.value}."
             ),
-            examples=[PdfBackend.DLPARSE_V4],
+            examples=[PdfBackend.DOCLING_PARSE],
         ),
-    ] = PdfBackend.DLPARSE_V4
+    ] = PdfBackend.DOCLING_PARSE
 
     table_mode: Annotated[
         TableFormerMode,
