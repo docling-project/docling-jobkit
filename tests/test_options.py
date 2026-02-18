@@ -3,8 +3,6 @@ import sys
 import pytest
 
 from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
-from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBackend
-from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import InputFormat
@@ -56,7 +54,7 @@ def test_options_validator():
     pipeline_opts = m.get_pdf_pipeline_opts(opts)
     assert pipeline_opts.pipeline_options is not None
     assert isinstance(pipeline_opts.pipeline_options, PdfPipelineOptions)
-    assert pipeline_opts.backend == DoclingParseV4DocumentBackend
+    assert pipeline_opts.backend == DoclingParseDocumentBackend
     assert pipeline_opts.pipeline_options.generate_page_images is True
 
     opts = ConvertDocumentsOptions(
@@ -70,15 +68,16 @@ def test_options_validator():
     assert pipeline_opts.pipeline_options.generate_page_images is True
     assert pipeline_opts.pipeline_options.generate_picture_images is True
 
-    opts = ConvertDocumentsOptions(pdf_backend=PdfBackend.DLPARSE_V2)
-    pipeline_opts = m.get_pdf_pipeline_opts(opts)
-    assert pipeline_opts.pipeline_options is not None
-    assert pipeline_opts.backend == DoclingParseV2DocumentBackend
-
-    opts = ConvertDocumentsOptions(pdf_backend=PdfBackend.DLPARSE_V1)
-    pipeline_opts = m.get_pdf_pipeline_opts(opts)
-    assert pipeline_opts.pipeline_options is not None
-    assert pipeline_opts.backend == DoclingParseDocumentBackend
+    for pdf_backend in (
+        PdfBackend.DLPARSE_V4,
+        PdfBackend.DLPARSE_V2,
+        PdfBackend.DLPARSE_V1,
+        PdfBackend.DOCLING_PARSE,
+    ):
+        opts = ConvertDocumentsOptions(pdf_backend=pdf_backend)
+        pipeline_opts = m.get_pdf_pipeline_opts(opts)
+        assert pipeline_opts.pipeline_options is not None
+        assert pipeline_opts.backend == DoclingParseDocumentBackend
 
     opts = ConvertDocumentsOptions(
         pipeline=ProcessingPipeline.VLM,
