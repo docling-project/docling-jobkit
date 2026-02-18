@@ -13,8 +13,6 @@ from typing import Any, Callable, Literal, Optional, Type, TypedDict, Union
 from pydantic import BaseModel, Field
 
 from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
-from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBackend
-from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
 from docling.backend.pdf_backend import PdfDocumentBackend
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
@@ -32,6 +30,7 @@ from docling.datamodel.pipeline_options import (
     TableStructureOptions,
     VlmConvertOptions,
     VlmPipelineOptions,
+    normalize_pdf_backend,
 )
 from docling.datamodel.pipeline_options_vlm_model import ApiVlmOptions, InlineVlmOptions
 from docling.datamodel.vlm_engine_options import (
@@ -1012,13 +1011,10 @@ class DoclingConverterManager:
     def _parse_backend(
         self, request: ConvertDocumentsOptions
     ) -> type[PdfDocumentBackend]:
-        if request.pdf_backend == PdfBackend.DLPARSE_V1:
+        pdf_backend = normalize_pdf_backend(request.pdf_backend)
+        if pdf_backend == PdfBackend.DOCLING_PARSE:
             backend: type[PdfDocumentBackend] = DoclingParseDocumentBackend
-        elif request.pdf_backend == PdfBackend.DLPARSE_V2:
-            backend = DoclingParseV2DocumentBackend
-        elif request.pdf_backend == PdfBackend.DLPARSE_V4:
-            backend = DoclingParseV4DocumentBackend
-        elif request.pdf_backend == PdfBackend.PYPDFIUM2:
+        elif pdf_backend == PdfBackend.PYPDFIUM2:
             backend = PyPdfiumDocumentBackend
         else:
             raise RuntimeError(f"Unexpected PDF backend type {request.pdf_backend}")
