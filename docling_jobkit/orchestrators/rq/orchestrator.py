@@ -41,6 +41,7 @@ class _TaskUpdate(BaseModel):
     task_id: str
     task_status: TaskStatus
     result_key: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 class RQOrchestrator(BaseOrchestrator):
@@ -197,6 +198,12 @@ class RQOrchestrator(BaseOrchestrator):
 
                     # Update the status
                     task.set_status(data.task_status)
+                    # Store error message on failure
+                    if (
+                        data.task_status == TaskStatus.FAILURE
+                        and data.error_message is not None
+                    ):
+                        task.error_message = data.error_message
                     # Update the results lookup
                     if (
                         data.task_status == TaskStatus.SUCCESS
