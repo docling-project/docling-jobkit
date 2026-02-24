@@ -35,6 +35,8 @@ class RQOrchestratorConfig(BaseModel):
     results_prefix: str = "docling:results"
     sub_channel: str = "docling:updates"
     scratch_dir: Optional[Path] = None
+    redis_max_connections: int = 50
+    redis_socket_timeout: float = 5.0
 
 
 class _TaskUpdate(BaseModel):
@@ -46,12 +48,23 @@ class _TaskUpdate(BaseModel):
 class RQOrchestrator(BaseOrchestrator):
     @staticmethod
     def make_rq_queue(config: RQOrchestratorConfig) -> tuple[redis.Redis, Queue]:
-        conn = redis.from_url(config.redis_url)
+        # Create connection pool with configurable size
+        pool = redis.ConnectionPool.from_url(
+            config.redis_url,
+            max_connections=config.redis_max_connections,
+            socket_timeout=config.redis_socket_timeout,
+            socket_connect_timeout=config.redis_socket_timeout,
+        )
+        conn = redis.Redis(connection_pool=pool)
         rq_queue = Queue(
             "convert",
             connection=conn,
             default_timeout=14400,
             result_ttl=config.results_ttl,
+        )
+        _log.info(
+            f"RQ Redis connection pool initialized with max_connections="
+            f"{config.redis_max_connections}, socket_timeout={config.redis_socket_timeout}s"
         )
         return conn, rq_queue
 
@@ -62,8 +75,22 @@ class RQOrchestrator(BaseOrchestrator):
         super().__init__()
         self.config = config
         self._redis_conn, self._rq_queue = self.make_rq_queue(self.config)
-        self._async_redis_conn = async_redis.from_url(self.config.redis_url)
+
+        # Create async connection pool with same configuration
+        self._async_redis_pool = async_redis.ConnectionPool.from_url(
+            self.config.redis_url,
+            max_connections=config.redis_max_connections,
+            socket_timeout=config.redis_socket_timeout,
+            socket_connect_timeout=config.redis_socket_timeout,
+        )
+        self._async_redis_conn = async_redis.Redis(
+            connection_pool=self._async_redis_pool
+        )
         self._task_result_keys: dict[str, str] = {}
+        _log.info(
+            f"RQ async Redis connection pool initialized with max_connections="
+            f"{config.redis_max_connections}"
+        )
 
     async def notify_end_job(self, task_id):
         # TODO: check if this is necessary
@@ -258,3 +285,20 @@ class RQOrchestrator(BaseOrchestrator):
         self._rq_queue.enqueue(
             "docling_jobkit.orchestrators.rq.worker.clear_cache_task",
         )
+
+    async def close(self):
+        """Close Redis connection pools and release resources."""
+        try:
+            # Close async connection pool
+            await self._async_redis_conn.aclose()
+            await self._async_redis_pool.aclose()
+            _log.info("Async Redis connection pool closed")
+        except Exception as e:
+            _log.error(f"Error closing async Redis connection pool: {e}")
+
+        try:
+            # Close sync connection pool
+            self._redis_conn.close()
+            _log.info("Sync Redis connection pool closed")
+        except Exception as e:
+            _log.error(f"Error closing sync Redis connection pool: {e}")
