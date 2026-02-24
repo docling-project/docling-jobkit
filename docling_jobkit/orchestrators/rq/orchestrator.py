@@ -32,6 +32,7 @@ _log = logging.getLogger(__name__)
 class RQOrchestratorConfig(BaseModel):
     redis_url: str = "redis://localhost:6379/"
     results_ttl: int = 3_600 * 4
+    failure_ttl: int = 3_600 * 4
     results_prefix: str = "docling:results"
     sub_channel: str = "docling:updates"
     scratch_dir: Optional[Path] = None
@@ -63,6 +64,7 @@ class RQOrchestrator(BaseOrchestrator):
             connection=conn,
             default_timeout=14400,
             result_ttl=config.results_ttl,
+            failure_ttl=config.failure_ttl,
         )
         _log.info(
             f"RQ Redis connection pool initialized with max_connections="
@@ -144,6 +146,7 @@ class RQOrchestrator(BaseOrchestrator):
             kwargs={"task_data": task_data},
             job_id=task_id,
             timeout=14400,
+            failure_ttl=self.config.failure_ttl,
         )
         await self.init_task_tracking(task)
 
