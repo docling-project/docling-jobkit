@@ -36,7 +36,8 @@ class RQOrchestratorConfig(BaseModel):
     sub_channel: str = "docling:updates"
     scratch_dir: Optional[Path] = None
     redis_max_connections: int = 50
-    redis_socket_timeout: float = 5.0
+    redis_socket_timeout: Optional[float] = None
+    redis_socket_connect_timeout: Optional[float] = None
 
 
 class _TaskUpdate(BaseModel):
@@ -54,7 +55,7 @@ class RQOrchestrator(BaseOrchestrator):
             config.redis_url,
             max_connections=config.redis_max_connections,
             socket_timeout=config.redis_socket_timeout,
-            socket_connect_timeout=config.redis_socket_timeout,
+            socket_connect_timeout=config.redis_socket_connect_timeout,
         )
         conn = redis.Redis(connection_pool=pool)
         rq_queue = Queue(
@@ -65,7 +66,8 @@ class RQOrchestrator(BaseOrchestrator):
         )
         _log.info(
             f"RQ Redis connection pool initialized with max_connections="
-            f"{config.redis_max_connections}, socket_timeout={config.redis_socket_timeout}s"
+            f"{config.redis_max_connections}, socket_timeout={config.redis_socket_timeout}, "
+            f"socket_connect_timeout={config.redis_socket_connect_timeout}"
         )
         return conn, rq_queue
 
@@ -82,7 +84,7 @@ class RQOrchestrator(BaseOrchestrator):
             self.config.redis_url,
             max_connections=config.redis_max_connections,
             socket_timeout=config.redis_socket_timeout,
-            socket_connect_timeout=config.redis_socket_timeout,
+            socket_connect_timeout=config.redis_socket_connect_timeout,
         )
         self._async_redis_conn = async_redis.Redis(
             connection_pool=self._async_redis_pool
