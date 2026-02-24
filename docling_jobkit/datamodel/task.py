@@ -44,6 +44,7 @@ class Task(BaseModel):
     chunking_export_options: ChunkingExportOptions = ChunkingExportOptions()
     # scratch_dir: Optional[Path] = None
     processing_meta: Optional[TaskProcessingMeta] = None
+    error_message: Optional[str] = None
     created_at: datetime.datetime = Field(
         default_factory=partial(datetime.datetime.now, datetime.timezone.utc)
     )
