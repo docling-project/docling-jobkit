@@ -270,20 +270,45 @@ class RQOrchestrator(BaseOrchestrator):
         key is absent the worker process has died — publishes a FAILURE update to
         the pub/sub channel so that polling clients and WebSocket subscribers are
         notified within ~90 seconds of the kill instead of waiting 4 hours.
+
+        Note: the grace period is tracked by the watchdog itself (first_seen_started)
+        rather than task.started_at. Orchestrator subclasses (e.g. RedisTaskStatusMixin)
+        may recreate Task objects on every poll, resetting started_at to the current
+        time and making a task.started_at-based check unreliable.
         """
         _log.debug("Watchdog starting")
+        # Maps task_id -> time the watchdog first observed the task in STARTED state.
+        # Independent of task.started_at which may be reset by polling machinery.
+        first_seen_started: dict[str, datetime.datetime] = {}
         while True:
             await asyncio.sleep(_WATCHDOG_INTERVAL)
             try:
                 now = datetime.datetime.now(datetime.timezone.utc)
-                candidates = [
+
+                # Determine which tasks are currently in STARTED state.
+                currently_started = {
                     task_id
                     for task_id, task in list(self.tasks.items())
                     if task.task_status == TaskStatus.STARTED
-                    and task.started_at is not None
-                    and (now - task.started_at).total_seconds()
-                    > _WATCHDOG_GRACE_PERIOD
+                }
+
+                # Remove tasks that are no longer STARTED (completed, failed, gone).
+                for task_id in list(first_seen_started.keys()):
+                    if task_id not in currently_started:
+                        del first_seen_started[task_id]
+
+                # Record first observation time for newly STARTED tasks.
+                for task_id in currently_started:
+                    if task_id not in first_seen_started:
+                        first_seen_started[task_id] = now
+
+                # Check tasks that have been STARTED long enough to be past grace period.
+                candidates = [
+                    task_id
+                    for task_id, first_seen in list(first_seen_started.items())
+                    if (now - first_seen).total_seconds() > _WATCHDOG_GRACE_PERIOD
                 ]
+
                 for task_id in candidates:
                     key = f"{_HEARTBEAT_KEY_PREFIX}:{task_id}"
                     alive = await self._async_redis_conn.exists(key)
@@ -303,6 +328,8 @@ class RQOrchestrator(BaseOrchestrator):
                                 ),
                             ).model_dump_json(),
                         )
+                        # Remove from tracking so we don't re-publish if pub/sub is slow.
+                        del first_seen_started[task_id]
             except Exception as e:
                 _log.error(f"Watchdog error: {e}")
 
