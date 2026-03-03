@@ -292,7 +292,7 @@ class RQOrchestrator(BaseOrchestrator):
         may recreate Task objects on every poll, resetting started_at to the current
         time and making a task.started_at-based check unreliable.
         """
-        _log.warning("Watchdog starting")
+        _log.info("Watchdog starting")
         # Maps task_id -> time the watchdog first observed the task in STARTED state.
         # Independent of task.started_at which may be reset by polling machinery.
         first_seen_started: dict[str, datetime.datetime] = {}
@@ -304,7 +304,7 @@ class RQOrchestrator(BaseOrchestrator):
                 all_statuses = {
                     tid: t.task_status for tid, t in list(self.tasks.items())
                 }
-                _log.warning(
+                _log.debug(
                     f"Watchdog scan: {len(self.tasks)} tasks in memory, "
                     f"statuses={all_statuses}"
                 )
@@ -325,7 +325,7 @@ class RQOrchestrator(BaseOrchestrator):
                 # Remove tasks that are no longer STARTED (completed, failed, gone).
                 for task_id in list(first_seen_started.keys()):
                     if task_id not in currently_started:
-                        _log.warning(
+                        _log.debug(
                             f"Watchdog: task {task_id} left STARTED, removing from tracking"
                         )
                         del first_seen_started[task_id]
@@ -333,7 +333,7 @@ class RQOrchestrator(BaseOrchestrator):
                 # Record first observation time for newly STARTED tasks.
                 for task_id in currently_started:
                     if task_id not in first_seen_started:
-                        _log.warning(
+                        _log.debug(
                             f"Watchdog: first observation of STARTED task {task_id}"
                         )
                         first_seen_started[task_id] = now
@@ -345,7 +345,7 @@ class RQOrchestrator(BaseOrchestrator):
                     if (now - first_seen).total_seconds() > _WATCHDOG_GRACE_PERIOD
                 ]
 
-                _log.warning(
+                _log.debug(
                     f"Watchdog: {len(currently_started)} started, "
                     f"{len(first_seen_started)} tracked, "
                     f"{len(candidates)} past grace period"
@@ -355,7 +355,7 @@ class RQOrchestrator(BaseOrchestrator):
                     key = f"{self.config.heartbeat_key_prefix}:{task_id}"
                     alive = await self._async_redis_conn.exists(key)
                     age = (now - first_seen_started[task_id]).total_seconds()
-                    _log.warning(
+                    _log.debug(
                         f"Watchdog: checking task {task_id} "
                         f"(age={age:.0f}s), heartbeat key alive={bool(alive)}"
                     )
@@ -377,8 +377,8 @@ class RQOrchestrator(BaseOrchestrator):
                         )
                         # Remove from tracking so we don't re-publish if pub/sub is slow.
                         del first_seen_started[task_id]
-            except Exception as e:
-                _log.error(f"Watchdog error: {e}")
+            except Exception:
+                _log.exception("Watchdog error")
 
     async def process_queue(self):
         # Create a pool of workers
