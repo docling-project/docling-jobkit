@@ -36,6 +36,7 @@ class RQOrchestratorConfig(BaseModel):
     results_ttl: int = 3_600 * 4
     failure_ttl: int = 3_600 * 4
     results_prefix: str = "docling:results"
+    heartbeat_key_prefix: str = "docling:job:alive"
     sub_channel: str = "docling:updates"
     scratch_dir: Optional[Path] = None
     redis_max_connections: int = 50
@@ -50,7 +51,6 @@ class _TaskUpdate(BaseModel):
     error_message: Optional[str] = None
 
 
-_HEARTBEAT_KEY_PREFIX = "docling:job:alive"
 _HEARTBEAT_TTL = 60  # seconds before an unrefreshed key expires
 _HEARTBEAT_INTERVAL = 20  # seconds between heartbeat writes
 _WATCHDOG_INTERVAL = 30.0  # seconds between watchdog scans
@@ -282,8 +282,8 @@ class RQOrchestrator(BaseOrchestrator):
 
         Runs every _WATCHDOG_INTERVAL seconds. For each task in STARTED state
         that is older than _WATCHDOG_GRACE_PERIOD, checks whether the worker's
-        liveness key (docling:job:alive:{task_id}) still exists in Redis. If the
-        key is absent the worker process has died — publishes a FAILURE update to
+        liveness key ({heartbeat_key_prefix}:{task_id}) still exists in Redis. If
+        the key is absent the worker process has died — publishes a FAILURE update to
         the pub/sub channel so that polling clients and WebSocket subscribers are
         notified within ~90 seconds of the kill instead of waiting 4 hours.
 
@@ -352,7 +352,7 @@ class RQOrchestrator(BaseOrchestrator):
                 )
 
                 for task_id in candidates:
-                    key = f"{_HEARTBEAT_KEY_PREFIX}:{task_id}"
+                    key = f"{self.config.heartbeat_key_prefix}:{task_id}"
                     alive = await self._async_redis_conn.exists(key)
                     age = (now - first_seen_started[task_id]).total_seconds()
                     _log.warning(

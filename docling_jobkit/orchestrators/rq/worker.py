@@ -23,7 +23,6 @@ from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus, TaskType
 from docling_jobkit.orchestrators.rq.orchestrator import (
     _HEARTBEAT_INTERVAL,
-    _HEARTBEAT_KEY_PREFIX,
     _HEARTBEAT_TTL,
     RQOrchestrator,
     RQOrchestratorConfig,
@@ -92,7 +91,7 @@ class CustomRQWorker(SimpleWorker):
         worker process is killed the thread dies with it and the key expires
         naturally, allowing the orchestrator watchdog to detect the dead job.
         """
-        key = f"{_HEARTBEAT_KEY_PREFIX}:{job_id}"
+        key = f"{self.orchestrator_config.heartbeat_key_prefix}:{job_id}"
         conn = None
         try:
             conn = sync_redis.Redis.from_url(self.orchestrator_config.redis_url)
