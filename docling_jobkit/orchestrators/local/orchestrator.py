@@ -13,6 +13,7 @@ from docling.datamodel.base_models import InputFormat
 
 from docling_jobkit.convert.chunking import DocumentChunkerManager
 from docling_jobkit.convert.manager import DoclingConverterManager
+from docling_jobkit.datamodel.callback import CallbackSpec
 from docling_jobkit.datamodel.chunking import BaseChunkerOptions, ChunkingExportOptions
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
@@ -59,6 +60,7 @@ class LocalOrchestrator(BaseOrchestrator):
         convert_options: ConvertDocumentsOptions | None = None,
         chunking_options: BaseChunkerOptions | None = None,
         chunking_export_options: ChunkingExportOptions | None = None,
+        callbacks: list[CallbackSpec] | None = None,
     ) -> Task:
         if options is not None and convert_options is None:
             convert_options = options
@@ -78,6 +80,7 @@ class LocalOrchestrator(BaseOrchestrator):
             chunking_options=chunking_options,
             chunking_export_options=chunking_export_options,
             target=target,
+            callbacks=callbacks or [],
         )
         await self.init_task_tracking(task)
 

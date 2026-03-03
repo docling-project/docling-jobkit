@@ -15,6 +15,7 @@ from rq.job import Job, JobStatus
 
 from docling.datamodel.base_models import DocumentStream
 
+from docling_jobkit.datamodel.callback import CallbackSpec
 from docling_jobkit.datamodel.chunking import BaseChunkerOptions, ChunkingExportOptions
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
@@ -110,6 +111,7 @@ class RQOrchestrator(BaseOrchestrator):
         convert_options: ConvertDocumentsOptions | None = None,
         chunking_options: BaseChunkerOptions | None = None,
         chunking_export_options: ChunkingExportOptions | None = None,
+        callbacks: list[CallbackSpec] | None = None,
     ) -> Task:
         if options is not None and convert_options is None:
             convert_options = options
@@ -138,6 +140,7 @@ class RQOrchestrator(BaseOrchestrator):
             chunking_options=chunking_options,
             chunking_export_options=chunking_export_options,
             target=target,
+            callbacks=callbacks or [],
         )
         self.tasks.update({task.task_id: task})
         task_data = task.model_dump(mode="json", serialize_as_any=True)

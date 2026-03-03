@@ -4,7 +4,7 @@ import threading
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -23,6 +23,14 @@ from docling_core.transforms.chunker.tokenizer.huggingface import (
 from docling_core.types.doc.document import DoclingDocument, ImageRefMode
 
 from docling_jobkit.convert.results import _export_document_as_content
+from docling_jobkit.datamodel.callback import (
+    DocumentCompletedItem,
+    FailedDocsItem,
+    ProgressDocumentCompleted,
+    ProgressSetNumDocs,
+    ProgressUpdateProcessed,
+    SucceededDocsItem,
+)
 from docling_jobkit.datamodel.chunking import (
     BaseChunkerOptions,
     HierarchicalChunkerOptions,
@@ -38,6 +46,9 @@ from docling_jobkit.datamodel.result import (
 )
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_targets import InBodyTarget
+
+if TYPE_CHECKING:
+    from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
 
 _log = logging.getLogger(__name__)
 
@@ -221,11 +232,21 @@ def process_chunk_results(
     conv_results: Iterable[ConversionResult],
     work_dir: Path,
     chunker_manager: Optional[DocumentChunkerManager] = None,
+    callback_invoker: Optional["CallbackInvoker"] = None,
 ) -> DoclingTaskResult:
     # Let's start by processing the documents
     start_time = time.monotonic()
     chunking_options = task.chunking_options or HybridChunkerOptions()
     conversion_options = task.convert_options or ConvertDocumentsOptions()
+
+    # 1. Send ProgressSetNumDocs at start
+    total_docs = len(task.sources)
+    if callback_invoker and task.callbacks and total_docs:
+        callback_invoker.invoke_callbacks_async(
+            callbacks=task.callbacks,
+            task_id=task.task_id,
+            progress=ProgressSetNumDocs(num_docs=total_docs),
+        )
 
     # We have some results, let's prepare the response
     task_result: ChunkedDocumentResult
@@ -233,10 +254,12 @@ def process_chunk_results(
     documents: list[ExportResult] = []
     num_succeeded = 0
     num_failed = 0
+    docs_succeeded: list[SucceededDocsItem] = []
+    docs_failed: list[FailedDocsItem] = []
 
     # TODO: DocumentChunkerManager should be initialized outside for really working as a cache
     chunker_manager = chunker_manager or DocumentChunkerManager()
-    for conv_res in conv_results:
+    for idx, conv_res in enumerate(conv_results):
         errors = conv_res.errors
         filename = conv_res.input.file.name
         if conv_res.status == ConversionStatus.SUCCESS:
@@ -268,6 +291,42 @@ def process_chunk_results(
         else:
             _log.warning(f"Document {conv_res.input.file} failed to convert.")
             num_failed += 1
+
+        # Track for final summary
+        if conv_res.status == ConversionStatus.SUCCESS:
+            docs_succeeded.append(SucceededDocsItem(source=str(conv_res.input.file)))
+        else:
+            docs_failed.append(
+                FailedDocsItem(
+                    source=str(conv_res.input.file),
+                    error=str(errors) if errors else "Unknown error",
+                )
+            )
+
+        # 2. Send per-document callback (non-blocking)
+        if callback_invoker and task.callbacks:
+            document_info = DocumentCompletedItem(
+                source=str(conv_res.input.file),
+                status=conv_res.status,
+                num_pages=(len(conv_res.document.pages) if conv_res.document else None),
+                processing_time=(
+                    sum(sum(item.times) for item in conv_res.timings.values())
+                    if conv_res.timings
+                    else None
+                ),
+                doc_hash=conv_res.input.document_hash,
+                error=str(errors) if errors else None,
+            )
+
+            callback_invoker.invoke_callbacks_async(
+                callbacks=task.callbacks,
+                task_id=task.task_id,
+                progress=ProgressDocumentCompleted(
+                    document=document_info,
+                    total_processed=idx + 1,
+                    total_docs=total_docs,
+                ),
+            )
 
         if (
             isinstance(task.target, InBodyTarget)
@@ -303,6 +362,20 @@ def process_chunk_results(
     _log.info(
         f"Processed {num_total} docs generating {len(chunks)} chunks in {processing_time:.2f} seconds."
     )
+
+    # 3. Send ProgressUpdateProcessed at end with final summary
+    if callback_invoker and task.callbacks:
+        callback_invoker.invoke_callbacks_async(
+            callbacks=task.callbacks,
+            task_id=task.task_id,
+            progress=ProgressUpdateProcessed(
+                num_processed=len(docs_succeeded) + len(docs_failed),
+                num_succeeded=len(docs_succeeded),
+                num_failed=len(docs_failed),
+                docs_succeeded=docs_succeeded,
+                docs_failed=docs_failed,
+            ),
+        )
 
     if isinstance(task.target, InBodyTarget):
         task_result = ChunkedDocumentResult(

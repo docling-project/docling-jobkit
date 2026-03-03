@@ -1,18 +1,20 @@
 import asyncio
 import base64
-import logging
 import os
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 import pytest
 import pytest_asyncio
 
 from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import ConversionStatus
+
+if TYPE_CHECKING:
+    pass
 from docling.datamodel.pipeline_options import (
     LayoutObjectDetectionOptions,
     ProcessingPipeline,
@@ -27,6 +29,7 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
 )
+from docling_jobkit.datamodel.callback import CallbackSpec, ProgressKind
 from docling_jobkit.datamodel.chunking import (
     BaseChunkerOptions,
     HierarchicalChunkerOptions,
@@ -46,10 +49,6 @@ from docling_jobkit.orchestrators.local.orchestrator import (
     LocalOrchestrator,
     LocalOrchestratorConfig,
 )
-
-
-def pytest_configure(config):
-    logging.getLogger("docling").setLevel(logging.INFO)
 
 
 def get_model_repos(model_spec: ObjectDetectionModelSpec):
@@ -609,3 +608,74 @@ async def test_worker_cms_tracking():
         await queue_task
     except asyncio.CancelledError:
         pass
+
+
+@pytest.mark.asyncio
+async def test_convert_with_callbacks(orchestrator: LocalOrchestrator, callback_server):
+    """Test document conversion with callback invocations."""
+    options = ConvertDocumentsOptions()
+
+    doc_filename = Path(__file__).parent / "2206.01062v1-pg4.pdf"
+    encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()
+
+    sources: list[TaskSource] = []
+    sources.append(FileSource(base64_string=encoded_doc, filename=doc_filename.name))
+
+    # Create task with callback
+    task = await orchestrator.enqueue(
+        sources=sources,
+        convert_options=options,
+        target=InBodyTarget(),
+        callbacks=[
+            CallbackSpec(
+                url="http://localhost:8765/callback",
+            )
+        ],
+    )
+
+    await _wait_task_complete(orchestrator, task.task_id)
+    task_result = await orchestrator.task_result(task_id=task.task_id)
+
+    assert task_result is not None
+    assert isinstance(task_result.result, ExportResult)
+    assert task_result.result.status == ConversionStatus.SUCCESS
+
+    # Give callbacks time to be invoked (they run in background threads)
+    await asyncio.sleep(2)
+
+    # Verify callbacks were received
+    assert len(callback_server.callbacks) >= 2, (
+        f"Expected at least 2 callbacks, got {len(callback_server.callbacks)}"
+    )
+
+    # Verify ProgressSetNumDocs callback
+    set_num_docs_callbacks = callback_server.get_callbacks_by_kind(
+        ProgressKind.SET_NUM_DOCS
+    )
+    assert len(set_num_docs_callbacks) == 1, "Expected 1 SET_NUM_DOCS callback"
+    assert set_num_docs_callbacks[0]["progress"]["num_docs"] == 1
+
+    # Verify ProgressDocumentCompleted callback
+    doc_completed_callbacks = callback_server.get_callbacks_by_kind(
+        ProgressKind.DOCUMENT_COMPLETED
+    )
+    assert len(doc_completed_callbacks) == 1, "Expected 1 DOCUMENT_COMPLETED callback"
+
+    doc_callback = doc_completed_callbacks[0]["progress"]
+    assert doc_callback["document"]["source"] == doc_filename.name
+    assert doc_callback["document"]["status"] == ConversionStatus.SUCCESS
+    assert doc_callback["document"]["num_pages"] is not None
+    assert doc_callback["document"]["num_pages"] > 0
+    assert doc_callback["total_processed"] == 1
+    assert doc_callback["total_docs"] == 1
+
+    # Verify ProgressUpdateProcessed callback
+    update_processed_callbacks = callback_server.get_callbacks_by_kind(
+        ProgressKind.UPDATE_PROCESSED
+    )
+    assert len(update_processed_callbacks) == 1, "Expected 1 UPDATE_PROCESSED callback"
+
+    final_callback = update_processed_callbacks[0]["progress"]
+    assert final_callback["num_processed"] == 1
+    assert final_callback["num_succeeded"] == 1
+    assert final_callback["num_failed"] == 0
