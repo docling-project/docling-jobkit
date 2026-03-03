@@ -1,10 +1,12 @@
 import logging
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Optional, Union
 
 import msgpack
+import redis as sync_redis
 from rq import SimpleWorker, get_current_job
 
 from docling.datamodel.base_models import DocumentStream
@@ -20,6 +22,8 @@ from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus, TaskType
 from docling_jobkit.orchestrators.rq.orchestrator import (
+    _HEARTBEAT_INTERVAL,
+    _HEARTBEAT_TTL,
     RQOrchestrator,
     RQOrchestratorConfig,
     _TaskUpdate,
@@ -75,7 +79,44 @@ class CustomRQWorker(SimpleWorker):
         # Call parent class constructor
         super().__init__(*args, **kwargs)
 
+    def _heartbeat_loop(self, job_id: str, stop_event: threading.Event) -> None:
+        """Write a liveness key to Redis every _HEARTBEAT_INTERVAL seconds.
+
+        Runs in a daemon thread for the duration of a single job. SimpleWorker
+        blocks its main thread during job execution, so the RQ-level heartbeat
+        is not maintained. This thread provides the equivalent liveness signal
+        that the standard forking Worker gets for free from its parent process.
+
+        The key expires after _HEARTBEAT_TTL seconds without a refresh. If the
+        worker process is killed the thread dies with it and the key expires
+        naturally, allowing the orchestrator watchdog to detect the dead job.
+        """
+        key = f"{self.orchestrator_config.heartbeat_key_prefix}:{job_id}"
+        conn = None
+        try:
+            conn = sync_redis.Redis.from_url(self.orchestrator_config.redis_url)
+            # Write immediately so the key exists before the first watchdog scan.
+            conn.set(key, "1", ex=_HEARTBEAT_TTL)
+            while not stop_event.wait(timeout=_HEARTBEAT_INTERVAL):
+                conn.set(key, "1", ex=_HEARTBEAT_TTL)
+        except Exception as e:
+            _log.error(f"Heartbeat thread error for {job_id}: {e}")
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
     def perform_job(self, job, queue):
+        stop_event = threading.Event()
+        heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            args=(job.id, stop_event),
+            daemon=True,
+            name=f"heartbeat-{job.id}",
+        )
+        heartbeat_thread.start()
         try:
             # Add to job's kwargs conversion manager
             if hasattr(job, "kwargs"):
@@ -88,6 +129,9 @@ class CustomRQWorker(SimpleWorker):
             # Custom error handling for individual jobs
             self.log.error(f"Job {job.id} failed: {e}")
             raise
+        finally:
+            stop_event.set()
+            heartbeat_thread.join(timeout=5)
 
 
 def docling_task(
@@ -133,6 +177,8 @@ def docling_task(
             raise RuntimeError("No converter")
         if not task.convert_options:
             raise RuntimeError("No conversion options")
+
+        # TODO: potentially move the below code into thread wrapper and wait for it.
         conv_results = conversion_manager.convert_documents(
             sources=convert_sources,
             options=task.convert_options,
