@@ -1,3 +1,13 @@
+## [v1.13.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.13.0) - 2026-03-03
+
+### Feature
+
+* Callback system for document conversion progress tracking ([#103](https://github.com/docling-project/docling-jobkit/issues/103)) ([`d0d9c73`](https://github.com/docling-project/docling-jobkit/commit/d0d9c737aaaf96eea8fab0743ca0415cc04b0988))
+
+### Fix
+
+* Recover orphaned job status when worker pod is killed mid-execution ([#102](https://github.com/docling-project/docling-jobkit/issues/102)) ([`4738900`](https://github.com/docling-project/docling-jobkit/commit/4738900c8c9f272cfd022bdc5907ca1ec337e58a))
+
 ## [v1.12.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.12.1) - 2026-02-24
 
 ### Fix
