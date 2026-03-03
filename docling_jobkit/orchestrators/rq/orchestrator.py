@@ -212,10 +212,13 @@ class RQOrchestrator(BaseOrchestrator):
         self,
         task_id: str,
     ) -> Optional[DoclingTaskResult]:
-        if task_id not in self._task_result_keys:
-            return None
-        result_key = self._task_result_keys[task_id]
+        result_key = self._task_result_keys.get(
+            task_id, f"{self.config.results_prefix}:{task_id}"
+        )
         packed = await self._async_redis_conn.get(result_key)
+        if packed is None:
+            return None
+        self._task_result_keys[task_id] = result_key
         result = DoclingTaskResult.model_validate(
             msgpack.unpackb(packed, raw=False, strict_map_key=False)
         )
@@ -313,12 +316,10 @@ class RQOrchestrator(BaseOrchestrator):
                 registry = StartedJobRegistry(
                     queue=self._rq_queue, connection=self._redis_conn
                 )
-                # cleanup=False: skip RQ's own abandoned-job sweep (ZRANGEBYSCORE
-                # + pipeline) — the heartbeat watchdog handles dead jobs via a
-                # separate signal. Saves one Redis round trip per scan.
-                rq_started_ids = await asyncio.to_thread(
-                    registry.get_job_ids, cleanup=False
-                )
+                # cleanup=True so RQ can remove abandoned STARTED entries while
+                # the watchdog still provides fast heartbeat-based failure
+                # signaling for SimpleWorker pods.
+                rq_started_ids = await asyncio.to_thread(registry.get_job_ids)
                 currently_started = set(rq_started_ids)
 
                 # Remove tasks that are no longer STARTED (completed, failed, gone).
