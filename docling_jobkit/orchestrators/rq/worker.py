@@ -22,12 +22,12 @@ from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus, TaskType
 from docling_jobkit.orchestrators.rq.orchestrator import (
+    _HEARTBEAT_INTERVAL,
+    _HEARTBEAT_KEY_PREFIX,
+    _HEARTBEAT_TTL,
     RQOrchestrator,
     RQOrchestratorConfig,
     _TaskUpdate,
-    _HEARTBEAT_KEY_PREFIX,
-    _HEARTBEAT_INTERVAL,
-    _HEARTBEAT_TTL,
 )
 
 _log = logging.getLogger(__name__)
@@ -178,7 +178,7 @@ def docling_task(
             raise RuntimeError("No converter")
         if not task.convert_options:
             raise RuntimeError("No conversion options")
-        
+
         # TODO: potentially move the below code into thread wrapper and wait for it.
         conv_results = conversion_manager.convert_documents(
             sources=convert_sources,

@@ -13,6 +13,7 @@ import redis.asyncio as async_redis
 from pydantic import BaseModel
 from rq import Queue
 from rq.job import Job, JobStatus
+from rq.registry import StartedJobRegistry
 
 from docling.datamodel.base_models import DocumentStream
 
@@ -53,7 +54,9 @@ _HEARTBEAT_KEY_PREFIX = "docling:job:alive"
 _HEARTBEAT_TTL = 60  # seconds before an unrefreshed key expires
 _HEARTBEAT_INTERVAL = 20  # seconds between heartbeat writes
 _WATCHDOG_INTERVAL = 30.0  # seconds between watchdog scans
-_WATCHDOG_GRACE_PERIOD = 90.0  # don't flag tasks started less than this many seconds ago
+_WATCHDOG_GRACE_PERIOD = (
+    90.0  # don't flag tasks started less than this many seconds ago
+)
 
 
 class RQOrchestrator(BaseOrchestrator):
@@ -218,6 +221,14 @@ class RQOrchestrator(BaseOrchestrator):
         )
         return result
 
+    async def _on_task_status_changed(self, task: Task) -> None:
+        """Called after every in-memory status update from pub/sub.
+
+        No-op by default. Subclasses should override to persist the updated
+        task to durable storage so that terminal states survive pod restarts
+        and are visible to pods that missed the pub/sub event.
+        """
+
     async def _listen_for_updates(self):
         pubsub = self._async_redis_conn.pubsub()
 
@@ -250,6 +261,8 @@ class RQOrchestrator(BaseOrchestrator):
                         and data.result_key is not None
                     ):
                         self._task_result_keys[data.task_id] = data.result_key
+
+                    await self._on_task_status_changed(task)
 
                     if self.notifier:
                         try:
@@ -293,12 +306,20 @@ class RQOrchestrator(BaseOrchestrator):
                     f"statuses={all_statuses}"
                 )
 
-                # Determine which tasks are currently in STARTED state.
-                currently_started = {
-                    task_id
-                    for task_id, task in list(self.tasks.items())
-                    if task.task_status == TaskStatus.STARTED
-                }
+                # Determine which tasks are currently in STARTED state by
+                # querying StartedJobRegistry directly — the authoritative,
+                # cross-pod, durable source that is independent of request
+                # routing and pod lifecycle.
+                registry = StartedJobRegistry(
+                    queue=self._rq_queue, connection=self._redis_conn
+                )
+                # cleanup=False: skip RQ's own abandoned-job sweep (ZRANGEBYSCORE
+                # + pipeline) — the heartbeat watchdog handles dead jobs via a
+                # separate signal. Saves one Redis round trip per scan.
+                rq_started_ids = await asyncio.to_thread(
+                    registry.get_job_ids, cleanup=False
+                )
+                currently_started = set(rq_started_ids)
 
                 # Remove tasks that are no longer STARTED (completed, failed, gone).
                 for task_id in list(first_seen_started.keys()):
@@ -332,9 +353,7 @@ class RQOrchestrator(BaseOrchestrator):
                 for task_id in candidates:
                     key = f"{_HEARTBEAT_KEY_PREFIX}:{task_id}"
                     alive = await self._async_redis_conn.exists(key)
-                    age = (
-                        now - first_seen_started[task_id]
-                    ).total_seconds()
+                    age = (now - first_seen_started[task_id]).total_seconds()
                     _log.warning(
                         f"Watchdog: checking task {task_id} "
                         f"(age={age:.0f}s), heartbeat key alive={bool(alive)}"
