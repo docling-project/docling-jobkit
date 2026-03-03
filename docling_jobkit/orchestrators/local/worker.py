@@ -12,6 +12,7 @@ from docling_jobkit.convert.results import process_export_results
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task_meta import TaskStatus, TaskType
+from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
 
 if TYPE_CHECKING:
     from docling_jobkit.orchestrators.local.orchestrator import LocalOrchestrator
@@ -59,8 +60,16 @@ class AsyncLocalWorker:
                     # Notify clients about queue updates
                     await self.orchestrator.notifier.notify_queue_positions()
 
+                # Initialize callback invoker if callbacks are configured
+                callback_invoker = None
+                if task.callbacks:
+                    callback_invoker = CallbackInvoker(
+                        max_retries=3,
+                        timeout=30.0,
+                        retry_delay=1.0,
+                    )
+
                 # Define a callback function to send progress updates to the client.
-                # TODO: send partial updates, e.g. when a document in the batch is done
                 def run_task() -> DoclingTaskResult:
                     convert_sources: list[Union[str, DocumentStream]] = []
                     headers: Optional[dict[str, Any]] = None
@@ -88,6 +97,7 @@ class AsyncLocalWorker:
                             task=task,
                             conv_results=conv_results,
                             work_dir=workdir,
+                            callback_invoker=callback_invoker,
                         )
                     elif task.task_type == TaskType.CHUNK:
                         processed_results = process_chunk_results(
@@ -95,6 +105,7 @@ class AsyncLocalWorker:
                             conv_results=conv_results,
                             work_dir=workdir,
                             chunker_manager=self.orchestrator.chunker_manager,
+                            callback_invoker=callback_invoker,
                         )
 
                     return processed_results

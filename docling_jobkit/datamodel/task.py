@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from docling.datamodel.base_models import DocumentStream
 
+from docling_jobkit.datamodel.callback import CallbackSpec
 from docling_jobkit.datamodel.chunking import (
     ChunkingExportOptions,
     ChunkingOptionType,
@@ -42,6 +43,7 @@ class Task(BaseModel):
         Field(discriminator="chunker"),
     ] = None
     chunking_export_options: ChunkingExportOptions = ChunkingExportOptions()
+    callbacks: list[CallbackSpec] = []
     # scratch_dir: Optional[Path] = None
     processing_meta: Optional[TaskProcessingMeta] = None
     error_message: Optional[str] = None

@@ -3,7 +3,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
 
-from docling_jobkit.datamodel.callback import ProgressCallbackRequest
+from docling_jobkit.datamodel.callback import CallbackSpec, ProgressCallbackRequest
 from docling_jobkit.datamodel.chunking import BaseChunkerOptions, ChunkingExportOptions
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
@@ -47,6 +47,7 @@ class BaseOrchestrator(ABC):
         convert_options: ConvertDocumentsOptions | None = None,
         chunking_options: BaseChunkerOptions | None = None,
         chunking_export_options: ChunkingExportOptions | None = None,
+        callbacks: list[CallbackSpec] | None = None,
     ) -> Task:
         pass
 

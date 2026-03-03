@@ -96,6 +96,7 @@ class KfpOrchestrator(BaseOrchestrator):
         convert_options: ConvertDocumentsOptions | None = None,
         chunking_options: BaseChunkerOptions | None = None,
         chunking_export_options: ChunkingExportOptions | None = None,
+        callbacks: list[CallbackSpec] | None = None,
     ) -> Task:
         if options is not None and convert_options is None:
             convert_options = options
@@ -107,7 +108,7 @@ class KfpOrchestrator(BaseOrchestrator):
             )
         if convert_options is None:
             raise RuntimeError("convert_options is required.")
-        callbacks = []
+        all_callbacks = list(callbacks) if callbacks else []
         if self.config.self_callback_endpoint is not None:
             headers = {}
             if self.config.self_callback_token_path is not None:
@@ -116,7 +117,7 @@ class KfpOrchestrator(BaseOrchestrator):
             ca_cert = ""
             if self.config.self_callback_ca_cert_path is not None:
                 ca_cert = self.config.self_callback_ca_cert_path.read_text()
-            callbacks.append(
+            all_callbacks.append(
                 CallbackSpec(
                     url=self.config.self_callback_endpoint,
                     headers=headers,
@@ -164,7 +165,7 @@ class KfpOrchestrator(BaseOrchestrator):
                     "batch_size": 10,
                     "sources": SourcesListType.dump_python(http_sources, mode="json"),
                     "options": convert_options.model_dump(mode="json"),
-                    "callbacks": CallbacksType.dump_python(callbacks, mode="json"),
+                    "callbacks": CallbacksType.dump_python(all_callbacks, mode="json"),
                     "run_name": run_name,
                 },
                 run_name=run_name,
