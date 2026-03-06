@@ -13,7 +13,7 @@ from docling.datamodel.pipeline_options import (
     VlmPipelineOptions,
 )
 from docling.pipeline.vlm_pipeline import VlmPipeline
-from docling_core.types.doc import ImageRefMode
+from docling_core.types.doc import ImageRefMode, PictureClassificationLabel
 
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
@@ -24,6 +24,7 @@ from docling_jobkit.convert.manager import (
 from docling_jobkit.datamodel.convert import (
     ConvertDocumentsOptions,
     PictureDescriptionApi,
+    PictureDescriptionLocal,
 )
 
 
@@ -191,6 +192,7 @@ def test_options_cache_key_with_presets():
     assert hash not in hashes
     hashes.add(hash)
 
+
     # VLM pipeline with default preset
     opts = ConvertDocumentsOptions(
         pipeline=ProcessingPipeline.VLM,
@@ -279,6 +281,48 @@ def test_options_cache_key_with_presets():
     hash = _hash_pdf_format_option(pipeline_opts)
     assert hash not in hashes
     hashes.add(hash)
+
+
+def test_legacy_picture_description_filters_reach_pipeline_options():
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+
+    with pytest.warns(DeprecationWarning):
+        opts = ConvertDocumentsOptions(
+            do_picture_description=True,
+            picture_description_local=PictureDescriptionLocal(
+                repo_id="HuggingFaceTB/SmolVLM-256M-Instruct",
+                classification_allow=[PictureClassificationLabel.BAR_CHART],
+                classification_deny=[PictureClassificationLabel.LOGO],
+                classification_min_confidence=0.55,
+            ),
+        )
+
+    pipeline_opts = m.get_pdf_pipeline_opts(opts)
+    picture_opts = pipeline_opts.pipeline_options.picture_description_options
+
+    assert picture_opts.classification_allow == [PictureClassificationLabel.BAR_CHART]
+    assert picture_opts.classification_deny == [PictureClassificationLabel.LOGO]
+    assert picture_opts.classification_min_confidence == 0.55
+
+
+def test_legacy_picture_description_api_filters_reach_pipeline_options():
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+
+    with pytest.warns(DeprecationWarning):
+        opts = ConvertDocumentsOptions(
+            do_picture_description=True,
+            picture_description_api={
+                "url": "http://localhost",
+                "classification_allow": ["map"],
+                "classification_min_confidence": 0.8,
+            },
+        )
+
+    pipeline_opts = m.get_pdf_pipeline_opts(opts)
+    picture_opts = pipeline_opts.pipeline_options.picture_description_options
+
+    assert [label.value for label in picture_opts.classification_allow] == ["map"]
+    assert picture_opts.classification_min_confidence == 0.8
 
 
 def test_image_pipeline_uses_vlm_pipeline_when_requested():
