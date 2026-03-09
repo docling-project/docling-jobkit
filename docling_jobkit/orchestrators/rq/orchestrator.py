@@ -378,6 +378,40 @@ class RQOrchestrator(BaseOrchestrator):
                                 ),
                             ).model_dump_json(),
                         )
+                        # Update the RQ job status to FAILED and remove it
+                        # from StartedJobRegistry. Without this, subsequent
+                        # poll requests read a stale STARTED from the RQ job
+                        # hash and overwrite the FAILURE we just published.
+                        try:
+                            def _mark_rq_failed(
+                                tid: str,
+                            ) -> None:
+                                try:
+                                    job = Job.fetch(
+                                        tid,
+                                        connection=self._redis_conn,
+                                    )
+                                    job.set_status(JobStatus.FAILED)
+                                except Exception:
+                                    _log.debug(
+                                        f"Could not set RQ job {tid} "
+                                        f"status to FAILED (may already "
+                                        f"be gone)"
+                                    )
+                                registry.remove(tid)
+
+                            await asyncio.to_thread(
+                                _mark_rq_failed, task_id
+                            )
+                            _log.info(
+                                f"Task {task_id} marked FAILED in RQ "
+                                f"and removed from StartedJobRegistry"
+                            )
+                        except Exception:
+                            _log.exception(
+                                f"Failed to clean up RQ state for "
+                                f"task {task_id}"
+                            )
                         # Remove from tracking so we don't re-publish if pub/sub is slow.
                         del first_seen_started[task_id]
             except Exception:
