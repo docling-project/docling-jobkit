@@ -40,6 +40,7 @@ class ResultsProcessor:
         generate_picture_images: bool = False,
         export_parquet_file: bool = False,
         scratch_dir: Path | None = None,
+        compact_tables: bool = False,
     ):
         self._target_processor = target_processor
 
@@ -51,6 +52,8 @@ class ResultsProcessor:
 
         self.scratch_dir = scratch_dir or Path(tempfile.mkdtemp(prefix="docling_"))
         self.scratch_dir.mkdir(exist_ok=True, parents=True)
+        
+        self.compact_tables = compact_tables
 
     def __del__(self):
         if self.scratch_dir is not None:
@@ -122,7 +125,7 @@ class ResultsProcessor:
                             # Export Docling document format to markdown:
                             target_key = f"md/{name_without_ext}.md"
 
-                            data = conv_res.document.export_to_markdown()
+                            data = conv_res.document.export_to_markdown(compact_tables=self.compact_tables,)
                             self._target_processor.upload_object(
                                 obj=data,
                                 target_filename=target_key,

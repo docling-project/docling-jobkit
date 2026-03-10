@@ -438,7 +438,17 @@ class ConvertDocumentsOptions(BaseModel):
             examples=["<!-- page-break -->", ""],
         ),
     ] = ""
-
+    compact_tables: Annotated[
+        bool,
+        Field(
+            description=(
+                "Whether to use compact table format without column padding. "
+                "When False (default), tables use padded columns for better "
+                "visual formatting. When True, tables use minimal whitespace, "
+                "which is better for large tables and downstream processing."
+            ),
+        ),
+    ] = False
     do_code_enrichment: Annotated[
         bool,
         Field(
