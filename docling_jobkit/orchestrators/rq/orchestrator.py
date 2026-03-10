@@ -383,6 +383,7 @@ class RQOrchestrator(BaseOrchestrator):
                         # poll requests read a stale STARTED from the RQ job
                         # hash and overwrite the FAILURE we just published.
                         try:
+
                             def _mark_rq_failed(
                                 tid: str,
                             ) -> None:
@@ -400,17 +401,14 @@ class RQOrchestrator(BaseOrchestrator):
                                     )
                                 registry.remove(tid)
 
-                            await asyncio.to_thread(
-                                _mark_rq_failed, task_id
-                            )
+                            await asyncio.to_thread(_mark_rq_failed, task_id)
                             _log.info(
                                 f"Task {task_id} marked FAILED in RQ "
                                 f"and removed from StartedJobRegistry"
                             )
                         except Exception:
                             _log.exception(
-                                f"Failed to clean up RQ state for "
-                                f"task {task_id}"
+                                f"Failed to clean up RQ state for task {task_id}"
                             )
                         # Remove from tracking so we don't re-publish if pub/sub is slow.
                         del first_seen_started[task_id]
