@@ -995,6 +995,16 @@ class DoclingConverterManager:
             request.picture_description_area_threshold
         )
 
+        # === NEW ENGINE-BASED APPROACH for Code Formula ===
+        new_code_formula_options = self._parse_code_formula_options(request)
+        if new_code_formula_options is not None:
+            if isinstance(new_code_formula_options, dict):
+                pipeline_options.code_formula_options = (
+                    CodeFormulaVlmOptions.model_validate(new_code_formula_options)
+                )
+            else:
+                pipeline_options.code_formula_options = new_code_formula_options
+
         # Forward the definition of the following attributes, if they are not none
         for attr in (
             "queue_max_size",
@@ -1131,6 +1141,16 @@ class DoclingConverterManager:
         pipeline_options.picture_description_options.picture_area_threshold = (
             request.picture_description_area_threshold
         )
+
+        # === NEW ENGINE-BASED APPROACH for Code Formula ===
+        new_code_formula_options = self._parse_code_formula_options(request)
+        if new_code_formula_options is not None:
+            if isinstance(new_code_formula_options, dict):
+                pipeline_options.code_formula_options = (
+                    CodeFormulaVlmOptions.model_validate(new_code_formula_options)
+                )
+            else:
+                pipeline_options.code_formula_options = new_code_formula_options
 
         return pipeline_options
 
