@@ -39,7 +39,7 @@ from docling.datamodel.settings import (
     DEFAULT_PAGE_RANGE,
     PageRange,
 )
-from docling_core.types.doc import ImageRefMode
+from docling_core.types.doc import ImageRefMode, PictureClassificationLabel
 
 
 class PictureDescriptionLocal(BaseModel):
@@ -70,6 +70,26 @@ class PictureDescriptionLocal(BaseModel):
             examples=[{"max_new_tokens": 200, "do_sample": False}],
         ),
     ] = {"max_new_tokens": 200, "do_sample": False}
+    classification_allow: Annotated[
+        Optional[list[PictureClassificationLabel]],
+        Field(
+            description="Only describe pictures whose predicted class is in this allow-list."
+        ),
+    ] = None
+    classification_deny: Annotated[
+        Optional[list[PictureClassificationLabel]],
+        Field(
+            description="Do not describe pictures whose predicted class is in this deny-list."
+        ),
+    ] = None
+    classification_min_confidence: Annotated[
+        float,
+        Field(
+            description="Minimum classification confidence required before a picture can be described.",
+            ge=0.0,
+            le=1.0,
+        ),
+    ] = 0.0
 
 
 class PictureDescriptionApi(BaseModel):
@@ -133,6 +153,26 @@ class PictureDescriptionApi(BaseModel):
             ],
         ),
     ] = "Describe this image in a few sentences."
+    classification_allow: Annotated[
+        Optional[list[PictureClassificationLabel]],
+        Field(
+            description="Only describe pictures whose predicted class is in this allow-list."
+        ),
+    ] = None
+    classification_deny: Annotated[
+        Optional[list[PictureClassificationLabel]],
+        Field(
+            description="Do not describe pictures whose predicted class is in this deny-list."
+        ),
+    ] = None
+    classification_min_confidence: Annotated[
+        float,
+        Field(
+            description="Minimum classification confidence required before a picture can be described.",
+            ge=0.0,
+            le=1.0,
+        ),
+    ] = 0.0
 
 
 class VlmModelLocal(BaseModel):
