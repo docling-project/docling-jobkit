@@ -46,6 +46,7 @@ def _export_document_as_content(
     export_doctags: bool,
     image_mode: ImageRefMode,
     md_page_break_placeholder: str,
+    compact_tables: bool = False,
 ) -> ExportDocumentResponse:
     document = ExportDocumentResponse(filename=conv_res.input.file.name)
 
@@ -63,11 +64,13 @@ def _export_document_as_content(
             document.text_content = new_doc.export_to_markdown(
                 strict_text=True,
                 image_mode=image_mode,
+                compact_tables=compact_tables,
             )
         if export_md:
             document.md_content = new_doc.export_to_markdown(
                 image_mode=image_mode,
                 page_break_placeholder=md_page_break_placeholder or None,
+                compact_tables=compact_tables,
             )
         if export_doctags:
             document.doctags_content = new_doc.export_to_doctags()
@@ -85,6 +88,7 @@ def _export_documents_as_files(
     export_doctags: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
+    compact_tables: bool = False,
 ):
     success_count = 0
     failure_count = 0
@@ -124,6 +128,7 @@ def _export_documents_as_files(
                     filename=fname,
                     strict_text=True,
                     image_mode=ImageRefMode.PLACEHOLDER,
+                    compact_tables=compact_tables,
                 )
 
             # Export Markdown format:
@@ -135,6 +140,7 @@ def _export_documents_as_files(
                     artifacts_dir=artifacts_dir,
                     image_mode=image_export_mode,
                     page_break_placeholder=md_page_break_placeholder or None,
+                    compact_tables=compact_tables,
                 )
 
             # Export Document Tags format:
@@ -274,6 +280,7 @@ def process_export_results(
             export_doctags=export_doctags,
             image_mode=conversion_options.image_export_mode,
             md_page_break_placeholder=conversion_options.md_page_break_placeholder,
+            compact_tables=conversion_options.compact_tables,
         )
         task_result = ExportResult(
             content=content,
@@ -303,6 +310,7 @@ def process_export_results(
             export_doctags=export_doctags,
             image_export_mode=conversion_options.image_export_mode,
             md_page_break_placeholder=conversion_options.md_page_break_placeholder,
+            compact_tables=conversion_options.compact_tables,
         )
 
         files = os.listdir(output_dir)
