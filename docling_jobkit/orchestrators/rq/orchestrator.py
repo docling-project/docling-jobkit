@@ -5,7 +5,7 @@ import logging
 import uuid
 import warnings
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import msgpack
 import redis
@@ -123,6 +123,7 @@ class RQOrchestrator(BaseOrchestrator):
         chunking_options: BaseChunkerOptions | None = None,
         chunking_export_options: ChunkingExportOptions | None = None,
         callbacks: list[CallbackSpec] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Task:
         if options is not None and convert_options is None:
             convert_options = options

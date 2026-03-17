@@ -1,7 +1,7 @@
 import datetime
 import logging
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from docling_jobkit.datamodel.callback import CallbackSpec, ProgressCallbackRequest
 from docling_jobkit.datamodel.chunking import BaseChunkerOptions, ChunkingExportOptions
@@ -48,6 +48,7 @@ class BaseOrchestrator(ABC):
         chunking_options: BaseChunkerOptions | None = None,
         chunking_export_options: ChunkingExportOptions | None = None,
         callbacks: list[CallbackSpec] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Task:
         pass
 

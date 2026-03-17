@@ -29,36 +29,9 @@ from docling_jobkit.orchestrators.rq.orchestrator import (
     RQOrchestratorConfig,
     _TaskUpdate,
 )
+from docling_jobkit.orchestrators.serialization import make_msgpack_safe
 
 _log = logging.getLogger(__name__)
-
-
-def make_msgpack_safe(obj):
-    """
-    Recursively convert any non-msgpack-serializable types to safe types,
-    keeping bytes unchanged.
-    """
-    from datetime import datetime
-    from decimal import Decimal
-
-    # Types msgpack already supports
-    if obj is None or isinstance(obj, (str, int, float, bool, bytes)):
-        return obj
-
-    # Handle sequences
-    if isinstance(obj, (list, tuple, set)):
-        return [make_msgpack_safe(v) for v in obj]
-
-    # Handle mappings
-    if isinstance(obj, dict):
-        return {make_msgpack_safe(k): make_msgpack_safe(v) for k, v in obj.items()}
-
-    # Known common conversions
-    if isinstance(obj, (datetime, Decimal)):
-        return str(obj)  # ISO for datetime, str for Decimal
-
-    # Fallback: use string representation
-    return str(obj)
 
 
 class CustomRQWorker(SimpleWorker):
