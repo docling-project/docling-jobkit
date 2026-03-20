@@ -960,20 +960,7 @@ class DoclingConverterManager:
         # === NEW ENGINE-BASED APPROACH for Picture Description ===
         new_picture_desc_options = self._parse_picture_description_options(request)
         if new_picture_desc_options is not None:
-            # New-style configuration provided
-            if isinstance(new_picture_desc_options, dict):
-                pipeline_options.picture_description_options = (
-                    PictureDescriptionVlmOptions.model_validate(
-                        new_picture_desc_options
-                    )
-                )
-            elif isinstance(new_picture_desc_options, str):
-                # Preset ID - for now, keep legacy behavior
-                # TODO: Update when PictureDescriptionVlmOptions has from_preset
-                pass
-            else:
-                # Already an options object
-                pipeline_options.picture_description_options = new_picture_desc_options
+            pipeline_options.picture_description_options = new_picture_desc_options
         else:
             # === LEGACY APPROACH for Picture Description ===
             if request.picture_description_local is not None:
@@ -998,12 +985,7 @@ class DoclingConverterManager:
         # === NEW ENGINE-BASED APPROACH for Code Formula ===
         new_code_formula_options = self._parse_code_formula_options(request)
         if new_code_formula_options is not None:
-            if isinstance(new_code_formula_options, dict):
-                pipeline_options.code_formula_options = (
-                    CodeFormulaVlmOptions.model_validate(new_code_formula_options)
-                )
-            else:
-                pipeline_options.code_formula_options = new_code_formula_options
+            pipeline_options.code_formula_options = new_code_formula_options
 
         # Forward the definition of the following attributes, if they are not none
         for attr in (
@@ -1044,15 +1026,7 @@ class DoclingConverterManager:
         # Try new preset/custom config approach first
         new_vlm_options = self._parse_vlm_options(request)
         if new_vlm_options is not None:
-            # New-style configuration provided
-            if isinstance(new_vlm_options, dict):
-                # Convert dict to VlmConvertOptions
-                pipeline_options.vlm_options = VlmConvertOptions.model_validate(
-                    new_vlm_options
-                )
-            else:
-                # Already a VlmConvertOptions object
-                pipeline_options.vlm_options = new_vlm_options
+            pipeline_options.vlm_options = new_vlm_options
         else:
             # === LEGACY APPROACH (Backwards Compatibility) ===
             # Fall back to legacy configuration
@@ -1107,20 +1081,7 @@ class DoclingConverterManager:
         # === NEW ENGINE-BASED APPROACH for Picture Description ===
         new_picture_desc_options = self._parse_picture_description_options(request)
         if new_picture_desc_options is not None:
-            # New-style configuration provided
-            if isinstance(new_picture_desc_options, dict):
-                pipeline_options.picture_description_options = (
-                    PictureDescriptionVlmOptions.model_validate(
-                        new_picture_desc_options
-                    )
-                )
-            elif isinstance(new_picture_desc_options, str):
-                # Preset ID - for now, keep legacy behavior
-                # TODO: Update when PictureDescriptionVlmOptions has from_preset
-                pass
-            else:
-                # Already an options object
-                pipeline_options.picture_description_options = new_picture_desc_options
+            pipeline_options.picture_description_options = new_picture_desc_options
         else:
             # === LEGACY APPROACH for Picture Description ===
             if request.picture_description_local is not None:
@@ -1145,12 +1106,7 @@ class DoclingConverterManager:
         # === NEW ENGINE-BASED APPROACH for Code Formula ===
         new_code_formula_options = self._parse_code_formula_options(request)
         if new_code_formula_options is not None:
-            if isinstance(new_code_formula_options, dict):
-                pipeline_options.code_formula_options = (
-                    CodeFormulaVlmOptions.model_validate(new_code_formula_options)
-                )
-            else:
-                pipeline_options.code_formula_options = new_code_formula_options
+            pipeline_options.code_formula_options = new_code_formula_options
 
         return pipeline_options
 
