@@ -69,11 +69,11 @@ rq = [
     "msgpack~=1.1",
 ]
 ray = [
-    'ray[serve]~=2.30 ; python_version < "3.14"',
+    "ray[serve]~=2.30 ; python_version < '3.14'",
     "redis[hiredis]>=4.2,<8.0.0",
     "msgpack~=1.1",
     "psutil>=6.0.0",
-    "codeflare-sdk>=0.20.0; python_version >= '3.11'",
+    "codeflare-sdk>=0.20.0; python_version >= '3.11' and python_version < '3.14'",
 ]
 gdrive = [
     "google-api-python-client>=2.183.0",
