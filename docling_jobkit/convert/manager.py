@@ -1103,10 +1103,8 @@ class DoclingConverterManager:
             request.picture_description_area_threshold
         )
 
-        # === NEW ENGINE-BASED APPROACH for Code Formula ===
-        new_code_formula_options = self._parse_code_formula_options(request)
-        if new_code_formula_options is not None:
-            pipeline_options.code_formula_options = new_code_formula_options
+        # Note: VlmPipelineOptions does not support code_formula_options
+        # Code/formula enrichment is only available in the standard PDF pipeline
 
         return pipeline_options
 
