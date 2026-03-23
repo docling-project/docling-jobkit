@@ -8,6 +8,10 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
+# Skip all tests if Ray or Redis are not available
+pytest.importorskip("ray")
+pytest.importorskip("redis")
+
 from docling.utils.model_downloader import download_models
 
 from docling_jobkit.convert.manager import (
@@ -23,10 +27,6 @@ from docling_jobkit.orchestrators.ray.orchestrator import (
     QueueLimitExceededError,
     RayOrchestrator,
 )
-
-# Skip all tests if Ray or Redis are not available
-pytest.importorskip("ray")
-pytest.importorskip("redis")
 
 
 @pytest.fixture
