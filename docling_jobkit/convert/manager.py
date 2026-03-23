@@ -24,6 +24,7 @@ from docling.datamodel.pipeline_options import (
     PdfBackend,
     PdfPipelineOptions,
     PictureDescriptionApiOptions,
+    PictureDescriptionVlmEngineOptions,
     PictureDescriptionVlmOptions,
     ProcessingPipeline,
     TableFormerMode,
@@ -703,17 +704,13 @@ class DoclingConverterManager:
                 self.picture_description_preset_registry,
                 "Picture description",
                 self.config.allowed_picture_description_engines,
-                None,  # No from_preset method yet
+                PictureDescriptionVlmEngineOptions.from_preset,
             )
 
         if request.picture_description_custom_config:
             self._validate_custom_config_allowed("picture_description")
 
             # If it's already a PictureDescriptionVlmEngineOptions object, validate and return
-            from docling.datamodel.pipeline_options import (
-                PictureDescriptionVlmEngineOptions,
-            )
-
             if isinstance(
                 request.picture_description_custom_config,
                 PictureDescriptionVlmEngineOptions,
@@ -762,15 +759,13 @@ class DoclingConverterManager:
                 self.code_formula_preset_registry,
                 "Code/formula",
                 self.config.allowed_code_formula_engines,
-                None,  # No from_preset method yet
+                CodeFormulaVlmOptions.from_preset,
             )
 
         if request.code_formula_custom_config:
             self._validate_custom_config_allowed("code_formula")
 
             # If it's already a CodeFormulaVlmOptions object, validate and return
-            from docling.datamodel.pipeline_options import CodeFormulaVlmOptions
-
             if isinstance(request.code_formula_custom_config, CodeFormulaVlmOptions):
                 if self.config.allowed_code_formula_engines is not None:
                     engine_type = (
@@ -960,20 +955,7 @@ class DoclingConverterManager:
         # === NEW ENGINE-BASED APPROACH for Picture Description ===
         new_picture_desc_options = self._parse_picture_description_options(request)
         if new_picture_desc_options is not None:
-            # New-style configuration provided
-            if isinstance(new_picture_desc_options, dict):
-                pipeline_options.picture_description_options = (
-                    PictureDescriptionVlmOptions.model_validate(
-                        new_picture_desc_options
-                    )
-                )
-            elif isinstance(new_picture_desc_options, str):
-                # Preset ID - for now, keep legacy behavior
-                # TODO: Update when PictureDescriptionVlmOptions has from_preset
-                pass
-            else:
-                # Already an options object
-                pipeline_options.picture_description_options = new_picture_desc_options
+            pipeline_options.picture_description_options = new_picture_desc_options
         else:
             # === LEGACY APPROACH for Picture Description ===
             if request.picture_description_local is not None:
@@ -991,9 +973,15 @@ class DoclingConverterManager:
                 )
 
         # Set picture area threshold (common to both approaches)
-        pipeline_options.picture_description_options.picture_area_threshold = (
-            request.picture_description_area_threshold
-        )
+        if pipeline_options.picture_description_options is not None:
+            pipeline_options.picture_description_options.picture_area_threshold = (
+                request.picture_description_area_threshold
+            )
+
+        # === NEW ENGINE-BASED APPROACH for Code Formula ===
+        new_code_formula_options = self._parse_code_formula_options(request)
+        if new_code_formula_options is not None:
+            pipeline_options.code_formula_options = new_code_formula_options
 
         # Forward the definition of the following attributes, if they are not none
         for attr in (
@@ -1034,15 +1022,7 @@ class DoclingConverterManager:
         # Try new preset/custom config approach first
         new_vlm_options = self._parse_vlm_options(request)
         if new_vlm_options is not None:
-            # New-style configuration provided
-            if isinstance(new_vlm_options, dict):
-                # Convert dict to VlmConvertOptions
-                pipeline_options.vlm_options = VlmConvertOptions.model_validate(
-                    new_vlm_options
-                )
-            else:
-                # Already a VlmConvertOptions object
-                pipeline_options.vlm_options = new_vlm_options
+            pipeline_options.vlm_options = new_vlm_options
         else:
             # === LEGACY APPROACH (Backwards Compatibility) ===
             # Fall back to legacy configuration
@@ -1097,20 +1077,7 @@ class DoclingConverterManager:
         # === NEW ENGINE-BASED APPROACH for Picture Description ===
         new_picture_desc_options = self._parse_picture_description_options(request)
         if new_picture_desc_options is not None:
-            # New-style configuration provided
-            if isinstance(new_picture_desc_options, dict):
-                pipeline_options.picture_description_options = (
-                    PictureDescriptionVlmOptions.model_validate(
-                        new_picture_desc_options
-                    )
-                )
-            elif isinstance(new_picture_desc_options, str):
-                # Preset ID - for now, keep legacy behavior
-                # TODO: Update when PictureDescriptionVlmOptions has from_preset
-                pass
-            else:
-                # Already an options object
-                pipeline_options.picture_description_options = new_picture_desc_options
+            pipeline_options.picture_description_options = new_picture_desc_options
         else:
             # === LEGACY APPROACH for Picture Description ===
             if request.picture_description_local is not None:
@@ -1128,9 +1095,13 @@ class DoclingConverterManager:
                 )
 
         # Set picture area threshold (common to both approaches)
-        pipeline_options.picture_description_options.picture_area_threshold = (
-            request.picture_description_area_threshold
-        )
+        if pipeline_options.picture_description_options is not None:
+            pipeline_options.picture_description_options.picture_area_threshold = (
+                request.picture_description_area_threshold
+            )
+
+        # Note: VlmPipelineOptions does not support code_formula_options
+        # Code/formula enrichment is only available in the standard PDF pipeline
 
         return pipeline_options
 
