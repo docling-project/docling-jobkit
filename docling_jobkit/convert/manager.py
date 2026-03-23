@@ -24,6 +24,7 @@ from docling.datamodel.pipeline_options import (
     PdfBackend,
     PdfPipelineOptions,
     PictureDescriptionApiOptions,
+    PictureDescriptionVlmEngineOptions,
     PictureDescriptionVlmOptions,
     ProcessingPipeline,
     TableFormerMode,
@@ -703,17 +704,13 @@ class DoclingConverterManager:
                 self.picture_description_preset_registry,
                 "Picture description",
                 self.config.allowed_picture_description_engines,
-                None,  # No from_preset method yet
+                PictureDescriptionVlmEngineOptions.from_preset,
             )
 
         if request.picture_description_custom_config:
             self._validate_custom_config_allowed("picture_description")
 
             # If it's already a PictureDescriptionVlmEngineOptions object, validate and return
-            from docling.datamodel.pipeline_options import (
-                PictureDescriptionVlmEngineOptions,
-            )
-
             if isinstance(
                 request.picture_description_custom_config,
                 PictureDescriptionVlmEngineOptions,
@@ -762,15 +759,13 @@ class DoclingConverterManager:
                 self.code_formula_preset_registry,
                 "Code/formula",
                 self.config.allowed_code_formula_engines,
-                None,  # No from_preset method yet
+                CodeFormulaVlmOptions.from_preset,
             )
 
         if request.code_formula_custom_config:
             self._validate_custom_config_allowed("code_formula")
 
             # If it's already a CodeFormulaVlmOptions object, validate and return
-            from docling.datamodel.pipeline_options import CodeFormulaVlmOptions
-
             if isinstance(request.code_formula_custom_config, CodeFormulaVlmOptions):
                 if self.config.allowed_code_formula_engines is not None:
                     engine_type = (
@@ -960,19 +955,7 @@ class DoclingConverterManager:
         # === NEW ENGINE-BASED APPROACH for Picture Description ===
         new_picture_desc_options = self._parse_picture_description_options(request)
         if new_picture_desc_options is not None:
-            # If it's a string (preset_id), convert to options object
-            if isinstance(new_picture_desc_options, str):
-                from docling.datamodel.pipeline_options import (
-                    PictureDescriptionVlmEngineOptions,
-                )
-
-                pipeline_options.picture_description_options = (
-                    PictureDescriptionVlmEngineOptions.from_preset(
-                        new_picture_desc_options
-                    )
-                )
-            else:
-                pipeline_options.picture_description_options = new_picture_desc_options
+            pipeline_options.picture_description_options = new_picture_desc_options
         else:
             # === LEGACY APPROACH for Picture Description ===
             if request.picture_description_local is not None:
@@ -1094,19 +1077,7 @@ class DoclingConverterManager:
         # === NEW ENGINE-BASED APPROACH for Picture Description ===
         new_picture_desc_options = self._parse_picture_description_options(request)
         if new_picture_desc_options is not None:
-            # If it's a string (preset_id), convert to options object
-            if isinstance(new_picture_desc_options, str):
-                from docling.datamodel.pipeline_options import (
-                    PictureDescriptionVlmEngineOptions,
-                )
-
-                pipeline_options.picture_description_options = (
-                    PictureDescriptionVlmEngineOptions.from_preset(
-                        new_picture_desc_options
-                    )
-                )
-            else:
-                pipeline_options.picture_description_options = new_picture_desc_options
+            pipeline_options.picture_description_options = new_picture_desc_options
         else:
             # === LEGACY APPROACH for Picture Description ===
             if request.picture_description_local is not None:
