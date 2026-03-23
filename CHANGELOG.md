@@ -1,3 +1,14 @@
+## [v1.14.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.14.0) - 2026-03-23
+
+### Feature
+
+* Expose classification filters for picture description ([#105](https://github.com/docling-project/docling-jobkit/issues/105)) ([`72fb382`](https://github.com/docling-project/docling-jobkit/commit/72fb3826c0d491ce4669971eb3d180ac46e42a4c))
+
+### Fix
+
+* Wire code_formula_custom_config to pipeline options ([#109](https://github.com/docling-project/docling-jobkit/issues/109)) ([`3a38e28`](https://github.com/docling-project/docling-jobkit/commit/3a38e28adc685ccc0e75b5c610e7861f3c5b80d7))
+* Watchdog: update the RQ job statusto FAILED and remove it from StartedJobRegistry ([#107](https://github.com/docling-project/docling-jobkit/issues/107)) ([`a242a66`](https://github.com/docling-project/docling-jobkit/commit/a242a66d639ce6e02c1aaa01d12117a9a7cadb04))
+
 ## [v1.13.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.13.0) - 2026-03-03
 
 ### Feature
