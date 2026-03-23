@@ -965,8 +965,11 @@ class DoclingConverterManager:
                 from docling.datamodel.pipeline_options import (
                     PictureDescriptionVlmEngineOptions,
                 )
+
                 pipeline_options.picture_description_options = (
-                    PictureDescriptionVlmEngineOptions.from_preset(new_picture_desc_options)
+                    PictureDescriptionVlmEngineOptions.from_preset(
+                        new_picture_desc_options
+                    )
                 )
             else:
                 pipeline_options.picture_description_options = new_picture_desc_options
@@ -1096,8 +1099,11 @@ class DoclingConverterManager:
                 from docling.datamodel.pipeline_options import (
                     PictureDescriptionVlmEngineOptions,
                 )
+
                 pipeline_options.picture_description_options = (
-                    PictureDescriptionVlmEngineOptions.from_preset(new_picture_desc_options)
+                    PictureDescriptionVlmEngineOptions.from_preset(
+                        new_picture_desc_options
+                    )
                 )
             else:
                 pipeline_options.picture_description_options = new_picture_desc_options
