@@ -69,7 +69,11 @@ rq = [
     "msgpack~=1.1",
 ]
 ray = [
-    'ray~=2.30 ; python_version < "3.14"',
+    "ray[serve]~=2.30 ; python_version < '3.14'",
+    "redis[hiredis]>=4.2,<8.0.0",
+    "msgpack~=1.1",
+    "psutil>=6.0.0",
+    "codeflare-sdk>=0.20.0; python_version >= '3.11' and python_version < '3.14'",
 ]
 gdrive = [
     "google-api-python-client>=2.183.0",
@@ -90,6 +94,7 @@ dev = [
     "ruff>=0.9.6",
     "types-pyyaml>=6.0.12.20250915",
     "aiohttp>=3.13.3",
+    "types-psutil>=7.2.2.20260130",
 ]
 
 # [tool.uv.sources]
@@ -209,6 +214,7 @@ module = [
     "googleapiclient.*",
     "google_auth_oauthlib.*",
     "ray.*",
+    "codeflare_sdk.*",
 ]
 ignore_missing_imports = true
 

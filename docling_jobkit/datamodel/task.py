@@ -1,7 +1,7 @@
 import datetime
 import warnings
 from functools import partial
-from typing import Annotated, Optional, Union
+from typing import Annotated, Any, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -46,6 +46,7 @@ class Task(BaseModel):
     callbacks: list[CallbackSpec] = []
     # scratch_dir: Optional[Path] = None
     processing_meta: Optional[TaskProcessingMeta] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     error_message: Optional[str] = None
     created_at: datetime.datetime = Field(
         default_factory=partial(datetime.datetime.now, datetime.timezone.utc)
