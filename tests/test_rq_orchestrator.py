@@ -286,6 +286,38 @@ async def test_clear_converters_clears_worker_cache():
 
 
 @pytest.mark.asyncio
+async def test_on_result_fetched_rq():
+    """on_result_fetched sets EXPIRE on result key, pops tracking dict, deletes RQ job."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    config = RQOrchestratorConfig(result_removal_delay=42)
+    orch = RQOrchestrator(config=config)
+
+    task_id = "test-task-id"
+    result_key = f"{config.results_prefix}:{task_id}"
+    orch._task_result_keys[task_id] = result_key
+    # Seed self.tasks so super().delete_task() doesn't raise
+    from docling_jobkit.datamodel.task import Task
+
+    orch.tasks[task_id] = MagicMock(spec=Task)
+
+    # Mock async redis expire
+    orch._async_redis_conn = AsyncMock()
+    orch._async_redis_conn.expire = AsyncMock(return_value=True)
+
+    # Mock RQ Job.fetch to raise (job already gone)
+    with patch("docling_jobkit.orchestrators.rq.orchestrator.Job") as mock_job_cls:
+        mock_job_cls.fetch.side_effect = Exception("job gone")
+        await orch.on_result_fetched(task_id)
+
+    # Result key must have had EXPIRE set with result_removal_delay
+    orch._async_redis_conn.expire.assert_called_once_with(result_key, 42)
+    # In-memory tracking must be cleaned up
+    assert task_id not in orch._task_result_keys
+    assert task_id not in orch.tasks
+
+
+@pytest.mark.asyncio
 async def test_convert_with_callbacks(orchestrator: RQOrchestrator, callback_server_rq):
     """Test document conversion with callback invocations using RQ orchestrator."""
     callback_server = callback_server_rq

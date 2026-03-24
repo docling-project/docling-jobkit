@@ -702,3 +702,17 @@ class RayOrchestrator(BaseOrchestrator):
         }
 
         return stats
+
+    async def on_result_fetched(self, task_id: str) -> None:
+        """Set Redis EXPIRE on the result key for crash-safe single-use deletion.
+
+        The base class delete_task() only removes in-memory tracking and closes
+        WebSocket connections — it does NOT delete the Redis result key. This
+        override corrects that by expiring the key via Redis, with no sleeping
+        coroutine.
+        """
+        result_key = f"{self.config.results_prefix}:task:{task_id}:result"
+        await self.redis_manager.expire_result(
+            result_key, self.config.result_removal_delay
+        )
+        await super().delete_task(task_id)

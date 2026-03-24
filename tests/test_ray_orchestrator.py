@@ -315,3 +315,55 @@ async def test_metadata_field_backward_compatibility():
     # Should be able to add metadata
     task.metadata["user_id"] = "test_user"
     assert task.metadata["user_id"] == "test_user"
+
+
+@pytest.mark.asyncio
+async def test_expire_result():
+    """RedisStateManager.expire_result calls redis.expire with correct args."""
+    from unittest.mock import AsyncMock
+
+    from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
+
+    manager = RedisStateManager(redis_url="redis://localhost:6379/")
+    manager.redis = AsyncMock()
+    manager.redis.expire = AsyncMock(return_value=True)
+
+    await manager.expire_result("mykey:task:abc:result", 42)
+
+    manager.redis.expire.assert_called_once_with("mykey:task:abc:result", 42)
+
+
+@pytest.mark.asyncio
+async def test_on_result_fetched_ray():
+    """on_result_fetched calls expire_result with correct key and result_removal_delay."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
+
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/",
+        results_prefix="docling:ray:results",
+        result_removal_delay=99,
+    )
+
+    with patch(
+        "docling_jobkit.orchestrators.ray.orchestrator.RayOrchestrator.__init__",
+        return_value=None,
+    ):
+        from docling_jobkit.orchestrators.ray.orchestrator import RayOrchestrator
+
+        orch = RayOrchestrator.__new__(RayOrchestrator)
+        orch.config = config
+        orch.tasks = {}
+        orch.notifier = None
+        orch.redis_manager = AsyncMock()
+        orch.redis_manager.expire_result = AsyncMock()
+
+        task_id = "abc-123"
+        orch.tasks[task_id] = MagicMock()
+
+        await orch.on_result_fetched(task_id)
+
+    expected_key = f"{config.results_prefix}:task:{task_id}:result"
+    orch.redis_manager.expire_result.assert_called_once_with(expected_key, 99)
+    assert task_id not in orch.tasks

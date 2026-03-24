@@ -110,16 +110,7 @@ class AsyncLocalWorker:
 
                     return processed_results
 
-                # Run the prediction in a thread to avoid blocking the event loop.
-                # Get the current event loop
-                # loop = asyncio.get_event_loop()
-                # future = asyncio.run_coroutine_threadsafe(
-                #     run_conversion(),
-                #     loop=loop
-                # )
-                # response = future.result()
-
-                # Run in a thread
+                # Run in a thread to avoid blocking the event loop.
                 task_result = await asyncio.to_thread(
                     run_task,
                 )

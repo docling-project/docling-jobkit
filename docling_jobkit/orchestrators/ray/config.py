@@ -49,6 +49,10 @@ class RayOrchestratorConfig(BaseSettings):
         default=3600 * 4,
         description="Time-to-live for task results in seconds (4 hours)",
     )
+    result_removal_delay: int = Field(
+        default=300,
+        description="Seconds until result key expires after fetch (single-use mode)",
+    )
     results_prefix: str = Field(
         default="docling:ray:results", description="Prefix for result keys in Redis"
     )

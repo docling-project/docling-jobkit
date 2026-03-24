@@ -43,6 +43,7 @@ class RQOrchestratorConfig(BaseModel):
     redis_max_connections: int = 50
     redis_socket_timeout: Optional[float] = None
     redis_socket_connect_timeout: Optional[float] = None
+    result_removal_delay: int = 300  # seconds until result key expires after fetch
 
 
 class _TaskUpdate(BaseModel):
@@ -444,6 +445,26 @@ class RQOrchestrator(BaseOrchestrator):
             # Job may not exist or already be deleted - this is not an error
             _log.debug(f"Could not delete RQ job {task_id=}: {e}")
 
+        await super().delete_task(task_id)
+
+    async def on_result_fetched(self, task_id: str) -> None:
+        """Set Redis EXPIRE on the result key instead of deleting immediately.
+
+        Crash-safe: the TTL persists in Redis across API restarts.
+        No sleeping coroutine accumulated.
+        """
+        result_key = self._task_result_keys.get(
+            task_id, f"{self.config.results_prefix}:{task_id}"
+        )
+        await self._async_redis_conn.expire(
+            result_key, self.config.result_removal_delay
+        )
+        self._task_result_keys.pop(task_id, None)
+        try:
+            job = Job.fetch(task_id, connection=self._redis_conn)
+            job.delete()
+        except Exception as e:
+            _log.debug(f"Could not delete RQ job {task_id=}: {e}")
         await super().delete_task(task_id)
 
     async def warm_up_caches(self):

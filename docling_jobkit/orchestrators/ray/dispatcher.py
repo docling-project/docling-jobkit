@@ -10,6 +10,9 @@ import ray
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
+from docling_jobkit.orchestrators.ray.logging_utils import (
+    configure_ray_actor_logging,
+)
 from docling_jobkit.orchestrators.ray.models import TaskUpdate
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 
@@ -44,6 +47,8 @@ class RayTaskDispatcher:
             config: Orchestrator configuration
             deployment_handle: Ray Serve deployment handle for processing tasks
         """
+        configure_ray_actor_logging(config.log_level)
+
         self.config = config
         self.deployment_handle = deployment_handle
 
