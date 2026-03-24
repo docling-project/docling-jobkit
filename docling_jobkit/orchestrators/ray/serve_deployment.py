@@ -461,6 +461,10 @@ def create_deployment(
     Returns:
         Configured Ray Serve deployment
     """
+    max_ongoing_requests = (
+        config.max_ongoing_requests_per_replica or config.target_requests_per_replica
+    )
+
     # Configure autoscaling
     autoscaling_config = {
         "min_replicas": config.min_actors,
@@ -490,7 +494,8 @@ def create_deployment(
     _log.info(
         f"Creating Ray Serve deployment '{deployment_name}' with autoscaling: "
         f"min={config.min_actors}, max={config.max_actors}, "
-        f"target_requests={config.target_requests_per_replica}"
+        f"target_requests={config.target_requests_per_replica}, "
+        f"max_ongoing_requests={max_ongoing_requests}"
     )
 
     # Create deployment with configuration
@@ -498,6 +503,7 @@ def create_deployment(
         name=deployment_name,
         autoscaling_config=autoscaling_config,
         ray_actor_options=ray_actor_options,
+        max_ongoing_requests=max_ongoing_requests,
     ).bind(
         converter_manager_config=converter_manager_config,
         config=config,

@@ -367,3 +367,60 @@ async def test_on_result_fetched_ray():
     expected_key = f"{config.results_prefix}:task:{task_id}:result"
     orch.redis_manager.expire_result.assert_called_once_with(expected_key, 99)
     assert task_id not in orch.tasks
+
+
+def test_create_deployment_sets_hard_replica_concurrency_limit():
+    """Ray Serve deployment should set a hard per-replica concurrency cap."""
+    from unittest.mock import MagicMock, patch
+
+    from docling_jobkit.orchestrators.ray.serve_deployment import create_deployment
+
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/",
+        target_requests_per_replica=1,
+        max_ongoing_requests_per_replica=1,
+    )
+
+    mock_bound_deployment = MagicMock()
+    mock_options_result = MagicMock()
+    mock_options_result.bind.return_value = mock_bound_deployment
+
+    with patch(
+        "docling_jobkit.orchestrators.ray.serve_deployment.DocumentProcessorDeployment.options",
+        return_value=mock_options_result,
+    ) as mock_options:
+        deployment = create_deployment(
+            converter_manager_config=MagicMock(),
+            config=config,
+            redis_url=config.redis_url,
+        )
+
+    assert deployment is mock_bound_deployment
+    assert mock_options.call_args.kwargs["max_ongoing_requests"] == 1
+
+
+def test_create_deployment_defaults_replica_cap_to_autoscaling_target():
+    """Unset hard cap should inherit the autoscaling target."""
+    from unittest.mock import MagicMock, patch
+
+    from docling_jobkit.orchestrators.ray.serve_deployment import create_deployment
+
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/",
+        target_requests_per_replica=2,
+    )
+
+    mock_options_result = MagicMock()
+    mock_options_result.bind.return_value = MagicMock()
+
+    with patch(
+        "docling_jobkit.orchestrators.ray.serve_deployment.DocumentProcessorDeployment.options",
+        return_value=mock_options_result,
+    ) as mock_options:
+        create_deployment(
+            converter_manager_config=MagicMock(),
+            config=config,
+            redis_url=config.redis_url,
+        )
+
+    assert mock_options.call_args.kwargs["max_ongoing_requests"] == 2

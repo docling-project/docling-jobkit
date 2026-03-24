@@ -22,6 +22,7 @@ from docling_jobkit.datamodel.s3_coords import S3Coordinates
 from docling_jobkit.datamodel.task import Task, TaskSource
 from docling_jobkit.datamodel.task_meta import TaskStatus, TaskType
 from docling_jobkit.datamodel.task_targets import TaskTarget
+from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
     OrchestratorError,
@@ -104,6 +105,8 @@ class RayOrchestrator(BaseOrchestrator):
         super().__init__()
         self.config = config
         self.cm = converter_manager
+        assert self.config.redis_gate_concurrency is not None
+        self._redis_gate = RedisCallerGate(self.config.redis_gate_concurrency)
 
         # Initialize Redis state manager
         self.redis_manager = RedisStateManager(
@@ -378,89 +381,75 @@ class RayOrchestrator(BaseOrchestrator):
         Raises:
             QueueLimitExceededError: If queue limit exceeded and rejection enabled
         """
-        # Ensure Redis is connected
-        await self.redis_manager.connect()
+        async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
+            # Ensure Redis is connected
+            await self.redis_manager.connect()
 
-        if options is not None and convert_options is None:
-            convert_options = options
-            warnings.warn(
-                "'options' is deprecated and will be removed in a future version. "
-                "Use 'convert_options' instead.",
-                DeprecationWarning,
-                stacklevel=2,
+            if options is not None and convert_options is None:
+                convert_options = options
+                warnings.warn(
+                    "'options' is deprecated and will be removed in a future version. "
+                    "Use 'convert_options' instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+
+            # Create task
+            task_id = str(uuid.uuid4())
+            chunking_export_options = chunking_export_options or ChunkingExportOptions()
+
+            # Convert DocumentStream sources to FileSource for JSON serialization
+            ray_sources: list[TaskSource] = []
+            for source in sources:
+                if isinstance(source, DocumentStream):
+                    encoded_doc = base64.b64encode(source.stream.read()).decode()
+                    ray_sources.append(
+                        FileSource(filename=source.name, base64_string=encoded_doc)
+                    )
+                elif isinstance(source, (HttpSource, FileSource, S3Coordinates)):
+                    ray_sources.append(source)
+
+            task = Task(
+                task_id=task_id,
+                task_type=task_type,
+                sources=ray_sources,
+                target=target,
+                convert_options=convert_options,
+                chunking_options=chunking_options,
+                chunking_export_options=chunking_export_options,
+                callbacks=callbacks or [],
+                metadata=metadata or {},
             )
 
-        # Create task
-        task_id = str(uuid.uuid4())
-        chunking_export_options = chunking_export_options or ChunkingExportOptions()
+            user_id = task.metadata.get("user_id", "default")
+            _log.info(
+                f"Enqueueing task {task_id} for user {user_id} with {len(sources)} documents"
+            )
 
-        # Convert DocumentStream sources to FileSource for JSON serialization
-        ray_sources: list[TaskSource] = []
-        for source in sources:
-            if isinstance(source, DocumentStream):
-                encoded_doc = base64.b64encode(source.stream.read()).decode()
-                ray_sources.append(
-                    FileSource(filename=source.name, base64_string=encoded_doc)
-                )
-            elif isinstance(source, (HttpSource, FileSource, S3Coordinates)):
-                ray_sources.append(source)
-
-        task = Task(
-            task_id=task_id,
-            task_type=task_type,
-            sources=ray_sources,
-            target=target,
-            convert_options=convert_options,
-            chunking_options=chunking_options,
-            chunking_export_options=chunking_export_options,
-            callbacks=callbacks or [],
-            metadata=metadata or {},
-        )
-
-        # Extract user_id from metadata or use default
-        user_id = task.metadata.get("user_id", "default")
-
-        _log.info(
-            f"Enqueueing task {task_id} for user {user_id} with {len(sources)} documents"
-        )
-
-        # Check user capacity (queue limits)
-        can_enqueue, reason = await self.redis_manager.check_user_can_enqueue(
-            user_id, len(sources)
-        )
-
-        if not can_enqueue:
-            if self.config.enable_queue_limit_rejection:
-                # Return 429-style error
-                _log.warning(f"Rejecting task for user {user_id}: {reason}")
-                raise QueueLimitExceededError(
-                    f"Queue limit exceeded for user {user_id}: {reason}"
-                )
-            else:
-                # Just log warning and enqueue anyway
+            can_enqueue, reason = await self.redis_manager.check_user_can_enqueue(
+                user_id, len(sources)
+            )
+            if not can_enqueue:
+                if self.config.enable_queue_limit_rejection:
+                    _log.warning(f"Rejecting task for user {user_id}: {reason}")
+                    raise QueueLimitExceededError(
+                        f"Queue limit exceeded for user {user_id}: {reason}"
+                    )
                 _log.warning(
                     f"User {user_id} exceeding limits but enqueueing: {reason}"
                 )
 
-        # Store task metadata in Redis
-        await self.redis_manager.set_task_metadata(
-            task_id=task_id,
-            user_id=user_id,
-            status=TaskStatus.PENDING,
-        )
+            await self.redis_manager.set_task_metadata(
+                task_id=task_id,
+                user_id=user_id,
+                status=TaskStatus.PENDING,
+            )
+            await self.redis_manager.set_task_dispatch_state(task_id, "queued")
+            await self.redis_manager.enqueue_task(user_id, task)
+            await self.init_task_tracking(task)
 
-        # Set initial dispatch state to "queued"
-        await self.redis_manager.set_task_dispatch_state(task_id, "queued")
-
-        # Enqueue to user's Redis queue
-        await self.redis_manager.enqueue_task(user_id, task)
-
-        # Initialize local tracking
-        await self.init_task_tracking(task)
-
-        _log.debug(f"Task {task_id} enqueued successfully")
-
-        return task
+            _log.debug(f"Task {task_id} enqueued successfully")
+            return task
 
     async def queue_size(self) -> int:
         """Get total queue size across all users.
@@ -489,21 +478,17 @@ class RayOrchestrator(BaseOrchestrator):
         Returns:
             Approximate queue position or None if not found
         """
-        # Get task metadata to find user
-        metadata = await self.redis_manager.get_task_metadata(task_id)
-        if not metadata:
-            return None
+        async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
+            metadata = await self.redis_manager.get_task_metadata(task_id)
+            if not metadata:
+                return None
 
-        user_id = metadata.get("user_id")
-        if not user_id:
-            return None
+            user_id = metadata.get("user_id")
+            if not user_id:
+                return None
 
-        # Get position in user's queue
-        # This is a simplified implementation - actual position depends on
-        # fair scheduling across all users
-        queue_size = await self.redis_manager.get_user_queue_size(user_id)
-
-        return queue_size if queue_size > 0 else None
+            queue_size = await self.redis_manager.get_user_queue_size(user_id)
+            return queue_size if queue_size > 0 else None
 
     async def task_result(
         self,
@@ -517,7 +502,8 @@ class RayOrchestrator(BaseOrchestrator):
         Returns:
             Task result or None if not found
         """
-        return await self.redis_manager.get_task_result(task_id)
+        async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
+            return await self.redis_manager.get_task_result(task_id)
 
     async def process_queue(self):
         """Start the dispatcher and pub/sub listener.

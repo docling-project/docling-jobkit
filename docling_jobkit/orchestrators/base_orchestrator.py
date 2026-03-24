@@ -21,6 +21,10 @@ class OrchestratorError(Exception):
     pass
 
 
+class RedisBackpressureError(OrchestratorError):
+    pass
+
+
 class TaskNotFoundError(OrchestratorError):
     pass
 
