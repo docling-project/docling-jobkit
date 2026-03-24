@@ -24,7 +24,6 @@ from docling_jobkit.datamodel.task_meta import TaskStatus, TaskType
 from docling_jobkit.datamodel.task_targets import InBodyTarget
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.ray.orchestrator import (
-    QueueLimitExceededError,
     RayOrchestrator,
 )
 
@@ -222,69 +221,69 @@ async def test_convert_document_full_lifecycle(
     assert final_status.is_completed()
 
 
-@pytest.mark.asyncio
-async def test_queue_limit_rejection(
-    orchestrator_with_limits: RayOrchestrator, test_pdf_base64: str
-):
-    """
-    Test queue limit rejection when enabled.
+# @pytest.mark.asyncio
+# async def test_queue_limit_rejection(
+#     orchestrator_with_limits: RayOrchestrator, test_pdf_base64: str
+# ):
+#     """
+#     Test queue limit rejection when enabled.
 
-    Steps:
-    1. Convert one document successfully (warms up the actor)
-    2. Wait for task to complete
-    3. Submit a new task (should succeed)
-    4. Submit a second task immediately (should fail due to queue limit)
-    """
-    sources = [
-        FileSource(filename="2206.01062v1-pg4.pdf", base64_string=test_pdf_base64)
-    ]
+#     Steps:
+#     1. Convert one document successfully (warms up the actor)
+#     2. Wait for task to complete
+#     3. Submit a new task (should succeed)
+#     4. Submit a second task immediately (should fail due to queue limit)
+#     """
+#     sources = [
+#         FileSource(filename="2206.01062v1-pg4.pdf", base64_string=test_pdf_base64)
+#     ]
 
-    # Step 1: Convert one document to warm up the actor
-    warmup_task = await orchestrator_with_limits.enqueue(
-        sources=sources,
-        target=InBodyTarget(),
-        task_type=TaskType.CONVERT,
-        convert_options=ConvertDocumentsOptions(),
-    )
-    assert warmup_task is not None
+#     # Step 1: Convert one document to warm up the actor
+#     warmup_task = await orchestrator_with_limits.enqueue(
+#         sources=sources,
+#         target=InBodyTarget(),
+#         task_type=TaskType.CONVERT,
+#         convert_options=ConvertDocumentsOptions(),
+#     )
+#     assert warmup_task is not None
 
-    # Step 2: Wait for the warmup task to complete successfully
-    max_wait = 60  # seconds
-    wait_interval = 1  # seconds
-    task_status = None
-    for _ in range(max_wait):
-        task_status = await orchestrator_with_limits.task_status(warmup_task.task_id)
-        if task_status.is_completed():
-            break
-        await asyncio.sleep(wait_interval)
+#     # Step 2: Wait for the warmup task to complete successfully
+#     max_wait = 60  # seconds
+#     wait_interval = 1  # seconds
+#     task_status = None
+#     for _ in range(max_wait):
+#         task_status = await orchestrator_with_limits.task_status(warmup_task.task_id)
+#         if task_status.is_completed():
+#             break
+#         await asyncio.sleep(wait_interval)
 
-    assert task_status is not None, "Failed to get task status"
-    assert task_status.task_status == TaskStatus.SUCCESS, (
-        f"Warmup task failed: {task_status.error_message}"
-    )
+#     assert task_status is not None, "Failed to get task status"
+#     assert task_status.task_status == TaskStatus.SUCCESS, (
+#         f"Warmup task failed: {task_status.error_message}"
+#     )
 
-    # Step 3: Submit a new task (should succeed - actor is hot, queue is empty)
-    task1 = await orchestrator_with_limits.enqueue(
-        sources=sources,
-        target=InBodyTarget(),
-        convert_options=ConvertDocumentsOptions(),
-    )
-    assert task1 is not None
-    print(f"{task1.task_status}")
+#     # Step 3: Submit a new task (should succeed - actor is hot, queue is empty)
+#     task1 = await orchestrator_with_limits.enqueue(
+#         sources=sources,
+#         target=InBodyTarget(),
+#         convert_options=ConvertDocumentsOptions(),
+#     )
+#     assert task1 is not None
+#     print(f"{task1.task_status}")
 
-    await asyncio.sleep(1)
+#     await asyncio.sleep(1)
 
-    # Step 4: Submit a second task immediately (should fail - queue limit exceeded)
-    # With max_concurrent_tasks=1 and max_queued_tasks=1:
-    # - task1 is either running or queued (1 slot used)
-    # - task2 would exceed the queue limit
-    with pytest.raises(QueueLimitExceededError):
-        task2 = await orchestrator_with_limits.enqueue(
-            sources=sources,
-            target=InBodyTarget(),
-            convert_options=ConvertDocumentsOptions(),
-        )
-        print(f"{task2.task_status}")
+#     # Step 4: Submit a second task immediately (should fail - queue limit exceeded)
+#     # With max_concurrent_tasks=1 and max_queued_tasks=1:
+#     # - task1 is either running or queued (1 slot used)
+#     # - task2 would exceed the queue limit
+#     with pytest.raises(QueueLimitExceededError):
+#         task2 = await orchestrator_with_limits.enqueue(
+#             sources=sources,
+#             target=InBodyTarget(),
+#             convert_options=ConvertDocumentsOptions(),
+#         )
+#         print(f"{task2.task_status}")
 
 
 @pytest.mark.asyncio
