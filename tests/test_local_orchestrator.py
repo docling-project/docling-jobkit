@@ -611,6 +611,40 @@ async def test_worker_cms_tracking():
 
 
 @pytest.mark.asyncio
+async def test_on_result_fetched_local():
+    """on_result_fetched schedules an asyncio task that deletes the result after result_removal_delay."""
+    from unittest.mock import MagicMock
+
+    from docling_jobkit.convert.manager import (
+        DoclingConverterManager,
+        DoclingConverterManagerConfig,
+    )
+    from docling_jobkit.orchestrators.local.orchestrator import (
+        LocalOrchestrator,
+        LocalOrchestratorConfig,
+    )
+
+    config = LocalOrchestratorConfig(result_removal_delay=1)  # 1s for fast test
+    cm = DoclingConverterManager(config=DoclingConverterManagerConfig())
+    orch = LocalOrchestrator(config=config, converter_manager=cm)
+
+    from docling_jobkit.datamodel.task import Task
+
+    task_id = "test-task-id"
+    orch.tasks[task_id] = MagicMock(spec=Task)
+    orch._task_results[task_id] = MagicMock()
+
+    await orch.on_result_fetched(task_id)
+
+    # Result not deleted yet (delay not elapsed)
+    assert task_id in orch._task_results
+
+    # Wait for deletion
+    await asyncio.sleep(1.5)
+    assert task_id not in orch._task_results
+
+
+@pytest.mark.asyncio
 async def test_convert_with_callbacks(orchestrator: LocalOrchestrator, callback_server):
     """Test document conversion with callback invocations."""
     options = ConvertDocumentsOptions()

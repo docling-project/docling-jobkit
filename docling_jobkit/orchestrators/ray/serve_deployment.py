@@ -26,6 +26,9 @@ from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus, TaskType
 from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
+from docling_jobkit.orchestrators.ray.logging_utils import (
+    configure_ray_actor_logging,
+)
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 
 _log = logging.getLogger(__name__)
@@ -65,6 +68,8 @@ class DocumentProcessorDeployment:
             config: Orchestrator configuration
             redis_url: Redis connection URL for state management
         """
+        configure_ray_actor_logging(config.log_level)
+
         self.config = config
         self.converter_manager_config = converter_manager_config
 

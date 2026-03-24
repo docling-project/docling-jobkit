@@ -104,6 +104,10 @@ class BaseOrchestrator(ABC):
         if task_id in self.tasks:
             del self.tasks[task_id]
 
+    async def on_result_fetched(self, task_id: str) -> None:
+        """Called after a result has been successfully returned to the caller.
+        Subclasses override to implement single-use cleanup strategies."""
+
     async def clear_results(self, older_than: float = 0.0):
         cutoff_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
             seconds=older_than

@@ -31,6 +31,7 @@ class LocalOrchestratorConfig(BaseModel):
     num_workers: int = 2
     shared_models: bool = False
     scratch_dir: Optional[Path] = None
+    result_removal_delay: int = 300  # seconds until result is deleted after fetch
 
 
 class LocalOrchestrator(BaseOrchestrator):
@@ -47,6 +48,7 @@ class LocalOrchestrator(BaseOrchestrator):
         self.chunker_manager = DocumentChunkerManager()
         self.worker_cms: list[DoclingConverterManager] = []
         self._task_results: dict[str, DoclingTaskResult] = {}
+        self._background_tasks: set[asyncio.Task] = set()
         self.scratch_dir = self.config.scratch_dir or Path(
             tempfile.mkdtemp(prefix="docling_")
         )
@@ -134,6 +136,17 @@ class LocalOrchestrator(BaseOrchestrator):
         if task_id in self._task_results:
             del self._task_results[task_id]
         await super().delete_task(task_id)
+
+    async def on_result_fetched(self, task_id: str) -> None:
+        """Schedule deletion of result after result_removal_delay seconds."""
+
+        async def _delayed_delete():
+            await asyncio.sleep(self.config.result_removal_delay)
+            await self.delete_task(task_id=task_id)
+
+        bg_task = asyncio.create_task(_delayed_delete())
+        self._background_tasks.add(bg_task)
+        bg_task.add_done_callback(self._background_tasks.discard)
 
     async def clear_converters(self):
         self.cm.clear_cache()

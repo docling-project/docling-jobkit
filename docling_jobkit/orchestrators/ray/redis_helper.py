@@ -468,6 +468,21 @@ class RedisStateManager:
 
         return None
 
+    async def expire_result(self, result_key: str, ttl: int) -> None:
+        """Set TTL on an existing result key.
+
+        Used by on_result_fetched() to implement crash-safe single-use deletion.
+        Redis expires the key automatically — no asyncio sleeping needed.
+
+        Args:
+            result_key: Full Redis key of the result
+            ttl: Seconds until the key expires
+        """
+        if not self.redis:
+            await self.connect()
+        redis = self._ensure_redis()
+        await redis.expire(result_key, ttl)
+
     # User Limits Operations
 
     async def get_user_limits(self, user_id: str) -> UserLimits:
