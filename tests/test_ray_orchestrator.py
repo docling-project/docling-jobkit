@@ -74,6 +74,9 @@ async def orchestrator(artifacts_path: Path, redis_url: str):
         max_queued_tasks=5,
         enable_queue_limit_rejection=False,
         ray_address=None,  # Use local Ray
+        ray_runtime_env={
+            "excludes": ["*"]  # Don't package anything
+        },
     )
 
     cm_config = DoclingConverterManagerConfig(
@@ -109,6 +112,9 @@ async def orchestrator_with_limits(artifacts_path: Path, redis_url: str):
         max_queued_tasks=1,  # Only 1 task can be queued
         enable_queue_limit_rejection=True,  # Enable rejection
         ray_address=None,  # Use local Ray
+        ray_runtime_env={
+            "excludes": ["*"]  # Don't package anything
+        },
     )
 
     cm_config = DoclingConverterManagerConfig(
