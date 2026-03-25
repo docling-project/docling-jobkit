@@ -39,6 +39,7 @@ def _make_orchestrator_with_task():
     orch.notifier = None
     orch._task_result_keys = {}
     orch._async_redis_conn = MagicMock()
+    orch._store_task_in_redis = AsyncMock()
 
     task = Task(
         task_id="test-task-1",

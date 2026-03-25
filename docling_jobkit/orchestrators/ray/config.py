@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,6 +42,22 @@ class RayOrchestratorConfig(BaseSettings):
     )
     redis_socket_connect_timeout: Optional[float] = Field(
         default=None, description="Socket connect timeout for Redis"
+    )
+    redis_gate_concurrency: Optional[int] = Field(
+        default=None,
+        description="Concurrent caller-facing Redis operations allowed",
+    )
+    redis_gate_reserved_connections: int = Field(
+        default=10,
+        description="Reserved Redis pool connections kept for background/internal work",
+    )
+    redis_gate_wait_timeout: float = Field(
+        default=0.25,
+        description="Seconds to wait for caller-facing Redis gate acquisition",
+    )
+    redis_gate_status_poll_wait_timeout: float = Field(
+        default=5.0,
+        description="Seconds to wait for status-poll gate acquisition",
     )
 
     # Result Storage
@@ -123,7 +139,16 @@ class RayOrchestratorConfig(BaseSettings):
     )
     target_requests_per_replica: int = Field(
         default=1,
+        ge=1,
         description="Target number of concurrent requests per replica for autoscaling",
+    )
+    max_ongoing_requests_per_replica: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Hard cap on in-flight requests per Ray Serve replica. "
+            "Defaults to target_requests_per_replica when unset."
+        ),
     )
     upscale_delay_s: float = Field(
         default=30.0,
@@ -203,3 +228,22 @@ class RayOrchestratorConfig(BaseSettings):
     log_level: str = Field(
         default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR)"
     )
+
+    @model_validator(mode="after")
+    def validate_request_concurrency(self) -> "RayOrchestratorConfig":
+        """Ensure Serve autoscaling target does not exceed the hard replica cap."""
+        if (
+            self.max_ongoing_requests_per_replica is not None
+            and self.target_requests_per_replica > self.max_ongoing_requests_per_replica
+        ):
+            raise ValueError(
+                "target_requests_per_replica must be <= "
+                "max_ongoing_requests_per_replica"
+            )
+
+        if self.redis_gate_concurrency is None:
+            self.redis_gate_concurrency = max(
+                1, self.redis_max_connections - self.redis_gate_reserved_connections
+            )
+
+        return self

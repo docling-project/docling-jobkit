@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import datetime
+import json
 import logging
 import uuid
 import warnings
@@ -10,8 +11,9 @@ from typing import Any, Optional
 import msgpack
 import redis
 import redis.asyncio as async_redis
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from rq import Queue
+from rq.exceptions import NoSuchJobError
 from rq.job import Job, JobStatus
 from rq.registry import StartedJobRegistry
 
@@ -23,7 +25,8 @@ from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
-from docling_jobkit.datamodel.task_meta import TaskStatus, TaskType
+from docling_jobkit.datamodel.task_meta import TaskProcessingMeta, TaskStatus, TaskType
+from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
     TaskNotFoundError,
@@ -43,7 +46,21 @@ class RQOrchestratorConfig(BaseModel):
     redis_max_connections: int = 50
     redis_socket_timeout: Optional[float] = None
     redis_socket_connect_timeout: Optional[float] = None
+    redis_gate_concurrency: Optional[int] = None
+    redis_gate_reserved_connections: int = 10
+    redis_gate_wait_timeout: float = 0.25
+    redis_gate_status_poll_wait_timeout: float = 5.0
+    zombie_reaper_interval: float = 300.0
+    zombie_reaper_max_age: float = 3600.0
     result_removal_delay: int = 300  # seconds until result key expires after fetch
+
+    @model_validator(mode="after")
+    def resolve_redis_gate_concurrency(self) -> "RQOrchestratorConfig":
+        if self.redis_gate_concurrency is None:
+            self.redis_gate_concurrency = max(
+                1, self.redis_max_connections - self.redis_gate_reserved_connections
+            )
+        return self
 
 
 class _TaskUpdate(BaseModel):
@@ -53,12 +70,18 @@ class _TaskUpdate(BaseModel):
     error_message: Optional[str] = None
 
 
+class _RQJobGone:
+    """Sentinel: the RQ job has been deleted or TTL-expired."""
+
+
 _HEARTBEAT_TTL = 60  # seconds before an unrefreshed key expires
 _HEARTBEAT_INTERVAL = 20  # seconds between heartbeat writes
 _WATCHDOG_INTERVAL = 30.0  # seconds between watchdog scans
 _WATCHDOG_GRACE_PERIOD = (
     90.0  # don't flag tasks started less than this many seconds ago
 )
+_RQ_JOB_GONE = _RQJobGone()
+_TASK_METADATA_PREFIX = "docling:tasks:"
 
 
 class RQOrchestrator(BaseOrchestrator):
@@ -92,6 +115,8 @@ class RQOrchestrator(BaseOrchestrator):
     ):
         super().__init__()
         self.config = config
+        assert self.config.redis_gate_concurrency is not None
+        self._redis_gate = RedisCallerGate(self.config.redis_gate_concurrency)
         self._redis_conn, self._rq_queue = self.make_rq_queue(self.config)
 
         # Create async connection pool with same configuration
@@ -105,6 +130,7 @@ class RQOrchestrator(BaseOrchestrator):
             connection_pool=self._async_redis_pool
         )
         self._task_result_keys: dict[str, str] = {}
+        self._rq_job_function = "docling_jobkit.orchestrators.rq.worker.docling_task"
         _log.info(
             f"RQ async Redis connection pool initialized with max_connections="
             f"{config.redis_max_connections}"
@@ -126,116 +152,339 @@ class RQOrchestrator(BaseOrchestrator):
         callbacks: list[CallbackSpec] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Task:
-        if options is not None and convert_options is None:
-            convert_options = options
-            warnings.warn(
-                "'options' is deprecated and will be removed in a future version. "
-                "Use 'conversion_options' instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        task_id = str(uuid.uuid4())
-        rq_sources: list[HttpSource | FileSource] = []
-        for source in sources:
-            if isinstance(source, DocumentStream):
-                encoded_doc = base64.b64encode(source.stream.read()).decode()
-                rq_sources.append(
-                    FileSource(filename=source.name, base64_string=encoded_doc)
+        async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
+            if options is not None and convert_options is None:
+                convert_options = options
+                warnings.warn(
+                    "'options' is deprecated and will be removed in a future version. "
+                    "Use 'conversion_options' instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
                 )
-            elif isinstance(source, (HttpSource | FileSource)):
-                rq_sources.append(source)
-        chunking_export_options = chunking_export_options or ChunkingExportOptions()
-        task = Task(
-            task_id=task_id,
-            task_type=task_type,
-            sources=rq_sources,
-            convert_options=convert_options,
-            chunking_options=chunking_options,
-            chunking_export_options=chunking_export_options,
-            target=target,
-            callbacks=callbacks or [],
-        )
-        self.tasks.update({task.task_id: task})
-        task_data = task.model_dump(mode="json", serialize_as_any=True)
-        self._rq_queue.enqueue(
-            "docling_jobkit.orchestrators.rq.worker.docling_task",
-            kwargs={"task_data": task_data},
-            job_id=task_id,
-            timeout=14400,
-            failure_ttl=self.config.failure_ttl,
-        )
-        await self.init_task_tracking(task)
-
-        return task
+            task_id = str(uuid.uuid4())
+            rq_sources: list[HttpSource | FileSource] = []
+            for source in sources:
+                if isinstance(source, DocumentStream):
+                    encoded_doc = base64.b64encode(source.stream.read()).decode()
+                    rq_sources.append(
+                        FileSource(filename=source.name, base64_string=encoded_doc)
+                    )
+                elif isinstance(source, (HttpSource | FileSource)):
+                    rq_sources.append(source)
+            chunking_export_options = chunking_export_options or ChunkingExportOptions()
+            task = Task(
+                task_id=task_id,
+                task_type=task_type,
+                sources=rq_sources,
+                convert_options=convert_options,
+                chunking_options=chunking_options,
+                chunking_export_options=chunking_export_options,
+                target=target,
+                callbacks=callbacks or [],
+                metadata=metadata or {},
+            )
+            task_data = task.model_dump(mode="json", serialize_as_any=True)
+            self._rq_queue.enqueue(
+                self._rq_job_function,
+                kwargs={"task_data": task_data},
+                job_id=task_id,
+                timeout=14400,
+                failure_ttl=self.config.failure_ttl,
+            )
+            await self.init_task_tracking(task)
+            await self._store_task_in_redis(task)
+            return task
 
     async def queue_size(self) -> int:
         return self._rq_queue.count
 
-    async def _update_task_from_rq(self, task_id: str) -> None:
+    async def _refresh_task_from_rq(self, task_id: str) -> None:
         task = await self.get_raw_task(task_id=task_id)
         if task.is_completed():
             return
 
-        job = Job.fetch(task_id, connection=self._redis_conn)
-        status = job.get_status()
+        def _fetch_job_info(tid: str):
+            j = Job.fetch(tid, connection=self._redis_conn)
+            s = j.get_status()
+            rq_result = j.latest_result() if s == JobStatus.FINISHED else None
+            return s, rq_result
 
-        if status == JobStatus.FINISHED:
-            result = job.latest_result()
-            if result is not None and result.type == result.Type.SUCCESSFUL:
+        job_status, rq_result = await asyncio.to_thread(_fetch_job_info, task_id)
+
+        if job_status == JobStatus.FINISHED:
+            if rq_result is not None and rq_result.type == rq_result.Type.SUCCESSFUL:
                 task.set_status(TaskStatus.SUCCESS)
-                task_result_key = str(result.return_value)
+                task_result_key = str(rq_result.return_value)
                 self._task_result_keys[task_id] = task_result_key
             else:
                 task.set_status(TaskStatus.FAILURE)
 
-        elif status in (
+        elif job_status in (
             JobStatus.QUEUED,
             JobStatus.SCHEDULED,
             JobStatus.STOPPED,
             JobStatus.DEFERRED,
         ):
             task.set_status(TaskStatus.PENDING)
-        elif status == JobStatus.STARTED:
+        elif job_status == JobStatus.STARTED:
             task.set_status(TaskStatus.STARTED)
         else:
             task.set_status(TaskStatus.FAILURE)
 
+    async def _update_task_from_rq(self, task_id: str) -> None:
+        original_status = (
+            self.tasks[task_id].task_status if task_id in self.tasks else None
+        )
+        await self._refresh_task_from_rq(task_id)
+        if task_id in self.tasks:
+            new_status = self.tasks[task_id].task_status
+            if original_status != new_status:
+                await self._store_task_in_redis(self.tasks[task_id])
+
     async def task_status(self, task_id: str, wait: float = 0.0) -> Task:
-        await self._update_task_from_rq(task_id=task_id)
-        return await self.get_raw_task(task_id=task_id)
+        del wait
+        async with self._redis_gate.acquire(
+            self.config.redis_gate_status_poll_wait_timeout
+        ):
+            _log.info(f"Task {task_id} status check")
+
+            task_from_redis = await self._get_task_from_redis(task_id)
+            if task_from_redis is not None and task_from_redis.is_completed():
+                try:
+                    job_exists = await asyncio.to_thread(
+                        Job.exists, task_id, self._redis_conn
+                    )
+                except Exception as exc:
+                    _log.warning(
+                        f"Task {task_id} terminal in Redis, but RQ existence check failed: {exc}"
+                    )
+                    job_exists = True
+                if job_exists:
+                    self.tasks[task_id] = task_from_redis
+                else:
+                    self.tasks.pop(task_id, None)
+                    self._task_result_keys.pop(task_id, None)
+                return task_from_redis
+
+            rq_result = await self._get_task_from_rq_direct(task_id)
+            if isinstance(rq_result, Task):
+                self.tasks[task_id] = rq_result
+                await self._store_task_in_redis(rq_result)
+                return rq_result
+
+            job_is_gone = isinstance(rq_result, _RQJobGone)
+            task = await self._get_task_from_redis(task_id)
+            if task is not None:
+                if job_is_gone:
+                    if task.is_completed():
+                        self.tasks.pop(task_id, None)
+                        self._task_result_keys.pop(task_id, None)
+                        return task
+
+                    previous_status = task.task_status
+                    task.set_status(TaskStatus.FAILURE)
+                    task.error_message = (
+                        "Task orphaned: RQ job expired while status was "
+                        f"{previous_status.value}. Likely caused by worker restart or Redis eviction."
+                    )
+                    self.tasks.pop(task_id, None)
+                    self._task_result_keys.pop(task_id, None)
+                    await self._store_task_in_redis(task)
+                    return task
+
+                if task.task_status in (TaskStatus.PENDING, TaskStatus.STARTED):
+                    fresh_rq_task = await self._get_task_from_rq_direct(task_id)
+                    if (
+                        isinstance(fresh_rq_task, Task)
+                        and fresh_rq_task.task_status != task.task_status
+                    ):
+                        self.tasks[task_id] = fresh_rq_task
+                        await self._store_task_in_redis(fresh_rq_task)
+                        return fresh_rq_task
+
+                return task
+
+            if job_is_gone:
+                self.tasks.pop(task_id, None)
+                raise TaskNotFoundError(task_id)
+
+            try:
+                parent_task = await BaseOrchestrator.get_raw_task(self, task_id)
+                await self._store_task_in_redis(parent_task)
+                return parent_task
+            except TaskNotFoundError:
+                raise
 
     async def get_queue_position(self, task_id: str) -> Optional[int]:
-        try:
-            job = Job.fetch(task_id, connection=self._redis_conn)
-            queue_pos = job.get_position()
-            return queue_pos + 1 if queue_pos is not None else None
-        except Exception as e:
-            _log.error("An error occour getting queue position.", exc_info=e)
-            return None
+        async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
+            try:
+
+                def _fetch_position(tid: str) -> Optional[int]:
+                    j = Job.fetch(tid, connection=self._redis_conn)
+                    queue_pos = j.get_position()
+                    return queue_pos + 1 if queue_pos is not None else None
+
+                return await asyncio.to_thread(_fetch_position, task_id)
+            except Exception as e:
+                _log.error("An error occour getting queue position.", exc_info=e)
+                return None
 
     async def task_result(
         self,
         task_id: str,
     ) -> Optional[DoclingTaskResult]:
-        result_key = self._task_result_keys.get(
-            task_id, f"{self.config.results_prefix}:{task_id}"
-        )
-        packed = await self._async_redis_conn.get(result_key)
-        if packed is None:
-            return None
-        self._task_result_keys[task_id] = result_key
-        result = DoclingTaskResult.model_validate(
-            msgpack.unpackb(packed, raw=False, strict_map_key=False)
-        )
-        return result
+        async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
+            result_key = self._task_result_keys.get(
+                task_id, f"{self.config.results_prefix}:{task_id}"
+            )
+            packed = await self._async_redis_conn.get(result_key)
+            if packed is None:
+                return None
+            self._task_result_keys[task_id] = result_key
+            result = DoclingTaskResult.model_validate(
+                msgpack.unpackb(packed, raw=False, strict_map_key=False)
+            )
+            return result
 
     async def _on_task_status_changed(self, task: Task) -> None:
-        """Called after every in-memory status update from pub/sub.
+        await self._store_task_in_redis(task)
 
-        No-op by default. Subclasses should override to persist the updated
-        task to durable storage so that terminal states survive pod restarts
-        and are visible to pods that missed the pub/sub event.
-        """
+    async def _get_task_from_redis(self, task_id: str) -> Task | None:
+        try:
+            task_data = await self._async_redis_conn.get(
+                f"{_TASK_METADATA_PREFIX}{task_id}:metadata"
+            )
+            if not task_data:
+                return None
+
+            data: dict[str, Any] = json.loads(task_data)
+            meta = data.get("processing_meta") or {}
+            meta.setdefault("num_docs", 0)
+            meta.setdefault("num_processed", 0)
+            meta.setdefault("num_succeeded", 0)
+            meta.setdefault("num_failed", 0)
+
+            task_kwargs: dict[str, Any] = {
+                "task_id": data["task_id"],
+                "task_type": data["task_type"],
+                "task_status": TaskStatus(data["task_status"]),
+                "processing_meta": meta,
+                "error_message": data.get("error_message"),
+            }
+            for field_name in (
+                "created_at",
+                "started_at",
+                "finished_at",
+                "last_update_at",
+                "target",
+                "sources",
+                "convert_options",
+                "chunking_options",
+                "chunking_export_options",
+                "callbacks",
+                "metadata",
+            ):
+                if data.get(field_name) is not None:
+                    task_kwargs[field_name] = data[field_name]
+            return Task(**task_kwargs)
+        except Exception as exc:
+            _log.error(f"Redis get task {task_id}: {exc}")
+            return None
+
+    async def _get_task_from_rq_direct(self, task_id: str) -> Task | _RQJobGone | None:
+        try:
+            original_task = self.tasks.get(task_id)
+            if original_task is not None and original_task.is_completed():
+                return original_task
+
+            temp_task = Task(
+                task_id=task_id,
+                task_type=TaskType.CONVERT,
+                task_status=TaskStatus.PENDING,
+                processing_meta={
+                    "num_docs": 0,
+                    "num_processed": 0,
+                    "num_succeeded": 0,
+                    "num_failed": 0,
+                },
+            )
+
+            self.tasks[task_id] = temp_task
+            try:
+                await self._refresh_task_from_rq(task_id)
+                updated_task = self.tasks.get(task_id)
+                if updated_task and updated_task.task_status != TaskStatus.PENDING:
+                    return updated_task
+                return None
+            finally:
+                if original_task is not None:
+                    self.tasks[task_id] = original_task
+                elif self.tasks.get(task_id) == temp_task:
+                    del self.tasks[task_id]
+        except NoSuchJobError:
+            return _RQ_JOB_GONE
+        except Exception as exc:
+            _log.error(f"RQ check {task_id}: {exc}")
+            return None
+
+    async def get_raw_task(self, task_id: str) -> Task:
+        if task_id in self.tasks:
+            return self.tasks[task_id]
+
+        task = await self._get_task_from_redis(task_id)
+        if task is not None:
+            self.tasks[task_id] = task
+            return task
+
+        raise TaskNotFoundError(task_id)
+
+    async def _store_task_in_redis(self, task: Task) -> None:
+        try:
+            meta: Any = task.processing_meta
+            if isinstance(meta, TaskProcessingMeta):
+                meta = meta.model_dump()
+            elif not isinstance(meta, dict):
+                meta = {
+                    "num_docs": 0,
+                    "num_processed": 0,
+                    "num_succeeded": 0,
+                    "num_failed": 0,
+                }
+
+            data = task.model_dump(mode="json", serialize_as_any=True)
+            data["task_status"] = task.task_status.value
+            data["processing_meta"] = meta
+            await self._async_redis_conn.set(
+                f"{_TASK_METADATA_PREFIX}{task.task_id}:metadata",
+                json.dumps(data),
+                ex=self.config.results_ttl,
+            )
+        except Exception as exc:
+            _log.error(f"Store task {task.task_id}: {exc}")
+
+    async def _reap_zombie_tasks(self) -> None:
+        while True:
+            await asyncio.sleep(self.config.zombie_reaper_interval)
+            try:
+                now = datetime.datetime.now(datetime.timezone.utc)
+                cutoff = now - datetime.timedelta(
+                    seconds=self.config.zombie_reaper_max_age
+                )
+                to_remove: list[str] = []
+                for task_id, task in list(self.tasks.items()):
+                    if (
+                        task.is_completed()
+                        and task.finished_at
+                        and task.finished_at < cutoff
+                    ):
+                        to_remove.append(task_id)
+                for task_id in to_remove:
+                    self.tasks.pop(task_id, None)
+                    self._task_result_keys.pop(task_id, None)
+                if to_remove:
+                    _log.info(f"Reaped {len(to_remove)} zombie tasks from tracking")
+            except Exception as exc:
+                _log.error(f"Zombie reaper error: {exc}")
 
     async def _listen_for_updates(self):
         pubsub = self._async_redis_conn.pubsub()
@@ -293,9 +542,9 @@ class RQOrchestrator(BaseOrchestrator):
         notified within ~90 seconds of the kill instead of waiting 4 hours.
 
         Note: the grace period is tracked by the watchdog itself (first_seen_started)
-        rather than task.started_at. Orchestrator subclasses (e.g. RedisTaskStatusMixin)
-        may recreate Task objects on every poll, resetting started_at to the current
-        time and making a task.started_at-based check unreliable.
+        rather than task.started_at. Task objects may be recreated on every poll,
+        resetting started_at to the current time and making a
+        task.started_at-based check unreliable.
         """
         _log.info("Watchdog starting")
         # Maps task_id -> time the watchdog first observed the task in STARTED state.
@@ -438,8 +687,12 @@ class RQOrchestrator(BaseOrchestrator):
         # Delete the RQ job itself to free up Redis memory
         # This includes the job metadata and result stream
         try:
-            job = Job.fetch(task_id, connection=self._redis_conn)
-            job.delete()
+
+            def _delete_job(tid: str) -> None:
+                j = Job.fetch(tid, connection=self._redis_conn)
+                j.delete()
+
+            await asyncio.to_thread(_delete_job, task_id)
             _log.debug(f"Deleted RQ job {task_id=}")
         except Exception as e:
             # Job may not exist or already be deleted - this is not an error
@@ -461,8 +714,12 @@ class RQOrchestrator(BaseOrchestrator):
         )
         self._task_result_keys.pop(task_id, None)
         try:
-            job = Job.fetch(task_id, connection=self._redis_conn)
-            job.delete()
+
+            def _delete_job(tid: str) -> None:
+                j = Job.fetch(tid, connection=self._redis_conn)
+                j.delete()
+
+            await asyncio.to_thread(_delete_job, task_id)
         except Exception as e:
             _log.debug(f"Could not delete RQ job {task_id=}: {e}")
         await super().delete_task(task_id)
