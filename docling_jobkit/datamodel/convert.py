@@ -15,6 +15,16 @@ from typing_extensions import Self
 
 from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import InputFormat, OutputFormat
+from docling.datamodel.layout_model_specs import (
+    DOCLING_LAYOUT_EGRET_LARGE,
+    DOCLING_LAYOUT_EGRET_MEDIUM,
+    DOCLING_LAYOUT_EGRET_XLARGE,
+    DOCLING_LAYOUT_HERON,
+    DOCLING_LAYOUT_HERON_101,
+    DOCLING_LAYOUT_V2,
+    LayoutModelConfig,
+    LayoutModelType,
+)
 
 # Import new engine system (available in docling>=2.73.0)
 from docling.datamodel.pipeline_options import (
@@ -40,6 +50,15 @@ from docling.datamodel.settings import (
     PageRange,
 )
 from docling_core.types.doc import ImageRefMode, PictureClassificationLabel
+
+LAYOUT_MODEL_SPECS: dict[LayoutModelType, LayoutModelConfig] = {
+    LayoutModelType.DOCLING_LAYOUT_HERON: DOCLING_LAYOUT_HERON,
+    LayoutModelType.DOCLING_LAYOUT_HERON_101: DOCLING_LAYOUT_HERON_101,
+    LayoutModelType.DOCLING_LAYOUT_EGRET_MEDIUM: DOCLING_LAYOUT_EGRET_MEDIUM,
+    LayoutModelType.DOCLING_LAYOUT_EGRET_LARGE: DOCLING_LAYOUT_EGRET_LARGE,
+    LayoutModelType.DOCLING_LAYOUT_EGRET_XLARGE: DOCLING_LAYOUT_EGRET_XLARGE,
+    LayoutModelType.DOCLING_LAYOUT_V2: DOCLING_LAYOUT_V2,
+}
 
 
 class PictureDescriptionLocal(BaseModel):
@@ -695,6 +714,23 @@ class ConvertDocumentsOptions(BaseModel):
     ] = None
 
     # Layout Configuration
+    layout_model: Annotated[
+        Optional[LayoutModelType],
+        Field(
+            default=None,
+            description=(
+                "The layout analysis model to use. "
+                f"Allowed values: {', '.join([v.value for v in LayoutModelType])}. "
+                "Optional. When set, automatically expands into layout_custom_config. "
+                "Ignored if layout_custom_config is explicitly provided."
+            ),
+            examples=[
+                LayoutModelType.DOCLING_LAYOUT_HERON.value,
+                LayoutModelType.DOCLING_LAYOUT_EGRET_LARGE.value,
+            ],
+        ),
+    ] = None
+
     layout_custom_config: Annotated[
         Optional[dict[str, Any]],
         Field(
@@ -703,7 +739,8 @@ class ConvertDocumentsOptions(BaseModel):
                 "Custom configuration for layout model. Use this to specify a "
                 "non-default kind with its options. The 'kind' field in the config dict "
                 "determines which layout implementation to use. "
-                "If not specified, uses the default kind with preset configuration."
+                "If not specified, uses the default kind with preset configuration. "
+                "Takes precedence over layout_model when both are set."
             ),
             examples=[
                 {
@@ -786,6 +823,23 @@ class ConvertDocumentsOptions(BaseModel):
                 stacklevel=2,
             )
         return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def expand_layout_model(cls, data: dict) -> dict:
+        """Expand layout_model into layout_custom_config when the latter is not set."""
+        if not isinstance(data, dict):
+            return data
+        layout_model = data.get("layout_model")
+        layout_custom_config = data.get("layout_custom_config")
+        if layout_model is not None and layout_custom_config is None:
+            model_type = LayoutModelType(layout_model)
+            spec = LAYOUT_MODEL_SPECS[model_type]
+            data["layout_custom_config"] = {
+                "kind": "docling_layout_default",
+                "model_spec": spec.model_dump(mode="json"),
+            }
+        return data
 
     @model_validator(mode="after")
     def picture_description_exclusivity(self) -> Self:
