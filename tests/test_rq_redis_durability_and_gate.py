@@ -220,7 +220,11 @@ class TestRQDurableStatus:
 
     @pytest.mark.asyncio
     async def test_reaps_old_completed_tasks(self):
-        orch = _make_orchestrator()
+        config = RQOrchestratorConfig(
+            zombie_reaper_interval=0.01,
+            zombie_reaper_max_age=3600.0,
+        )
+        orch = _make_orchestrator(config)
         old_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
             hours=2
         )
@@ -228,9 +232,7 @@ class TestRQDurableStatus:
         orch.tasks["old-1"] = old_task
         orch._task_result_keys["old-1"] = "key-1"
 
-        reaper = asyncio.create_task(
-            orch._reap_zombie_tasks(interval=0.01, max_age=3600.0)
-        )
+        reaper = asyncio.create_task(orch._reap_zombie_tasks())
         await asyncio.sleep(0.05)
         reaper.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -383,7 +385,11 @@ class TestRQRedisGate:
 
     @pytest.mark.asyncio
     async def test_reaper_is_not_gated(self):
-        orch = _make_orchestrator()
+        config = RQOrchestratorConfig(
+            zombie_reaper_interval=0.01,
+            zombie_reaper_max_age=3600.0,
+        )
+        orch = _make_orchestrator(config)
         old_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
             hours=2
         )
@@ -392,9 +398,7 @@ class TestRQRedisGate:
         )
 
         async with orch._redis_gate.acquire(1.0):
-            reaper = asyncio.create_task(
-                orch._reap_zombie_tasks(interval=0.01, max_age=3600.0)
-            )
+            reaper = asyncio.create_task(orch._reap_zombie_tasks())
             await asyncio.sleep(0.05)
             reaper.cancel()
             with pytest.raises(asyncio.CancelledError):
