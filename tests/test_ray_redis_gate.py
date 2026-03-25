@@ -2,6 +2,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+# Skip all tests if Ray is not available
+pytest.importorskip("ray")
+
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.datamodel.task_targets import InBodyTarget
