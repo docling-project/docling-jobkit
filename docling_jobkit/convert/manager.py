@@ -314,6 +314,10 @@ class DoclingConverterManagerConfig(BaseModel):
         default_factory=dict,
         description="Custom OCR presets. Maps preset ID to OCR options.",
     )
+    allowed_ocr_kinds: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed OCR kinds. None means all are allowed.",
+    )
 
 
 # Custom serializer for PdfFormatOption
@@ -589,11 +593,10 @@ class DoclingConverterManager:
         # Register each factory kind as a preset
         available_ocr_kinds = self.ocr_factory.registered_kind
         for kind in available_ocr_kinds:
-            if kind != self.config.default_ocr_preset:
-                self.ocr_preset_registry[kind] = {
-                    "source": "docling",
-                    "preset_id": kind,
-                }
+            self.ocr_preset_registry[kind] = {
+                "source": "docling",
+                "preset_id": kind,
+            }
 
         # Add allowed presets if specified (filter the auto-registered ones)
         if self.config.allowed_ocr_presets is not None:
@@ -620,6 +623,9 @@ class DoclingConverterManager:
 
         # Layout Kinds
         self.available_layout_kinds = self.layout_factory.registered_kind
+
+        # OCR Kinds
+        self.available_ocr_kinds = self.ocr_factory.registered_kind
 
     def _validate_kind_available(
         self, kind: str, available_kinds: list[str], stage_name: str
@@ -1108,6 +1114,16 @@ class DoclingConverterManager:
             else:
                 # Docling preset - use preset_id (which is the kind)
                 kind = preset_info["preset_id"]
+
+                # Validate kind is allowed and available
+                self._validate_kind_allowed(
+                    kind,
+                    self.config.allowed_ocr_kinds,
+                    self.config.default_ocr_preset,
+                    "OCR",
+                )
+                self._validate_kind_available(kind, self.available_ocr_kinds, "OCR")
+
                 try:
                     ocr_options = self.ocr_factory.create_options(  # type: ignore[assignment]
                         kind=kind,
@@ -1137,6 +1153,15 @@ class DoclingConverterManager:
                     "ocr_custom_config must include a 'kind' field "
                     "specifying which OCR engine to use."
                 )
+
+            # Validate kind is allowed and available
+            self._validate_kind_allowed(
+                kind_value,
+                self.config.allowed_ocr_kinds,
+                self.config.default_ocr_preset,
+                "OCR",
+            )
+            self._validate_kind_available(kind_value, self.available_ocr_kinds, "OCR")
 
             try:
                 return self.ocr_factory.create_options(  # type: ignore[return-value]
