@@ -1102,7 +1102,10 @@ class DoclingConverterManager:
         """Parse OCR options - preset OR custom config."""
 
         # Option 1: Preset (recommended, includes deprecated ocr_engine via validator)
-        if request.ocr_preset:
+        # "auto" is the default sentinel — if ocr_custom_config is also set, defer to Option 2.
+        if request.ocr_preset and not (
+            request.ocr_preset == "auto" and request.ocr_custom_config
+        ):
             preset_info = self.ocr_preset_registry.get(request.ocr_preset)
             if not preset_info:
                 raise ValueError(f"Unknown OCR preset: {request.ocr_preset}")
