@@ -998,6 +998,7 @@ class ConvertDocumentsOptions(BaseModel):
         if (
             hasattr(self, "__pydantic_fields_set__")
             and "ocr_engine" in self.__pydantic_fields_set__
+            and "ocr_preset" not in self.__pydantic_fields_set__
         ):
             warnings.warn(
                 "ocr_engine is deprecated and will be removed in a future version. "
@@ -1005,9 +1006,8 @@ class ConvertDocumentsOptions(BaseModel):
                 DeprecationWarning,
                 stacklevel=2,
             )
-            # Sync ocr_engine value to ocr_preset if ocr_preset is still default
-            if self.ocr_preset == "auto":
-                self.ocr_preset = self.ocr_engine
+            # Sync ocr_engine value to ocr_preset only if ocr_preset wasn't explicitly set
+            object.__setattr__(self, "ocr_preset", self.ocr_engine)
 
         # Ensure preset and custom_config are mutually exclusive
         if self.ocr_preset != "auto" and self.ocr_custom_config:

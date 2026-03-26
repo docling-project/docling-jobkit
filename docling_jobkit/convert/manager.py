@@ -1029,7 +1029,10 @@ class DoclingConverterManager:
             config_dict = request.layout_custom_config.copy()
             kind = config_dict.get("kind")
             if not kind:
-                raise ValueError("layout_custom_config must include 'kind' field")
+                raise ValueError(
+                    "layout_custom_config must include a 'kind' field "
+                    "specifying which layout implementation to use."
+                )
 
             self._validate_kind_allowed(
                 kind,
@@ -1196,11 +1199,8 @@ class DoclingConverterManager:
             )
 
         # === NEW PRESET/KIND-BASED APPROACH for Layout ===
-        if request.layout_preset:
-            pipeline_options.layout_options = self._parse_layout_options(request)
-        elif request.layout_custom_config:
-            pipeline_options.layout_options = self._parse_layout_options(request)
-        # If neither, use default (factory will handle it)
+        # Always parse layout options (will use default if no preset/custom config)
+        pipeline_options.layout_options = self._parse_layout_options(request)
 
         # === NEW PRESET/KIND-BASED APPROACH for Picture Classification ===
         picture_classification_options = self._parse_picture_classification_options(
