@@ -361,7 +361,10 @@ class ConvertDocumentsOptions(BaseModel):
     ocr_engine: Annotated[
         str,
         Field(
-            description=("The OCR engine to use. String. "),
+            description=(
+                "DEPRECATED: Use ocr_preset instead. The OCR engine to use. String. "
+            ),
+            deprecated=True,
         ),
     ] = "auto"
 
@@ -375,6 +378,41 @@ class ConvertDocumentsOptions(BaseModel):
                 "Optional, defaults to empty."
             ),
             examples=[["fr", "de", "es", "en"]],
+        ),
+    ] = None
+
+    ocr_preset: Annotated[
+        str,
+        Field(
+            default="auto",
+            description="Preset ID for OCR engine.",
+            examples=["auto", "easyocr", "tesseract"],
+        ),
+    ] = "auto"
+
+    ocr_custom_config: Annotated[
+        Optional[dict[str, Any]],
+        Field(
+            default=None,
+            description=(
+                "Custom configuration for OCR engine. Use this to specify "
+                "engine-specific options beyond ocr_lang. "
+                "Each OCR engine kind has its own configuration schema."
+            ),
+            examples=[
+                {
+                    "kind": "easyocr",
+                    "lang": ["en", "fr"],
+                    "use_gpu": True,
+                    "confidence_threshold": 0.5,
+                    "force_full_page_ocr": False,
+                },
+                {
+                    "kind": "tesseract_cli",
+                    "lang": ["eng", "deu"],
+                    "force_full_page_ocr": False,
+                },
+            ],
         ),
     ] = None
 
@@ -707,13 +745,52 @@ class ConvertDocumentsOptions(BaseModel):
             ),
             examples=[
                 {
-                    "kind": "custom_layout_model",
-                    "model_path": "/path/to/model",
-                    "device": "cuda",
+                    "kind": "docling_layout_default",
+                    "keep_empty_clusters": False,
+                    "skip_cell_assignment": False,
+                    "create_orphan_clusters": True,
                 },
                 {
-                    "kind": "docling_layout_default",
-                    "model_name": "egret_large",
+                    "kind": "layout_object_detection",
+                    "keep_empty_clusters": False,
+                    "skip_cell_assignment": False,
+                },
+            ],
+        ),
+    ] = None
+
+    # Layout preset field
+    layout_preset: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Preset ID for layout detection.",
+            examples=["default", "docling_layout_default"],
+        ),
+    ] = None
+
+    # Picture Classification Configuration
+    picture_classification_preset: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Preset ID for picture classification.",
+            examples=["default", "document_figure_classifier_v2"],
+        ),
+    ] = None
+
+    picture_classification_custom_config: Annotated[
+        Optional[dict[str, Any]],
+        Field(
+            default=None,
+            description=(
+                "Custom configuration for picture classification. Use this to specify "
+                "custom options for the picture classifier. "
+                "The configuration should match DocumentPictureClassifierOptions schema."
+            ),
+            examples=[
+                {
+                    "kind": "document_picture_classifier",
                 },
             ],
         ),
@@ -889,5 +966,51 @@ class ConvertDocumentsOptions(BaseModel):
             raise ValueError(
                 "Cannot specify both code_formula_preset and code_formula_custom_config."
             )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_layout_options(self) -> Self:
+        """Ensure preset and custom config are mutually exclusive for layout."""
+        if self.layout_preset and self.layout_custom_config:
+            raise ValueError(
+                "Cannot specify both layout_preset and layout_custom_config."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_picture_classification_options(self) -> Self:
+        """Ensure preset and custom config are mutually exclusive for picture classification."""
+        if (
+            self.picture_classification_preset
+            and self.picture_classification_custom_config
+        ):
+            raise ValueError(
+                "Cannot specify both picture_classification_preset and "
+                "picture_classification_custom_config."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_ocr_options(self) -> Self:
+        """Handle deprecated ocr_engine and sync to ocr_preset."""
+        # If ocr_engine is explicitly set (not default), sync to ocr_preset
+        if (
+            hasattr(self, "__pydantic_fields_set__")
+            and "ocr_engine" in self.__pydantic_fields_set__
+            and "ocr_preset" not in self.__pydantic_fields_set__
+        ):
+            warnings.warn(
+                "ocr_engine is deprecated and will be removed in a future version. "
+                "Use ocr_preset instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            # Sync ocr_engine value to ocr_preset only if ocr_preset wasn't explicitly set
+            object.__setattr__(self, "ocr_preset", self.ocr_engine)
+
+        # Ensure preset and custom_config are mutually exclusive
+        if self.ocr_preset != "auto" and self.ocr_custom_config:
+            raise ValueError("Cannot specify both ocr_preset and ocr_custom_config.")
 
         return self

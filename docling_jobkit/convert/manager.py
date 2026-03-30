@@ -1,4 +1,3 @@
-import enum
 import hashlib
 import json
 import logging
@@ -53,6 +52,9 @@ from docling.models.factories import (
     get_ocr_factory,
     get_table_structure_factory,
 )
+
+# Note: PictureClassificationFactory will be imported when available in docling
+# from docling.backend.picture_classification_factory import PictureClassificationFactory
 from docling.models.inference_engines.vlm.base import VlmEngineType
 from docling.pipeline.vlm_pipeline import VlmPipeline
 from docling_core.types.doc import ImageRefMode
@@ -98,9 +100,43 @@ PictureDescriptionPresetInfo = Union[
 ]
 CodeFormulaPresetInfo = Union[DoclingPresetInfo, CodeFormulaCustomPresetInfo]
 
+
+class LayoutCustomPresetInfo(TypedDict):
+    """Info for a custom layout preset."""
+
+    source: Literal["custom"]
+    options: dict[str, Any]
+
+
+class PictureClassificationCustomPresetInfo(TypedDict):
+    """Info for a custom picture classification preset."""
+
+    source: Literal["custom"]
+    options: dict[str, Any]
+
+
+class OcrCustomPresetInfo(TypedDict):
+    """Info for a custom OCR preset."""
+
+    source: Literal["custom"]
+    options: dict[str, Any]
+
+
+# Registry-specific types
+LayoutPresetInfo = Union[DoclingPresetInfo, LayoutCustomPresetInfo]
+PictureClassificationPresetInfo = Union[
+    DoclingPresetInfo, PictureClassificationCustomPresetInfo
+]
+OcrPresetInfo = Union[DoclingPresetInfo, OcrCustomPresetInfo]
+
 # Generic preset info type for shared functions
 AnyPresetInfo = Union[
-    VlmPresetInfo, PictureDescriptionPresetInfo, CodeFormulaPresetInfo
+    VlmPresetInfo,
+    PictureDescriptionPresetInfo,
+    CodeFormulaPresetInfo,
+    LayoutPresetInfo,
+    PictureClassificationPresetInfo,
+    OcrPresetInfo,
 ]
 
 
@@ -238,6 +274,51 @@ class DoclingConverterManagerConfig(BaseModel):
         ],
     )
 
+    default_layout_preset: str = Field(
+        default="docling_layout_default",
+        description='Default layout preset to use when user specifies "default".',
+    )
+    allowed_layout_presets: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed layout preset IDs. None means all are allowed.",
+    )
+    custom_layout_presets: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Custom layout presets. Maps preset ID to layout options dict with 'kind' field.",
+    )
+
+    # Picture Classification Control
+    default_picture_classification_preset: str = Field(
+        default="document_figure_classifier_v2",
+        description='Default picture classification preset to use when user specifies "default".',
+    )
+    allowed_picture_classification_presets: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed picture classification preset IDs. None means all are allowed.",
+    )
+    custom_picture_classification_presets: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Custom picture classification presets. Maps preset ID to PictureClassificationOptions.",
+    )
+
+    # OCR Control
+    default_ocr_preset: str = Field(
+        default="auto",
+        description='Default OCR preset to use when user specifies "default".',
+    )
+    allowed_ocr_presets: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed OCR preset IDs. None means all are allowed.",
+    )
+    custom_ocr_presets: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Custom OCR presets. Maps preset ID to OCR options.",
+    )
+    allowed_ocr_kinds: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed OCR kinds. None means all are allowed.",
+    )
+
 
 # Custom serializer for PdfFormatOption
 # (model_dump_json does not work with some classes)
@@ -356,7 +437,7 @@ class DoclingConverterManager:
     def clear_cache(self):
         self._get_converter_from_hash.cache_clear()
 
-    def _build_preset_registries(self):
+    def _build_preset_registries(self):  # noqa: C901
         """Build internal registries of allowed presets."""
         # VLM Pipeline Registry
         self.vlm_preset_registry: dict[str, VlmPresetInfo] = {}
@@ -448,6 +529,91 @@ class DoclingConverterManager:
                 "options": preset_options,
             }
 
+        # Layout Registry
+        self.layout_preset_registry: dict[str, LayoutPresetInfo] = {}
+
+        self.layout_preset_registry["default"] = {
+            "source": "docling",
+            "preset_id": self.config.default_layout_preset,
+        }
+
+        # Add allowed presets if specified
+        if self.config.allowed_layout_presets is not None:
+            for preset_id in self.config.allowed_layout_presets:
+                if preset_id != "default":
+                    self.layout_preset_registry[preset_id] = {
+                        "source": "docling",
+                        "preset_id": preset_id,
+                    }
+
+        # Add custom presets
+        for preset_id, preset_options in self.config.custom_layout_presets.items():
+            self.layout_preset_registry[preset_id] = {
+                "source": "custom",
+                "options": preset_options,
+            }
+
+        # Picture Classification Registry
+        self.picture_classification_preset_registry: dict[
+            str, PictureClassificationPresetInfo
+        ] = {}
+
+        self.picture_classification_preset_registry["default"] = {
+            "source": "docling",
+            "preset_id": self.config.default_picture_classification_preset,
+        }
+
+        # Add allowed presets if specified
+        if self.config.allowed_picture_classification_presets is not None:
+            for preset_id in self.config.allowed_picture_classification_presets:
+                if preset_id != "default":
+                    self.picture_classification_preset_registry[preset_id] = {
+                        "source": "docling",
+                        "preset_id": preset_id,
+                    }
+
+        # Add custom presets
+        for (
+            preset_id,
+            preset_options,
+        ) in self.config.custom_picture_classification_presets.items():
+            self.picture_classification_preset_registry[preset_id] = {
+                "source": "custom",
+                "options": preset_options,
+            }
+
+        # OCR Registry
+        self.ocr_preset_registry: dict[str, OcrPresetInfo] = {}
+
+        self.ocr_preset_registry["default"] = {
+            "source": "docling",
+            "preset_id": self.config.default_ocr_preset,
+        }
+
+        # Register each factory kind as a preset
+        available_ocr_kinds = self.ocr_factory.registered_kind
+        for kind in available_ocr_kinds:
+            self.ocr_preset_registry[kind] = {
+                "source": "docling",
+                "preset_id": kind,
+            }
+
+        # Add allowed presets if specified (filter the auto-registered ones)
+        if self.config.allowed_ocr_presets is not None:
+            # Remove presets not in allowed list
+            allowed_set = set(self.config.allowed_ocr_presets)
+            allowed_set.add("default")  # Always allow default
+            self.ocr_preset_registry = {
+                k: v for k, v in self.ocr_preset_registry.items() if k in allowed_set
+            }
+
+        # Add custom presets
+        for preset_id, preset_options in self.config.custom_ocr_presets.items():
+            self.ocr_preset_registry[preset_id] = {
+                "source": "custom",
+                "options": preset_options,
+            }
+
     def _build_kind_registries(self):
         """Build registries of available kinds from factories."""
         # Table Structure Kinds
@@ -457,6 +623,9 @@ class DoclingConverterManager:
 
         # Layout Kinds
         self.available_layout_kinds = self.layout_factory.registered_kind
+
+        # OCR Kinds
+        self.available_ocr_kinds = self.ocr_factory.registered_kind
 
     def _validate_kind_available(
         self, kind: str, available_kinds: list[str], stage_name: str
@@ -845,39 +1014,177 @@ class DoclingConverterManager:
             )
 
     def _parse_layout_options(self, request: ConvertDocumentsOptions) -> Any:
-        """Parse layout options - preset for default kind, custom config for others."""
+        """Parse layout options - preset OR custom config."""
 
+        # Option 1: Preset (recommended)
+        if request.layout_preset:
+            preset_info = self.layout_preset_registry.get(request.layout_preset)
+            if not preset_info:
+                raise ValueError(f"Unknown layout preset: {request.layout_preset}")
+
+            if preset_info["source"] == "custom":
+                # Custom preset from manager config - stored as complete options
+                return preset_info["options"]
+            else:
+                # Docling preset - use preset_id (which is the kind)
+                preset_id = preset_info["preset_id"]
+                return self.layout_factory.create_options(kind=preset_id)
+
+        # Option 2: Custom config (existing logic)
         if request.layout_custom_config:
-            # Custom config provided - validate and use it
             config_dict = request.layout_custom_config.copy()
             kind = config_dict.get("kind")
-
             if not kind:
                 raise ValueError(
                     "layout_custom_config must include a 'kind' field "
                     "specifying which layout implementation to use."
                 )
 
-            # Validate kind is allowed (pre-filter before factory)
             self._validate_kind_allowed(
                 kind,
                 self.config.allowed_layout_kinds,
                 self.config.default_layout_kind,
                 "layout",
             )
-
-            # Validate kind is available from factory
             self._validate_kind_available(kind, self.available_layout_kinds, "layout")
 
-            # Create options using factory with custom config
             return self.layout_factory.create_options(
                 kind=kind, **{k: v for k, v in config_dict.items() if k != "kind"}
             )
 
-        else:
-            # Use default kind with preset/default configuration
-            kind = self.config.default_layout_kind
-            return self.layout_factory.create_options(kind=kind)
+        # Option 3: Use default
+        return self.layout_factory.create_options(
+            kind=self.config.default_layout_preset
+        )
+
+    def _parse_picture_classification_options(
+        self, request: ConvertDocumentsOptions
+    ) -> Any:
+        """Parse picture classification options - preset OR custom config."""
+
+        # Option 1: Preset (recommended)
+        if request.picture_classification_preset:
+            preset_info = self.picture_classification_preset_registry.get(
+                request.picture_classification_preset
+            )
+            if not preset_info:
+                raise ValueError(
+                    f"Unknown picture classification preset: {request.picture_classification_preset}"
+                )
+
+            if preset_info["source"] == "custom":
+                # Custom preset from manager config - stored as complete options
+                return preset_info["options"]
+            else:
+                # Docling preset - use preset_id
+                # Note: When PictureClassificationFactory is available, use:
+                # preset_id = preset_info["preset_id"]
+                # return self.picture_classification_factory.create_options_from_preset(preset_id)
+                # For now, return None as factory is not yet available
+                return None
+
+        # Option 2: Custom config
+        if request.picture_classification_custom_config:
+            # Custom config is passed directly as options
+            return request.picture_classification_custom_config
+
+        # Option 3: Use default if do_picture_classification is enabled
+        if request.do_picture_classification:
+            # Note: When factory is available, use:
+            # return self.picture_classification_factory.create_options_from_preset(
+            #     self.config.default_picture_classification_preset
+            # )
+            return None
+
+        return None
+
+    def _parse_ocr_options(self, request: ConvertDocumentsOptions) -> OcrOptions:
+        """Parse OCR options - preset OR custom config."""
+
+        # Option 1: Preset (recommended, includes deprecated ocr_engine via validator)
+        # "auto" is the default sentinel — if ocr_custom_config is also set, defer to Option 2.
+        if request.ocr_preset and not (
+            request.ocr_preset == "auto" and request.ocr_custom_config
+        ):
+            preset_info = self.ocr_preset_registry.get(request.ocr_preset)
+            if not preset_info:
+                raise ValueError(f"Unknown OCR preset: {request.ocr_preset}")
+
+            ocr_options: OcrOptions
+            if preset_info["source"] == "custom":
+                # Custom preset from manager config - stored as complete options
+                ocr_options = preset_info["options"]  # type: ignore[assignment]
+            else:
+                # Docling preset - use preset_id (which is the kind)
+                kind = preset_info["preset_id"]
+
+                # Validate kind is allowed and available
+                self._validate_kind_allowed(
+                    kind,
+                    self.config.allowed_ocr_kinds,
+                    self.config.default_ocr_preset,
+                    "OCR",
+                )
+                self._validate_kind_available(kind, self.available_ocr_kinds, "OCR")
+
+                try:
+                    ocr_options = self.ocr_factory.create_options(  # type: ignore[assignment]
+                        kind=kind,
+                        force_full_page_ocr=request.force_ocr,
+                    )
+                except ImportError as err:
+                    raise ImportError(
+                        f"The requested OCR engine (preset={request.ocr_preset}) "
+                        "is not available on this system. Please choose another OCR engine "
+                        "or contact your system administrator.\n"
+                        f"{err}"
+                    )
+
+            # Apply ocr_lang if specified (overrides preset)
+            if request.ocr_lang is not None:
+                ocr_options.lang = request.ocr_lang  # type: ignore[attr-defined]
+
+            return ocr_options
+
+        # Option 2: Custom config
+        if request.ocr_custom_config:
+            config_dict = request.ocr_custom_config.copy()
+            kind_value = config_dict.get("kind")
+
+            if not kind_value or not isinstance(kind_value, str):
+                raise ValueError(
+                    "ocr_custom_config must include a 'kind' field "
+                    "specifying which OCR engine to use."
+                )
+
+            # Validate kind is allowed and available
+            self._validate_kind_allowed(
+                kind_value,
+                self.config.allowed_ocr_kinds,
+                self.config.default_ocr_preset,
+                "OCR",
+            )
+            self._validate_kind_available(kind_value, self.available_ocr_kinds, "OCR")
+
+            try:
+                return self.ocr_factory.create_options(  # type: ignore[return-value]
+                    kind=kind_value,
+                    force_full_page_ocr=request.force_ocr,
+                    **{k: v for k, v in config_dict.items() if k != "kind"},
+                )
+            except ImportError as err:
+                raise ImportError(
+                    f"The requested OCR engine (kind={kind_value}) "
+                    "is not available on this system. Please choose another OCR engine "
+                    "or contact your system administrator.\n"
+                    f"{err}"
+                )
+
+        # Option 3: Use default (should not reach here due to default="auto")
+        return self.ocr_factory.create_options(  # type: ignore[return-value]
+            kind=self.config.default_ocr_preset,
+            force_full_page_ocr=request.force_ocr,
+        )
 
     def get_converter(self, pdf_format_option: PdfFormatOption) -> DocumentConverter:
         with self._cache_lock:
@@ -889,27 +1196,8 @@ class DoclingConverterManager:
     def _parse_standard_pdf_opts(
         self, request: ConvertDocumentsOptions, artifacts_path: Optional[Path]
     ) -> PdfPipelineOptions:
-        try:
-            kind = (
-                request.ocr_engine.value
-                if isinstance(request.ocr_engine, enum.Enum)
-                else str(request.ocr_engine)
-            )
-            ocr_options: OcrOptions = self.ocr_factory.create_options(  # type: ignore
-                kind=kind,
-                force_full_page_ocr=request.force_ocr,
-            )
-        except ImportError as err:
-            raise ImportError(
-                "The requested OCR engine"
-                f" (ocr_engine={request.ocr_engine})"
-                " is not available on this system. Please choose another OCR engine "
-                "or contact your system administrator.\n"
-                f"{err}"
-            )
-
-        if request.ocr_lang is not None:
-            ocr_options.lang = request.ocr_lang
+        # === NEW APPROACH for OCR with full custom config support ===
+        ocr_options = self._parse_ocr_options(request)
 
         pipeline_options = PdfPipelineOptions(
             artifacts_path=artifacts_path,
@@ -938,12 +1226,18 @@ class DoclingConverterManager:
                 do_cell_matching=request.table_cell_matching,
             )
 
-        # === NEW KIND-BASED APPROACH for Layout ===
-        # Try new custom config approach first
-        if request.layout_custom_config:
-            pipeline_options.layout_options = self._parse_layout_options(request)
-        # If no custom config, use default (factory will handle it)
-        # Note: Layout options are optional, so we don't set them if not specified
+        # === NEW PRESET/KIND-BASED APPROACH for Layout ===
+        # Always parse layout options (will use default if no preset/custom config)
+        pipeline_options.layout_options = self._parse_layout_options(request)
+
+        # === NEW PRESET/KIND-BASED APPROACH for Picture Classification ===
+        picture_classification_options = self._parse_picture_classification_options(
+            request
+        )
+        if picture_classification_options is not None:
+            pipeline_options.picture_classification_options = (
+                picture_classification_options
+            )
 
         if request.image_export_mode != ImageRefMode.PLACEHOLDER:
             pipeline_options.generate_page_images = True
