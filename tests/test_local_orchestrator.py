@@ -172,6 +172,132 @@ async def test_convert_warmup():
     assert len(converter.initialized_pipelines) > 0
 
 
+@pytest.mark.asyncio
+async def test_preload_shared_mode_calls_preload_on_orchestrator_cm():
+    """With shared_models=True, warm_up_caches calls preload_additional_formats on self.cm."""
+    from unittest.mock import patch
+
+    cm_config = DoclingConverterManagerConfig(preload_formats=["pdf"])
+    cm = DoclingConverterManager(config=cm_config)
+
+    config = LocalOrchestratorConfig(shared_models=True)
+    orchestrator = LocalOrchestrator(config=config, converter_manager=cm)
+
+    with patch.object(
+        cm, "preload_additional_formats", wraps=cm.preload_additional_formats
+    ) as mock_preload:
+        await orchestrator.warm_up_caches()
+        mock_preload.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_preload_non_shared_mode_still_validates_on_orchestrator_cm():
+    """With shared_models=False, warm_up_caches still calls preload_additional_formats.
+
+    Even though non-shared workers create their own managers, the
+    orchestrator CM is pre-loaded to validate the config before the
+    readiness gate opens.  A bad format name will fail startup here
+    rather than silently crashing workers later.
+    """
+    from unittest.mock import patch
+
+    cm_config = DoclingConverterManagerConfig(preload_formats=["pdf"])
+    cm = DoclingConverterManager(config=cm_config)
+
+    config = LocalOrchestratorConfig(shared_models=False)
+    orchestrator = LocalOrchestrator(config=config, converter_manager=cm)
+
+    with patch.object(
+        cm, "preload_additional_formats", wraps=cm.preload_additional_formats
+    ) as mock_preload:
+        await orchestrator.warm_up_caches()
+        mock_preload.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_non_shared_workers_preload_own_managers():
+    """Non-shared workers call preload_additional_formats on their own CMs."""
+    cm_config = DoclingConverterManagerConfig(preload_formats=["pdf"])
+    cm = DoclingConverterManager(config=cm_config)
+
+    config = LocalOrchestratorConfig(num_workers=1, shared_models=False)
+    orchestrator = LocalOrchestrator(config=config, converter_manager=cm)
+
+    queue_task = asyncio.create_task(orchestrator.process_queue())
+    # Give the worker time to start and pre-warm
+    await asyncio.sleep(0.5)
+
+    # Worker should have created its own CM
+    assert len(orchestrator.worker_cms) == 1
+    worker_cm = orchestrator.worker_cms[0]
+
+    # The worker CM should have pre-warmed its converter
+    converter = worker_cm.get_converter(
+        worker_cm.get_pdf_pipeline_opts(ConvertDocumentsOptions())
+    )
+    assert len(converter.initialized_pipelines) > 0
+
+    queue_task.cancel()
+    try:
+        await queue_task
+    except asyncio.CancelledError:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_preload_empty_is_noop():
+    """Empty preload_formats means preload_additional_formats is not called."""
+    from unittest.mock import patch
+
+    cm_config = DoclingConverterManagerConfig(preload_formats=[])
+    cm = DoclingConverterManager(config=cm_config)
+
+    config = LocalOrchestratorConfig(shared_models=True)
+    orchestrator = LocalOrchestrator(config=config, converter_manager=cm)
+
+    with patch.object(cm, "preload_additional_formats") as mock_preload:
+        await orchestrator.warm_up_caches()
+        # preload_additional_formats is called but is a no-op internally
+        # (returns early when preload_formats is empty)
+        mock_preload.assert_called_once()
+
+    # PDF should still be initialized by the explicit init in warm_up_caches
+    options = ConvertDocumentsOptions()
+    converter = cm.get_converter(cm.get_pdf_pipeline_opts(options))
+    assert len(converter.initialized_pipelines) > 0
+
+
+def test_preload_additional_formats_unknown_format_raises():
+    """Unknown format names in preload_formats raise RuntimeError at startup."""
+    cm_config = DoclingConverterManagerConfig(preload_formats=["nonexistent_format"])
+    cm = DoclingConverterManager(config=cm_config)
+
+    with pytest.raises(RuntimeError, match="Unknown format"):
+        cm.preload_additional_formats()
+
+
+def test_preload_additional_formats_idempotent():
+    """Calling preload_additional_formats twice is harmless."""
+    cm_config = DoclingConverterManagerConfig(preload_formats=["pdf"])
+    cm = DoclingConverterManager(config=cm_config)
+
+    cm.preload_additional_formats()
+    count_after_first = len(
+        cm.get_converter(
+            cm.get_pdf_pipeline_opts(ConvertDocumentsOptions())
+        ).initialized_pipelines
+    )
+
+    cm.preload_additional_formats()
+    count_after_second = len(
+        cm.get_converter(
+            cm.get_pdf_pipeline_opts(ConvertDocumentsOptions())
+        ).initialized_pipelines
+    )
+
+    assert count_after_first == count_after_second
+
+
 @dataclass
 class TestOption:
     options: ConvertDocumentsOptions

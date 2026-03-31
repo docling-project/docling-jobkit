@@ -387,3 +387,49 @@ async def test_convert_with_callbacks(orchestrator: RQOrchestrator, callback_ser
     assert final_callback["num_processed"] == 1
     assert final_callback["num_succeeded"] == 1
     assert final_callback["num_failed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_rq_worker_calls_preload_on_init():
+    """CustomRQWorker calls preload_additional_formats on its conversion_manager during __init__."""
+    config = RQOrchestratorConfig()
+    orchestrator = RQOrchestrator(config=config)
+
+    cm_config = DoclingConverterManagerConfig(preload_formats=["pdf"])
+
+    with tempfile.TemporaryDirectory(prefix="docling_test_") as scratch_dir:
+        worker = CustomRQWorker(
+            [orchestrator._rq_queue],
+            connection=orchestrator._redis_conn,
+            orchestrator_config=config,
+            cm_config=cm_config,
+            scratch_dir=scratch_dir,
+        )
+        # Verify preload ran by checking the converter cache was populated.
+        # preload_formats=["pdf"] triggers get_converter + initialize_pipeline,
+        # so the LRU cache should have one entry.
+        cache_info = worker.conversion_manager._get_converter_from_hash.cache_info()
+        assert cache_info.currsize > 0, (
+            "Converter cache should be populated after preload"
+        )
+
+
+@pytest.mark.asyncio
+async def test_rq_worker_skips_preload_when_empty():
+    """CustomRQWorker with empty preload_formats still calls the method but it's a no-op."""
+    config = RQOrchestratorConfig()
+    orchestrator = RQOrchestrator(config=config)
+
+    cm_config = DoclingConverterManagerConfig(preload_formats=[])
+
+    with tempfile.TemporaryDirectory(prefix="docling_test_") as scratch_dir:
+        worker = CustomRQWorker(
+            [orchestrator._rq_queue],
+            connection=orchestrator._redis_conn,
+            orchestrator_config=config,
+            cm_config=cm_config,
+            scratch_dir=scratch_dir,
+        )
+        # Converter cache should be empty (no formats to preload)
+        cache_info = worker.conversion_manager._get_converter_from_hash.cache_info()
+        assert cache_info.currsize == 0

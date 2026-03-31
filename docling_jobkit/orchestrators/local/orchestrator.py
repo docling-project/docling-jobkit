@@ -130,6 +130,12 @@ class LocalOrchestrator(BaseOrchestrator):
         pdf_format_option = self.cm.get_pdf_pipeline_opts(ConvertDocumentsOptions())
         converter = self.cm.get_converter(pdf_format_option)
         converter.initialize_pipeline(InputFormat.PDF)
+        # Pre-warm additional configured formats.  This always runs
+        # (regardless of shared_models) so that misconfigured format names
+        # fail startup before the readiness gate opens.  In non-shared
+        # mode the orchestrator copy is not used for requests, but it
+        # serves as config validation and model download.
+        self.cm.preload_additional_formats()
 
     async def delete_task(self, task_id: str):
         _log.info(f"Deleting result of task {task_id=}")

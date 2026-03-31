@@ -45,6 +45,7 @@ class CustomRQWorker(SimpleWorker):
     ):
         self.orchestrator_config = orchestrator_config
         self.conversion_manager = DoclingConverterManager(cm_config)
+        self.conversion_manager.preload_additional_formats()
         self.scratch_dir = scratch_dir
 
         if "default_result_ttl" not in kwargs:

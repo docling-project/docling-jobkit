@@ -238,6 +238,20 @@ class DoclingConverterManagerConfig(BaseModel):
         ],
     )
 
+    # Pipeline Pre-loading
+    preload_formats: list[str] = Field(
+        default_factory=list,
+        description=(
+            "List of InputFormat names (e.g. 'pdf', 'audio') whose ML "
+            "pipelines should be eagerly initialized at startup.  "
+            "Pre-loading keeps models resident in memory, eliminating "
+            "cold-start latency on the first request for each configured "
+            "format.  Configured formats are required: if a listed format "
+            "cannot be initialized, startup will fail."
+        ),
+        examples=[["pdf", "audio"]],
+    )
+
 
 # Custom serializer for PdfFormatOption
 # (model_dump_json does not work with some classes)
@@ -1179,3 +1193,52 @@ class DoclingConverterManager:
         )
 
         return results
+
+    def preload_additional_formats(self) -> None:
+        """Eagerly initialize pipelines for formats in *config.preload_formats*.
+
+        This is a no-op when *preload_formats* is empty.
+
+        The method obtains the same cached ``DocumentConverter`` that
+        :meth:`convert_documents` uses (with default options), so pre-warmed
+        pipelines persist across requests.  Calling this for a format that
+        is already initialized is harmless (the pipeline cache is checked
+        first).
+
+        Raises
+        ------
+        RuntimeError
+            If a configured format name is not a valid ``InputFormat`` or
+            has no format options in the converter.
+        Exception
+            If ``initialize_pipeline`` fails for a configured format.
+            Configured formats are treated as required: if the operator
+            listed a format in *preload_formats*, failure to initialize it
+            is a startup error, not a soft degradation.
+        """
+        if not self.config.preload_formats:
+            return
+
+        pdf_opts = self.get_pdf_pipeline_opts(ConvertDocumentsOptions())
+        converter = self.get_converter(pdf_opts)
+
+        for fmt_name in self.config.preload_formats:
+            fmt_lower = fmt_name.lower()
+
+            try:
+                fmt = InputFormat(fmt_lower)
+            except ValueError:
+                raise RuntimeError(
+                    f"Unknown format '{fmt_name}' in preload_formats. "
+                    f"Valid formats: {[f.value for f in InputFormat]}"
+                )
+
+            if fmt not in converter.format_to_options:
+                raise RuntimeError(
+                    f"Format '{fmt_name}' has no format options in "
+                    f"converter and cannot be pre-loaded."
+                )
+
+            _log.info("Pre-warming %s pipeline...", fmt_lower)
+            converter.initialize_pipeline(fmt)
+            _log.info("Pipeline for %s is ready.", fmt_lower)

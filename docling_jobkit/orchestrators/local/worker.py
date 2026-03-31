@@ -40,6 +40,11 @@ class AsyncLocalWorker:
         else:
             cm = DoclingConverterManager(self.orchestrator.cm.config)
             self.orchestrator.worker_cms.append(cm)
+            # Pre-warm additional pipelines on this worker's own manager.
+            # Shared managers are pre-warmed centrally in warm_up_caches().
+            # Run off the event loop to avoid blocking health checks and
+            # other workers during heavy model loading.
+            await asyncio.to_thread(cm.preload_additional_formats)
         while True:
             task_id: str = await self.orchestrator.task_queue.get()
             self.orchestrator.queue_list.remove(task_id)
