@@ -13,8 +13,8 @@ from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.ray.models import (
     TaskUpdate,
-    UserLimits,
-    UserStats,
+    TenantLimits,
+    TenantStats,
 )
 from docling_jobkit.orchestrators.serialization import make_msgpack_safe
 
@@ -128,31 +128,31 @@ class RedisStateManager:
 
     # Task Queue Operations
 
-    async def enqueue_task(self, user_id: str, task: Task) -> None:
-        """Add task to user's queue.
+    async def enqueue_task(self, tenant_id: str, task: Task) -> None:
+        """Add task to tenant's queue.
 
         Args:
-            user_id: User identifier
+            tenant_id: Tenant identifier
             task: Task to enqueue
         """
         if not self.redis:
             await self.connect()
 
-        queue_key = f"user:{user_id}:tasks"
+        queue_key = f"tenant:{tenant_id}:tasks"
         task_json = task.model_dump_json()
 
         await self.redis.rpush(queue_key, task_json)  # type: ignore[misc, union-attr]
 
-        # Update user limits
-        await self.update_user_limits(user_id, delta_queued_tasks=1)
+        # Update tenant limits
+        await self.update_tenant_limits(tenant_id, delta_queued_tasks=1)
 
-        _log.debug(f"Enqueued task {task.task_id} for user {user_id}")
+        _log.debug(f"Enqueued task {task.task_id} for tenant {tenant_id}")
 
-    async def dequeue_task(self, user_id: str) -> Optional[Task]:
-        """Remove and return next task from user's queue.
+    async def dequeue_task(self, tenant_id: str) -> Optional[Task]:
+        """Remove and return next task from tenant's queue.
 
         Args:
-            user_id: User identifier
+            tenant_id: Tenant identifier
 
         Returns:
             Next task or None if queue is empty
@@ -160,24 +160,24 @@ class RedisStateManager:
         if not self.redis:
             await self.connect()
 
-        queue_key = f"user:{user_id}:tasks"
+        queue_key = f"tenant:{tenant_id}:tasks"
         redis = self._ensure_redis()
         task_json = await redis.lpop(queue_key)  # type: ignore[misc]
 
         if task_json:
             task = Task.model_validate_json(task_json)
-            # Update user limits
-            await self.update_user_limits(user_id, delta_queued_tasks=-1)
-            _log.debug(f"Dequeued task {task.task_id} for user {user_id}")
+            # Update tenant limits
+            await self.update_tenant_limits(tenant_id, delta_queued_tasks=-1)
+            _log.debug(f"Dequeued task {task.task_id} for tenant {tenant_id}")
             return task
 
         return None
 
-    async def peek_task(self, user_id: str) -> Optional[Task]:
+    async def peek_task(self, tenant_id: str) -> Optional[Task]:
         """View next task without removing it.
 
         Args:
-            user_id: User identifier
+            tenant_id: Tenant identifier
 
         Returns:
             Next task or None if queue is empty
@@ -185,7 +185,7 @@ class RedisStateManager:
         if not self.redis:
             await self.connect()
 
-        queue_key = f"user:{user_id}:tasks"
+        queue_key = f"tenant:{tenant_id}:tasks"
         redis = self._ensure_redis()
         task_json = await redis.lindex(queue_key, 0)  # type: ignore[misc]
 
@@ -194,36 +194,36 @@ class RedisStateManager:
 
         return None
 
-    async def get_all_users_with_tasks(self) -> list[str]:
-        """Get list of all users with pending tasks.
+    async def get_all_tenants_with_tasks(self) -> list[str]:
+        """Get list of all tenants with pending tasks.
 
         Returns:
-            List of user IDs
+            List of tenant IDs
         """
         if not self.redis:
             await self.connect()
 
-        # Scan for all user task queue keys
-        users = []
+        # Scan for all tenant task queue keys
+        tenants = []
         redis = self._ensure_redis()
-        async for key in redis.scan_iter(match="user:*:tasks"):  # type: ignore[union-attr]
+        async for key in redis.scan_iter(match="tenant:*:tasks"):  # type: ignore[union-attr]
             key_str = key.decode("utf-8")
-            # Extract user_id from "user:{user_id}:tasks"
+            # Extract tenant_id from "tenant:{tenant_id}:tasks"
             parts = key_str.split(":")
             if len(parts) == 3:
-                user_id = parts[1]
+                tenant_id = parts[1]
                 # Check if queue has tasks
                 queue_len = await redis.llen(key)  # type: ignore[misc]
                 if queue_len > 0:
-                    users.append(user_id)
+                    tenants.append(tenant_id)
 
-        return users
+        return tenants
 
-    async def get_user_queue_size(self, user_id: str) -> int:
-        """Get number of tasks in user's queue.
+    async def get_tenant_queue_size(self, tenant_id: str) -> int:
+        """Get number of tasks in tenant's queue.
 
         Args:
-            user_id: User identifier
+            tenant_id: Tenant identifier
 
         Returns:
             Number of queued tasks
@@ -231,7 +231,7 @@ class RedisStateManager:
         if not self.redis:
             await self.connect()
 
-        queue_key = f"user:{user_id}:tasks"
+        queue_key = f"tenant:{tenant_id}:tasks"
         redis = self._ensure_redis()
         return await redis.llen(queue_key)  # type: ignore[misc,return-value]
 
@@ -295,14 +295,14 @@ class RedisStateManager:
     async def set_task_metadata(
         self,
         task_id: str,
-        user_id: str,
+        tenant_id: str,
         status: TaskStatus = TaskStatus.PENDING,
     ) -> None:
         """Initialize task metadata.
 
         Args:
             task_id: Task identifier
-            user_id: User identifier
+            tenant_id: Tenant identifier
             status: Initial task status
         """
         if not self.redis:
@@ -312,7 +312,7 @@ class RedisStateManager:
 
         metadata = {
             "task_id": task_id,
-            "user_id": user_id,
+            "tenant_id": tenant_id,
             "status": status.value,
             "created_at": str(json.dumps(None)),  # Will be set by caller
         }
@@ -367,7 +367,7 @@ class RedisStateManager:
         if not self.redis:
             await self.connect()
 
-        active_key = f"user:{user_id}:active_tasks"
+        active_key = f"tenant:{user_id}:active_tasks"
         redis = self._ensure_redis()
         task_ids = await redis.smembers(active_key)  # type: ignore[misc]
 
@@ -397,7 +397,7 @@ class RedisStateManager:
         if not self.redis:
             await self.connect()
 
-        active_key = f"user:{user_id}:active_tasks"
+        active_key = f"tenant:{user_id}:active_tasks"
         redis = self._ensure_redis()
         task_ids = await redis.smembers(active_key)  # type: ignore[misc]
 
@@ -485,25 +485,25 @@ class RedisStateManager:
 
     # User Limits Operations
 
-    async def get_user_limits(self, user_id: str) -> UserLimits:
-        """Get user resource limits and current usage.
+    async def get_tenant_limits(self, tenant_id: str) -> TenantLimits:
+        """Get tenant resource limits and current usage.
 
         Args:
-            user_id: User identifier
+            tenant_id: Tenant identifier
 
         Returns:
-            User limits object
+            Tenant limits object
         """
         if not self.redis:
             await self.connect()
 
-        limits_key = f"user:{user_id}:limits"
+        limits_key = f"tenant:{tenant_id}:limits"
         redis = self._ensure_redis()
         limits_data = await redis.hgetall(limits_key)  # type: ignore[misc]
 
         if not limits_data:
             # Return defaults
-            return UserLimits(
+            return TenantLimits(
                 max_concurrent_tasks=self.max_concurrent_tasks,
                 max_queued_tasks=self.max_queued_tasks,
                 max_documents=self.max_documents,
@@ -524,19 +524,19 @@ class RedisStateManager:
                 except ValueError:
                     limits_dict[key] = value
 
-        return UserLimits.model_validate(limits_dict)
+        return TenantLimits.model_validate(limits_dict)
 
-    async def update_user_limits(
+    async def update_tenant_limits(
         self,
-        user_id: str,
+        tenant_id: str,
         delta_active_tasks: int = 0,
         delta_queued_tasks: int = 0,
         delta_docs: int = 0,
     ) -> None:
-        """Update user resource usage counters.
+        """Update tenant resource usage counters.
 
         Args:
-            user_id: User identifier
+            tenant_id: Tenant identifier
             delta_active_tasks: Change in active tasks count
             delta_queued_tasks: Change in queued tasks count
             delta_docs: Change in active documents count
@@ -544,10 +544,10 @@ class RedisStateManager:
         if not self.redis:
             await self.connect()
 
-        limits_key = f"user:{user_id}:limits"
+        limits_key = f"tenant:{tenant_id}:limits"
 
         # Get current limits or initialize
-        limits = await self.get_user_limits(user_id)
+        limits = await self.get_tenant_limits(tenant_id)
 
         # Update counters
         limits.active_tasks = max(0, limits.active_tasks + delta_active_tasks)
@@ -562,19 +562,19 @@ class RedisStateManager:
         redis = self._ensure_redis()
         await redis.hset(limits_key, mapping=limits_dict)  # type: ignore[misc]
 
-    async def check_user_can_enqueue(
-        self, user_id: str, task_size: int
+    async def check_tenant_can_enqueue(
+        self, tenant_id: str, task_size: int
     ) -> tuple[bool, str]:
-        """Check if user can enqueue a new task.
+        """Check if tenant can enqueue a new task.
 
         Args:
-            user_id: User identifier
+            tenant_id: Tenant identifier
             task_size: Number of documents in task
 
         Returns:
             Tuple of (can_enqueue, reason_if_not)
         """
-        limits = await self.get_user_limits(user_id)
+        limits = await self.get_tenant_limits(tenant_id)
 
         # Check queue limit
         if limits.max_queued_tasks is not None:
@@ -583,22 +583,22 @@ class RedisStateManager:
 
         return True, ""
 
-    async def check_user_can_process(
-        self, user_id: str, task_size: int
+    async def check_tenant_can_process(
+        self, tenant_id: str, task_size: int
     ) -> tuple[bool, str]:
-        """Check if user can start processing a task.
+        """Check if tenant can start processing a task.
 
         Args:
-            user_id: User identifier
+            tenant_id: Tenant identifier
             task_size: Number of documents in task
 
         Returns:
             Tuple of (can_process, reason_if_not)
         """
-        limits = await self.get_user_limits(user_id)
+        limits = await self.get_tenant_limits(tenant_id)
 
         _log.debug(
-            f"[CAPACITY-CHECK] {user_id}: "
+            f"[CAPACITY-CHECK] {tenant_id}: "
             f"active_tasks={limits.active_tasks}/{limits.max_concurrent_tasks}, "
             f"active_docs={limits.active_documents}/{limits.max_documents or 'unlimited'}, "
             f"task_size={task_size}"
@@ -607,33 +607,33 @@ class RedisStateManager:
         # Check concurrent task limit
         if limits.active_tasks >= limits.max_concurrent_tasks:
             reason = f"Concurrent task limit reached ({limits.max_concurrent_tasks})"
-            _log.debug(f"[CAPACITY-CHECK] {user_id}: BLOCKED - {reason}")
+            _log.debug(f"[CAPACITY-CHECK] {tenant_id}: BLOCKED - {reason}")
             return False, reason
 
         # Check document limit if enabled
         if limits.max_documents is not None:
             if limits.active_documents + task_size > limits.max_documents:
                 reason = f"Document limit would be exceeded ({limits.max_documents})"
-                _log.debug(f"[CAPACITY-CHECK] {user_id}: BLOCKED - {reason}")
+                _log.debug(f"[CAPACITY-CHECK] {tenant_id}: BLOCKED - {reason}")
                 return False, reason
 
-        _log.debug(f"[CAPACITY-CHECK] {user_id}: ALLOWED")
+        _log.debug(f"[CAPACITY-CHECK] {tenant_id}: ALLOWED")
         return True, ""
 
     # User Statistics Operations
 
-    async def update_user_stats(
+    async def update_tenant_stats(
         self,
-        user_id: str,
+        tenant_id: str,
         delta_total_tasks: int = 0,
         delta_total_documents: int = 0,
         delta_successful_documents: int = 0,
         delta_failed_documents: int = 0,
     ) -> None:
-        """Update user statistics.
+        """Update tenant statistics.
 
         Args:
-            user_id: User identifier
+            tenant_id: Tenant identifier
             delta_total_tasks: Change in total tasks count
             delta_total_documents: Change in total documents count
             delta_successful_documents: Change in successful documents count
@@ -642,7 +642,7 @@ class RedisStateManager:
         if not self.redis:
             await self.connect()
 
-        stats_key = f"user:{user_id}:stats"
+        stats_key = f"tenant:{tenant_id}:stats"
 
         # Use HINCRBY for atomic increments
         if delta_total_tasks != 0:
@@ -661,24 +661,24 @@ class RedisStateManager:
                 stats_key, "failed_documents", delta_failed_documents
             )
 
-    async def get_user_stats(self, user_id: str) -> UserStats:
-        """Get user statistics.
+    async def get_tenant_stats(self, tenant_id: str) -> TenantStats:
+        """Get tenant statistics.
 
         Args:
-            user_id: User identifier
+            tenant_id: Tenant identifier
 
         Returns:
-            User statistics object
+            Tenant statistics object
         """
         if not self.redis:
             await self.connect()
 
-        stats_key = f"user:{user_id}:stats"
+        stats_key = f"tenant:{tenant_id}:stats"
         redis = self._ensure_redis()
         stats_data = await redis.hgetall(stats_key)  # type: ignore[misc]
 
         if not stats_data:
-            return UserStats()
+            return TenantStats()
 
         # Decode and parse
         stats_dict = {}
@@ -687,7 +687,7 @@ class RedisStateManager:
             value = int(v.decode("utf-8"))
             stats_dict[key] = value
 
-        return UserStats.model_validate(stats_dict)
+        return TenantStats.model_validate(stats_dict)
 
     # Atomic Task Dispatch Operations
 
@@ -708,9 +708,9 @@ class RedisStateManager:
         """
         import datetime
 
-        queue_key = f"user:{user_id}:tasks"
-        active_key = f"user:{user_id}:active_tasks"
-        limits_key = f"user:{user_id}:limits"
+        queue_key = f"tenant:{user_id}:tasks"
+        active_key = f"tenant:{user_id}:active_tasks"
+        limits_key = f"tenant:{user_id}:limits"
         processing_key = f"task:{task_id}:processing"
 
         redis = self._ensure_redis()
@@ -769,7 +769,7 @@ class RedisStateManager:
                 await pipe.execute()
 
                 _log.debug(
-                    f"[REDIS-ATOMIC] Dispatched task {task_id} for user {user_id}"
+                    f"[REDIS-ATOMIC] Dispatched task {task_id} for tenant {user_id}"
                 )
                 return True
 
@@ -794,8 +794,8 @@ class RedisStateManager:
             task_id: Task identifier
             task_size: Number of documents in task
         """
-        active_key = f"user:{user_id}:active_tasks"
-        limits_key = f"user:{user_id}:limits"
+        active_key = f"tenant:{user_id}:active_tasks"
+        limits_key = f"tenant:{user_id}:limits"
 
         redis = self._ensure_redis()
 
@@ -812,20 +812,20 @@ class RedisStateManager:
 
             await pipe.execute()
 
-        _log.debug(f"[REDIS-ATOMIC] Completed task {task_id} for user {user_id}")
+        _log.debug(f"[REDIS-ATOMIC] Completed task {task_id} for tenant {user_id}")
 
-    async def get_user_active_task_count(self, user_id: str) -> int:
-        """Get number of active tasks for user from Redis set.
+    async def get_tenant_active_task_count(self, tenant_id: str) -> int:
+        """Get number of active tasks for tenant from Redis set.
 
         This is the source of truth, not the counter in limits.
 
         Args:
-            user_id: User identifier
+            tenant_id: Tenant identifier
 
         Returns:
             Number of active tasks
         """
-        active_key = f"user:{user_id}:active_tasks"
+        active_key = f"tenant:{tenant_id}:active_tasks"
         redis = self._ensure_redis()
         count = await redis.scard(active_key)  # type: ignore[misc]
         return int(count)
@@ -839,57 +839,57 @@ class RedisStateManager:
         Returns:
             List of task IDs
         """
-        active_key = f"user:{user_id}:active_tasks"
+        active_key = f"tenant:{user_id}:active_tasks"
         redis = self._ensure_redis()
         task_ids = await redis.smembers(active_key)  # type: ignore[misc]
         return [tid.decode("utf-8") for tid in task_ids]
 
-    async def get_all_users_with_active_tasks(self) -> list[str]:
-        """Get list of all users with active tasks.
+    async def get_all_tenants_with_active_tasks(self) -> list[str]:
+        """Get list of all tenants with active tasks.
 
         Returns:
-            List of user IDs
+            List of tenant IDs
         """
-        users = []
+        tenants = []
         redis = self._ensure_redis()
-        async for key in redis.scan_iter(match="user:*:active_tasks"):  # type: ignore[union-attr]
+        async for key in redis.scan_iter(match="tenant:*:active_tasks"):  # type: ignore[union-attr]
             key_str = key.decode("utf-8")
             parts = key_str.split(":")
             if len(parts) == 3:
-                user_id = parts[1]
+                tenant_id = parts[1]
                 # Check if set is non-empty
                 count = await redis.scard(key)  # type: ignore[misc]
                 if count > 0:
-                    users.append(user_id)
-        return users
+                    tenants.append(tenant_id)
+        return tenants
 
-    async def get_all_users_with_any_tasks(self) -> list[str]:
-        """Get list of all users with pending OR active tasks.
+    async def get_all_tenants_with_any_tasks(self) -> list[str]:
+        """Get list of all tenants with pending OR active tasks.
 
-        This combines users from both queued tasks and active tasks,
+        This combines tenants from both queued tasks and active tasks,
         providing complete visibility for metrics and monitoring.
 
         Returns:
-            List of unique user IDs with any tasks (queued or active)
+            List of unique tenant IDs with any tasks (queued or active)
         """
-        users_set = set()
+        tenants_set = set()
 
-        # Get users with queued tasks (waiting to be dispatched)
-        queued_users = await self.get_all_users_with_tasks()
-        users_set.update(queued_users)
+        # Get tenants with queued tasks (waiting to be dispatched)
+        queued_tenants = await self.get_all_tenants_with_tasks()
+        tenants_set.update(queued_tenants)
 
-        # Get users with active tasks (currently being processed)
-        active_users = await self.get_all_users_with_active_tasks()
-        users_set.update(active_users)
+        # Get tenants with active tasks (currently being processed)
+        active_tenants = await self.get_all_tenants_with_active_tasks()
+        tenants_set.update(active_tenants)
 
-        return list(users_set)
+        return list(tenants_set)
 
-    async def mark_task_processing(self, task_id: str, user_id: str) -> None:
+    async def mark_task_processing(self, task_id: str, tenant_id: str) -> None:
         """Mark task as actively processing.
 
         Args:
             task_id: Task identifier
-            user_id: User identifier
+            tenant_id: Tenant identifier
         """
         import datetime
 

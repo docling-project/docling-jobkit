@@ -1,4 +1,4 @@
-"""Data models for Fair Ray orchestrator."""
+"""Data models for Ray orchestrator."""
 
 from typing import Optional
 
@@ -7,8 +7,8 @@ from pydantic import BaseModel, Field
 from docling_jobkit.datamodel.task_meta import TaskProcessingMeta, TaskStatus
 
 
-class UserLimits(BaseModel):
-    """Per-user resource limits and current usage.
+class TenantLimits(BaseModel):
+    """Per-tenant resource limits and current usage.
 
     Attributes:
         max_concurrent_tasks: Maximum tasks being scheduled/processed simultaneously
@@ -33,8 +33,8 @@ class UserLimits(BaseModel):
     active_documents: int = Field(default=0, description="Currently being processed")
 
 
-class UserStats(BaseModel):
-    """Per-user statistics for tracking usage and performance.
+class TenantStats(BaseModel):
+    """Per-tenant statistics for tracking usage and performance.
 
     Attributes:
         total_tasks: Total number of tasks submitted

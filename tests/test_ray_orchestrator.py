@@ -195,9 +195,9 @@ async def test_convert_document_full_lifecycle(
     new_queue_size = await orchestrator.queue_size()
     assert new_queue_size >= initial_queue_size
 
-    # Validate user metadata handling
-    task.metadata["user_id"] = "test_user_123"
-    assert task.metadata.get("user_id") == "test_user_123"
+    # Validate tenant metadata handling
+    task.metadata["tenant_id"] = "test_tenant_123"
+    assert task.metadata.get("tenant_id") == "test_tenant_123"
 
     # Validate task tracking
     assert task.task_id in orchestrator.tasks
@@ -313,8 +313,8 @@ async def test_metadata_field_backward_compatibility():
     assert task.metadata == {}
 
     # Should be able to add metadata
-    task.metadata["user_id"] = "test_user"
-    assert task.metadata["user_id"] == "test_user"
+    task.metadata["tenant_id"] = "test_tenant"
+    assert task.metadata["tenant_id"] == "test_tenant"
 
 
 @pytest.mark.asyncio

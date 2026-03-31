@@ -125,8 +125,8 @@ class DocumentProcessorDeployment:
             f"with {len(task.sources)} documents"
         )
 
-        # Extract user_id from task metadata (needed for cleanup)
-        user_id = task.metadata.get("user_id", "default")
+        # Extract tenant_id from task metadata (needed for cleanup)
+        tenant_id = task.metadata.get("tenant_id", "default")
 
         # Update task status and processing state (actor is now actively processing)
         try:
@@ -136,7 +136,7 @@ class DocumentProcessorDeployment:
             )
 
             # Update processing state to "processing" (used for accurate metrics)
-            await self.redis_manager.mark_task_processing(task.task_id, user_id)
+            await self.redis_manager.mark_task_processing(task.task_id, tenant_id)
 
             _log.debug(
                 f"Replica {self.replica_id}: Task {task.task_id} marked as processing"
