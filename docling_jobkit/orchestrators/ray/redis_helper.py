@@ -367,7 +367,7 @@ class RedisStateManager:
         if not self.redis:
             await self.connect()
 
-        active_key = f"user:{user_id}:active_tasks"
+        active_key = f"tenant:{user_id}:active_tasks"
         redis = self._ensure_redis()
         task_ids = await redis.smembers(active_key)  # type: ignore[misc]
 
@@ -397,7 +397,7 @@ class RedisStateManager:
         if not self.redis:
             await self.connect()
 
-        active_key = f"user:{user_id}:active_tasks"
+        active_key = f"tenant:{user_id}:active_tasks"
         redis = self._ensure_redis()
         task_ids = await redis.smembers(active_key)  # type: ignore[misc]
 
@@ -708,9 +708,9 @@ class RedisStateManager:
         """
         import datetime
 
-        queue_key = f"user:{user_id}:tasks"
-        active_key = f"user:{user_id}:active_tasks"
-        limits_key = f"user:{user_id}:limits"
+        queue_key = f"tenant:{user_id}:tasks"
+        active_key = f"tenant:{user_id}:active_tasks"
+        limits_key = f"tenant:{user_id}:limits"
         processing_key = f"task:{task_id}:processing"
 
         redis = self._ensure_redis()
@@ -769,7 +769,7 @@ class RedisStateManager:
                 await pipe.execute()
 
                 _log.debug(
-                    f"[REDIS-ATOMIC] Dispatched task {task_id} for user {user_id}"
+                    f"[REDIS-ATOMIC] Dispatched task {task_id} for tenant {user_id}"
                 )
                 return True
 
@@ -794,8 +794,8 @@ class RedisStateManager:
             task_id: Task identifier
             task_size: Number of documents in task
         """
-        active_key = f"user:{user_id}:active_tasks"
-        limits_key = f"user:{user_id}:limits"
+        active_key = f"tenant:{user_id}:active_tasks"
+        limits_key = f"tenant:{user_id}:limits"
 
         redis = self._ensure_redis()
 
@@ -812,7 +812,7 @@ class RedisStateManager:
 
             await pipe.execute()
 
-        _log.debug(f"[REDIS-ATOMIC] Completed task {task_id} for user {user_id}")
+        _log.debug(f"[REDIS-ATOMIC] Completed task {task_id} for tenant {user_id}")
 
     async def get_tenant_active_task_count(self, tenant_id: str) -> int:
         """Get number of active tasks for tenant from Redis set.
@@ -839,7 +839,7 @@ class RedisStateManager:
         Returns:
             List of task IDs
         """
-        active_key = f"user:{user_id}:active_tasks"
+        active_key = f"tenant:{user_id}:active_tasks"
         redis = self._ensure_redis()
         task_ids = await redis.smembers(active_key)  # type: ignore[misc]
         return [tid.decode("utf-8") for tid in task_ids]
