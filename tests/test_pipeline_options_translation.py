@@ -83,7 +83,7 @@ class TestPipelineOptionsTranslation:
 
         assert isinstance(ocr_opts, KserveV2OcrOptions)
         assert str(ocr_opts.url) == "http://triton-ocr.internal:8001"
-        assert ocr_opts.model_name == "rapidocr"
+        assert ocr_opts.model_name == "ocr"
         assert ocr_opts.transport == "grpc"
         assert ocr_opts.force_full_page_ocr is True  # from force_ocr=True in payload
 
