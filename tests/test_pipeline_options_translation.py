@@ -45,7 +45,6 @@ PAYLOAD = {
 }
 
 
-
 class TestPipelineOptionsTranslation:
     @pytest.fixture
     def manager(self):
