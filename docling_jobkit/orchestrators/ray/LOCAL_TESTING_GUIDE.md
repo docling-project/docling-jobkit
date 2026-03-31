@@ -121,11 +121,11 @@ async def main():
         convert_options=ConvertDocumentsOptions(),  # Use default options
     )
     
-    # Set user metadata
-    task.metadata["user_id"] = "test_user_123"
+    # Set tenant metadata
+    task.metadata["tenant_id"] = "test_tenant_123"
     
     print(f"✅ Task enqueued: {task.task_id}")
-    print(f"   User: {task.metadata.get('user_id')}")
+    print(f"   Tenant: {task.metadata.get('tenant_id')}")
     print(f"   Status: {task.task_status}")
     print(f"   Sources: {len(task.sources)}")
     
@@ -358,7 +358,7 @@ rm -rf /tmp/ray
 Once local testing works:
 
 1. **Test with real PDFs**: Replace test content with actual PDF files
-2. **Test multi-user scenarios**: Enqueue tasks with different user_ids
+2. **Test multi-tenant scenarios**: Enqueue tasks with different tenant_ids
 3. **Test queue limits**: Configure limits and verify rejection
 4. **Load testing**: Enqueue many tasks to test scalability
 5. **Integration testing**: Integrate with docling-serve
@@ -368,11 +368,11 @@ Once local testing works:
 ### Test Multi-User Fair Scheduling
 
 ```python
-# Enqueue tasks for multiple users
-for user_id in ["alice", "bob", "charlie"]:
+# Enqueue tasks for multiple tenants
+for tenant_id in ["alice", "bob", "charlie"]:
     for i in range(5):
         task = await orchestrator.enqueue(sources=[...], target=InBodyTarget())
-        task.metadata["user_id"] = user_id
+        task.metadata["tenant_id"] = tenant_id
 
 # Watch fair scheduling in action - each user gets one task per round
 ```

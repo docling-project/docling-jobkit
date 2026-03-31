@@ -68,7 +68,7 @@ def _parse_memory_string(memory_str: str) -> int:
 
 
 class QueueLimitExceededError(OrchestratorError):
-    """Raised when user queue limit is exceeded and rejection is enabled."""
+    """Raised when tenant queue limit is exceeded and rejection is enabled."""
 
 
 class RayOrchestrator(BaseOrchestrator):
@@ -76,7 +76,7 @@ class RayOrchestrator(BaseOrchestrator):
 
     Features:
     - Fair round-robin scheduling at task level
-    - Per-user task queues in Redis
+    - Per-tenant task queues in Redis
     - Configurable resource limits (concurrent + optional queue limits)
     - Optional 429 rejection when queue limits exceeded
     - Ray Serve for autoscaling document processing with persistent converters
@@ -84,8 +84,8 @@ class RayOrchestrator(BaseOrchestrator):
     - Fault tolerance with automatic retries and recovery
 
     Architecture:
-    1. Tasks are enqueued to per-user Redis queues
-    2. Ray Task Dispatcher (Ray Actor) pulls one task per user per round
+    1. Tasks are enqueued to per-tenant Redis queues
+    2. Ray Task Dispatcher (Ray Actor) pulls one task per tenant per round
     3. Tasks are processed using Ray Serve with autoscaling replicas
     4. Results are stored in Redis with configurable TTL
     5. Updates are published via Redis pub/sub
@@ -373,7 +373,7 @@ class RayOrchestrator(BaseOrchestrator):
             chunking_options: Chunking options (for CHUNK tasks)
             chunking_export_options: Chunking export options
             callbacks: List of callback specifications
-            metadata: Optional metadata dict (e.g., {"user_id": "user123"})
+            metadata: Optional metadata dict (e.g., {"tenant_id": "tenant123"})
 
         Returns:
             Created task
@@ -421,47 +421,47 @@ class RayOrchestrator(BaseOrchestrator):
                 metadata=metadata or {},
             )
 
-            user_id = task.metadata.get("user_id", "default")
+            tenant_id = task.metadata.get("tenant_id", "default")
             _log.info(
-                f"Enqueueing task {task_id} for user {user_id} with {len(sources)} documents"
+                f"Enqueueing task {task_id} for tenant {tenant_id} with {len(sources)} documents"
             )
 
-            can_enqueue, reason = await self.redis_manager.check_user_can_enqueue(
-                user_id, len(sources)
+            can_enqueue, reason = await self.redis_manager.check_tenant_can_enqueue(
+                tenant_id, len(sources)
             )
             if not can_enqueue:
                 if self.config.enable_queue_limit_rejection:
-                    _log.warning(f"Rejecting task for user {user_id}: {reason}")
+                    _log.warning(f"Rejecting task for tenant {tenant_id}: {reason}")
                     raise QueueLimitExceededError(
-                        f"Queue limit exceeded for user {user_id}: {reason}"
+                        f"Queue limit exceeded for tenant {tenant_id}: {reason}"
                     )
                 _log.warning(
-                    f"User {user_id} exceeding limits but enqueueing: {reason}"
+                    f"Tenant {tenant_id} exceeding limits but enqueueing: {reason}"
                 )
 
             await self.redis_manager.set_task_metadata(
                 task_id=task_id,
-                user_id=user_id,
+                tenant_id=tenant_id,
                 status=TaskStatus.PENDING,
             )
             await self.redis_manager.set_task_dispatch_state(task_id, "queued")
-            await self.redis_manager.enqueue_task(user_id, task)
+            await self.redis_manager.enqueue_task(tenant_id, task)
             await self.init_task_tracking(task)
 
             _log.debug(f"Task {task_id} enqueued successfully")
             return task
 
     async def queue_size(self) -> int:
-        """Get total queue size across all users.
+        """Get total queue size across all tenants.
 
         Returns:
             Total number of queued tasks
         """
-        users = await self.redis_manager.get_all_users_with_tasks()
+        tenants = await self.redis_manager.get_all_tenants_with_tasks()
         total_size = 0
 
-        for user_id in users:
-            size = await self.redis_manager.get_user_queue_size(user_id)
+        for tenant_id in tenants:
+            size = await self.redis_manager.get_tenant_queue_size(tenant_id)
             total_size += size
 
         return total_size
@@ -470,7 +470,7 @@ class RayOrchestrator(BaseOrchestrator):
         """Get position in queue for a specific task.
 
         Note: This is approximate due to fair scheduling - tasks from different
-        users are interleaved, so position depends on other users' queues.
+        tenants are interleaved, so position depends on other tenants' queues.
 
         Args:
             task_id: Task identifier
@@ -483,11 +483,11 @@ class RayOrchestrator(BaseOrchestrator):
             if not metadata:
                 return None
 
-            user_id = metadata.get("user_id")
-            if not user_id:
+            tenant_id = metadata.get("tenant_id")
+            if not tenant_id:
                 return None
 
-            queue_size = await self.redis_manager.get_user_queue_size(user_id)
+            queue_size = await self.redis_manager.get_tenant_queue_size(tenant_id)
             return queue_size if queue_size > 0 else None
 
     async def task_result(
@@ -665,7 +665,7 @@ class RayOrchestrator(BaseOrchestrator):
         Returns:
             Dictionary with orchestrator stats
         """
-        users = await self.redis_manager.get_all_users_with_tasks()
+        tenants = await self.redis_manager.get_all_tenants_with_tasks()
 
         # Get dispatcher stats
         try:
@@ -677,7 +677,7 @@ class RayOrchestrator(BaseOrchestrator):
         stats = {
             "orchestrator_type": "ray",
             "total_tasks": len(self.tasks),
-            "users_with_tasks": len(users),
+            "tenants_with_tasks": len(tenants),
             "queue_size": await self.queue_size(),
             "dispatcher": dispatcher_stats,
             "config": {

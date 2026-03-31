@@ -24,14 +24,14 @@ class RayTaskDispatcher:
     """Ray Task Dispatcher - Round-robin scheduling at TASK level.
 
     This Ray Actor runs a continuous dispatch loop that:
-    1. Discovers all users with pending tasks
-    2. For each user (round-robin):
-       - Peeks at next task in user's queue
-       - Checks if user has capacity
+    1. Discovers all tenants with pending tasks
+    2. For each tenant (round-robin):
+       - Peeks at next task in tenant's queue
+       - Checks if tenant has capacity
        - If yes: pops task, updates limits, schedules with Ray Serve
-       - If no: skips user this round
+       - If no: skips tenant this round
 
-    The dispatcher ensures fair resource allocation by giving each user
+    The dispatcher ensures fair resource allocation by giving each tenant
     an equal opportunity to have their tasks processed, regardless of
     queue size.
     """
@@ -146,7 +146,7 @@ class RayTaskDispatcher:
 
     async def _log_dispatcher_stats(self):
         """Log comprehensive dispatcher statistics."""
-        users = await self.redis_manager.get_all_users_with_tasks()
+        tenants = await self.redis_manager.get_all_tenants_with_tasks()
 
         _log.info("=" * 60)
         _log.info("[DISPATCHER-STATS] Current State:")
@@ -154,22 +154,24 @@ class RayTaskDispatcher:
         total_active = 0
         total_queued = 0
 
-        for user_id in users:
-            active_count = await self.redis_manager.get_user_active_task_count(user_id)
-            limits = await self.redis_manager.get_user_limits(user_id)
-            queue_size = await self.redis_manager.get_user_queue_size(user_id)
+        for tenant_id in tenants:
+            active_count = await self.redis_manager.get_tenant_active_task_count(
+                tenant_id
+            )
+            limits = await self.redis_manager.get_tenant_limits(tenant_id)
+            queue_size = await self.redis_manager.get_tenant_queue_size(tenant_id)
 
             total_active += active_count
             total_queued += queue_size
 
             _log.info(
-                f"  User {user_id}: "
+                f"  Tenant {tenant_id}: "
                 f"active={active_count}/{limits.max_concurrent_tasks}, "
                 f"queued={queue_size}"
             )
 
         _log.info(
-            f"  TOTAL: active={total_active}, queued={total_queued}, users={len(users)}"
+            f"  TOTAL: active={total_active}, queued={total_queued}, tenants={len(tenants)}"
         )
         _log.info("=" * 60)
 
@@ -179,13 +181,13 @@ class RayTaskDispatcher:
         Algorithm:
         1. Update dispatcher heartbeat
         2. Check for orphaned tasks (from previous dispatcher crash)
-        3. Discover all users with pending tasks
-        4. For each user (round-robin):
+        3. Discover all tenants with pending tasks
+        4. For each tenant (round-robin):
            a. Check current active task count
            b. Launch tasks until max_concurrent_tasks limit reached
-           c. Skip user if at capacity or no more tasks
+           c. Skip tenant if at capacity or no more tasks
 
-        This ensures fair scheduling while maximizing concurrency - each user
+        This ensures fair scheduling while maximizing concurrency - each tenant
         can have up to max_concurrent_tasks running simultaneously.
         """
         # Update dispatcher heartbeat
@@ -194,29 +196,29 @@ class RayTaskDispatcher:
         # Check for orphaned tasks (from previous dispatcher crash)
         await self._recover_orphaned_tasks()
 
-        # Get all users with tasks
-        users = await self.redis_manager.get_all_users_with_tasks()
+        # Get all tenants with tasks
+        tenants = await self.redis_manager.get_all_tenants_with_tasks()
 
-        if not users:
-            _log.debug("[DISPATCH-ROUND] No users with pending tasks")
+        if not tenants:
+            _log.debug("[DISPATCH-ROUND] No tenants with pending tasks")
             return
 
-        _log.info(f"[DISPATCH-ROUND] Starting: {len(users)} users with tasks")
+        _log.info(f"[DISPATCH-ROUND] Starting: {len(tenants)} tenants with tasks")
 
-        # Round-robin: launch UP TO max_concurrent_tasks per user
-        for user_id in users:
+        # Round-robin: launch UP TO max_concurrent_tasks per tenant
+        for tenant_id in tenants:
             try:
                 # Get current active count from Redis (source of truth)
-                active_count = await self.redis_manager.get_user_active_task_count(
-                    user_id
+                active_count = await self.redis_manager.get_tenant_active_task_count(
+                    tenant_id
                 )
-                limits = await self.redis_manager.get_user_limits(user_id)
-                queue_size = await self.redis_manager.get_user_queue_size(user_id)
+                limits = await self.redis_manager.get_tenant_limits(tenant_id)
+                queue_size = await self.redis_manager.get_tenant_queue_size(tenant_id)
 
                 capacity_available = limits.max_concurrent_tasks - active_count
 
                 _log.info(
-                    f"[DISPATCH-USER] {user_id}: "
+                    f"[DISPATCH-TENANT] {tenant_id}: "
                     f"active={active_count}/{limits.max_concurrent_tasks}, "
                     f"queued={queue_size}, "
                     f"capacity={capacity_available}"
@@ -225,7 +227,7 @@ class RayTaskDispatcher:
                 # Launch tasks until we hit the limit
                 tasks_launched = 0
                 while active_count < limits.max_concurrent_tasks and queue_size > 0:
-                    dispatched = await self._dispatch_user_task(user_id)
+                    dispatched = await self._dispatch_tenant_task(tenant_id)
                     if not dispatched:
                         break  # No more tasks or dispatch failed
 
@@ -235,65 +237,66 @@ class RayTaskDispatcher:
 
                 if tasks_launched > 0:
                     _log.info(
-                        f"[DISPATCH-USER] {user_id}: Launched {tasks_launched} tasks this round"
+                        f"[DISPATCH-TENANT] {tenant_id}: Launched {tasks_launched} tasks this round"
                     )
 
             except Exception as e:
                 _log.error(
-                    f"Error dispatching tasks for user {user_id}: {e}", exc_info=True
+                    f"Error dispatching tasks for tenant {tenant_id}: {e}",
+                    exc_info=True,
                 )
 
         _log.info("[DISPATCH-ROUND] Completed")
 
-    async def _dispatch_user_task(self, user_id: str) -> bool:
-        """Dispatch ONE task for a user (fire-and-forget with Redis tracking).
+    async def _dispatch_tenant_task(self, tenant_id: str) -> bool:
+        """Dispatch ONE task for a tenant (fire-and-forget with Redis tracking).
 
         Args:
-            user_id: User identifier
+            tenant_id: Tenant identifier
 
         Returns:
             True if task was dispatched, False otherwise
         """
         # Peek at next task
-        task = await self.redis_manager.peek_task(user_id)
+        task = await self.redis_manager.peek_task(tenant_id)
         if not task:
-            _log.debug(f"[DISPATCH] User {user_id}: No tasks in queue")
+            _log.debug(f"[DISPATCH] Tenant {tenant_id}: No tasks in queue")
             return False
 
         task_size = len(task.sources)
 
-        # Check if user can process (has capacity for active tasks)
-        can_process, reason = await self.redis_manager.check_user_can_process(
-            user_id, task_size
+        # Check if tenant can process (has capacity for active tasks)
+        can_process, reason = await self.redis_manager.check_tenant_can_process(
+            tenant_id, task_size
         )
         if not can_process:
-            _log.debug(f"[DISPATCH] User {user_id}: SKIP - {reason}")
+            _log.debug(f"[DISPATCH] Tenant {tenant_id}: SKIP - {reason}")
             return False
 
         # ATOMIC: Pop task + Add to active set + Update limits
         success = await self.redis_manager.dispatch_task_atomic(
-            user_id, task.task_id, task_size
+            tenant_id, task.task_id, task_size
         )
         if not success:
             _log.warning(
-                f"[DISPATCH] User {user_id}: Failed atomic dispatch for {task.task_id}"
+                f"[DISPATCH] Tenant {tenant_id}: Failed atomic dispatch for {task.task_id}"
             )
             return False
 
         # Launch task asynchronously (fire-and-forget)
         # The task state is now in Redis, so restart-safe
         # Store reference to prevent premature garbage collection
-        bg_task = asyncio.create_task(self._process_task_async(task, user_id))
+        bg_task = asyncio.create_task(self._process_task_async(task, tenant_id))
         self._background_tasks.add(bg_task)
         bg_task.add_done_callback(self._background_tasks.discard)
 
         _log.info(
-            f"[DISPATCH] User {user_id}: LAUNCHED task {task.task_id} ({task_size} docs)"
+            f"[DISPATCH] Tenant {tenant_id}: LAUNCHED task {task.task_id} ({task_size} docs)"
         )
 
         return True
 
-    async def _process_task_async(self, task: Task, user_id: str):
+    async def _process_task_async(self, task: Task, tenant_id: str):
         """Process task asynchronously with Redis state tracking.
 
         This method is fire-and-forget but all state is persisted in Redis,
@@ -301,7 +304,7 @@ class RayTaskDispatcher:
 
         Args:
             task: Task to process
-            user_id: User identifier
+            tenant_id: Tenant identifier
         """
         task_id = task.task_id
         task_size = len(task.sources)
@@ -335,9 +338,9 @@ class RayTaskDispatcher:
                 )
             )
 
-            # Update user stats
-            await self.redis_manager.update_user_stats(
-                user_id,
+            # Update tenant stats
+            await self.redis_manager.update_tenant_stats(
+                tenant_id,
                 delta_total_tasks=1,
                 delta_total_documents=task_size,
                 delta_successful_documents=result.num_succeeded,
@@ -363,9 +366,9 @@ class RayTaskDispatcher:
                 )
             )
 
-            # Update user stats
-            await self.redis_manager.update_user_stats(
-                user_id,
+            # Update tenant stats
+            await self.redis_manager.update_tenant_stats(
+                tenant_id,
                 delta_total_tasks=1,
                 delta_total_documents=task_size,
                 delta_failed_documents=task_size,
@@ -373,8 +376,10 @@ class RayTaskDispatcher:
 
         finally:
             # CRITICAL: Remove from active set and decrement counters (ATOMIC)
-            await self.redis_manager.complete_task_atomic(user_id, task_id, task_size)
-            _log.info(f"[TASK-CLEANUP] {task_id}: Released capacity for user {user_id}")
+            await self.redis_manager.complete_task_atomic(tenant_id, task_id, task_size)
+            _log.info(
+                f"[TASK-CLEANUP] {task_id}: Released capacity for tenant {tenant_id}"
+            )
 
     async def _recover_orphaned_tasks(self):
         """Recover tasks orphaned by dispatcher crash.
@@ -393,15 +398,17 @@ class RayTaskDispatcher:
             f"[RECOVERY] Stale heartbeat detected ({heartbeat_age:.1f}s), checking for orphaned tasks"
         )
 
-        # Get all users with active tasks
-        users = await self.redis_manager.get_all_users_with_active_tasks()
+        # Get all tenants with active tasks
+        tenants = await self.redis_manager.get_all_tenants_with_active_tasks()
 
         recovered_count = 0
         failed_count = 0
 
-        for user_id in users:
-            # Get active task IDs for this user
-            active_task_ids = await self.redis_manager.get_user_active_task_ids(user_id)
+        for tenant_id in tenants:
+            # Get active task IDs for this tenant
+            active_task_ids = await self.redis_manager.get_tenant_active_task_ids(
+                tenant_id
+            )
 
             for task_id in active_task_ids:
                 # Check task processing state
@@ -412,7 +419,7 @@ class RayTaskDispatcher:
                 if not processing_state:
                     # No processing state = orphaned
                     _log.warning(
-                        f"[RECOVERY] Orphaned task {task_id} for user {user_id}"
+                        f"[RECOVERY] Orphaned task {task_id} for tenant {tenant_id}"
                     )
 
                     # Get task metadata to check retry count
@@ -434,7 +441,7 @@ class RayTaskDispatcher:
                         # Remove from active set
                         task_size = int(processing_state.get("task_size", 1))
                         await self.redis_manager.complete_task_atomic(
-                            user_id, task_id, task_size
+                            tenant_id, task_id, task_size
                         )
 
                         recovered_count += 1
@@ -453,7 +460,7 @@ class RayTaskDispatcher:
                         # Remove from active set
                         task_size = int(processing_state.get("task_size", 1))
                         await self.redis_manager.complete_task_atomic(
-                            user_id, task_id, task_size
+                            tenant_id, task_id, task_size
                         )
 
                         failed_count += 1
@@ -467,20 +474,22 @@ class RayTaskDispatcher:
         """Get comprehensive dispatcher statistics.
 
         Returns:
-            Dictionary with dispatcher stats including per-user details
+            Dictionary with dispatcher stats including per-tenant details
         """
-        users = await self.redis_manager.get_all_users_with_tasks()
+        tenants = await self.redis_manager.get_all_tenants_with_tasks()
 
-        # Aggregate user stats
+        # Aggregate tenant stats
         total_active_tasks = 0
         total_queued_tasks = 0
         total_capacity_available = 0
-        user_details = []
+        tenant_details = []
 
-        for user_id in users:
-            active_count = await self.redis_manager.get_user_active_task_count(user_id)
-            limits = await self.redis_manager.get_user_limits(user_id)
-            queue_size = await self.redis_manager.get_user_queue_size(user_id)
+        for tenant_id in tenants:
+            active_count = await self.redis_manager.get_tenant_active_task_count(
+                tenant_id
+            )
+            limits = await self.redis_manager.get_tenant_limits(tenant_id)
+            queue_size = await self.redis_manager.get_tenant_queue_size(tenant_id)
 
             total_active_tasks += active_count
             total_queued_tasks += queue_size
@@ -493,9 +502,9 @@ class RayTaskDispatcher:
                 else 0
             )
 
-            user_details.append(
+            tenant_details.append(
                 {
-                    "user_id": user_id,
+                    "tenant_id": tenant_id,
                     "active_tasks": active_count,
                     "max_concurrent_tasks": limits.max_concurrent_tasks,
                     "queued_tasks": queue_size,
@@ -514,11 +523,11 @@ class RayTaskDispatcher:
         stats = {
             "active": self.active,
             "last_heartbeat": self.last_heartbeat.isoformat(),
-            "users_with_tasks": len(users),
+            "tenants_with_tasks": len(tenants),
             "total_active_tasks": total_active_tasks,
             "total_queued_tasks": total_queued_tasks,
             "total_capacity_available": total_capacity_available,
-            "user_details": user_details,
+            "tenant_details": tenant_details,
             "ray_serve_deployment": deployment_stats,
             "config": {
                 "dispatcher_interval": self.config.dispatcher_interval,

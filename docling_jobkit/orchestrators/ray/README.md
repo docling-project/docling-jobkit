@@ -246,12 +246,12 @@ asyncio.run(main())
 # User A enqueues 100 tasks
 for i in range(100):
     task = await orchestrator.enqueue(sources=[...], target=InBodyTarget())
-    task.metadata["user_id"] = "user_a"
+    task.metadata["tenant_id"] = "tenant_a"
 
-# User B enqueues 10 tasks
-for i in range(10):
+    # Tenant B enqueues 10 tasks
+    for i in range(10):
     task = await orchestrator.enqueue(sources=[...], target=InBodyTarget())
-    task.metadata["user_id"] = "user_b"
+    task.metadata["tenant_id"] = "tenant_b"
 
 # Fair scheduling ensures:
 # - User B's tasks are processed alongside User A's
@@ -643,28 +643,28 @@ If you manually set Ray TLS environment variables, they may conflict with auto-g
 
 ## Redis Schema
 
-### Per-User Task Queues
-- **Key**: `user:{user_id}:tasks`
+### Per-Tenant Task Queues
+- **Key**: `tenant:{tenant_id}:tasks`
 - **Type**: List (FIFO)
 - **Value**: JSON-serialized Task objects
 
 ### Task Metadata
 - **Key**: `task:{task_id}`
 - **Type**: Hash
-- **Fields**: status, user_id, created_at, started_at, finished_at, progress, error_message
+- **Fields**: status, tenant_id, created_at, started_at, finished_at, progress, error_message
 
 ### Task Results
 - **Key**: `task:{task_id}:result`
 - **Type**: String (msgpack-serialized)
 - **TTL**: Configurable (default: 4 hours)
 
-### User Limits
-- **Key**: `user:{user_id}:limits`
+### Tenant Limits
+- **Key**: `tenant:{tenant_id}:limits`
 - **Type**: Hash
 - **Fields**: max_concurrent_tasks, max_documents, active_tasks, active_documents
 
-### User Statistics
-- **Key**: `user:{user_id}:stats`
+### Tenant Statistics
+- **Key**: `tenant:{tenant_id}:stats`
 - **Type**: Hash
 - **Fields**: total_tasks, total_documents, successful_documents, failed_documents
 
