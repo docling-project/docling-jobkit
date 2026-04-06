@@ -1127,12 +1127,21 @@ class DoclingConverterManager:
 
         # Option 3: Legacy fields (backward compatibility)
         # Use default kind with legacy fields (table_mode, table_cell_matching)
+        # Only pass legacy parameters if they're not at defaults to avoid passing
+        # unsupported parameters to kinds that don't support them
         kind = self.config.default_table_structure_kind
-        return self.table_structure_factory.create_options(
-            kind=kind,
-            mode=TableFormerMode(request.table_mode),
-            do_cell_matching=request.table_cell_matching,
-        )
+
+        # Build kwargs only with non-default legacy parameters
+        kwargs: dict[str, Any] = {}
+        default_table_options = TableStructureOptions()
+
+        if request.table_mode != default_table_options.mode:
+            kwargs["mode"] = TableFormerMode(request.table_mode)
+
+        if request.table_cell_matching != default_table_options.do_cell_matching:
+            kwargs["do_cell_matching"] = request.table_cell_matching
+
+        return self.table_structure_factory.create_options(kind=kind, **kwargs)
 
     def _parse_layout_options(self, request: ConvertDocumentsOptions) -> Any:
         """Parse layout options - preset OR custom config."""

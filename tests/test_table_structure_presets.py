@@ -171,4 +171,18 @@ def test_preset_with_legacy_fields():
     options = manager._parse_table_structure_options(request)
     # Custom preset values should be used, not legacy fields
     assert options.mode.value == "accurate"
+
+
+def test_default_legacy_fields_dont_pass_parameters():
+    """Test that default legacy fields don't pass unnecessary parameters to factory."""
+    config = DoclingConverterManagerConfig()
+    manager = DoclingConverterManager(config)
+
+    # When legacy fields are at defaults, they shouldn't be passed to factory
+    # This allows kinds that don't support these parameters to work
+    request = ConvertDocumentsOptions()  # All defaults
+    options = manager._parse_table_structure_options(request)
+
+    # Should work without errors even if the kind doesn't support mode/do_cell_matching
+    assert options is not None
     assert options.do_cell_matching is True
