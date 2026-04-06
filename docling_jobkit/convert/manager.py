@@ -122,12 +122,20 @@ class OcrCustomPresetInfo(TypedDict):
     options: dict[str, Any]
 
 
+class TableStructureCustomPresetInfo(TypedDict):
+    """Info for a custom table structure preset."""
+
+    source: Literal["custom"]
+    options: dict[str, Any]
+
+
 # Registry-specific types
 LayoutPresetInfo = Union[DoclingPresetInfo, LayoutCustomPresetInfo]
 PictureClassificationPresetInfo = Union[
     DoclingPresetInfo, PictureClassificationCustomPresetInfo
 ]
 OcrPresetInfo = Union[DoclingPresetInfo, OcrCustomPresetInfo]
+TableStructurePresetInfo = Union[DoclingPresetInfo, TableStructureCustomPresetInfo]
 
 # Generic preset info type for shared functions
 AnyPresetInfo = Union[
@@ -137,6 +145,7 @@ AnyPresetInfo = Union[
     LayoutPresetInfo,
     PictureClassificationPresetInfo,
     OcrPresetInfo,
+    TableStructurePresetInfo,
 ]
 
 
@@ -245,6 +254,20 @@ class DoclingConverterManagerConfig(BaseModel):
             "Users can provide custom configs for any allowed kind."
         ),
         examples=[["docling_tableformer", "approved_plugin_kind"]],
+    )
+
+    # Table Structure Preset Control
+    default_table_structure_preset: str = Field(
+        default="tableformer_v1_accurate",
+        description='Default table structure preset to use when user specifies "default".',
+    )
+    allowed_table_structure_presets: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed table structure preset IDs. None means all are allowed.",
+    )
+    custom_table_structure_presets: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Custom table structure presets. Maps preset ID to table structure options dict with 'kind' field.",
     )
 
     # Layout Control
@@ -614,6 +637,49 @@ class DoclingConverterManager:
                 "options": preset_options,
             }
 
+        # Table Structure Registry
+        self.table_structure_preset_registry: dict[str, TableStructurePresetInfo] = {}
+
+        # Add built-in presets
+        built_in_presets = {
+            "tableformer_v1_accurate": {
+                "kind": "docling_tableformer",
+                "mode": "accurate",
+            },
+            "tableformer_v1_fast": {
+                "kind": "docling_tableformer",
+                "mode": "fast",
+            },
+            "tableformer_v2": {
+                "kind": "docling_tableformer_v2",
+            },
+        }
+
+        for preset_id, preset_options in built_in_presets.items():
+            self.table_structure_preset_registry[preset_id] = {
+                "source": "custom",
+                "options": preset_options,
+            }
+
+        # Filter presets if allowed list is specified
+        if self.config.allowed_table_structure_presets is not None:
+            allowed_set = set(self.config.allowed_table_structure_presets)
+            self.table_structure_preset_registry = {
+                k: v
+                for k, v in self.table_structure_preset_registry.items()
+                if k in allowed_set
+            }
+
+        # Add custom presets from config (these override built-in presets)
+        for (
+            preset_id,
+            preset_options,
+        ) in self.config.custom_table_structure_presets.items():
+            self.table_structure_preset_registry[preset_id] = {
+                "source": "custom",
+                "options": preset_options,
+            }
+
     def _build_kind_registries(self):
         """Build registries of available kinds from factories."""
         # Table Structure Kinds
@@ -973,10 +1039,10 @@ class DoclingConverterManager:
         return None
 
     def _parse_table_structure_options(self, request: ConvertDocumentsOptions) -> Any:
-        """Parse table structure options - preset for default kind, custom config for others."""
+        """Parse table structure options - preset OR custom config OR legacy fields."""
 
+        # Option 1: Custom config takes highest precedence
         if request.table_structure_custom_config:
-            # Custom config provided - validate and use it
             config_dict = request.table_structure_custom_config.copy()
             kind = config_dict.get("kind")
 
@@ -991,12 +1057,12 @@ class DoclingConverterManager:
                 kind,
                 self.config.allowed_table_structure_kinds,
                 self.config.default_table_structure_kind,
-                "table structure",
+                "table_structure",
             )
 
             # Validate kind is available from factory
             self._validate_kind_available(
-                kind, self.available_table_structure_kinds, "table structure"
+                kind, self.available_table_structure_kinds, "table_structure"
             )
 
             # Create options using factory with custom config
@@ -1004,14 +1070,69 @@ class DoclingConverterManager:
                 kind=kind, **{k: v for k, v in config_dict.items() if k != "kind"}
             )
 
-        else:
-            # Use default kind with legacy fields (table_mode, table_cell_matching)
-            kind = self.config.default_table_structure_kind
-            return self.table_structure_factory.create_options(
-                kind=kind,
-                mode=TableFormerMode(request.table_mode),
-                do_cell_matching=request.table_cell_matching,
+        # Option 2: Preset (recommended)
+        # Check if preset is explicitly provided OR if we should use default
+        # (when no custom config and no legacy fields are non-default)
+        use_preset = request.table_structure_preset is not None
+
+        # If no preset specified, check if legacy fields are default
+        if not use_preset:
+            # Use preset if legacy fields are at their defaults
+            legacy_is_default = (
+                request.table_mode == TableStructureOptions().mode
+                and request.table_cell_matching
+                == TableStructureOptions().do_cell_matching
             )
+            use_preset = legacy_is_default
+
+        if use_preset:
+            preset_id = request.table_structure_preset or "default"
+
+            # Resolve "default" to the actual preset
+            if preset_id == "default":
+                preset_id = self.config.default_table_structure_preset
+
+            preset_info = self.table_structure_preset_registry.get(preset_id)
+            if not preset_info:
+                raise ValueError(f"Unknown table structure preset: {preset_id}")
+
+            # All presets are now "custom" source (built-in or user-defined)
+            # Process through factory
+            if preset_info["source"] != "custom":
+                raise ValueError(f"Preset '{preset_id}' has invalid source")
+
+            config_dict = preset_info["options"].copy()
+            kind = config_dict.get("kind")
+
+            if not kind:
+                raise ValueError(f"Preset '{preset_id}' must include a 'kind' field")
+
+            # Validate kind is allowed and available
+            self._validate_kind_allowed(
+                kind,
+                self.config.allowed_table_structure_kinds,
+                self.config.default_table_structure_kind,
+                "table_structure",
+            )
+            self._validate_kind_available(
+                kind, self.available_table_structure_kinds, "table_structure"
+            )
+
+            # Create options using factory with preset config
+            table_options = self.table_structure_factory.create_options(
+                kind=kind, **{k: v for k, v in config_dict.items() if k != "kind"}
+            )
+
+            return table_options
+
+        # Option 3: Legacy fields (backward compatibility)
+        # Use default kind with legacy fields (table_mode, table_cell_matching)
+        kind = self.config.default_table_structure_kind
+        return self.table_structure_factory.create_options(
+            kind=kind,
+            mode=TableFormerMode(request.table_mode),
+            do_cell_matching=request.table_cell_matching,
+        )
 
     def _parse_layout_options(self, request: ConvertDocumentsOptions) -> Any:
         """Parse layout options - preset OR custom config."""

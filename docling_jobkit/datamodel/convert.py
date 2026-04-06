@@ -707,6 +707,20 @@ class ConvertDocumentsOptions(BaseModel):
     # === NEW: Kind Selection for Pipeline Stages ===
 
     # Table Structure Configuration
+    table_structure_preset: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Preset ID for table structure detection.",
+            examples=[
+                "default",
+                "tableformer_v1_accurate",
+                "tableformer_v1_fast",
+                "tableformer_v2",
+            ],
+        ),
+    ] = None
+
     table_structure_custom_config: Annotated[
         Optional[dict[str, Any]],
         Field(
