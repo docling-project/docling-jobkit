@@ -65,7 +65,7 @@ def test_legacy_fields_still_work():
 
 def test_custom_config_overrides_preset():
     """Test that custom config takes precedence over preset."""
-    config = DoclingConverterManagerConfig()
+    config = DoclingConverterManagerConfig(allow_custom_table_structure_config=True)
     manager = DoclingConverterManager(config)
     request = ConvertDocumentsOptions(
         table_structure_preset="tableformer_v1_fast",

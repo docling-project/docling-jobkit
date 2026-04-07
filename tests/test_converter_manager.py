@@ -173,6 +173,45 @@ class TestCustomConfigValidation:
         with pytest.raises(ValueError, match="not allowed"):
             manager._validate_custom_config_allowed("code_formula")
 
+    @pytest.mark.parametrize(
+        ("config_type", "config_field"),
+        [
+            ("table_structure", "allow_custom_table_structure_config"),
+            ("layout", "allow_custom_layout_config"),
+            (
+                "picture_classification",
+                "allow_custom_picture_classification_config",
+            ),
+            ("ocr", "allow_custom_ocr_config"),
+        ],
+    )
+    def test_stage_custom_config_not_allowed(self, config_type, config_field):
+        """Test that stage custom configs are rejected when not allowed."""
+        config = DoclingConverterManagerConfig(**{config_field: False})
+        manager = DoclingConverterManager(config)
+
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._validate_custom_config_allowed(config_type)
+
+    @pytest.mark.parametrize(
+        ("config_type", "config_field"),
+        [
+            ("table_structure", "allow_custom_table_structure_config"),
+            ("layout", "allow_custom_layout_config"),
+            (
+                "picture_classification",
+                "allow_custom_picture_classification_config",
+            ),
+            ("ocr", "allow_custom_ocr_config"),
+        ],
+    )
+    def test_stage_custom_config_allowed(self, config_type, config_field):
+        """Test that stage custom configs are accepted when allowed."""
+        config = DoclingConverterManagerConfig(**{config_field: True})
+        manager = DoclingConverterManager(config)
+
+        manager._validate_custom_config_allowed(config_type)
+
 
 class TestEngineRestriction:
     """Test that engine restrictions are enforced."""
@@ -318,6 +357,67 @@ class TestOptionsParsingCustomConfig:
 
         with pytest.raises(ValueError, match="not allowed"):
             manager._parse_vlm_options(request)
+
+    def test_parse_table_structure_custom_config_not_allowed(self):
+        """Test that custom table structure config raises error when not allowed."""
+        config = DoclingConverterManagerConfig(
+            allow_custom_table_structure_config=False,
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(
+            table_structure_custom_config={
+                "kind": "docling_tableformer",
+                "mode": "fast",
+            },
+        )
+
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._parse_table_structure_options(request)
+
+    def test_parse_layout_custom_config_not_allowed(self):
+        """Test that custom layout config raises error when not allowed."""
+        config = DoclingConverterManagerConfig(allow_custom_layout_config=False)
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(
+            layout_custom_config={
+                "kind": "docling_layout_default",
+            },
+        )
+
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._parse_layout_options(request)
+
+    def test_parse_picture_classification_custom_config_not_allowed(self):
+        """Test that custom picture classification config raises error when not allowed."""
+        config = DoclingConverterManagerConfig(
+            allow_custom_picture_classification_config=False,
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(
+            picture_classification_custom_config={
+                "kind": "document_picture_classifier",
+            },
+        )
+
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._parse_picture_classification_options(request)
+
+    def test_parse_ocr_custom_config_not_allowed(self):
+        """Test that custom OCR config raises error when not allowed."""
+        config = DoclingConverterManagerConfig(allow_custom_ocr_config=False)
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(
+            ocr_custom_config={
+                "kind": "auto",
+            },
+        )
+
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._parse_ocr_options(request)
 
 
 class TestGetVlmOptionsFromPreset:

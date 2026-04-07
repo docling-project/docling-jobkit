@@ -48,7 +48,12 @@ PAYLOAD = {
 class TestPipelineOptionsTranslation:
     @pytest.fixture
     def manager(self):
-        config = DoclingConverterManagerConfig(allow_external_plugins=True)
+        config = DoclingConverterManagerConfig(
+            allow_external_plugins=True,
+            allow_custom_layout_config=True,
+            allow_custom_table_structure_config=True,
+            allow_custom_ocr_config=True,
+        )
         return DoclingConverterManager(config)
 
     def test_layout_options_translated(self, manager):

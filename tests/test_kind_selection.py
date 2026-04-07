@@ -25,7 +25,7 @@ class TestKindSelection:
 
     def test_custom_table_structure_kind(self):
         """Test custom table structure kind with config."""
-        config = DoclingConverterManagerConfig()
+        config = DoclingConverterManagerConfig(allow_custom_table_structure_config=True)
         manager = DoclingConverterManager(config)
 
         request = ConvertDocumentsOptions(
@@ -42,7 +42,7 @@ class TestKindSelection:
 
     def test_table_structure_kind_missing_kind_field(self):
         """Test that missing 'kind' field raises error."""
-        config = DoclingConverterManagerConfig()
+        config = DoclingConverterManagerConfig(allow_custom_table_structure_config=True)
         manager = DoclingConverterManager(config)
 
         request = ConvertDocumentsOptions(
@@ -58,7 +58,8 @@ class TestKindSelection:
     def test_table_structure_kind_not_allowed(self):
         """Test that non-allowed kind raises error."""
         config = DoclingConverterManagerConfig(
-            allowed_table_structure_kinds=["docling_tableformer"]
+            allow_custom_table_structure_config=True,
+            allowed_table_structure_kinds=["docling_tableformer"],
         )
         manager = DoclingConverterManager(config)
 
@@ -85,7 +86,7 @@ class TestKindSelection:
 
     def test_custom_layout_kind(self):
         """Test custom layout kind with config."""
-        config = DoclingConverterManagerConfig()
+        config = DoclingConverterManagerConfig(allow_custom_layout_config=True)
         manager = DoclingConverterManager(config)
 
         request = ConvertDocumentsOptions(
@@ -101,7 +102,7 @@ class TestKindSelection:
 
     def test_layout_kind_missing_kind_field(self):
         """Test that missing 'kind' field raises error."""
-        config = DoclingConverterManagerConfig()
+        config = DoclingConverterManagerConfig(allow_custom_layout_config=True)
         manager = DoclingConverterManager(config)
 
         request = ConvertDocumentsOptions(
@@ -117,7 +118,8 @@ class TestKindSelection:
     def test_layout_kind_not_allowed(self):
         """Test that non-allowed kind raises error."""
         config = DoclingConverterManagerConfig(
-            allowed_layout_kinds=["docling_layout_default"]
+            allow_custom_layout_config=True,
+            allowed_layout_kinds=["docling_layout_default"],
         )
         manager = DoclingConverterManager(config)
 
@@ -134,6 +136,7 @@ class TestKindSelection:
     def test_default_kind_always_allowed(self):
         """Test that default kind is always allowed even with allowlist."""
         config = DoclingConverterManagerConfig(
+            allow_custom_table_structure_config=True,
             default_table_structure_kind="docling_tableformer",
             allowed_table_structure_kinds=["other_kind"],  # Default not in list
         )

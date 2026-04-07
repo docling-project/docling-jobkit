@@ -89,6 +89,10 @@ async def orchestrator(artifacts_path: Path):
         allow_custom_vlm_config=True,
         allow_custom_picture_description_config=True,
         allow_custom_code_formula_config=True,
+        allow_custom_layout_config=True,
+        allow_custom_table_structure_config=True,
+        allow_custom_picture_classification_config=True,
+        allow_custom_ocr_config=True,
     )
     cm = DoclingConverterManager(config=cm_config)
 
@@ -123,6 +127,10 @@ async def replicated_orchestrator(artifacts_path: Path):
         allow_custom_vlm_config=True,
         allow_custom_picture_description_config=True,
         allow_custom_code_formula_config=True,
+        allow_custom_layout_config=True,
+        allow_custom_table_structure_config=True,
+        allow_custom_picture_classification_config=True,
+        allow_custom_ocr_config=True,
     )
     cm = DoclingConverterManager(config=cm_config)
 

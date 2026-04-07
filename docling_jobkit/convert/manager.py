@@ -269,6 +269,10 @@ class DoclingConverterManagerConfig(BaseModel):
         default_factory=dict,
         description="Custom table structure presets. Maps preset ID to table structure options dict with 'kind' field.",
     )
+    allow_custom_table_structure_config: bool = Field(
+        default=False,
+        description="Whether users can specify custom table structure configurations.",
+    )
 
     # Layout Control
     default_layout_kind: str = Field(
@@ -309,6 +313,10 @@ class DoclingConverterManagerConfig(BaseModel):
         default_factory=dict,
         description="Custom layout presets. Maps preset ID to layout options dict with 'kind' field.",
     )
+    allow_custom_layout_config: bool = Field(
+        default=False,
+        description="Whether users can specify custom layout configurations.",
+    )
 
     # Picture Classification Control
     default_picture_classification_preset: str = Field(
@@ -322,6 +330,10 @@ class DoclingConverterManagerConfig(BaseModel):
     custom_picture_classification_presets: dict[str, Any] = Field(
         default_factory=dict,
         description="Custom picture classification presets. Maps preset ID to PictureClassificationOptions.",
+    )
+    allow_custom_picture_classification_config: bool = Field(
+        default=False,
+        description="Whether users can specify custom picture classification configurations.",
     )
 
     # OCR Control
@@ -340,6 +352,10 @@ class DoclingConverterManagerConfig(BaseModel):
     allowed_ocr_kinds: Optional[list[str]] = Field(
         default=None,
         description="List of allowed OCR kinds. None means all are allowed.",
+    )
+    allow_custom_ocr_config: bool = Field(
+        default=False,
+        description="Whether users can specify custom OCR configurations.",
     )
 
 
@@ -765,6 +781,32 @@ class DoclingConverterManager:
                 "Custom code/formula configuration is not allowed. "
                 "Please use a preset or contact your administrator."
             )
+        elif (
+            config_type == "table_structure"
+            and not self.config.allow_custom_table_structure_config
+        ):
+            raise ValueError(
+                "Custom table structure configuration is not allowed. "
+                "Please use a preset or contact your administrator."
+            )
+        elif config_type == "layout" and not self.config.allow_custom_layout_config:
+            raise ValueError(
+                "Custom layout configuration is not allowed. "
+                "Please use a preset or contact your administrator."
+            )
+        elif (
+            config_type == "picture_classification"
+            and not self.config.allow_custom_picture_classification_config
+        ):
+            raise ValueError(
+                "Custom picture classification configuration is not allowed. "
+                "Please use a preset or contact your administrator."
+            )
+        elif config_type == "ocr" and not self.config.allow_custom_ocr_config:
+            raise ValueError(
+                "Custom OCR configuration is not allowed. "
+                "Please use a preset or contact your administrator."
+            )
 
     def _validate_engine_allowed(
         self, engine_type: str, allowed_engines: Optional[list[str]]
@@ -1043,6 +1085,8 @@ class DoclingConverterManager:
 
         # Option 1: Custom config takes highest precedence
         if request.table_structure_custom_config:
+            self._validate_custom_config_allowed("table_structure")
+
             config_dict = request.table_structure_custom_config.copy()
             kind = config_dict.get("kind")
 
@@ -1183,6 +1227,8 @@ class DoclingConverterManager:
 
         # Option 2: Custom config (existing logic)
         if request.layout_custom_config:
+            self._validate_custom_config_allowed("layout")
+
             config_dict = request.layout_custom_config.copy()
             kind = config_dict.get("kind")
             if not kind:
@@ -1234,6 +1280,8 @@ class DoclingConverterManager:
 
         # Option 2: Custom config
         if request.picture_classification_custom_config:
+            self._validate_custom_config_allowed("picture_classification")
+
             # Custom config is passed directly as options
             return request.picture_classification_custom_config
 
@@ -1297,6 +1345,8 @@ class DoclingConverterManager:
 
         # Option 2: Custom config
         if request.ocr_custom_config:
+            self._validate_custom_config_allowed("ocr")
+
             config_dict = request.ocr_custom_config.copy()
             kind_value = config_dict.get("kind")
 
