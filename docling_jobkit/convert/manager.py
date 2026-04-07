@@ -341,6 +341,13 @@ class DoclingConverterManagerConfig(BaseModel):
         default="auto",
         description='Default OCR preset to use when user specifies "default".',
     )
+    default_ocr_kind: str = Field(
+        default="auto",
+        description=(
+            "Default OCR kind used when user doesn't provide custom config. "
+            "This kind will use preset/default configuration."
+        ),
+    )
     allowed_ocr_presets: Optional[list[str]] = Field(
         default=None,
         description="List of allowed OCR preset IDs. None means all are allowed.",
@@ -1309,8 +1316,35 @@ class DoclingConverterManager:
 
             ocr_options: OcrOptions
             if preset_info["source"] == "custom":
-                # Custom preset from manager config - stored as complete options
-                ocr_options = preset_info["options"]  # type: ignore[assignment]
+                config_dict = dict(preset_info["options"])
+                kind = config_dict.get("kind")
+
+                if not kind or not isinstance(kind, str):
+                    raise ValueError(
+                        f"Preset '{request.ocr_preset}' must include a 'kind' field"
+                    )
+
+                self._validate_kind_allowed(
+                    kind,
+                    self.config.allowed_ocr_kinds,
+                    self.config.default_ocr_kind,
+                    "OCR",
+                )
+                self._validate_kind_available(kind, self.available_ocr_kinds, "OCR")
+
+                try:
+                    ocr_options = self.ocr_factory.create_options(  # type: ignore[assignment]
+                        kind=kind,
+                        force_full_page_ocr=request.force_ocr,
+                        **{k: v for k, v in config_dict.items() if k != "kind"},
+                    )
+                except ImportError as err:
+                    raise ImportError(
+                        f"The requested OCR engine (preset={request.ocr_preset}) "
+                        "is not available on this system. Please choose another OCR engine "
+                        "or contact your system administrator.\n"
+                        f"{err}"
+                    )
             else:
                 # Docling preset - use preset_id (which is the kind)
                 kind = preset_info["preset_id"]
@@ -1319,7 +1353,7 @@ class DoclingConverterManager:
                 self._validate_kind_allowed(
                     kind,
                     self.config.allowed_ocr_kinds,
-                    self.config.default_ocr_preset,
+                    self.config.default_ocr_kind,
                     "OCR",
                 )
                 self._validate_kind_available(kind, self.available_ocr_kinds, "OCR")
@@ -1360,7 +1394,7 @@ class DoclingConverterManager:
             self._validate_kind_allowed(
                 kind_value,
                 self.config.allowed_ocr_kinds,
-                self.config.default_ocr_preset,
+                self.config.default_ocr_kind,
                 "OCR",
             )
             self._validate_kind_available(kind_value, self.available_ocr_kinds, "OCR")
@@ -1381,7 +1415,7 @@ class DoclingConverterManager:
 
         # Option 3: Use default (should not reach here due to default="auto")
         return self.ocr_factory.create_options(  # type: ignore[return-value]
-            kind=self.config.default_ocr_preset,
+            kind=self.config.default_ocr_kind,
             force_full_page_ocr=request.force_ocr,
         )
 
