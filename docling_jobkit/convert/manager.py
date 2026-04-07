@@ -1429,8 +1429,6 @@ class DoclingConverterManager:
             if value := getattr(self.config, attr):
                 setattr(pipeline_options, attr, value)
 
-        print(pipeline_options)
-
         return pipeline_options
 
     def _parse_backend(
