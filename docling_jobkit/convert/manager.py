@@ -1361,18 +1361,10 @@ class DoclingConverterManager:
             do_chart_extraction=request.do_chart_extraction,
             do_picture_description=request.do_picture_description,
         )
-        # === NEW KIND-BASED APPROACH for Table Structure ===
-        # Try new custom config approach first, fall back to legacy fields
-        if request.table_structure_custom_config:
-            pipeline_options.table_structure_options = (
-                self._parse_table_structure_options(request)
-            )
-        else:
-            # Legacy approach - use table_mode and table_cell_matching fields
-            pipeline_options.table_structure_options = TableStructureOptions(
-                mode=TableFormerMode(request.table_mode),
-                do_cell_matching=request.table_cell_matching,
-            )
+        # === NEW KIND/PRESET-BASED APPROACH for Table Structure ===
+        pipeline_options.table_structure_options = self._parse_table_structure_options(
+            request
+        )
 
         # === NEW PRESET/KIND-BASED APPROACH for Layout ===
         # Always parse layout options (will use default if no preset/custom config)
