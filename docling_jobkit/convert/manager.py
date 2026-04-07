@@ -1146,18 +1146,17 @@ class DoclingConverterManager:
     def _parse_layout_options(self, request: ConvertDocumentsOptions) -> Any:
         """Parse layout options - preset OR custom config."""
 
-        # Option 1: Preset (recommended)
-        if request.layout_preset:
-            preset_info = self.layout_preset_registry.get(request.layout_preset)
+        def _create_options_from_preset(preset_id: str) -> Any:
+            preset_info = self.layout_preset_registry.get(preset_id)
             if not preset_info:
-                raise ValueError(f"Unknown layout preset: {request.layout_preset}")
+                raise ValueError(f"Unknown layout preset: {preset_id}")
 
             if preset_info["source"] == "custom":
                 config_dict = preset_info["options"].copy()
                 kind = config_dict.get("kind")
                 if not kind:
                     raise ValueError(
-                        f"Preset '{request.layout_preset}' must include a 'kind' field"
+                        f"Preset '{preset_id}' must include a 'kind' field"
                     )
 
                 self._validate_kind_allowed(
@@ -1173,10 +1172,14 @@ class DoclingConverterManager:
                 return self.layout_factory.create_options(
                     kind=kind, **{k: v for k, v in config_dict.items() if k != "kind"}
                 )
-            else:
-                # Docling preset - use preset_id (which is the kind)
-                preset_id = preset_info["preset_id"]
-                return self.layout_factory.create_options(kind=preset_id)
+
+            # Docling preset - use preset_id (which is the kind)
+            docling_preset_id = preset_info["preset_id"]
+            return self.layout_factory.create_options(kind=docling_preset_id)
+
+        # Option 1: Preset (recommended)
+        if request.layout_preset:
+            return _create_options_from_preset(request.layout_preset)
 
         # Option 2: Custom config (existing logic)
         if request.layout_custom_config:
@@ -1201,9 +1204,7 @@ class DoclingConverterManager:
             )
 
         # Option 3: Use default
-        return self.layout_factory.create_options(
-            kind=self.config.default_layout_preset
-        )
+        return _create_options_from_preset("default")
 
     def _parse_picture_classification_options(
         self, request: ConvertDocumentsOptions
