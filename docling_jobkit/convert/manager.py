@@ -1153,8 +1153,26 @@ class DoclingConverterManager:
                 raise ValueError(f"Unknown layout preset: {request.layout_preset}")
 
             if preset_info["source"] == "custom":
-                # Custom preset from manager config - stored as complete options
-                return preset_info["options"]
+                config_dict = preset_info["options"].copy()
+                kind = config_dict.get("kind")
+                if not kind:
+                    raise ValueError(
+                        f"Preset '{request.layout_preset}' must include a 'kind' field"
+                    )
+
+                self._validate_kind_allowed(
+                    kind,
+                    self.config.allowed_layout_kinds,
+                    self.config.default_layout_kind,
+                    "layout",
+                )
+                self._validate_kind_available(
+                    kind, self.available_layout_kinds, "layout"
+                )
+
+                return self.layout_factory.create_options(
+                    kind=kind, **{k: v for k, v in config_dict.items() if k != "kind"}
+                )
             else:
                 # Docling preset - use preset_id (which is the kind)
                 preset_id = preset_info["preset_id"]
@@ -1417,6 +1435,8 @@ class DoclingConverterManager:
         ):
             if value := getattr(self.config, attr):
                 setattr(pipeline_options, attr, value)
+
+        print(pipeline_options)
 
         return pipeline_options
 
