@@ -74,6 +74,7 @@ def convert_payload(
             to_formats=[v.value for v in convert_options.to_formats],
             generate_page_images=convert_options.include_images,
             generate_picture_images=convert_options.include_images,
+            compact_tables=convert_options.compact_tables,
         )
         for item in result_processor.process_documents(
             converter.convert_documents(

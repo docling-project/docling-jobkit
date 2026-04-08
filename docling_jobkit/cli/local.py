@@ -111,6 +111,7 @@ def convert(
             to_formats=[v.value for v in config.options.to_formats],
             generate_page_images=config.options.include_images,
             generate_picture_images=config.options.include_images,
+            compact_tables=options.compact_tables,
         )
         for source in config.sources:
             with get_source_processor(source) as source_processor:
