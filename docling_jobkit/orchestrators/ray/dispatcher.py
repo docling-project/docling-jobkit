@@ -148,8 +148,8 @@ class RayTaskDispatcher:
         """Log comprehensive dispatcher statistics."""
         tenants = await self.redis_manager.get_all_tenants_with_tasks()
 
-        _log.info("=" * 60)
-        _log.info("[DISPATCHER-STATS] Current State:")
+        _log.debug("=" * 60)
+        _log.debug("[DISPATCHER-STATS] Current State:")
 
         total_active = 0
         total_queued = 0
@@ -164,16 +164,16 @@ class RayTaskDispatcher:
             total_active += active_count
             total_queued += queue_size
 
-            _log.info(
+            _log.debug(
                 f"  Tenant {tenant_id}: "
                 f"active={active_count}/{limits.max_concurrent_tasks}, "
                 f"queued={queue_size}"
             )
 
-        _log.info(
+        _log.debug(
             f"  TOTAL: active={total_active}, queued={total_queued}, tenants={len(tenants)}"
         )
-        _log.info("=" * 60)
+        _log.debug("=" * 60)
 
     async def _dispatch_round(self):
         """Execute one round of fair task dispatching.
@@ -203,7 +203,7 @@ class RayTaskDispatcher:
             _log.debug("[DISPATCH-ROUND] No tenants with pending tasks")
             return
 
-        _log.info(f"[DISPATCH-ROUND] Starting: {len(tenants)} tenants with tasks")
+        _log.debug(f"[DISPATCH-ROUND] Starting: {len(tenants)} tenants with tasks")
 
         # Round-robin: launch UP TO max_concurrent_tasks per tenant
         for tenant_id in tenants:
@@ -217,7 +217,7 @@ class RayTaskDispatcher:
 
                 capacity_available = limits.max_concurrent_tasks - active_count
 
-                _log.info(
+                _log.debug(
                     f"[DISPATCH-TENANT] {tenant_id}: "
                     f"active={active_count}/{limits.max_concurrent_tasks}, "
                     f"queued={queue_size}, "
@@ -236,7 +236,7 @@ class RayTaskDispatcher:
                     queue_size -= 1
 
                 if tasks_launched > 0:
-                    _log.info(
+                    _log.debug(
                         f"[DISPATCH-TENANT] {tenant_id}: Launched {tasks_launched} tasks this round"
                     )
 
@@ -246,7 +246,7 @@ class RayTaskDispatcher:
                     exc_info=True,
                 )
 
-        _log.info("[DISPATCH-ROUND] Completed")
+        _log.debug("[DISPATCH-ROUND] Completed")
 
     async def _dispatch_tenant_task(self, tenant_id: str) -> bool:
         """Dispatch ONE task for a tenant (fire-and-forget with Redis tracking).
