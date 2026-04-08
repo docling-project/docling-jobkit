@@ -479,11 +479,37 @@ class ConvertDocumentsOptions(BaseModel):
         ),
     ] = False
 
+    force_backend_text: Annotated[
+        bool,
+        Field(
+            description=(
+                "Force use of PDF backend's native text extraction instead of "
+                "layout model predictions. When enabled, bypasses the layout model's "
+                "text detection and uses the embedded text from the PDF file directly. "
+                "Useful for PDFs with reliable programmatic text layers. "
+                "Boolean. Optional, defaults to false."
+            ),
+        ),
+    ] = False
+
     do_table_structure: Annotated[
         bool,
         Field(
             description=(
                 "If enabled, the table structure will be extracted. "
+                "Boolean. Optional, defaults to true."
+            ),
+            examples=[True],
+        ),
+    ] = True
+
+    do_reading_order: Annotated[
+        bool,
+        Field(
+            description=(
+                "If enabled, the reading-order predictor reorders document elements. "
+                "Set to false to keep the layout postprocessor order (use together with "
+                "sort_cells_spatial=true in layout_custom_config). "
                 "Boolean. Optional, defaults to true."
             ),
             examples=[True],
