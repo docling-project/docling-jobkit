@@ -26,6 +26,9 @@ def convert_payload(
     import logging
     from pathlib import Path
 
+    from docling.datamodel.service.options import ConvertDocumentsOptions
+    from docling.datamodel.service.sources import S3Coordinates
+
     from docling_jobkit.connectors.s3_helper import (
         generate_presign_url,
         get_s3_connection,
@@ -36,8 +39,6 @@ def convert_payload(
         DoclingConverterManagerConfig,
     )
     from docling_jobkit.convert.results_processor import ResultsProcessor
-    from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
-    from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
     logging.basicConfig(level=logging.INFO)
 
@@ -104,13 +105,14 @@ def compute_batches(
     import logging
     from typing import NamedTuple
 
+    from docling.datamodel.service.sources import S3Coordinates
+
     from docling_jobkit.connectors.s3_helper import (
         check_target_has_source_converted,
         generate_batch_keys,
         get_s3_connection,
         get_source_files,
     )
-    from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
     logging.basicConfig(level=logging.INFO)
 

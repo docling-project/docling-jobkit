@@ -10,6 +10,21 @@ from pydantic import BaseModel, Field
 
 from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.document import ConversionResult
+from docling.datamodel.service.callbacks import (
+    DocumentCompletedItem,
+    FailedDocsItem,
+    ProgressDocumentCompleted,
+    ProgressSetNumDocs,
+    ProgressUpdateProcessed,
+    SucceededDocsItem,
+)
+from docling.datamodel.service.chunking import (
+    BaseChunkerOptions,
+    HierarchicalChunkerOptions,
+    HybridChunkerOptions,
+)
+from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.targets import InBodyTarget
 from docling_core.transforms.chunker import BaseChunker
 from docling_core.transforms.chunker.hierarchical_chunker import (
     ChunkingSerializerProvider,
@@ -23,20 +38,6 @@ from docling_core.transforms.chunker.tokenizer.huggingface import (
 from docling_core.types.doc.document import DoclingDocument, ImageRefMode
 
 from docling_jobkit.convert.results import _export_document_as_content
-from docling_jobkit.datamodel.callback import (
-    DocumentCompletedItem,
-    FailedDocsItem,
-    ProgressDocumentCompleted,
-    ProgressSetNumDocs,
-    ProgressUpdateProcessed,
-    SucceededDocsItem,
-)
-from docling_jobkit.datamodel.chunking import (
-    BaseChunkerOptions,
-    HierarchicalChunkerOptions,
-    HybridChunkerOptions,
-)
-from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.result import (
     ChunkedDocumentResult,
     ChunkedDocumentResultItem,
@@ -45,7 +46,6 @@ from docling_jobkit.datamodel.result import (
     ExportResult,
 )
 from docling_jobkit.datamodel.task import Task
-from docling_jobkit.datamodel.task_targets import InBodyTarget
 
 if TYPE_CHECKING:
     from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker

@@ -3,12 +3,14 @@ import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Optional
 
-from docling_jobkit.datamodel.callback import CallbackSpec, ProgressCallbackRequest
-from docling_jobkit.datamodel.chunking import BaseChunkerOptions, ChunkingExportOptions
-from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
+from docling.datamodel.service.callbacks import CallbackSpec, ProgressCallbackRequest
+from docling.datamodel.service.chunking import BaseChunkerOptions
+from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.tasks import TaskType
+
+from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource
-from docling_jobkit.datamodel.task_meta import TaskType
 from docling_jobkit.datamodel.task_targets import TaskTarget
 
 if TYPE_CHECKING:

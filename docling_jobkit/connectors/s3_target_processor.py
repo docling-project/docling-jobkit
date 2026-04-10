@@ -2,9 +2,10 @@ from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO
 
+from docling.datamodel.service.sources import S3Coordinates
+
 from docling_jobkit.connectors.s3_helper import get_s3_connection
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
-from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
 
 class S3TargetProcessor(BaseTargetProcessor):

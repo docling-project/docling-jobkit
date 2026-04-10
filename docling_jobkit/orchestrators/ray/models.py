@@ -4,7 +4,9 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from docling_jobkit.datamodel.task_meta import TaskProcessingMeta, TaskStatus
+from docling.datamodel.service.tasks import TaskProcessingMeta
+
+from docling_jobkit.datamodel.task_meta import TaskStatus
 
 
 class TenantLimits(BaseModel):

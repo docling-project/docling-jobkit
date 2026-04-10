@@ -12,6 +12,9 @@ from typing import Any, Optional, Union
 from ray import serve
 
 from docling.datamodel.base_models import DocumentStream
+from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.sources import FileSource, HttpSource
+from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.convert.chunking import process_chunk_results
 from docling_jobkit.convert.manager import (
@@ -19,11 +22,9 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManagerConfig,
 )
 from docling_jobkit.convert.results import process_export_results
-from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
-from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
-from docling_jobkit.datamodel.task_meta import TaskStatus, TaskType
+from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.ray.logging_utils import (

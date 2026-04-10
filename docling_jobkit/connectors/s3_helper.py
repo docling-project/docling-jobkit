@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from mypy_boto3_s3.paginator import ListObjectsV2Paginator
     from mypy_boto3_s3.service_resource import S3ServiceResource
 
-from docling_jobkit.datamodel.s3_coords import S3Coordinates
+from docling.datamodel.service.sources import S3Coordinates
 
 logging.basicConfig(level=logging.INFO)
 

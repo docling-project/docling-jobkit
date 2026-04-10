@@ -33,6 +33,7 @@ from docling.datamodel.pipeline_options import (
     normalize_pdf_backend,
 )
 from docling.datamodel.pipeline_options_vlm_model import ApiVlmOptions, InlineVlmOptions
+from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.vlm_engine_options import (
     ApiVlmEngineOptions,
     AutoInlineVlmEngineOptions,
@@ -58,8 +59,6 @@ from docling.models.factories import (
 from docling.models.inference_engines.vlm.base import VlmEngineType
 from docling.pipeline.vlm_pipeline import VlmPipeline
 from docling_core.types.doc import ImageRefMode
-
-from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 
 _log = logging.getLogger(__name__)
 

@@ -3,7 +3,7 @@ import ssl
 import certifi
 import httpx
 
-from docling_jobkit.datamodel.callback import CallbackSpec, ProgressCallbackRequest
+from docling.datamodel.service.callbacks import CallbackSpec, ProgressCallbackRequest
 
 
 def notify_callbacks(

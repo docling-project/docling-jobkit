@@ -3,9 +3,9 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
+from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
-from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
-from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
 
 class TaskFileSource(FileSource):

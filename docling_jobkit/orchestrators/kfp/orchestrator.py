@@ -10,20 +10,23 @@ from kfp_server_api.models import V2beta1RuntimeState
 from pydantic import AnyUrl, BaseModel, TypeAdapter
 from pydantic_settings import SettingsConfigDict
 
-from docling_jobkit.datamodel.callback import (
+from docling.datamodel.service.callbacks import (
     CallbackSpec,
     ProgressCallbackRequest,
     ProgressSetNumDocs,
     ProgressUpdateProcessed,
 )
-from docling_jobkit.datamodel.chunking import BaseChunkerOptions, ChunkingExportOptions
-from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
-from docling_jobkit.datamodel.http_inputs import HttpSource
+from docling.datamodel.service.chunking import BaseChunkerOptions
+from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.sources import HttpSource, S3Coordinates
+from docling.datamodel.service.targets import S3Target
+from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
+
+from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
-from docling_jobkit.datamodel.s3_coords import S3Coordinates
 from docling_jobkit.datamodel.task import Task, TaskSource
-from docling_jobkit.datamodel.task_meta import TaskProcessingMeta, TaskStatus, TaskType
-from docling_jobkit.datamodel.task_targets import S3Target, TaskTarget
+from docling_jobkit.datamodel.task_meta import TaskStatus
+from docling_jobkit.datamodel.task_targets import TaskTarget
 from docling_jobkit.kfp_pipeline.docling_s3in_s3out import inputs_s3in_s3out
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,

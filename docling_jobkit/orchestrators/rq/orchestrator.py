@@ -18,14 +18,16 @@ from rq.job import Job, JobStatus
 from rq.registry import StartedJobRegistry
 
 from docling.datamodel.base_models import DocumentStream
+from docling.datamodel.service.callbacks import CallbackSpec
+from docling.datamodel.service.chunking import BaseChunkerOptions
+from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.sources import FileSource, HttpSource
+from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
-from docling_jobkit.datamodel.callback import CallbackSpec
-from docling_jobkit.datamodel.chunking import BaseChunkerOptions, ChunkingExportOptions
-from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
-from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
+from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
-from docling_jobkit.datamodel.task_meta import TaskProcessingMeta, TaskStatus, TaskType
+from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,

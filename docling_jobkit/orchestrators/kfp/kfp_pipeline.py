@@ -23,11 +23,12 @@ def generate_chunks(
 ) -> List[List[Dict[str, Any]]]:
     from pydantic import TypeAdapter
 
-    from docling_jobkit.datamodel.callback import (
+    from docling.datamodel.service.callbacks import (
         CallbackSpec,
         ProgressCallbackRequest,
         ProgressSetNumDocs,
     )
+
     from docling_jobkit.orchestrators.kfp.notify import notify_callbacks
 
     CallbacksListType = TypeAdapter(list[CallbackSpec])
@@ -66,15 +67,16 @@ def convert_batch(
 
     from pydantic import AnyUrl, TypeAdapter
 
-    from docling_jobkit.datamodel.callback import (
+    from docling.datamodel.service.callbacks import (
         CallbackSpec,
         FailedDocsItem,
         ProgressCallbackRequest,
         ProgressUpdateProcessed,
         SucceededDocsItem,
     )
-    from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
-    from docling_jobkit.datamodel.http_inputs import HttpSource
+    from docling.datamodel.service.options import ConvertDocumentsOptions
+    from docling.datamodel.service.sources import HttpSource
+
     from docling_jobkit.orchestrators.kfp.notify import notify_callbacks
 
     CallbacksListType = TypeAdapter(list[CallbackSpec])

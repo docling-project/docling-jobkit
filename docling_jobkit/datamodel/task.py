@@ -6,17 +6,18 @@ from typing import Annotated, Any, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from docling.datamodel.base_models import DocumentStream
+from docling.datamodel.service.callbacks import CallbackSpec
+from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.targets import InBodyTarget
+from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
-from docling_jobkit.datamodel.callback import CallbackSpec
 from docling_jobkit.datamodel.chunking import (
     ChunkingExportOptions,
     ChunkingOptionType,
 )
-from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
-from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
-from docling_jobkit.datamodel.s3_coords import S3Coordinates
-from docling_jobkit.datamodel.task_meta import TaskProcessingMeta, TaskStatus, TaskType
-from docling_jobkit.datamodel.task_targets import InBodyTarget, TaskTarget
+from docling_jobkit.datamodel.task_meta import TaskStatus
+from docling_jobkit.datamodel.task_targets import TaskTarget
 
 TaskSource = Union[HttpSource, FileSource, DocumentStream, S3Coordinates]
 

@@ -5,7 +5,7 @@ from typing import Union
 
 import httpx
 
-from docling_jobkit.datamodel.callback import (
+from docling.datamodel.service.callbacks import (
     CallbackSpec,
     ProgressCallbackRequest,
     ProgressDocumentCompleted,

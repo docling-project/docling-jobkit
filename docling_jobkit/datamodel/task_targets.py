@@ -1,31 +1,20 @@
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import AnyHttpUrl, BaseModel, Field
+from pydantic import BaseModel, Field
+
+from docling.datamodel.service.targets import (
+    InBodyTarget,
+    PutTarget,
+    S3Target,
+    ZipTarget,
+)
 
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
-from docling_jobkit.datamodel.s3_coords import S3Coordinates
-
-
-class InBodyTarget(BaseModel):
-    kind: Literal["inbody"] = "inbody"
-
-
-class ZipTarget(BaseModel):
-    kind: Literal["zip"] = "zip"
-
-
-class S3Target(S3Coordinates):
-    kind: Literal["s3"] = "s3"
 
 
 class GoogleDriveTarget(GoogleDriveCoordinates):
     kind: Literal["google_drive"] = "google_drive"
-
-
-class PutTarget(BaseModel):
-    kind: Literal["put"] = "put"
-    url: AnyHttpUrl
 
 
 class LocalPathTarget(BaseModel):
@@ -57,4 +46,14 @@ TaskTarget = Annotated[
     | PutTarget
     | LocalPathTarget,
     Field(discriminator="kind"),
+]
+
+__all__ = [
+    "GoogleDriveTarget",
+    "InBodyTarget",
+    "LocalPathTarget",
+    "PutTarget",
+    "S3Target",
+    "TaskTarget",
+    "ZipTarget",
 ]

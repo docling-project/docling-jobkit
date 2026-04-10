@@ -1,9 +1,9 @@
 from typing import Iterator, TypedDict
 
+from docling.datamodel.service.sources import FileSource, HttpSource
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.source_processor import BaseSourceProcessor
-from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
 
 
 class HttpFileIdentifier(TypedDict):

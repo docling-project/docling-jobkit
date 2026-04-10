@@ -1,11 +1,11 @@
 from io import BytesIO
 from typing import Iterator, TypedDict
 
+from docling.datamodel.service.sources import S3Coordinates
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.s3_helper import get_s3_connection
 from docling_jobkit.connectors.source_processor import BaseSourceProcessor
-from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
 
 class S3FileIdentifier(TypedDict):

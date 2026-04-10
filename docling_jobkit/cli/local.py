@@ -6,6 +6,9 @@ import yaml
 from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
+from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.targets import S3Target, ZipTarget
+
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.convert.manager import (
@@ -13,7 +16,6 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManagerConfig,
 )
 from docling_jobkit.convert.results_processor import ResultsProcessor
-from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.task_sources import (
     TaskFileSource,
     TaskGoogleDriveSource,
@@ -24,8 +26,6 @@ from docling_jobkit.datamodel.task_sources import (
 from docling_jobkit.datamodel.task_targets import (
     GoogleDriveTarget,
     LocalPathTarget,
-    S3Target,
-    ZipTarget,
 )
 
 console = Console()

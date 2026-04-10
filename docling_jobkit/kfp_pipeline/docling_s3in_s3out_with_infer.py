@@ -34,6 +34,7 @@ def convert_payload(
         ApiVlmOptions,
         ResponseFormat,
     )
+    from docling.datamodel.service.sources import S3Coordinates
     from docling.datamodel.settings import settings
     from docling.document_converter import DocumentConverter, PdfFormatOption
     from docling.pipeline.vlm_pipeline import VlmPipeline
@@ -43,7 +44,6 @@ def convert_payload(
         generate_presign_url,
         get_s3_connection,
     )
-    from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
     def openai_compatible_vlm_options(
         model: str,
@@ -187,13 +187,14 @@ def compute_batches(
     import logging
     from typing import NamedTuple
 
+    from docling.datamodel.service.sources import S3Coordinates
+
     from docling_jobkit.connectors.s3_helper import (
         check_target_has_source_converted,
         generate_batch_keys,
         get_s3_connection,
         get_source_files,
     )
-    from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
     logging.basicConfig(level=logging.INFO)
 

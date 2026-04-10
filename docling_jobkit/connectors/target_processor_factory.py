@@ -1,3 +1,5 @@
+from docling.datamodel.service.targets import S3Target
+
 from docling_jobkit.connectors.local_path_target_processor import (
     LocalPathTargetProcessor,
 )
@@ -6,7 +8,6 @@ from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.datamodel.task_targets import (
     GoogleDriveTarget,
     LocalPathTarget,
-    S3Target,
     TaskTarget,
 )
 

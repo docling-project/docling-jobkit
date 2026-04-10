@@ -10,9 +10,7 @@ import httpx
 
 from docling.datamodel.base_models import OutputFormat
 from docling.datamodel.document import ConversionResult, ConversionStatus
-from docling_core.types.doc import ImageRefMode
-
-from docling_jobkit.datamodel.callback import (
+from docling.datamodel.service.callbacks import (
     DocumentCompletedItem,
     FailedDocsItem,
     ProgressDocumentCompleted,
@@ -20,6 +18,9 @@ from docling_jobkit.datamodel.callback import (
     ProgressUpdateProcessed,
     SucceededDocsItem,
 )
+from docling.datamodel.service.targets import InBodyTarget, PutTarget
+from docling_core.types.doc import ImageRefMode
+
 from docling_jobkit.datamodel.result import (
     DoclingTaskResult,
     ExportDocumentResponse,
@@ -29,7 +30,6 @@ from docling_jobkit.datamodel.result import (
     ZipArchiveResult,
 )
 from docling_jobkit.datamodel.task import Task
-from docling_jobkit.datamodel.task_targets import InBodyTarget, PutTarget
 
 if TYPE_CHECKING:
     from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker

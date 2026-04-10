@@ -1,6 +1,6 @@
 import enum
 
-from pydantic import BaseModel
+from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
 
 class TaskStatus(str, enum.Enum):
@@ -10,13 +10,4 @@ class TaskStatus(str, enum.Enum):
     FAILURE = "failure"
 
 
-class TaskType(str, enum.Enum):
-    CONVERT = "convert"
-    CHUNK = "chunk"
-
-
-class TaskProcessingMeta(BaseModel):
-    num_docs: int
-    num_processed: int = 0
-    num_succeeded: int = 0
-    num_failed: int = 0
+__all__ = ["TaskProcessingMeta", "TaskStatus", "TaskType"]
