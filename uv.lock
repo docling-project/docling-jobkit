@@ -1076,7 +1076,7 @@ wheels = [
 [[package]]
 name = "docling"
 version = "2.85.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/docling-project/docling/?rev=cau%2Fmove-client-sdk#080cc0071994294a185568dfda6754cbe4198b55" }
 dependencies = [
     { name = "accelerate" },
     { name = "beautifulsoup4" },
@@ -1086,6 +1086,7 @@ dependencies = [
     { name = "docling-ibm-models" },
     { name = "docling-parse" },
     { name = "filetype" },
+    { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "lxml" },
     { name = "marko" },
@@ -1110,10 +1111,7 @@ dependencies = [
     { name = "torchvision" },
     { name = "tqdm" },
     { name = "typer" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/31/9c/20c7979f97fa872dd88227c34132817541dccba1416d6f0abe0f1359433c/docling-2.85.0.tar.gz", hash = "sha256:142a2e50cae32a5c9c2297484ee946b6042eaeb448724019ff801dfa8d1c61bf", size = 428619, upload-time = "2026-04-07T14:23:07.677Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fa/34/143f061b6c0f40032ae981314e8f472e22b94a0cc1f2859fb9a6099cd24b/docling-2.85.0-py3-none-any.whl", hash = "sha256:d69cf7068ca0d83023306eaf80bdc7a5e4c3b7421f6d6782de17f0786ee6da77", size = 452593, upload-time = "2026-04-07T14:23:05.663Z" },
+    { name = "websockets" },
 ]
 
 [package.optional-dependencies]
@@ -1247,9 +1245,9 @@ dev = [
 requires-dist = [
     { name = "boto3", specifier = "~=1.35" },
     { name = "codeflare-sdk", marker = "python_full_version >= '3.11' and python_full_version < '3.14' and extra == 'ray'", specifier = ">=0.20.0" },
-    { name = "docling", specifier = ">=2.85.0,<3.0.0" },
-    { name = "docling", extras = ["onnxruntime"], marker = "extra == 'onnxruntime'", specifier = ">=2.73.0,<3.0.0" },
-    { name = "docling", extras = ["vlm"], marker = "extra == 'vlm'", specifier = ">=2.73.0,<3.0.0" },
+    { name = "docling", git = "https://github.com/docling-project/docling/?rev=cau%2Fmove-client-sdk" },
+    { name = "docling", extras = ["onnxruntime"], marker = "extra == 'onnxruntime'", git = "https://github.com/docling-project/docling/?rev=cau%2Fmove-client-sdk" },
+    { name = "docling", extras = ["vlm"], marker = "extra == 'vlm'", git = "https://github.com/docling-project/docling/?rev=cau%2Fmove-client-sdk" },
     { name = "google-api-python-client", marker = "extra == 'gdrive'", specifier = ">=2.183.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'gdrive'", specifier = ">=1.2.2" },
     { name = "httpx", specifier = ">=0.28,<1" },

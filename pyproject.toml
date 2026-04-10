@@ -97,9 +97,10 @@ dev = [
     "types-psutil>=7.2.2.20260130",
 ]
 
-# [tool.uv.sources]
-# docling = { git = "https://github.com/docling-project/docling/", rev = "main" }
-# docling = { path = "../docling", editable = true }
+[tool.uv.sources]
+docling = { git = "https://github.com/docling-project/docling/", rev = "cau/move-client-sdk" }
+
+# docling = { path = "../docling_release", editable = true }
 
 
 [tool.uv]
