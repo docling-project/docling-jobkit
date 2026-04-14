@@ -83,7 +83,13 @@ class TaskUpdate(BaseModel):
 
 
 class RedisTaskMetadata(BaseModel):
-    """Durable task metadata stored in Redis for Ray task recovery."""
+    """Durable task metadata stored in Redis for Ray task recovery.
+
+    This model intentionally captures orchestration-only state that is not part
+    of the public service API models. It exists so a restarted API/orchestrator
+    process can reconstruct task state from Redis without depending on
+    in-memory bookkeeping.
+    """
 
     task_id: str = Field(description="Unique task identifier")
     tenant_id: str = Field(description="Tenant that owns the task")
@@ -168,3 +174,15 @@ class RedisTaskMetadata(BaseModel):
             finished_at=self.finished_at,
             last_update_at=self.last_update_at,
         )
+
+    def apply_to_task(self, task: Task) -> Task:
+        """Refresh an existing in-memory task from durable Redis metadata."""
+        task.task_type = self.task_type
+        task.task_status = self.status
+        task.metadata["tenant_id"] = self.tenant_id
+        task.error_message = self.error_message
+        task.created_at = self.created_at
+        task.started_at = self.started_at
+        task.finished_at = self.finished_at
+        task.last_update_at = self.last_update_at
+        return task

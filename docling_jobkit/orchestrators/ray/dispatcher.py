@@ -25,13 +25,31 @@ _log = logging.getLogger(__name__)
 
 @ray.remote
 class RayTaskDispatcher:
-    """Ray Task Dispatcher - Round-robin scheduling at TASK level."""
+    """Ray Task Dispatcher - round-robin scheduling at TASK level.
+
+    This detached Ray actor runs a continuous dispatch loop that:
+    1. Discovers all tenants with pending tasks.
+    2. For each tenant in round-robin order:
+       - Peeks at the next task in that tenant's queue.
+       - Checks whether the tenant still has admission capacity.
+       - If yes: pops the task, updates Redis-backed limits, and submits it to Ray Serve.
+       - If no: skips that tenant for the current round.
+
+    The dispatcher exists to enforce tenant fairness and admission control in
+    front of Ray Serve. It is not the system's durable queue; Redis is.
+    """
 
     def __init__(
         self,
         config: RayOrchestratorConfig,
         deployment_handle: Any,
     ) -> None:
+        """Initialize the shared dispatcher actor.
+
+        Args:
+            config: Orchestrator configuration.
+            deployment_handle: Ray Serve deployment handle used to process tasks.
+        """
         configure_ray_actor_logging(config.log_level)
 
         self.config = config
@@ -71,6 +89,9 @@ class RayTaskDispatcher:
         async with self._runtime_lock:
             self.deployment_handle = deployment_handle
             self.config = config
+
+            # Processing keys must outlive the typical task runtime so the
+            # dispatcher can tell whether a STARTED task still has a live worker.
             if config.task_timeout is not None:
                 self.redis_manager.processing_ttl = max(
                     int(config.task_timeout) + 300,
@@ -81,6 +102,8 @@ class RayTaskDispatcher:
                     self.redis_manager.results_ttl,
                     7200,
                 )
+
+            # Treat 3 missed dispatch intervals as a stale dispatcher heartbeat.
             self.redis_manager.dispatcher_heartbeat_ttl = max(
                 math.ceil(config.dispatcher_interval * 3),
                 1,
@@ -111,9 +134,11 @@ class RayTaskDispatcher:
         await self.redis_manager.disconnect()
 
     async def get_heartbeat(self) -> datetime.datetime:
+        """Get the last dispatcher heartbeat timestamp for health monitoring."""
         return self.last_heartbeat
 
     async def is_active(self) -> bool:
+        """Check whether the background dispatch loop is currently running."""
         return self._dispatch_loop_running()
 
     async def _ensure_dispatch_loop_started_locked(self) -> None:
@@ -131,6 +156,7 @@ class RayTaskDispatcher:
         )
 
     async def _run_dispatch_loop(self) -> None:
+        """Run the long-lived dispatcher loop with heartbeat and reconciliation."""
         round_count = 0
         current_task = asyncio.current_task()
 
@@ -171,6 +197,7 @@ class RayTaskDispatcher:
         self._background_tasks.clear()
 
     async def _log_dispatcher_stats(self) -> None:
+        """Log a compact view of tenant scheduling pressure."""
         tenants = await self.redis_manager.get_all_tenants_with_tasks()
 
         _log.debug("=" * 60)
@@ -206,6 +233,21 @@ class RayTaskDispatcher:
         _log.debug("=" * 60)
 
     async def _dispatch_round(self) -> None:
+        """Execute one round of fair tenant dispatching.
+
+        Algorithm:
+        1. Reconcile Redis active-task state against live processing keys.
+        2. Discover all tenants with queued work.
+        3. For each tenant in round-robin order:
+           a. Read current active-task usage from Redis.
+           b. Launch tasks until the tenant reaches its concurrency limit.
+           c. Skip the tenant if it is already at capacity or no task can be dispatched.
+
+        Reconciliation intentionally only fails tasks that had already reached
+        STARTED but no longer have processing state. Tasks still sitting in
+        Ray Serve's backlog may remain in "dispatched" state for a long time,
+        so they are left unresolved rather than being aged out heuristically.
+        """
         await self._reconcile_active_tasks()
 
         tenants = await self.redis_manager.get_all_tenants_with_tasks()
@@ -259,6 +301,14 @@ class RayTaskDispatcher:
         _log.debug("[DISPATCH-ROUND] Completed")
 
     async def _dispatch_tenant_task(self, tenant_id: str) -> bool:
+        """Dispatch one task for a tenant using Redis as the source of truth.
+
+        Args:
+            tenant_id: Tenant identifier.
+
+        Returns:
+            True if a task was dispatched, False otherwise.
+        """
         task = await self.redis_manager.peek_task(tenant_id)
         if task is None:
             _log.debug("[DISPATCH] Tenant %s: no tasks in queue", tenant_id)
@@ -283,7 +333,10 @@ class RayTaskDispatcher:
             )
             return False
 
+        # Launch task asynchronously (fire-and-forget). The durable task state is
+        # already in Redis, so dispatcher restarts do not lose ownership metadata.
         background_task = asyncio.create_task(self._process_task_async(task, tenant_id))
+        # Store a strong reference to prevent premature garbage collection.
         self._background_tasks.add(background_task)
         background_task.add_done_callback(self._background_tasks.discard)
 
@@ -296,6 +349,12 @@ class RayTaskDispatcher:
         return True
 
     async def _process_task_async(self, task: Task, tenant_id: str) -> None:
+        """Process a dispatched task while keeping status durable in Redis.
+
+        This coroutine is intentionally fire-and-forget from the dispatch loop.
+        All ownership, status, and cleanup state needed for restart recovery is
+        persisted in Redis before and during execution.
+        """
         task_id = task.task_id
         task_size = len(task.sources)
 
@@ -361,11 +420,20 @@ class RayTaskDispatcher:
             )
 
     async def _reconcile_active_tasks(self) -> None:
+        """Reconcile active-task bookkeeping after dispatcher startup and per round.
+
+        This replaces the old stale-heartbeat orphan recovery path. The current
+        rule is intentionally conservative:
+        - STARTED tasks missing processing state are failed and released.
+        - Pre-start dispatched tasks are left unresolved because Ray Serve may
+          legitimately keep them queued for a long time.
+        """
         tenants = await self.redis_manager.get_all_tenants_with_active_tasks()
         for tenant_id in tenants:
             await self._reconcile_tenant_active_tasks(tenant_id)
 
     async def _reconcile_tenant_active_tasks(self, tenant_id: str) -> None:
+        """Reconcile one tenant's active-task set against durable task metadata."""
         active_task_ids = await self.redis_manager.get_tenant_active_task_ids(tenant_id)
         if not active_task_ids:
             await self.redis_manager.resync_tenant_limits(tenant_id)
@@ -396,6 +464,7 @@ class RayTaskDispatcher:
         metadata: RedisTaskMetadata,
         error_message: str,
     ) -> None:
+        """Fail a reconciled task and release any capacity it still consumes."""
         task_size = metadata.task_size if metadata.task_size > 0 else 1
         if task_size == 1 and metadata.task_size <= 0:
             _log.warning(
@@ -421,6 +490,11 @@ class RayTaskDispatcher:
         await self.redis_manager.complete_task_atomic(tenant_id, task_id, task_size)
 
     async def get_stats(self) -> dict[str, Any]:
+        """Get comprehensive dispatcher statistics.
+
+        Returns:
+            Dictionary with dispatcher stats including per-tenant details.
+        """
         tenants = await self.redis_manager.get_all_tenants_with_tasks()
 
         total_active_tasks = 0
@@ -464,10 +538,17 @@ class RayTaskDispatcher:
         }
 
         return {
-            "loop_running": self._dispatch_loop_running(),
+            "active": self._dispatch_loop_running(),
+            "last_heartbeat": self.last_heartbeat.isoformat(),
+            "tenants_with_tasks": len(tenants),
             "total_active_tasks": total_active_tasks,
             "total_queued_tasks": total_queued_tasks,
             "total_capacity_available": total_capacity_available,
-            "tenants": tenant_details,
-            "deployment": deployment_stats,
+            "tenant_details": tenant_details,
+            "ray_serve_deployment": deployment_stats,
+            "config": {
+                "dispatcher_interval": self.config.dispatcher_interval,
+                "max_concurrent_tasks": self.config.max_concurrent_tasks,
+                "max_queued_tasks": self.config.max_queued_tasks,
+            },
         }

@@ -408,6 +408,7 @@ class RayOrchestrator(BaseOrchestrator):
                 await asyncio.sleep(1.0)
 
     async def _task_from_redis(self, task_id: str) -> Optional[Task]:
+        """Rebuild or refresh a task from durable Redis metadata."""
         metadata = await self.redis_manager.get_task_metadata_model(task_id)
         if metadata is None:
             return None
@@ -418,15 +419,7 @@ class RayOrchestrator(BaseOrchestrator):
             await self.init_task_tracking(task)
             return task
 
-        task.task_type = metadata.task_type
-        task.task_status = metadata.status
-        task.metadata["tenant_id"] = metadata.tenant_id
-        task.error_message = metadata.error_message
-        task.created_at = metadata.created_at
-        task.started_at = metadata.started_at
-        task.finished_at = metadata.finished_at
-        task.last_update_at = metadata.last_update_at
-        return task
+        return metadata.apply_to_task(task)
 
     async def enqueue(
         self,
@@ -570,6 +563,7 @@ class RayOrchestrator(BaseOrchestrator):
             return queue_size if queue_size > 0 else None
 
     async def get_raw_task(self, task_id: str) -> Task:
+        """Get a task from memory first, then fall back to durable Redis state."""
         task = self.tasks.get(task_id)
         if task is not None:
             return task
@@ -580,10 +574,19 @@ class RayOrchestrator(BaseOrchestrator):
         return redis_task
 
     async def task_status(self, task_id: str, wait: float = 0.0) -> Task:
+        """Get task status, preferring durable Redis state when available.
+
+        Redis is checked first because a restarted API process may not yet have
+        reconstructed the task into local memory. If `wait` is provided, poll
+        until completion or until the timeout expires.
+        """
         deadline = asyncio.get_running_loop().time() + max(wait, 0.0)
 
         while True:
             task: Optional[Task]
+
+            # Prefer Redis-backed task state so status remains visible across
+            # API/orchestrator restarts before local in-memory maps warm up.
             redis_task = await self._task_from_redis(task_id)
             if redis_task is not None:
                 task = redis_task
@@ -599,6 +602,8 @@ class RayOrchestrator(BaseOrchestrator):
             if remaining <= 0.0:
                 return task
 
+            # Use short polling so waiters see state transitions quickly without
+            # turning task_status() into a hot loop.
             await asyncio.sleep(min(0.25, remaining))
 
     async def task_result(
