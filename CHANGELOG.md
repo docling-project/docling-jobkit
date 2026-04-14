@@ -1,3 +1,13 @@
+## [v1.17.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.17.0) - 2026-04-14
+
+### Feature
+
+* Move types required by client SDK to docling ([#121](https://github.com/docling-project/docling-jobkit/issues/121)) ([`2398dba`](https://github.com/docling-project/docling-jobkit/commit/2398dba3411e2bb08070155e920d462984775d9e))
+
+### Fix
+
+* Change verbose dispatcher logging to DEBUG level ([#120](https://github.com/docling-project/docling-jobkit/issues/120)) ([`81db3aa`](https://github.com/docling-project/docling-jobkit/commit/81db3aa815ab427fba7d48e84a69af85ab3e3091))
+
 ## [v1.16.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.16.0) - 2026-04-07
 
 ### Feature
