@@ -371,8 +371,6 @@ class RayTaskDispatcher:
             await self.redis_manager.resync_tenant_limits(tenant_id)
             return
 
-        now_timestamp = datetime.datetime.now(datetime.timezone.utc).timestamp()
-
         for task_id in active_task_ids:
             metadata = await self.redis_manager.get_task_metadata_model(task_id)
             processing_state = await self.redis_manager.get_task_processing_state(
@@ -380,30 +378,14 @@ class RayTaskDispatcher:
             )
 
             if not processing_state:
+                if metadata is None or metadata.status != TaskStatus.STARTED:
+                    continue
                 await self._fail_reconciled_task(
                     tenant_id=tenant_id,
                     task_id=task_id,
                     metadata=metadata,
                     error_message="Task orphaned: processing state missing during reconciliation",
                 )
-                continue
-
-            processing_status = processing_state.get("status")
-            if processing_status == "dispatched":
-                dispatched_at_raw = processing_state.get("dispatched_at")
-                dispatched_at = float(dispatched_at_raw) if dispatched_at_raw else 0.0
-                if (
-                    now_timestamp - dispatched_at
-                    > self.config.dispatcher_handoff_timeout
-                ):
-                    await self._fail_reconciled_task(
-                        tenant_id=tenant_id,
-                        task_id=task_id,
-                        metadata=metadata,
-                        error_message=(
-                            "Task dispatch handoff timed out during reconciliation"
-                        ),
-                    )
 
         await self.redis_manager.resync_tenant_limits(tenant_id)
 
@@ -411,10 +393,15 @@ class RayTaskDispatcher:
         self,
         tenant_id: str,
         task_id: str,
-        metadata: Optional[RedisTaskMetadata],
+        metadata: RedisTaskMetadata,
         error_message: str,
     ) -> None:
-        task_size = self._task_size_for_cleanup(task_id, metadata)
+        task_size = metadata.task_size if metadata.task_size > 0 else 1
+        if task_size == 1 and metadata.task_size <= 0:
+            _log.warning(
+                "[RECONCILE] Missing durable task_size for %s; falling back to 1",
+                task_id,
+            )
 
         _log.warning("[RECONCILE] %s: %s", task_id, error_message)
 
@@ -432,19 +419,6 @@ class RayTaskDispatcher:
             )
         )
         await self.redis_manager.complete_task_atomic(tenant_id, task_id, task_size)
-
-    @staticmethod
-    def _task_size_for_cleanup(
-        task_id: str, metadata: Optional[RedisTaskMetadata]
-    ) -> int:
-        if metadata is not None and metadata.task_size > 0:
-            return metadata.task_size
-
-        _log.warning(
-            "[RECONCILE] Missing durable task_size for %s; falling back to 1",
-            task_id,
-        )
-        return 1
 
     async def get_stats(self) -> dict[str, Any]:
         tenants = await self.redis_manager.get_all_tenants_with_tasks()
