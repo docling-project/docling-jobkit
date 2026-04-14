@@ -93,6 +93,7 @@ async def orchestrator(artifacts_path: Path, redis_url: str):
 
     # Teardown
     await orchestrator.shutdown()
+    await orchestrator.cleanup_shared_runtime_for_tests()
     queue_task.cancel()
     try:
         await queue_task
@@ -131,6 +132,7 @@ async def orchestrator_with_limits(artifacts_path: Path, redis_url: str):
 
     # Teardown
     await orchestrator.shutdown()
+    await orchestrator.cleanup_shared_runtime_for_tests()
     queue_task.cancel()
     try:
         await queue_task

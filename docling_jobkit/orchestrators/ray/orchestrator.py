@@ -27,6 +27,7 @@ from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
     OrchestratorError,
+    TaskNotFoundError,
 )
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.ray.dispatcher import RayTaskDispatcher
@@ -70,6 +71,10 @@ def _parse_memory_string(memory_str: str) -> int:
 
 class QueueLimitExceededError(OrchestratorError):
     """Raised when tenant queue limit is exceeded and rejection is enabled."""
+
+
+class DispatcherUnavailableError(OrchestratorError):
+    """Raised when the shared Ray dispatcher cannot accept new work."""
 
 
 class RayOrchestrator(BaseOrchestrator):
@@ -121,6 +126,8 @@ class RayOrchestrator(BaseOrchestrator):
             max_concurrent_tasks=config.max_concurrent_tasks,
             max_queued_tasks=config.max_queued_tasks,
             max_documents=config.max_documents,
+            task_timeout=config.task_timeout,
+            dispatcher_interval=config.dispatcher_interval,
             log_level=config.log_level,
         )
 
@@ -332,16 +339,11 @@ class RayOrchestrator(BaseOrchestrator):
             deployment_name="docling_processor",
         )
 
-        # Deploy Ray Task Dispatcher as Ray Actor
-        _log.info("Deploying Ray Task Dispatcher as Ray Actor")
-        self.dispatcher = RayTaskDispatcher.options(  # type: ignore[attr-defined]
-            max_restarts=config.dispatcher_max_restarts,
-            max_task_retries=config.dispatcher_max_task_retries,
-        ).remote(config, self.deployment_handle)
-
         # Pub/sub listener task
         self._pubsub_task: Optional[asyncio.Task] = None
-        self._dispatcher_task: Optional[asyncio.Task] = None
+        self._dispatcher_supervisor_task: Optional[asyncio.Task] = None
+        self.dispatcher: Optional[Any] = None
+        self.dispatcher_name = "docling_task_dispatcher"
 
         # Configure logging level
         _log.setLevel(config.log_level.upper())
@@ -349,7 +351,82 @@ class RayOrchestrator(BaseOrchestrator):
             config.log_level.upper()
         )
 
+        self.dispatcher = self._bind_dispatcher()
         _log.info("RayOrchestrator initialized with Ray Serve")
+
+    def _bind_dispatcher(self) -> Any:
+        """Bind to the named detached dispatcher actor for this namespace."""
+        _log.info("Binding to named Ray Task Dispatcher actor")
+        return RayTaskDispatcher.options(  # type: ignore[attr-defined]
+            name=self.dispatcher_name,
+            lifetime="detached",
+            get_if_exists=True,
+            max_restarts=self.config.dispatcher_max_restarts,
+            max_task_retries=self.config.dispatcher_max_task_retries,
+        ).remote(self.config, self.deployment_handle)
+
+    async def _refresh_dispatcher_runtime(self) -> None:
+        dispatcher = self.dispatcher
+        if dispatcher is None:
+            dispatcher = self._bind_dispatcher()
+            self.dispatcher = dispatcher
+
+        await dispatcher.refresh_runtime.remote(self.deployment_handle, self.config)
+
+    async def ensure_dispatcher_ready(self) -> None:
+        """Verify that the named dispatcher actor is reachable and healthy."""
+        try:
+            dispatcher = self.dispatcher
+            if dispatcher is None:
+                dispatcher = self._bind_dispatcher()
+                self.dispatcher = dispatcher
+            loop_running = await dispatcher.get_health.remote()
+        except Exception as exc:
+            self.dispatcher = None
+            raise DispatcherUnavailableError(
+                f"Ray dispatcher is unavailable: {exc}"
+            ) from exc
+
+        if not loop_running:
+            raise DispatcherUnavailableError("Ray dispatcher loop is not running")
+
+    async def _supervise_dispatcher(self) -> None:
+        """Keep the local dispatcher binding refreshed and healthy."""
+        poll_interval = max(1.0, self.config.dispatcher_interval)
+
+        while True:
+            try:
+                if self.dispatcher is None:
+                    await self._refresh_dispatcher_runtime()
+                await self.ensure_dispatcher_ready()
+                await asyncio.sleep(poll_interval)
+            except asyncio.CancelledError:
+                raise
+            except DispatcherUnavailableError as exc:
+                _log.warning("Dispatcher supervisor retrying after error: %s", exc)
+                self.dispatcher = None
+                await asyncio.sleep(1.0)
+
+    async def _task_from_redis(self, task_id: str) -> Optional[Task]:
+        metadata = await self.redis_manager.get_task_metadata_model(task_id)
+        if metadata is None:
+            return None
+
+        task = self.tasks.get(metadata.task_id)
+        if task is None:
+            task = metadata.to_task()
+            await self.init_task_tracking(task)
+            return task
+
+        task.task_type = metadata.task_type
+        task.task_status = metadata.status
+        task.metadata["tenant_id"] = metadata.tenant_id
+        task.error_message = metadata.error_message
+        task.created_at = metadata.created_at
+        task.started_at = metadata.started_at
+        task.finished_at = metadata.finished_at
+        task.last_update_at = metadata.last_update_at
+        return task
 
     async def enqueue(
         self,
@@ -440,9 +517,12 @@ class RayOrchestrator(BaseOrchestrator):
                     f"Tenant {tenant_id} exceeding limits but enqueueing: {reason}"
                 )
 
+            await self.ensure_dispatcher_ready()
             await self.redis_manager.set_task_metadata(
                 task_id=task_id,
                 tenant_id=tenant_id,
+                task_type=task_type,
+                task_size=len(sources),
                 status=TaskStatus.PENDING,
             )
             await self.redis_manager.set_task_dispatch_state(task_id, "queued")
@@ -480,16 +560,46 @@ class RayOrchestrator(BaseOrchestrator):
             Approximate queue position or None if not found
         """
         async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
-            metadata = await self.redis_manager.get_task_metadata(task_id)
-            if not metadata:
+            metadata = await self.redis_manager.get_task_metadata_model(task_id)
+            if metadata is None:
                 return None
 
-            tenant_id = metadata.get("tenant_id")
-            if not tenant_id:
-                return None
-
-            queue_size = await self.redis_manager.get_tenant_queue_size(tenant_id)
+            queue_size = await self.redis_manager.get_tenant_queue_size(
+                metadata.tenant_id
+            )
             return queue_size if queue_size > 0 else None
+
+    async def get_raw_task(self, task_id: str) -> Task:
+        task = self.tasks.get(task_id)
+        if task is not None:
+            return task
+
+        redis_task = await self._task_from_redis(task_id)
+        if redis_task is None:
+            raise TaskNotFoundError()
+        return redis_task
+
+    async def task_status(self, task_id: str, wait: float = 0.0) -> Task:
+        deadline = asyncio.get_running_loop().time() + max(wait, 0.0)
+
+        while True:
+            task: Optional[Task]
+            redis_task = await self._task_from_redis(task_id)
+            if redis_task is not None:
+                task = redis_task
+            else:
+                task = self.tasks.get(task_id)
+                if task is None:
+                    raise TaskNotFoundError()
+
+            if wait <= 0.0 or task.is_completed():
+                return task
+
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0.0:
+                return task
+
+            await asyncio.sleep(min(0.25, remaining))
 
     async def task_result(
         self,
@@ -507,39 +617,21 @@ class RayOrchestrator(BaseOrchestrator):
             return await self.redis_manager.get_task_result(task_id)
 
     async def process_queue(self):
-        """Start the dispatcher and pub/sub listener.
-
-        This starts:
-        1. Fair Task Dispatcher loop (Ray Actor)
-        2. Redis pub/sub listener for task updates
-        """
-        # Ensure Redis is connected
+        """Start local supervision and pub/sub handling for the shared dispatcher."""
         await self.redis_manager.connect()
+        await self._refresh_dispatcher_runtime()
+        await self.ensure_dispatcher_ready()
 
-        _log.info("Starting Fair Ray Orchestrator queue processing")
-
-        # Start dispatcher loop in Ray Actor
-        _log.info("Starting Fair Task Dispatcher")
-        self._dispatcher_task = asyncio.create_task(self._start_dispatcher())
-
-        # Start pub/sub listener
-        _log.info("Starting Redis pub/sub listener")
+        _log.info("Starting Ray orchestrator queue processing")
+        self._dispatcher_supervisor_task = asyncio.create_task(
+            self._supervise_dispatcher()
+        )
         self._pubsub_task = asyncio.create_task(self._listen_for_updates())
 
-        # Wait for both tasks
         await asyncio.gather(
-            self._dispatcher_task,
+            self._dispatcher_supervisor_task,
             self._pubsub_task,
         )
-
-    async def _start_dispatcher(self):
-        """Start the Fair Task Dispatcher Ray Actor."""
-        try:
-            # This is a blocking call that runs the dispatcher loop
-            await self.dispatcher.start_dispatching.remote()
-        except Exception as e:
-            _log.error(f"Dispatcher failed: {e}", exc_info=True)
-            raise
 
     async def _listen_for_updates(self):
         """Listen for task updates via Redis pub/sub.
@@ -550,25 +642,31 @@ class RayOrchestrator(BaseOrchestrator):
             async for update in self.redis_manager.subscribe_to_updates():
                 task_id = update.task_id
 
-                if task_id in self.tasks:
-                    task = self.tasks[task_id]
-                    task.set_status(update.task_status)
+                try:
+                    task = await self.get_raw_task(task_id)
+                except TaskNotFoundError:
+                    _log.warning(
+                        "Dropping update for unknown task %s with no Redis metadata",
+                        task_id,
+                    )
+                    continue
 
-                    if update.error_message:
-                        task.error_message = update.error_message
+                task.set_status(update.task_status)
 
-                    if update.progress:
-                        task.processing_meta = update.progress
+                if update.error_message:
+                    task.error_message = update.error_message
 
-                    # Notify subscribers if notifier is configured
-                    if self.notifier:
-                        try:
-                            await self.notifier.notify_task_subscribers(task_id)
-                            await self.notifier.notify_queue_positions()
-                        except Exception as e:
-                            _log.error(f"Notifier error for task {task_id}: {e}")
+                if update.progress:
+                    task.processing_meta = update.progress
 
-                    _log.debug(f"Updated task {task_id} status to {update.task_status}")
+                if self.notifier:
+                    try:
+                        await self.notifier.notify_task_subscribers(task_id)
+                        await self.notifier.notify_queue_positions()
+                    except Exception as exc:
+                        _log.error("Notifier error for task %s: %s", task_id, exc)
+
+                _log.debug("Updated task %s status to %s", task_id, update.task_status)
 
         except Exception as e:
             _log.error(f"Pub/sub listener failed: {e}", exc_info=True)
@@ -610,29 +708,21 @@ class RayOrchestrator(BaseOrchestrator):
         if not ray.is_initialized():
             raise OrchestratorError("Ray is not initialized")
 
-        # Check dispatcher health
         try:
-            is_active = await self.dispatcher.is_active.remote()
-            _log.debug(f"Dispatcher active: {is_active}")
-        except Exception as e:
-            raise OrchestratorError(f"Dispatcher health check failed: {e}")
+            await self.ensure_dispatcher_ready()
+        except DispatcherUnavailableError as exc:
+            raise OrchestratorError(str(exc)) from exc
 
         _log.info("All connections healthy")
 
     async def shutdown(self):
         """Shutdown the orchestrator gracefully.
 
-        Stops the dispatcher, closes Redis connections, and cleans up Ray resources.
+        Normal shutdown is local-only and intentionally leaves shared Ray
+        resources running.
         """
         _log.info("Shutting down RayOrchestrator")
 
-        # Stop dispatcher
-        try:
-            await self.dispatcher.stop_dispatching.remote()
-        except Exception as e:
-            _log.error(f"Error stopping dispatcher: {e}")
-
-        # Cancel pub/sub listener
         if self._pubsub_task:
             self._pubsub_task.cancel()
             try:
@@ -640,25 +730,38 @@ class RayOrchestrator(BaseOrchestrator):
             except asyncio.CancelledError:
                 pass
 
-        # Cancel dispatcher task
-        if self._dispatcher_task:
-            self._dispatcher_task.cancel()
+        if self._dispatcher_supervisor_task:
+            self._dispatcher_supervisor_task.cancel()
             try:
-                await self._dispatcher_task
+                await self._dispatcher_supervisor_task
             except asyncio.CancelledError:
                 pass
 
-        # Disconnect from Redis
         await self.redis_manager.disconnect()
+        _log.info("RayOrchestrator shutdown complete")
 
-        # Shutdown Ray Serve deployment
+    async def cleanup_shared_runtime_for_tests(self) -> None:
+        """Explicit destructive cleanup for test environments only."""
+        dispatcher = self.dispatcher
+        if dispatcher is not None:
+            try:
+                await dispatcher.stop_dispatching.remote()
+            except Exception as exc:
+                _log.warning(
+                    "Error stopping shared dispatcher in test cleanup: %s", exc
+                )
+
+            try:
+                ray.kill(dispatcher, no_restart=True)
+            except Exception as exc:
+                _log.warning("Error killing shared dispatcher in test cleanup: %s", exc)
+
+            self.dispatcher = None
+
         try:
             serve.delete("docling_processor")
-            _log.info("Ray Serve deployment deleted")
-        except Exception as e:
-            _log.warning(f"Error deleting Ray Serve deployment: {e}")
-
-        _log.info("RayOrchestrator shutdown complete")
+        except Exception as exc:
+            _log.warning("Error deleting Ray Serve deployment in test cleanup: %s", exc)
 
     async def get_stats(self) -> dict:
         """Get orchestrator statistics.
@@ -669,8 +772,11 @@ class RayOrchestrator(BaseOrchestrator):
         tenants = await self.redis_manager.get_all_tenants_with_tasks()
 
         # Get dispatcher stats
+        dispatcher = self.dispatcher
         try:
-            dispatcher_stats = await self.dispatcher.get_stats.remote()
+            if dispatcher is None:
+                raise RuntimeError("dispatcher not bound")
+            dispatcher_stats = await dispatcher.get_stats.remote()
         except Exception as e:
             _log.error(f"Failed to get dispatcher stats: {e}")
             dispatcher_stats = {}

@@ -90,6 +90,8 @@ class DocumentProcessorDeployment:
         self.redis_manager = RedisStateManager(
             redis_url=redis_url,
             results_ttl=config.results_ttl,
+            task_timeout=config.task_timeout,
+            dispatcher_interval=config.dispatcher_interval,
             log_level=config.log_level,
         )
         # Note: Connection will be established on first use (lazy connection)

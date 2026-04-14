@@ -84,6 +84,10 @@ class RayOrchestratorConfig(BaseSettings):
         default=2.0,
         description="Seconds between dispatch rounds (how often to check for new tasks)",
     )
+    dispatcher_handoff_timeout: float = Field(
+        default=30.0,
+        description="Seconds a task may remain in dispatched handoff before reconciliation fails it",
+    )
 
     # Per-User Limits
     max_concurrent_tasks: int = Field(

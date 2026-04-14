@@ -3,7 +3,8 @@
 import asyncio
 import datetime
 import logging
-from typing import Any
+import math
+from typing import Any, Optional
 
 import ray
 
@@ -13,7 +14,10 @@ from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
 )
-from docling_jobkit.orchestrators.ray.models import TaskUpdate
+from docling_jobkit.orchestrators.ray.models import (
+    RedisTaskMetadata,
+    TaskUpdate,
+)
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 
 _log = logging.getLogger(__name__)
@@ -21,32 +25,13 @@ _log = logging.getLogger(__name__)
 
 @ray.remote
 class RayTaskDispatcher:
-    """Ray Task Dispatcher - Round-robin scheduling at TASK level.
-
-    This Ray Actor runs a continuous dispatch loop that:
-    1. Discovers all tenants with pending tasks
-    2. For each tenant (round-robin):
-       - Peeks at next task in tenant's queue
-       - Checks if tenant has capacity
-       - If yes: pops task, updates limits, schedules with Ray Serve
-       - If no: skips tenant this round
-
-    The dispatcher ensures fair resource allocation by giving each tenant
-    an equal opportunity to have their tasks processed, regardless of
-    queue size.
-    """
+    """Ray Task Dispatcher - Round-robin scheduling at TASK level."""
 
     def __init__(
         self,
         config: RayOrchestratorConfig,
-        deployment_handle: Any,  # Ray Serve deployment handle
-    ):
-        """Initialize the Ray Task Dispatcher.
-
-        Args:
-            config: Orchestrator configuration
-            deployment_handle: Ray Serve deployment handle for processing tasks
-        """
+        deployment_handle: Any,
+    ) -> None:
         configure_ray_actor_logging(config.log_level)
 
         self.config = config
@@ -63,89 +48,129 @@ class RayTaskDispatcher:
             max_concurrent_tasks=config.max_concurrent_tasks,
             max_queued_tasks=config.max_queued_tasks,
             max_documents=config.max_documents,
+            task_timeout=config.task_timeout,
+            dispatcher_interval=config.dispatcher_interval,
             log_level=config.log_level,
         )
+
         self.active = False
         self.last_heartbeat = datetime.datetime.now(datetime.timezone.utc)
+        self._background_tasks: set[asyncio.Task[None]] = set()
+        self._dispatch_loop_task: Optional[asyncio.Task[None]] = None
+        self._runtime_lock = asyncio.Lock()
 
-        # Track background tasks to prevent garbage collection
-        self._background_tasks: set[asyncio.Task] = set()
-
-        # Configure logging level for dispatcher
         _log.setLevel(self.config.log_level.upper())
+        _log.info("RayTaskDispatcher initialized")
 
-        _log.info("RayTaskDispatcher initialized with Ray Serve deployment")
+    async def refresh_runtime(
+        self,
+        deployment_handle: Any,
+        config: RayOrchestratorConfig,
+    ) -> None:
+        """Refresh Serve handle and runtime-derived settings after API startup."""
+        async with self._runtime_lock:
+            self.deployment_handle = deployment_handle
+            self.config = config
+            if config.task_timeout is not None:
+                self.redis_manager.processing_ttl = max(
+                    int(config.task_timeout) + 300,
+                    300,
+                )
+            else:
+                self.redis_manager.processing_ttl = max(
+                    self.redis_manager.results_ttl,
+                    7200,
+                )
+            self.redis_manager.dispatcher_heartbeat_ttl = max(
+                math.ceil(config.dispatcher_interval * 3),
+                1,
+            )
+            _log.setLevel(self.config.log_level.upper())
 
-    async def start_dispatching(self):
-        """Start the dispatcher loop."""
-        if self.active:
-            _log.warning("Dispatcher already active")
-            return
+    async def get_health(self) -> bool:
+        """Ensure the dispatch loop is running and report health."""
+        async with self._runtime_lock:
+            await self._ensure_dispatch_loop_started_locked()
+            return self._dispatch_loop_running()
 
-        _log.info("Starting Ray Task Dispatcher")
-        self.active = True
+    async def stop_dispatching(self) -> None:
+        """Explicit test-only shutdown for the detached dispatcher actor."""
+        async with self._runtime_lock:
+            self.active = False
+            dispatch_loop_task = self._dispatch_loop_task
+            self._dispatch_loop_task = None
 
-        # Connect to Redis
-        await self.redis_manager.connect()
+        if dispatch_loop_task is not None:
+            dispatch_loop_task.cancel()
+            try:
+                await dispatch_loop_task
+            except asyncio.CancelledError:
+                pass
 
-        # Start dispatch loop
-        await self._dispatch_loop()
-
-    async def stop_dispatching(self):
-        """Stop the dispatcher loop."""
-        _log.info("Stopping Fair Task Dispatcher")
-        self.active = False
-
-        # Disconnect from Redis
+        await self._cancel_background_tasks()
         await self.redis_manager.disconnect()
 
     async def get_heartbeat(self) -> datetime.datetime:
-        """Get last heartbeat timestamp for health monitoring.
-
-        Returns:
-            Last heartbeat timestamp
-        """
         return self.last_heartbeat
 
     async def is_active(self) -> bool:
-        """Check if dispatcher is active.
+        return self._dispatch_loop_running()
 
-        Returns:
-            True if dispatcher is running
-        """
-        return self.active
+    async def _ensure_dispatch_loop_started_locked(self) -> None:
+        if self._dispatch_loop_running():
+            return
 
-    async def _dispatch_loop(self):
-        """Main dispatcher loop - implements fair task scheduling.
+        await self.redis_manager.connect()
+        self.active = True
+        self._dispatch_loop_task = asyncio.create_task(self._run_dispatch_loop())
+        _log.info("Started Ray dispatcher background loop")
 
-        Continuously runs dispatch rounds at configured intervals,
-        with error handling and heartbeat updates.
-        """
+    def _dispatch_loop_running(self) -> bool:
+        return (
+            self._dispatch_loop_task is not None and not self._dispatch_loop_task.done()
+        )
+
+    async def _run_dispatch_loop(self) -> None:
         round_count = 0
+        current_task = asyncio.current_task()
 
-        while self.active:
-            try:
+        try:
+            await self._reconcile_active_tasks()
+
+            while self.active:
                 round_count += 1
+                self.last_heartbeat = datetime.datetime.now(datetime.timezone.utc)
 
-                # Update heartbeat
                 if self.config.enable_heartbeat:
-                    self.last_heartbeat = datetime.datetime.now(datetime.timezone.utc)
+                    await self.redis_manager.update_dispatcher_heartbeat()
 
-                # Log stats every 10 rounds
                 if round_count % 10 == 0:
                     await self._log_dispatcher_stats()
 
-                # Execute one dispatch round
                 await self._dispatch_round()
+                await asyncio.sleep(self.config.dispatcher_interval)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log.error("Dispatcher loop crashed: %s", exc, exc_info=True)
+        finally:
+            await self._cancel_background_tasks()
+            self.active = False
+            if self._dispatch_loop_task is current_task:
+                self._dispatch_loop_task = None
 
-            except Exception as e:
-                _log.error(f"Error in dispatch round: {e}", exc_info=True)
+    async def _cancel_background_tasks(self) -> None:
+        background_tasks = list(self._background_tasks)
+        if not background_tasks:
+            return
 
-            # Wait before next round
-            await asyncio.sleep(self.config.dispatcher_interval)
+        for task in background_tasks:
+            task.cancel()
 
-    async def _log_dispatcher_stats(self):
-        """Log comprehensive dispatcher statistics."""
+        await asyncio.gather(*background_tasks, return_exceptions=True)
+        self._background_tasks.clear()
+
+    async def _log_dispatcher_stats(self) -> None:
         tenants = await self.redis_manager.get_all_tenants_with_tasks()
 
         _log.debug("=" * 60)
@@ -165,71 +190,53 @@ class RayTaskDispatcher:
             total_queued += queue_size
 
             _log.debug(
-                f"  Tenant {tenant_id}: "
-                f"active={active_count}/{limits.max_concurrent_tasks}, "
-                f"queued={queue_size}"
+                "  Tenant %s: active=%s/%s, queued=%s",
+                tenant_id,
+                active_count,
+                limits.max_concurrent_tasks,
+                queue_size,
             )
 
         _log.debug(
-            f"  TOTAL: active={total_active}, queued={total_queued}, tenants={len(tenants)}"
+            "  TOTAL: active=%s, queued=%s, tenants=%s",
+            total_active,
+            total_queued,
+            len(tenants),
         )
         _log.debug("=" * 60)
 
-    async def _dispatch_round(self):
-        """Execute one round of fair task dispatching.
+    async def _dispatch_round(self) -> None:
+        await self._reconcile_active_tasks()
 
-        Algorithm:
-        1. Update dispatcher heartbeat
-        2. Check for orphaned tasks (from previous dispatcher crash)
-        3. Discover all tenants with pending tasks
-        4. For each tenant (round-robin):
-           a. Check current active task count
-           b. Launch tasks until max_concurrent_tasks limit reached
-           c. Skip tenant if at capacity or no more tasks
-
-        This ensures fair scheduling while maximizing concurrency - each tenant
-        can have up to max_concurrent_tasks running simultaneously.
-        """
-        # Update dispatcher heartbeat
-        await self.redis_manager.update_dispatcher_heartbeat()
-
-        # Check for orphaned tasks (from previous dispatcher crash)
-        await self._recover_orphaned_tasks()
-
-        # Get all tenants with tasks
         tenants = await self.redis_manager.get_all_tenants_with_tasks()
-
         if not tenants:
             _log.debug("[DISPATCH-ROUND] No tenants with pending tasks")
             return
 
-        _log.debug(f"[DISPATCH-ROUND] Starting: {len(tenants)} tenants with tasks")
+        _log.debug("[DISPATCH-ROUND] Starting: %s tenants with tasks", len(tenants))
 
-        # Round-robin: launch UP TO max_concurrent_tasks per tenant
         for tenant_id in tenants:
             try:
-                # Get current active count from Redis (source of truth)
                 active_count = await self.redis_manager.get_tenant_active_task_count(
                     tenant_id
                 )
                 limits = await self.redis_manager.get_tenant_limits(tenant_id)
                 queue_size = await self.redis_manager.get_tenant_queue_size(tenant_id)
 
-                capacity_available = limits.max_concurrent_tasks - active_count
-
                 _log.debug(
-                    f"[DISPATCH-TENANT] {tenant_id}: "
-                    f"active={active_count}/{limits.max_concurrent_tasks}, "
-                    f"queued={queue_size}, "
-                    f"capacity={capacity_available}"
+                    "[DISPATCH-TENANT] %s: active=%s/%s, queued=%s, capacity=%s",
+                    tenant_id,
+                    active_count,
+                    limits.max_concurrent_tasks,
+                    queue_size,
+                    limits.max_concurrent_tasks - active_count,
                 )
 
-                # Launch tasks until we hit the limit
                 tasks_launched = 0
                 while active_count < limits.max_concurrent_tasks and queue_size > 0:
                     dispatched = await self._dispatch_tenant_task(tenant_id)
                     if not dispatched:
-                        break  # No more tasks or dispatch failed
+                        break
 
                     tasks_launched += 1
                     active_count += 1
@@ -237,108 +244,79 @@ class RayTaskDispatcher:
 
                 if tasks_launched > 0:
                     _log.debug(
-                        f"[DISPATCH-TENANT] {tenant_id}: Launched {tasks_launched} tasks this round"
+                        "[DISPATCH-TENANT] %s: launched %s tasks this round",
+                        tenant_id,
+                        tasks_launched,
                     )
-
-            except Exception as e:
+            except Exception as exc:
                 _log.error(
-                    f"Error dispatching tasks for tenant {tenant_id}: {e}",
+                    "Error dispatching tasks for tenant %s: %s",
+                    tenant_id,
+                    exc,
                     exc_info=True,
                 )
 
         _log.debug("[DISPATCH-ROUND] Completed")
 
     async def _dispatch_tenant_task(self, tenant_id: str) -> bool:
-        """Dispatch ONE task for a tenant (fire-and-forget with Redis tracking).
-
-        Args:
-            tenant_id: Tenant identifier
-
-        Returns:
-            True if task was dispatched, False otherwise
-        """
-        # Peek at next task
         task = await self.redis_manager.peek_task(tenant_id)
-        if not task:
-            _log.debug(f"[DISPATCH] Tenant {tenant_id}: No tasks in queue")
+        if task is None:
+            _log.debug("[DISPATCH] Tenant %s: no tasks in queue", tenant_id)
             return False
 
         task_size = len(task.sources)
-
-        # Check if tenant can process (has capacity for active tasks)
         can_process, reason = await self.redis_manager.check_tenant_can_process(
             tenant_id, task_size
         )
         if not can_process:
-            _log.debug(f"[DISPATCH] Tenant {tenant_id}: SKIP - {reason}")
+            _log.debug("[DISPATCH] Tenant %s: skip - %s", tenant_id, reason)
             return False
 
-        # ATOMIC: Pop task + Add to active set + Update limits
         success = await self.redis_manager.dispatch_task_atomic(
             tenant_id, task.task_id, task_size
         )
         if not success:
             _log.warning(
-                f"[DISPATCH] Tenant {tenant_id}: Failed atomic dispatch for {task.task_id}"
+                "[DISPATCH] Tenant %s: failed atomic dispatch for %s",
+                tenant_id,
+                task.task_id,
             )
             return False
 
-        # Launch task asynchronously (fire-and-forget)
-        # The task state is now in Redis, so restart-safe
-        # Store reference to prevent premature garbage collection
-        bg_task = asyncio.create_task(self._process_task_async(task, tenant_id))
-        self._background_tasks.add(bg_task)
-        bg_task.add_done_callback(self._background_tasks.discard)
+        background_task = asyncio.create_task(self._process_task_async(task, tenant_id))
+        self._background_tasks.add(background_task)
+        background_task.add_done_callback(self._background_tasks.discard)
 
         _log.info(
-            f"[DISPATCH] Tenant {tenant_id}: LAUNCHED task {task.task_id} ({task_size} docs)"
+            "[DISPATCH] Tenant %s: launched task %s (%s docs)",
+            tenant_id,
+            task.task_id,
+            task_size,
         )
-
         return True
 
-    async def _process_task_async(self, task: Task, tenant_id: str):
-        """Process task asynchronously with Redis state tracking.
-
-        This method is fire-and-forget but all state is persisted in Redis,
-        making it resilient to dispatcher restarts.
-
-        Args:
-            task: Task to process
-            tenant_id: Tenant identifier
-        """
+    async def _process_task_async(self, task: Task, tenant_id: str) -> None:
         task_id = task.task_id
         task_size = len(task.sources)
 
         try:
-            _log.info(f"[TASK-START] {task_id}: Processing {task_size} documents")
-
-            # Update dispatch state to "dispatched" (task sent to actor but not yet running)
+            _log.info("[TASK-START] %s: processing %s documents", task_id, task_size)
             await self.redis_manager.set_task_dispatch_state(task_id, "dispatched")
-            # Keep status as PENDING - actor will update to STARTED when it begins processing
-            # NOTE: Actor will call mark_task_processing() when it actually starts
 
-            # Process with Ray Serve (this is the long-running operation)
-            # Ray handles its own fault tolerance and retries
-            # The actor has Redis access and will update status to STARTED when it begins processing
             result = await self.deployment_handle.process_task.remote(task)
-
-            # Store results
             result_key = await self.redis_manager.store_task_result(task_id, result)
 
-            # Update status to SUCCESS
             await self.redis_manager.update_task_status(task_id, TaskStatus.SUCCESS)
-
-            # Publish update
+            await self.redis_manager.set_task_dispatch_state(task_id, None)
             await self.redis_manager.publish_update(
                 TaskUpdate(
                     task_id=task_id,
                     task_status=TaskStatus.SUCCESS,
                     result_key=result_key,
-                    progress=None,  # No progress object in DoclingTaskResult
+                    progress=None,
                 )
             )
 
-            # Update tenant stats
             await self.redis_manager.update_tenant_stats(
                 tenant_id,
                 delta_total_tasks=1,
@@ -347,138 +325,130 @@ class RayTaskDispatcher:
                 delta_failed_documents=result.num_failed,
             )
 
-            _log.info(f"[TASK-SUCCESS] {task_id}: Completed successfully")
+            _log.info("[TASK-SUCCESS] %s: completed successfully", task_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            error_message = str(exc)
+            _log.error("[TASK-FAILURE] %s: %s", task_id, error_message, exc_info=True)
 
-        except Exception as e:
-            _log.error(f"[TASK-FAILURE] {task_id}: {e}", exc_info=True)
-
-            # Update status to FAILURE
             await self.redis_manager.update_task_status(
-                task_id, TaskStatus.FAILURE, error_message=str(e)
+                task_id,
+                TaskStatus.FAILURE,
+                error_message=error_message,
             )
-
-            # Publish update
+            await self.redis_manager.set_task_dispatch_state(task_id, None)
             await self.redis_manager.publish_update(
                 TaskUpdate(
                     task_id=task_id,
                     task_status=TaskStatus.FAILURE,
-                    error_message=str(e),
+                    error_message=error_message,
                 )
             )
 
-            # Update tenant stats
             await self.redis_manager.update_tenant_stats(
                 tenant_id,
                 delta_total_tasks=1,
                 delta_total_documents=task_size,
                 delta_failed_documents=task_size,
             )
-
         finally:
-            # CRITICAL: Remove from active set and decrement counters (ATOMIC)
             await self.redis_manager.complete_task_atomic(tenant_id, task_id, task_size)
             _log.info(
-                f"[TASK-CLEANUP] {task_id}: Released capacity for tenant {tenant_id}"
+                "[TASK-CLEANUP] %s: released capacity for tenant %s",
+                task_id,
+                tenant_id,
             )
 
-    async def _recover_orphaned_tasks(self):
-        """Recover tasks orphaned by dispatcher crash.
+    async def _reconcile_active_tasks(self) -> None:
+        tenants = await self.redis_manager.get_all_tenants_with_active_tasks()
+        for tenant_id in tenants:
+            await self._reconcile_tenant_active_tasks(tenant_id)
 
-        Checks for tasks in 'active' state but dispatcher heartbeat is stale.
-        Re-queues or marks as failed based on task age and retry count.
-        """
-        # Check if dispatcher heartbeat is stale
-        heartbeat_age = await self.redis_manager.get_dispatcher_heartbeat_age()
-
-        # Only recover if heartbeat is very stale (3x interval)
-        if heartbeat_age < (self.config.dispatcher_interval * 3):
+    async def _reconcile_tenant_active_tasks(self, tenant_id: str) -> None:
+        active_task_ids = await self.redis_manager.get_tenant_active_task_ids(tenant_id)
+        if not active_task_ids:
+            await self.redis_manager.resync_tenant_limits(tenant_id)
             return
 
-        _log.warning(
-            f"[RECOVERY] Stale heartbeat detected ({heartbeat_age:.1f}s), checking for orphaned tasks"
-        )
+        now_timestamp = datetime.datetime.now(datetime.timezone.utc).timestamp()
 
-        # Get all tenants with active tasks
-        tenants = await self.redis_manager.get_all_tenants_with_active_tasks()
-
-        recovered_count = 0
-        failed_count = 0
-
-        for tenant_id in tenants:
-            # Get active task IDs for this tenant
-            active_task_ids = await self.redis_manager.get_tenant_active_task_ids(
-                tenant_id
+        for task_id in active_task_ids:
+            metadata = await self.redis_manager.get_task_metadata_model(task_id)
+            processing_state = await self.redis_manager.get_task_processing_state(
+                task_id
             )
 
-            for task_id in active_task_ids:
-                # Check task processing state
-                processing_state = await self.redis_manager.get_task_processing_state(
-                    task_id
+            if not processing_state:
+                await self._fail_reconciled_task(
+                    tenant_id=tenant_id,
+                    task_id=task_id,
+                    metadata=metadata,
+                    error_message="Task orphaned: processing state missing during reconciliation",
                 )
+                continue
 
-                if not processing_state:
-                    # No processing state = orphaned
-                    _log.warning(
-                        f"[RECOVERY] Orphaned task {task_id} for tenant {tenant_id}"
+            processing_status = processing_state.get("status")
+            if processing_status == "dispatched":
+                dispatched_at_raw = processing_state.get("dispatched_at")
+                dispatched_at = float(dispatched_at_raw) if dispatched_at_raw else 0.0
+                if (
+                    now_timestamp - dispatched_at
+                    > self.config.dispatcher_handoff_timeout
+                ):
+                    await self._fail_reconciled_task(
+                        tenant_id=tenant_id,
+                        task_id=task_id,
+                        metadata=metadata,
+                        error_message=(
+                            "Task dispatch handoff timed out during reconciliation"
+                        ),
                     )
 
-                    # Get task metadata to check retry count
-                    metadata = await self.redis_manager.get_task_metadata(task_id)
-                    retry_count = int(metadata.get("retry_count", 0))
+        await self.redis_manager.resync_tenant_limits(tenant_id)
 
-                    if retry_count < self.config.max_task_retries:
-                        # Mark as failed and let client retry
-                        _log.info(
-                            f"[RECOVERY] Marking task {task_id} as failed (retry {retry_count + 1})"
-                        )
+    async def _fail_reconciled_task(
+        self,
+        tenant_id: str,
+        task_id: str,
+        metadata: Optional[RedisTaskMetadata],
+        error_message: str,
+    ) -> None:
+        task_size = self._task_size_for_cleanup(task_id, metadata)
 
-                        await self.redis_manager.update_task_status(
-                            task_id,
-                            TaskStatus.FAILURE,
-                            error_message=f"Task orphaned by dispatcher restart (retry {retry_count})",
-                        )
+        _log.warning("[RECONCILE] %s: %s", task_id, error_message)
 
-                        # Remove from active set
-                        task_size = int(processing_state.get("task_size", 1))
-                        await self.redis_manager.complete_task_atomic(
-                            tenant_id, task_id, task_size
-                        )
-
-                        recovered_count += 1
-                    else:
-                        # Max retries exceeded
-                        _log.error(
-                            f"[RECOVERY] Task {task_id} exceeded max retries, marking as failed"
-                        )
-
-                        await self.redis_manager.update_task_status(
-                            task_id,
-                            TaskStatus.FAILURE,
-                            error_message=f"Task failed after {retry_count} retries (dispatcher restarts)",
-                        )
-
-                        # Remove from active set
-                        task_size = int(processing_state.get("task_size", 1))
-                        await self.redis_manager.complete_task_atomic(
-                            tenant_id, task_id, task_size
-                        )
-
-                        failed_count += 1
-
-        if recovered_count > 0 or failed_count > 0:
-            _log.warning(
-                f"[RECOVERY] Completed: recovered={recovered_count}, failed={failed_count}"
+        await self.redis_manager.update_task_status(
+            task_id,
+            TaskStatus.FAILURE,
+            error_message=error_message,
+        )
+        await self.redis_manager.set_task_dispatch_state(task_id, None)
+        await self.redis_manager.publish_update(
+            TaskUpdate(
+                task_id=task_id,
+                task_status=TaskStatus.FAILURE,
+                error_message=error_message,
             )
+        )
+        await self.redis_manager.complete_task_atomic(tenant_id, task_id, task_size)
 
-    async def get_stats(self) -> dict:
-        """Get comprehensive dispatcher statistics.
+    @staticmethod
+    def _task_size_for_cleanup(
+        task_id: str, metadata: Optional[RedisTaskMetadata]
+    ) -> int:
+        if metadata is not None and metadata.task_size > 0:
+            return metadata.task_size
 
-        Returns:
-            Dictionary with dispatcher stats including per-tenant details
-        """
+        _log.warning(
+            "[RECONCILE] Missing durable task_size for %s; falling back to 1",
+            task_id,
+        )
+        return 1
+
+    async def get_stats(self) -> dict[str, Any]:
         tenants = await self.redis_manager.get_all_tenants_with_tasks()
 
-        # Aggregate tenant stats
         total_active_tasks = 0
         total_queued_tasks = 0
         total_capacity_available = 0
@@ -513,27 +483,17 @@ class RayTaskDispatcher:
                 }
             )
 
-        # Get Ray Serve deployment stats
         deployment_stats = {
             "min_replicas": self.config.min_actors,
             "max_replicas": self.config.max_actors,
             "target_requests_per_replica": self.config.target_requests_per_replica,
         }
 
-        stats = {
-            "active": self.active,
-            "last_heartbeat": self.last_heartbeat.isoformat(),
-            "tenants_with_tasks": len(tenants),
+        return {
+            "loop_running": self._dispatch_loop_running(),
             "total_active_tasks": total_active_tasks,
             "total_queued_tasks": total_queued_tasks,
             "total_capacity_available": total_capacity_available,
-            "tenant_details": tenant_details,
-            "ray_serve_deployment": deployment_stats,
-            "config": {
-                "dispatcher_interval": self.config.dispatcher_interval,
-                "max_concurrent_tasks": self.config.max_concurrent_tasks,
-                "max_queued_tasks": self.config.max_queued_tasks,
-            },
+            "tenants": tenant_details,
+            "deployment": deployment_stats,
         }
-
-        return stats
