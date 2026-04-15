@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import logging
+import time
 import uuid
 import warnings
 from typing import Any, Optional
@@ -351,6 +352,7 @@ class RayOrchestrator(BaseOrchestrator):
             config.log_level.upper()
         )
 
+        self._unhealthy_since: Optional[float] = None
         self.dispatcher = self._bind_dispatcher()
         _log.info("RayOrchestrator initialized with Ray Serve")
 
@@ -366,21 +368,49 @@ class RayOrchestrator(BaseOrchestrator):
         ).remote(self.config, self.deployment_handle)
 
     async def _refresh_dispatcher_runtime(self) -> None:
-        dispatcher = self.dispatcher
-        if dispatcher is None:
-            dispatcher = self._bind_dispatcher()
-            self.dispatcher = dispatcher
-
-        await dispatcher.refresh_runtime.remote(self.deployment_handle, self.config)
-
-    async def ensure_dispatcher_ready(self) -> None:
-        """Verify that the named dispatcher actor is reachable and healthy."""
+        """Refresh dispatcher runtime state without allowing the supervisor to hang forever."""
+        rpc_timeout = self.config.dispatcher_rpc_timeout
         try:
             dispatcher = self.dispatcher
             if dispatcher is None:
                 dispatcher = self._bind_dispatcher()
                 self.dispatcher = dispatcher
-            loop_running = await dispatcher.get_health.remote()
+
+            await asyncio.wait_for(
+                dispatcher.refresh_runtime.remote(self.deployment_handle, self.config),
+                timeout=rpc_timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            self.dispatcher = None
+            raise DispatcherUnavailableError(
+                f"Ray dispatcher runtime refresh timed out after {rpc_timeout}s"
+            ) from exc
+        except Exception as exc:
+            self.dispatcher = None
+            raise DispatcherUnavailableError(
+                f"Ray dispatcher runtime refresh failed: {exc}"
+            ) from exc
+
+    async def ensure_dispatcher_ready(self) -> None:
+        """Verify that the named dispatcher actor is reachable and healthy.
+
+        The health-check RPC is bounded by config.dispatcher_rpc_timeout so this
+        method never hangs when the Ray head is gone.
+        """
+        rpc_timeout = self.config.dispatcher_rpc_timeout
+        try:
+            dispatcher = self.dispatcher
+            if dispatcher is None:
+                dispatcher = self._bind_dispatcher()
+                self.dispatcher = dispatcher
+            loop_running = await asyncio.wait_for(
+                dispatcher.get_health.remote(), timeout=rpc_timeout
+            )
+        except asyncio.TimeoutError as exc:
+            self.dispatcher = None
+            raise DispatcherUnavailableError(
+                f"Ray dispatcher health check timed out after {rpc_timeout}s"
+            ) from exc
         except Exception as exc:
             self.dispatcher = None
             raise DispatcherUnavailableError(
@@ -391,7 +421,11 @@ class RayOrchestrator(BaseOrchestrator):
             raise DispatcherUnavailableError("Ray dispatcher loop is not running")
 
     async def _supervise_dispatcher(self) -> None:
-        """Keep the local dispatcher binding refreshed and healthy."""
+        """Keep the local dispatcher binding refreshed and healthy.
+
+        Tracks continuous unhealthiness duration so is_liveness_healthy()
+        can report failure after the configured deadline.
+        """
         poll_interval = max(1.0, self.config.dispatcher_interval)
 
         while True:
@@ -399,13 +433,35 @@ class RayOrchestrator(BaseOrchestrator):
                 if self.dispatcher is None:
                     await self._refresh_dispatcher_runtime()
                 await self.ensure_dispatcher_ready()
+                if self._unhealthy_since is not None:
+                    _log.info(
+                        "Ray dispatcher recovered after %.1fs of unhealthiness",
+                        time.monotonic() - self._unhealthy_since,
+                    )
+                    self._unhealthy_since = None
                 await asyncio.sleep(poll_interval)
             except asyncio.CancelledError:
                 raise
             except DispatcherUnavailableError as exc:
-                _log.warning("Dispatcher supervisor retrying after error: %s", exc)
+                if self._unhealthy_since is None:
+                    self._unhealthy_since = time.monotonic()
+                    _log.warning(
+                        "Ray dispatcher became unhealthy; liveness deadline in %.0fs: %s",
+                        self.config.liveness_fail_after,
+                        exc,
+                    )
+                else:
+                    _log.warning("Dispatcher supervisor retrying after error: %s", exc)
                 self.dispatcher = None
                 await asyncio.sleep(1.0)
+
+    def is_liveness_healthy(self) -> bool:
+        """Return False once the dispatcher has been continuously unhealthy past the deadline."""
+        if self._unhealthy_since is None:
+            return True
+        return (
+            time.monotonic() - self._unhealthy_since
+        ) < self.config.liveness_fail_after
 
     async def _task_from_redis(self, task_id: str) -> Optional[Task]:
         """Rebuild or refresh a task from durable Redis metadata."""

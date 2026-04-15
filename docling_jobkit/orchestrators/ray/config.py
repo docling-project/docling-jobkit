@@ -194,6 +194,17 @@ class RayOrchestratorConfig(BaseSettings):
     redis_operation_timeout: float = Field(
         default=30.0, description="Timeout for Redis operations in seconds"
     )
+    dispatcher_rpc_timeout: float = Field(
+        default=5.0,
+        description="Timeout in seconds for a single Ray dispatcher health-check RPC",
+    )
+    liveness_fail_after: float = Field(
+        default=90.0,
+        description=(
+            "Seconds of continuous unhealthiness before /livez reports failure "
+            "so Kubernetes is allowed to restart the pod"
+        ),
+    )
 
     # Health Checks
     enable_heartbeat: bool = Field(
