@@ -357,14 +357,10 @@ class RayTaskDispatcher:
         """
         task_id = task.task_id
         task_size = len(task.sources)
-        processing_heartbeat_task: Optional[asyncio.Task[None]] = None
 
         try:
             _log.info("[TASK-START] %s: processing %s documents", task_id, task_size)
             await self.redis_manager.set_task_dispatch_state(task_id, "dispatched")
-            processing_heartbeat_task = asyncio.create_task(
-                self._maintain_processing_heartbeat(task_id)
-            )
 
             response = self.deployment_handle.process_task.remote(task)
             await asyncio.to_thread(
@@ -410,41 +406,6 @@ class RayTaskDispatcher:
                     "[TASK-FAILURE] %s: preserving existing durable SUCCESS",
                     task_id,
                 )
-        finally:
-            if processing_heartbeat_task is not None:
-                processing_heartbeat_task.cancel()
-                try:
-                    await processing_heartbeat_task
-                except asyncio.CancelledError:
-                    pass
-
-    async def _maintain_processing_heartbeat(self, task_id: str) -> None:
-        """Refresh task processing heartbeats while work is in flight.
-
-        This is task-liveness, not replica-liveness. Serve health checks answer
-        "is the replica process alive?" but do not prove that a specific
-        in-flight task still has a live owner that can finalize it. This
-        heartbeat exists because failure recovery still crosses dispatcher-owned
-        boundaries; if terminal completion is ever fully decoupled from the
-        dispatcher, this mechanism should be reevaluated.
-        """
-        interval = max(self.config.heartbeat_interval, 0.01)
-        while True:
-            try:
-                updated = await self.redis_manager.update_task_processing_heartbeat(
-                    task_id
-                )
-                if not updated:
-                    return
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                _log.warning(
-                    "[TASK-HEARTBEAT] %s: failed to update processing heartbeat: %s",
-                    task_id,
-                    exc,
-                )
-            await asyncio.sleep(interval)
 
     async def _reconcile_active_tasks(self) -> None:
         """Reconcile active-task bookkeeping after dispatcher startup and per round.
@@ -468,12 +429,14 @@ class RayTaskDispatcher:
 
         for task_id in active_task_ids:
             metadata = await self.redis_manager.get_task_metadata_model(task_id)
-            processing_state = await self.redis_manager.get_task_processing_state(
+            dispatch_hash = await self.redis_manager.get_task_dispatch_state_hash(
                 task_id
             )
 
-            if not processing_state:
+            if not dispatch_hash:
                 if metadata is None or metadata.status != TaskStatus.STARTED:
+                    # No processing state + non-STARTED metadata: already terminal or
+                    # was never properly dispatched. No action needed.
                     continue
                 await self._fail_reconciled_task(
                     tenant_id=tenant_id,
@@ -490,8 +453,17 @@ class RayTaskDispatcher:
             if metadata is None or metadata.status != TaskStatus.STARTED:
                 continue
 
-            heartbeat_at_raw = processing_state.get("heartbeat_at")
+            execution_lease = await self.redis_manager.get_task_execution_lease(task_id)
+            if execution_lease is None:
+                # No lease written yet: narrow window between dispatch and replica claim,
+                # or an old in-flight task from before this code was deployed.
+                # Leave unresolved — conservative, no false positives.
+                continue
+
+            heartbeat_at_raw = execution_lease.get("heartbeat_at")
             if heartbeat_at_raw is None:
+                # Lease exists but no heartbeat field — should not happen with current code.
+                # Leave unresolved rather than risk a false positive.
                 continue
 
             try:
@@ -500,7 +472,7 @@ class RayTaskDispatcher:
                 ).timestamp() - float(heartbeat_at_raw)
             except ValueError:
                 _log.warning(
-                    "[RECONCILE] %s: invalid processing heartbeat %r",
+                    "[RECONCILE] %s: invalid execution lease heartbeat %r",
                     task_id,
                     heartbeat_at_raw,
                 )
@@ -512,7 +484,7 @@ class RayTaskDispatcher:
                     task_id=task_id,
                     metadata=metadata,
                     error_message=(
-                        "Task orphaned: processing heartbeat stale during reconciliation"
+                        "Task orphaned: replica execution lease stale during reconciliation"
                     ),
                 )
 

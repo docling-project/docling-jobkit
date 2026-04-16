@@ -28,14 +28,6 @@ from docling_jobkit.orchestrators.serialization import make_msgpack_safe
 
 _log = logging.getLogger(__name__)
 
-_UPDATE_TASK_PROCESSING_HEARTBEAT_LUA = """
-if redis.call('EXISTS', KEYS[1]) == 1 then
-    redis.call('HSET', KEYS[1], 'heartbeat_at', ARGV[1])
-    return 1
-end
-return 0
-"""
-
 _UPDATE_TASK_EXECUTION_HEARTBEAT_LUA = """
 if redis.call('EXISTS', KEYS[1]) == 1 then
     redis.call('HSET', KEYS[1], 'heartbeat_at', ARGV[1])
@@ -113,7 +105,6 @@ class RedisStateManager:
         # Connection pool and client will be created in connect()
         self.pool: Optional[ConnectionPool] = None
         self.redis: Optional[Redis] = None
-        self._update_task_processing_heartbeat_sha: Optional[str] = None
         self._update_task_execution_heartbeat_sha: Optional[str] = None
 
     def _compute_processing_ttl(self, task_timeout: Optional[float]) -> int:
@@ -141,7 +132,6 @@ class RedisStateManager:
                 decode_responses=False,  # We handle encoding/decoding
             )
             self.redis = Redis(connection_pool=self.pool)
-            self._update_task_processing_heartbeat_sha = None
             self._update_task_execution_heartbeat_sha = None
             _log.info(f"Connected to Redis at {self.redis_url}")
 
@@ -150,7 +140,6 @@ class RedisStateManager:
         if self.redis:
             await self.redis.aclose()
             self.redis = None
-            self._update_task_processing_heartbeat_sha = None
             self._update_task_execution_heartbeat_sha = None
         if self.pool:
             await self.pool.aclose()
@@ -481,11 +470,11 @@ class RedisStateManager:
 
             # Check processing state instead of task metadata
             # Processing state is deleted when task completes, so it's more reliable
-            processing_state = await self.get_task_processing_state(task_id)
+            dispatch_hash = await self.get_task_dispatch_state_hash(task_id)
 
-            # Count if processing state exists and status is "processing"
+            # Count if dispatch hash exists and status is "processing"
             # (status="dispatched" means sent to actor but not yet started)
-            if processing_state and processing_state.get("status") == "processing":
+            if dispatch_hash and dispatch_hash.get("status") == "processing":
                 count += 1
 
         return count
@@ -790,7 +779,7 @@ class RedisStateManager:
         queue_key = f"tenant:{tenant_id}:tasks"
         active_key = f"tenant:{tenant_id}:active_tasks"
         limits_key = f"tenant:{tenant_id}:limits"
-        processing_key = f"task:{task_id}:processing"
+        dispatch_key = f"task:{task_id}:dispatch"
 
         redis = self._ensure_redis()
 
@@ -833,7 +822,7 @@ class RedisStateManager:
                 # 4. Create processing state
                 now_timestamp = datetime.datetime.now(datetime.timezone.utc).timestamp()
                 pipe.hset(
-                    processing_key,
+                    dispatch_key,
                     mapping={
                         "tenant_id": tenant_id,
                         "status": "dispatched",
@@ -841,7 +830,7 @@ class RedisStateManager:
                         "task_size": str(task_size),
                     },
                 )
-                pipe.expire(processing_key, self.processing_ttl)
+                pipe.expire(dispatch_key, self.processing_ttl)
 
                 # Execute transaction
                 await pipe.execute()
@@ -874,7 +863,7 @@ class RedisStateManager:
         """
         active_key = f"tenant:{tenant_id}:active_tasks"
         limits_key = f"tenant:{tenant_id}:limits"
-        processing_key = f"task:{task_id}:processing"
+        dispatch_key = f"task:{task_id}:dispatch"
         execution_key = f"task:{task_id}:execution"
 
         redis = self._ensure_redis()
@@ -890,7 +879,7 @@ class RedisStateManager:
                         was_active = bool(sismember_result)
 
                     pipe.multi()
-                    pipe.delete(processing_key, execution_key)
+                    pipe.delete(dispatch_key, execution_key)
                     if was_active:
                         pipe.srem(active_key, task_id)
                         pipe.hincrby(limits_key, "active_tasks", -1)
@@ -960,7 +949,7 @@ class RedisStateManager:
         task_key = f"task:{task_id}"
         active_key = f"tenant:{tenant_id}:active_tasks"
         limits_key = f"tenant:{tenant_id}:limits"
-        processing_key = f"task:{task_id}:processing"
+        dispatch_key = f"task:{task_id}:dispatch"
         execution_key = f"task:{task_id}:execution"
         redis = self._ensure_redis()
 
@@ -1013,7 +1002,7 @@ class RedisStateManager:
                     if terminal_status == TaskStatus.SUCCESS:
                         fields_to_delete.append("error_message")
                     pipe.hdel(task_key, *fields_to_delete)
-                    pipe.delete(processing_key, execution_key)
+                    pipe.delete(dispatch_key, execution_key)
 
                     if was_active:
                         pipe.srem(active_key, task_id)
@@ -1156,55 +1145,20 @@ class RedisStateManager:
             task_id: Task identifier
             tenant_id: Tenant identifier
         """
-        processing_key = f"task:{task_id}:processing"
+        dispatch_key = f"task:{task_id}:dispatch"
         redis = self._ensure_redis()
         now_timestamp = datetime.datetime.now(datetime.timezone.utc).timestamp()
         await redis.hset(  # type: ignore[misc]
-            processing_key,
+            dispatch_key,
             mapping={
                 "tenant_id": tenant_id,
                 "status": "processing",
                 "processing_started_at": str(now_timestamp),
-                "heartbeat_at": str(now_timestamp),
             },
         )
-        await redis.expire(processing_key, self.processing_ttl)  # type: ignore[misc]
+        await redis.expire(dispatch_key, self.processing_ttl)  # type: ignore[misc]
 
-    async def update_task_processing_heartbeat(self, task_id: str) -> bool:
-        """Refresh the processing heartbeat without extending the processing-key TTL."""
-        if not self.redis:
-            await self.connect()
-
-        processing_key = f"task:{task_id}:processing"
-        redis = self._ensure_redis()
-        now_timestamp = str(datetime.datetime.now(datetime.timezone.utc).timestamp())
-
-        if self._update_task_processing_heartbeat_sha is None:
-            self._update_task_processing_heartbeat_sha = await redis.script_load(  # type: ignore[misc]
-                _UPDATE_TASK_PROCESSING_HEARTBEAT_LUA
-            )
-
-        try:
-            updated = await redis.evalsha(  # type: ignore[misc]
-                self._update_task_processing_heartbeat_sha,
-                1,
-                processing_key,
-                now_timestamp,
-            )
-        except NoScriptError:
-            self._update_task_processing_heartbeat_sha = await redis.script_load(  # type: ignore[misc]
-                _UPDATE_TASK_PROCESSING_HEARTBEAT_LUA
-            )
-            updated = await redis.evalsha(  # type: ignore[misc]
-                self._update_task_processing_heartbeat_sha,
-                1,
-                processing_key,
-                now_timestamp,
-            )
-
-        return bool(updated)
-
-    async def get_task_processing_state(self, task_id: str) -> dict:
+    async def get_task_dispatch_state_hash(self, task_id: str) -> dict:
         """Get task processing state.
 
         Args:
@@ -1213,9 +1167,9 @@ class RedisStateManager:
         Returns:
             Processing state dictionary
         """
-        processing_key = f"task:{task_id}:processing"
+        dispatch_key = f"task:{task_id}:dispatch"
         redis = self._ensure_redis()
-        state = await redis.hgetall(processing_key)  # type: ignore[misc]
+        state = await redis.hgetall(dispatch_key)  # type: ignore[misc]
         if not state:
             return {}
         return {k.decode("utf-8"): v.decode("utf-8") for k, v in state.items()}
@@ -1232,14 +1186,14 @@ class RedisStateManager:
         """
         execution_key = f"task:{task_id}:execution"
         redis = self._ensure_redis()
-        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        now_timestamp = str(datetime.datetime.now(datetime.timezone.utc).timestamp())
         await redis.hset(  # type: ignore[misc]
             execution_key,
             mapping={
                 "replica_id": replica_id,
                 "tenant_id": tenant_id,
-                "claimed_at": now_iso,
-                "heartbeat_at": now_iso,
+                "claimed_at": now_timestamp,
+                "heartbeat_at": now_timestamp,
             },
         )
 
@@ -1288,6 +1242,8 @@ class RedisStateManager:
         Used by reconciliation to determine whether a STARTED task still has
         a live replica owner.
         """
+        if not self.redis:
+            await self.connect()
         execution_key = f"task:{task_id}:execution"
         redis = self._ensure_redis()
         state = await redis.hgetall(execution_key)  # type: ignore[misc]
