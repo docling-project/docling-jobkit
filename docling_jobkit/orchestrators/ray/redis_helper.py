@@ -36,6 +36,14 @@ end
 return 0
 """
 
+_UPDATE_TASK_EXECUTION_HEARTBEAT_LUA = """
+if redis.call('EXISTS', KEYS[1]) == 1 then
+    redis.call('HSET', KEYS[1], 'heartbeat_at', ARGV[1])
+    return 1
+end
+return 0
+"""
+
 
 class RedisStateManager:
     """Manages Redis state for Ray orchestrator.
@@ -106,6 +114,7 @@ class RedisStateManager:
         self.pool: Optional[ConnectionPool] = None
         self.redis: Optional[Redis] = None
         self._update_task_processing_heartbeat_sha: Optional[str] = None
+        self._update_task_execution_heartbeat_sha: Optional[str] = None
 
     def _compute_processing_ttl(self, task_timeout: Optional[float]) -> int:
         if task_timeout is not None:
@@ -133,6 +142,7 @@ class RedisStateManager:
             )
             self.redis = Redis(connection_pool=self.pool)
             self._update_task_processing_heartbeat_sha = None
+            self._update_task_execution_heartbeat_sha = None
             _log.info(f"Connected to Redis at {self.redis_url}")
 
     async def disconnect(self):
@@ -141,6 +151,7 @@ class RedisStateManager:
             await self.redis.aclose()
             self.redis = None
             self._update_task_processing_heartbeat_sha = None
+            self._update_task_execution_heartbeat_sha = None
         if self.pool:
             await self.pool.aclose()
             self.pool = None
@@ -864,6 +875,7 @@ class RedisStateManager:
         active_key = f"tenant:{tenant_id}:active_tasks"
         limits_key = f"tenant:{tenant_id}:limits"
         processing_key = f"task:{task_id}:processing"
+        execution_key = f"task:{task_id}:execution"
 
         redis = self._ensure_redis()
 
@@ -878,7 +890,7 @@ class RedisStateManager:
                         was_active = bool(sismember_result)
 
                     pipe.multi()
-                    pipe.delete(processing_key)
+                    pipe.delete(processing_key, execution_key)
                     if was_active:
                         pipe.srem(active_key, task_id)
                         pipe.hincrby(limits_key, "active_tasks", -1)
@@ -949,6 +961,7 @@ class RedisStateManager:
         active_key = f"tenant:{tenant_id}:active_tasks"
         limits_key = f"tenant:{tenant_id}:limits"
         processing_key = f"task:{task_id}:processing"
+        execution_key = f"task:{task_id}:execution"
         redis = self._ensure_redis()
 
         async with redis.pipeline(transaction=True) as pipe:
@@ -1000,7 +1013,7 @@ class RedisStateManager:
                     if terminal_status == TaskStatus.SUCCESS:
                         fields_to_delete.append("error_message")
                     pipe.hdel(task_key, *fields_to_delete)
-                    pipe.delete(processing_key)
+                    pipe.delete(processing_key, execution_key)
 
                     if was_active:
                         pipe.srem(active_key, task_id)
@@ -1205,6 +1218,81 @@ class RedisStateManager:
         state = await redis.hgetall(processing_key)  # type: ignore[misc]
         if not state:
             return {}
+        return {k.decode("utf-8"): v.decode("utf-8") for k, v in state.items()}
+
+    async def write_task_execution_lease(
+        self, task_id: str, tenant_id: str, replica_id: str
+    ) -> None:
+        """Write the replica-owned execution lease for a task.
+
+        Called by the replica when it begins executing a task. The lease proves
+        a live replica owns this work. It is refreshed by
+        update_task_execution_heartbeat() and deleted by finalize_task_*_atomic().
+        No TTL — the key is cleaned up explicitly at terminalization.
+        """
+        execution_key = f"task:{task_id}:execution"
+        redis = self._ensure_redis()
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        await redis.hset(  # type: ignore[misc]
+            execution_key,
+            mapping={
+                "replica_id": replica_id,
+                "tenant_id": tenant_id,
+                "claimed_at": now_iso,
+                "heartbeat_at": now_iso,
+            },
+        )
+
+    async def update_task_execution_heartbeat(self, task_id: str) -> bool:
+        """Refresh the execution lease heartbeat timestamp.
+
+        Uses a Lua script so the update is a no-op when the key is gone
+        (replica died or task was already terminalized). Returns False when
+        the key no longer exists — the caller should stop heartbeating.
+        """
+        if not self.redis:
+            await self.connect()
+
+        execution_key = f"task:{task_id}:execution"
+        redis = self._ensure_redis()
+        now_timestamp = str(datetime.datetime.now(datetime.timezone.utc).timestamp())
+
+        if self._update_task_execution_heartbeat_sha is None:
+            self._update_task_execution_heartbeat_sha = await redis.script_load(  # type: ignore[misc]
+                _UPDATE_TASK_EXECUTION_HEARTBEAT_LUA
+            )
+
+        try:
+            updated = await redis.evalsha(  # type: ignore[misc]
+                self._update_task_execution_heartbeat_sha,
+                1,
+                execution_key,
+                now_timestamp,
+            )
+        except NoScriptError:
+            self._update_task_execution_heartbeat_sha = await redis.script_load(  # type: ignore[misc]
+                _UPDATE_TASK_EXECUTION_HEARTBEAT_LUA
+            )
+            updated = await redis.evalsha(  # type: ignore[misc]
+                self._update_task_execution_heartbeat_sha,
+                1,
+                execution_key,
+                now_timestamp,
+            )
+
+        return bool(updated)
+
+    async def get_task_execution_lease(self, task_id: str) -> Optional[dict]:
+        """Return the replica-owned execution lease, or None if it does not exist.
+
+        Used by reconciliation to determine whether a STARTED task still has
+        a live replica owner.
+        """
+        execution_key = f"task:{task_id}:execution"
+        redis = self._ensure_redis()
+        state = await redis.hgetall(execution_key)  # type: ignore[misc]
+        if not state:
+            return None
         return {k.decode("utf-8"): v.decode("utf-8") for k, v in state.items()}
 
     # Dispatcher Heartbeat Operations
