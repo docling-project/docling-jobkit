@@ -78,7 +78,7 @@ class DocumentProcessorDeployment:
         # Get replica context for logging
         try:
             replica_context = serve.get_replica_context()
-            self.replica_id = replica_context.replica_id
+            self.replica_id = str(replica_context.replica_id)
         except RuntimeError:
             self.replica_id = "unknown"
 
