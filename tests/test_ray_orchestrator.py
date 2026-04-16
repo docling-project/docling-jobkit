@@ -11,6 +11,7 @@ import pytest_asyncio
 # Skip all tests if Ray or Redis are not available
 pytest.importorskip("ray")
 pytest.importorskip("redis")
+import redis.asyncio as redis_async
 
 from docling.utils.model_downloader import download_models
 
@@ -28,10 +29,33 @@ from docling_jobkit.orchestrators.ray.orchestrator import (
 )
 
 
-@pytest.fixture
-def redis_url():
+@pytest_asyncio.fixture
+async def redis_url():
     """Get Redis URL from environment or use default."""
-    return os.getenv("REDIS_URL", "redis://localhost:6379/")
+    url = os.getenv("REDIS_URL", "redis://localhost:6379/")
+    client = redis_async.from_url(url)
+
+    try:
+        await client.ping()
+    except Exception as exc:
+        pytest.skip(f"Redis is not available for Ray integration tests: {exc}")
+    finally:
+        await client.aclose()
+
+    return url
+
+
+async def _wait_for_dispatcher(
+    orchestrator: RayOrchestrator, queue_task: asyncio.Task
+) -> None:
+    for _ in range(300):
+        if orchestrator.dispatcher is not None:
+            return
+        if queue_task.done():
+            await queue_task
+        await asyncio.sleep(0.1)
+
+    raise AssertionError("Ray dispatcher did not initialize within 30s")
 
 
 @pytest_asyncio.fixture
@@ -88,6 +112,7 @@ async def orchestrator(artifacts_path: Path, redis_url: str):
 
     # Start processing in background
     queue_task = asyncio.create_task(orchestrator.process_queue())
+    await _wait_for_dispatcher(orchestrator, queue_task)
 
     yield orchestrator
 
@@ -127,6 +152,7 @@ async def orchestrator_with_limits(artifacts_path: Path, redis_url: str):
 
     # Start processing in background
     queue_task = asyncio.create_task(orchestrator.process_queue())
+    await _wait_for_dispatcher(orchestrator, queue_task)
 
     yield orchestrator
 

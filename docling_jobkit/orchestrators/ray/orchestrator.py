@@ -98,7 +98,7 @@ class RayOrchestrator(BaseOrchestrator):
     5. Updates are published via Redis pub/sub
     """
 
-    def __init__(  # noqa: C901
+    def __init__(
         self,
         config: RayOrchestratorConfig,
         converter_manager: DoclingConverterManager,
@@ -132,217 +132,10 @@ class RayOrchestrator(BaseOrchestrator):
             log_level=config.log_level,
         )
 
-        # Initialize Ray if not already initialized
-        if not ray.is_initialized():
-            _log.info(f"Initializing Ray with address: {config.ray_address}")
-
-            # Handle mTLS certificate generation if enabled
-            if config.enable_mtls:
-                if not config.ray_cluster_name:
-                    raise ValueError(
-                        "ray_cluster_name must be provided when enable_mtls is True"
-                    )
-
-                _log.info(
-                    f"Generating mTLS certificates for cluster: {config.ray_cluster_name}, "
-                    f"namespace: {config.ray_namespace}"
-                )
-
-                try:
-                    import os
-                    from pathlib import Path
-
-                    from codeflare_sdk import generate_cert
-
-                    _log.info("=== mTLS Certificate Generation Starting ===")
-                    _log.info(f"Cluster Name: {config.ray_cluster_name}")
-                    _log.info(f"Namespace: {config.ray_namespace}")
-
-                    # Generate TLS certificates
-                    # Note: This requires the Ray cluster to be deployed with TLS enabled
-                    # and the CA secret to exist in the namespace
-                    _log.info("Calling generate_tls_cert()...")
-                    generate_cert.generate_tls_cert(
-                        config.ray_cluster_name,
-                        config.ray_namespace,
-                    )
-                    _log.info("✓ TLS certificates generated successfully")
-
-                    # Export environment variables for Ray mTLS
-                    _log.info("Calling export_env()...")
-                    generate_cert.export_env(
-                        config.ray_cluster_name,
-                        config.ray_namespace,
-                    )
-                    _log.info("✓ Environment variables exported")
-
-                    # Log and verify the environment variables that were set
-                    _log.info("=== mTLS Environment Variables ===")
-                    ray_use_tls = os.environ.get("RAY_USE_TLS", "NOT SET")
-                    ray_tls_server_cert = os.environ.get(
-                        "RAY_TLS_SERVER_CERT", "NOT SET"
-                    )
-                    ray_tls_server_key = os.environ.get("RAY_TLS_SERVER_KEY", "NOT SET")
-                    ray_tls_ca_cert = os.environ.get("RAY_TLS_CA_CERT", "NOT SET")
-
-                    _log.info(f"RAY_USE_TLS: {ray_use_tls}")
-                    _log.info(f"RAY_TLS_SERVER_CERT: {ray_tls_server_cert}")
-                    _log.info(f"RAY_TLS_SERVER_KEY: {ray_tls_server_key}")
-                    _log.info(f"RAY_TLS_CA_CERT: {ray_tls_ca_cert}")
-
-                    # Verify certificate files exist
-                    _log.info("=== Verifying Certificate Files ===")
-                    cert_files = {
-                        "Server Cert": ray_tls_server_cert,
-                        "Server Key": ray_tls_server_key,
-                        "CA Cert": ray_tls_ca_cert,
-                    }
-
-                    all_files_exist = True
-                    for name, path_str in cert_files.items():
-                        if path_str and path_str != "NOT SET":
-                            cert_path = Path(path_str)
-                            exists = cert_path.exists()
-                            if exists:
-                                size = cert_path.stat().st_size
-                                _log.info(f"✓ {name}: {path_str} (size: {size} bytes)")
-                            else:
-                                _log.error(f"✗ {name}: {path_str} (FILE NOT FOUND)")
-                                all_files_exist = False
-                        else:
-                            _log.error(f"✗ {name}: Environment variable not set")
-                            all_files_exist = False
-
-                    if not all_files_exist:
-                        raise RuntimeError(
-                            "mTLS certificate files are missing or environment variables not set properly"
-                        )
-
-                    _log.info("=== mTLS Setup Complete ===")
-
-                except ImportError as e:
-                    raise ImportError(
-                        "codeflare-sdk is required for mTLS support. "
-                        f"Install with: pip install docling-jobkit[ray]. Error: {e}"
-                    )
-                except Exception as e:
-                    _log.error(
-                        f"Failed to generate mTLS certificates. "
-                        f"Cluster: {config.ray_cluster_name}, "
-                        f"Namespace: {config.ray_namespace}. "
-                        f"Error: {e}"
-                    )
-                    raise RuntimeError(
-                        f"Failed to generate mTLS certificates: {e}. "
-                        f"Ensure the Ray cluster '{config.ray_cluster_name}' exists in namespace "
-                        f"'{config.ray_namespace}' and has TLS enabled with a CA secret."
-                    )
-
-            # Prepare init kwargs
-            init_kwargs: dict[str, Any] = {
-                "address": config.ray_address,
-                "namespace": config.ray_namespace,
-                "runtime_env": config.ray_runtime_env,
-            }
-
-            # Add object store memory if configured
-            if config.ray_object_store_memory:
-                try:
-                    memory_bytes = _parse_memory_string(config.ray_object_store_memory)
-                    init_kwargs["object_store_memory"] = memory_bytes
-                    _log.info(
-                        f"Setting Ray object store memory to {config.ray_object_store_memory}"
-                    )
-                except ValueError as e:
-                    _log.warning(f"Invalid ray_object_store_memory format: {e}")
-
-            _log.info("=== Ray Initialization Starting ===")
-            _log.info(f"Ray Address: {config.ray_address}")
-            _log.info(f"Ray Namespace: {config.ray_namespace}")
-            _log.info(f"mTLS Enabled: {config.enable_mtls}")
-            if config.ray_runtime_env:
-                _log.info(f"Runtime Env: {config.ray_runtime_env}")
-            if config.ray_object_store_memory:
-                _log.info(f"Object Store Memory: {config.ray_object_store_memory}")
-
-            _log.info("Calling ray.init()...")
-            try:
-                ray.init(**init_kwargs)
-                _log.info("✓ Ray initialized successfully")
-                _log.info(f"Ray Version: {ray.__version__}")
-                try:
-                    dashboard_url = ray.get_dashboard_url()  # type: ignore
-                    if dashboard_url:
-                        _log.info(f"Ray Dashboard: {dashboard_url}")
-                except Exception:
-                    pass  # Dashboard URL not available in all configurations
-            except Exception as e:
-                _log.error("=" * 60)
-                _log.error("✗ FAILED TO INITIALIZE RAY")
-                _log.error("=" * 60)
-                _log.error(f"Error Type: {type(e).__name__}")
-                _log.error(f"Error Message: {e}")
-                _log.error(f"Ray Address: {config.ray_address}")
-                _log.error(f"Ray Namespace: {config.ray_namespace}")
-
-                if config.enable_mtls:
-                    import os
-                    from pathlib import Path
-
-                    _log.error("--- mTLS Configuration ---")
-                    _log.error(f"Cluster Name: {config.ray_cluster_name}")
-                    _log.error(
-                        f"RAY_USE_TLS: {os.environ.get('RAY_USE_TLS', 'NOT SET')}"
-                    )
-
-                    for env_var in [
-                        "RAY_TLS_SERVER_CERT",
-                        "RAY_TLS_SERVER_KEY",
-                        "RAY_TLS_CA_CERT",
-                    ]:
-                        path_str = os.environ.get(env_var, "NOT SET")
-                        if path_str and path_str != "NOT SET":
-                            exists = Path(path_str).exists()
-                            _log.error(f"{env_var}: {path_str} (exists: {exists})")
-                        else:
-                            _log.error(f"{env_var}: NOT SET")
-
-                _log.error("=" * 60)
-                _log.error("Troubleshooting Tips:")
-                _log.error(
-                    "1. Verify Ray cluster is running: kubectl get raycluster -n <namespace>"
-                )
-                _log.error(
-                    "2. Check Ray head service: kubectl get svc <cluster>-head-svc"
-                )
-                _log.error("3. Test connectivity: nc -zv <ray-address> <port>")
-                if config.enable_mtls:
-                    _log.error("4. Verify Ray cluster has TLS enabled (RAY_USE_TLS=1)")
-                    _log.error("5. Check certificate files exist and are readable")
-                _log.error("=" * 60)
-                raise
-        else:
-            _log.info("Ray already initialized")
-
-        # Initialize Ray Serve if not already running
-        try:
-            serve.start(detached=True)
-            _log.info("Ray Serve started")
-        except RuntimeError:
-            _log.info("Ray Serve already running")
-
-        # Deploy document processor with Ray Serve
-        _log.info("Deploying document processor with Ray Serve")
-        self.deployment_handle = deploy_processor(
-            converter_manager_config=converter_manager.config,
-            config=config,
-            redis_url=config.redis_url,
-            deployment_name="docling_processor",
-        )
-
         # Pub/sub listener task
         self._pubsub_task: Optional[asyncio.Task] = None
         self._dispatcher_supervisor_task: Optional[asyncio.Task] = None
+        self.deployment_handle: Optional[Any] = None
         self.dispatcher: Optional[Any] = None
         self.dispatcher_name = "docling_task_dispatcher"
 
@@ -353,11 +146,130 @@ class RayOrchestrator(BaseOrchestrator):
         )
 
         self._unhealthy_since: Optional[float] = None
-        self.dispatcher = self._bind_dispatcher()
-        _log.info("RayOrchestrator initialized with Ray Serve")
+        _log.info("RayOrchestrator initialized without connecting to Ray")
+
+    def _build_ray_init_kwargs(self) -> dict[str, Any]:
+        """Build Ray init kwargs and perform mTLS setup when enabled."""
+        config = self.config
+
+        _log.info(f"Initializing Ray with address: {config.ray_address}")
+
+        if config.enable_mtls:
+            if not config.ray_cluster_name:
+                raise ValueError(
+                    "ray_cluster_name must be provided when enable_mtls is True"
+                )
+
+            _log.info(
+                f"Generating mTLS certificates for cluster: {config.ray_cluster_name}, "
+                f"namespace: {config.ray_namespace}"
+            )
+
+            try:
+                import os
+                from pathlib import Path
+
+                from codeflare_sdk import generate_cert
+
+                _log.info("=== mTLS Certificate Generation Starting ===")
+                _log.info(f"Cluster Name: {config.ray_cluster_name}")
+                _log.info(f"Namespace: {config.ray_namespace}")
+
+                _log.info("Calling generate_tls_cert()...")
+                generate_cert.generate_tls_cert(
+                    config.ray_cluster_name,
+                    config.ray_namespace,
+                )
+                _log.info("✓ TLS certificates generated successfully")
+
+                _log.info("Calling export_env()...")
+                generate_cert.export_env(
+                    config.ray_cluster_name,
+                    config.ray_namespace,
+                )
+                _log.info("✓ Environment variables exported")
+
+                _log.info("=== mTLS Environment Variables ===")
+                ray_use_tls = os.environ.get("RAY_USE_TLS", "NOT SET")
+                ray_tls_server_cert = os.environ.get("RAY_TLS_SERVER_CERT", "NOT SET")
+                ray_tls_server_key = os.environ.get("RAY_TLS_SERVER_KEY", "NOT SET")
+                ray_tls_ca_cert = os.environ.get("RAY_TLS_CA_CERT", "NOT SET")
+
+                _log.info(f"RAY_USE_TLS: {ray_use_tls}")
+                _log.info(f"RAY_TLS_SERVER_CERT: {ray_tls_server_cert}")
+                _log.info(f"RAY_TLS_SERVER_KEY: {ray_tls_server_key}")
+                _log.info(f"RAY_TLS_CA_CERT: {ray_tls_ca_cert}")
+
+                _log.info("=== Verifying Certificate Files ===")
+                cert_files = {
+                    "Server Cert": ray_tls_server_cert,
+                    "Server Key": ray_tls_server_key,
+                    "CA Cert": ray_tls_ca_cert,
+                }
+
+                all_files_exist = True
+                for name, path_str in cert_files.items():
+                    if path_str and path_str != "NOT SET":
+                        cert_path = Path(path_str)
+                        exists = cert_path.exists()
+                        if exists:
+                            size = cert_path.stat().st_size
+                            _log.info(f"✓ {name}: {path_str} (size: {size} bytes)")
+                        else:
+                            _log.error(f"✗ {name}: {path_str} (FILE NOT FOUND)")
+                            all_files_exist = False
+                    else:
+                        _log.error(f"✗ {name}: Environment variable not set")
+                        all_files_exist = False
+
+                if not all_files_exist:
+                    raise RuntimeError(
+                        "mTLS certificate files are missing or environment variables not set properly"
+                    )
+
+                _log.info("=== mTLS Setup Complete ===")
+
+            except ImportError as exc:
+                raise ImportError(
+                    "codeflare-sdk is required for mTLS support. "
+                    f"Install with: pip install docling-jobkit[ray]. Error: {exc}"
+                ) from exc
+            except Exception as exc:
+                _log.error(
+                    f"Failed to generate mTLS certificates. "
+                    f"Cluster: {config.ray_cluster_name}, "
+                    f"Namespace: {config.ray_namespace}. "
+                    f"Error: {exc}"
+                )
+                raise RuntimeError(
+                    f"Failed to generate mTLS certificates: {exc}. "
+                    f"Ensure the Ray cluster '{config.ray_cluster_name}' exists in namespace "
+                    f"'{config.ray_namespace}' and has TLS enabled with a CA secret."
+                ) from exc
+
+        init_kwargs: dict[str, Any] = {
+            "address": config.ray_address,
+            "namespace": config.ray_namespace,
+            "runtime_env": config.ray_runtime_env,
+        }
+
+        if config.ray_object_store_memory:
+            try:
+                memory_bytes = _parse_memory_string(config.ray_object_store_memory)
+                init_kwargs["object_store_memory"] = memory_bytes
+                _log.info(
+                    f"Setting Ray object store memory to {config.ray_object_store_memory}"
+                )
+            except ValueError as exc:
+                _log.warning(f"Invalid ray_object_store_memory format: {exc}")
+
+        return init_kwargs
 
     def _bind_dispatcher(self) -> Any:
         """Bind to the named detached dispatcher actor for this namespace."""
+        if self.deployment_handle is None:
+            raise DispatcherUnavailableError("Ray runtime is not initialized")
+
         _log.info("Binding to named Ray Task Dispatcher actor")
         return RayTaskDispatcher.options(  # type: ignore[attr-defined]
             name=self.dispatcher_name,
@@ -366,6 +278,64 @@ class RayOrchestrator(BaseOrchestrator):
             max_restarts=self.config.dispatcher_max_restarts,
             max_task_retries=self.config.dispatcher_max_task_retries,
         ).remote(self.config, self.deployment_handle)
+
+    async def _initialize_ray_runtime(self) -> None:
+        """Initialize Ray client, Serve deployment, and dispatcher binding lazily."""
+        if self.dispatcher is not None and self.deployment_handle is not None:
+            return
+
+        config = self.config
+
+        try:
+            if not ray.is_initialized():
+                init_kwargs = await asyncio.to_thread(self._build_ray_init_kwargs)
+
+                _log.info("=== Ray Initialization Starting ===")
+                _log.info(f"Ray Address: {config.ray_address}")
+                _log.info(f"Ray Namespace: {config.ray_namespace}")
+                _log.info(f"mTLS Enabled: {config.enable_mtls}")
+                if config.ray_runtime_env:
+                    _log.info(f"Runtime Env: {config.ray_runtime_env}")
+                if config.ray_object_store_memory:
+                    _log.info(f"Object Store Memory: {config.ray_object_store_memory}")
+
+                _log.info("Calling ray.init()...")
+                await asyncio.to_thread(ray.init, **init_kwargs)
+                _log.info("✓ Ray initialized successfully")
+                _log.info(f"Ray Version: {ray.__version__}")
+                try:
+                    dashboard_url = ray.get_dashboard_url()  # type: ignore
+                    if dashboard_url:
+                        _log.info(f"Ray Dashboard: {dashboard_url}")
+                except Exception:
+                    pass
+            else:
+                _log.info("Ray already initialized")
+
+            try:
+                await asyncio.to_thread(serve.start, detached=True)
+                _log.info("Ray Serve started")
+            except RuntimeError:
+                _log.info("Ray Serve already running")
+
+            _log.info("Deploying document processor with Ray Serve")
+            self.deployment_handle = await asyncio.to_thread(
+                deploy_processor,
+                converter_manager_config=self.cm.config,
+                config=config,
+                redis_url=config.redis_url,
+                deployment_name="docling_processor",
+            )
+            self.dispatcher = self._bind_dispatcher()
+            _log.info("Ray runtime initialized")
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            self.dispatcher = None
+            self.deployment_handle = None
+            raise DispatcherUnavailableError(
+                f"Ray runtime initialization failed: {exc}"
+            ) from exc
 
     async def _refresh_dispatcher_runtime(self) -> None:
         """Refresh dispatcher runtime state without allowing the supervisor to hang forever."""
@@ -385,7 +355,9 @@ class RayOrchestrator(BaseOrchestrator):
             raise DispatcherUnavailableError(
                 f"Ray dispatcher runtime refresh timed out after {rpc_timeout}s"
             ) from exc
-        except Exception as exc:
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
             self.dispatcher = None
             raise DispatcherUnavailableError(
                 f"Ray dispatcher runtime refresh failed: {exc}"
@@ -411,7 +383,9 @@ class RayOrchestrator(BaseOrchestrator):
             raise DispatcherUnavailableError(
                 f"Ray dispatcher health check timed out after {rpc_timeout}s"
             ) from exc
-        except Exception as exc:
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
             self.dispatcher = None
             raise DispatcherUnavailableError(
                 f"Ray dispatcher is unavailable: {exc}"
@@ -680,6 +654,7 @@ class RayOrchestrator(BaseOrchestrator):
     async def process_queue(self):
         """Start local supervision and pub/sub handling for the shared dispatcher."""
         await self.redis_manager.connect()
+        await self._initialize_ray_runtime()
         await self._refresh_dispatcher_runtime()
         await self.ensure_dispatcher_ready()
 
