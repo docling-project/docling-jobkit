@@ -190,7 +190,6 @@ config = RayOrchestratorConfig(
     # Health monitoring
     enable_heartbeat=True,
     heartbeat_interval=30.0,
-    heartbeat_timeout=90.0,
     
     # Resource management
     ray_memory_limit_per_worker="4GB",

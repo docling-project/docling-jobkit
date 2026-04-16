@@ -357,67 +357,94 @@ class RayTaskDispatcher:
         """
         task_id = task.task_id
         task_size = len(task.sources)
+        processing_heartbeat_task: Optional[asyncio.Task[None]] = None
 
         try:
             _log.info("[TASK-START] %s: processing %s documents", task_id, task_size)
             await self.redis_manager.set_task_dispatch_state(task_id, "dispatched")
-
-            result = await self.deployment_handle.process_task.remote(task)
-            result_key = await self.redis_manager.store_task_result(task_id, result)
-
-            await self.redis_manager.update_task_status(task_id, TaskStatus.SUCCESS)
-            await self.redis_manager.set_task_dispatch_state(task_id, None)
-            await self.redis_manager.publish_update(
-                TaskUpdate(
-                    task_id=task_id,
-                    task_status=TaskStatus.SUCCESS,
-                    result_key=result_key,
-                    progress=None,
-                )
+            processing_heartbeat_task = asyncio.create_task(
+                self._maintain_processing_heartbeat(task_id)
             )
 
-            await self.redis_manager.update_tenant_stats(
-                tenant_id,
-                delta_total_tasks=1,
-                delta_total_documents=task_size,
-                delta_successful_documents=result.num_succeeded,
-                delta_failed_documents=result.num_failed,
+            response = self.deployment_handle.process_task.remote(task)
+            await asyncio.to_thread(
+                response.result,
+                timeout_s=self.config.task_timeout,
+                _skip_asyncio_check=True,
             )
-
-            _log.info("[TASK-SUCCESS] %s: completed successfully", task_id)
+            _log.info(
+                "[TASK-SUCCESS] %s: replica completed; durable success is replica-owned",
+                task_id,
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            error_message = str(exc)
+            error_message = str(exc) or exc.__class__.__name__
             _log.error("[TASK-FAILURE] %s: %s", task_id, error_message, exc_info=True)
 
-            await self.redis_manager.update_task_status(
-                task_id,
-                TaskStatus.FAILURE,
+            terminalization = await self.redis_manager.finalize_task_failure_atomic(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                task_size=task_size,
                 error_message=error_message,
             )
-            await self.redis_manager.set_task_dispatch_state(task_id, None)
-            await self.redis_manager.publish_update(
-                TaskUpdate(
-                    task_id=task_id,
-                    task_status=TaskStatus.FAILURE,
-                    error_message=error_message,
+            if (
+                terminalization.status_changed
+                and terminalization.final_status == TaskStatus.FAILURE
+            ):
+                await self.redis_manager.publish_update(
+                    TaskUpdate(
+                        task_id=task_id,
+                        task_status=TaskStatus.FAILURE,
+                        error_message=error_message,
+                    )
                 )
-            )
-
-            await self.redis_manager.update_tenant_stats(
-                tenant_id,
-                delta_total_tasks=1,
-                delta_total_documents=task_size,
-                delta_failed_documents=task_size,
-            )
+                await self.redis_manager.update_tenant_stats(
+                    tenant_id,
+                    delta_total_tasks=1,
+                    delta_total_documents=task_size,
+                    delta_failed_documents=task_size,
+                )
+            elif terminalization.final_status == TaskStatus.SUCCESS:
+                _log.info(
+                    "[TASK-FAILURE] %s: preserving existing durable SUCCESS",
+                    task_id,
+                )
         finally:
-            await self.redis_manager.complete_task_atomic(tenant_id, task_id, task_size)
-            _log.info(
-                "[TASK-CLEANUP] %s: released capacity for tenant %s",
-                task_id,
-                tenant_id,
-            )
+            if processing_heartbeat_task is not None:
+                processing_heartbeat_task.cancel()
+                try:
+                    await processing_heartbeat_task
+                except asyncio.CancelledError:
+                    pass
+
+    async def _maintain_processing_heartbeat(self, task_id: str) -> None:
+        """Refresh task processing heartbeats while work is in flight.
+
+        This is task-liveness, not replica-liveness. Serve health checks answer
+        "is the replica process alive?" but do not prove that a specific
+        in-flight task still has a live owner that can finalize it. This
+        heartbeat exists because failure recovery still crosses dispatcher-owned
+        boundaries; if terminal completion is ever fully decoupled from the
+        dispatcher, this mechanism should be reevaluated.
+        """
+        interval = max(self.config.heartbeat_interval, 0.01)
+        while True:
+            try:
+                updated = await self.redis_manager.update_task_processing_heartbeat(
+                    task_id
+                )
+                if not updated:
+                    return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _log.warning(
+                    "[TASK-HEARTBEAT] %s: failed to update processing heartbeat: %s",
+                    task_id,
+                    exc,
+                )
+            await asyncio.sleep(interval)
 
     async def _reconcile_active_tasks(self) -> None:
         """Reconcile active-task bookkeeping after dispatcher startup and per round.
@@ -454,6 +481,40 @@ class RayTaskDispatcher:
                     metadata=metadata,
                     error_message="Task orphaned: processing state missing during reconciliation",
                 )
+                continue
+
+            # D3-owned durable SUCCESS is the terminal fence. Reconciliation only
+            # applies stale-heartbeat failure logic to tasks that are still
+            # durably STARTED; once durable status has moved to SUCCESS or
+            # FAILURE, this path must leave the task alone.
+            if metadata is None or metadata.status != TaskStatus.STARTED:
+                continue
+
+            heartbeat_at_raw = processing_state.get("heartbeat_at")
+            if heartbeat_at_raw is None:
+                continue
+
+            try:
+                heartbeat_age = datetime.datetime.now(
+                    datetime.timezone.utc
+                ).timestamp() - float(heartbeat_at_raw)
+            except ValueError:
+                _log.warning(
+                    "[RECONCILE] %s: invalid processing heartbeat %r",
+                    task_id,
+                    heartbeat_at_raw,
+                )
+                continue
+
+            if heartbeat_age > self._get_task_processing_stale_after():
+                await self._fail_reconciled_task(
+                    tenant_id=tenant_id,
+                    task_id=task_id,
+                    metadata=metadata,
+                    error_message=(
+                        "Task orphaned: processing heartbeat stale during reconciliation"
+                    ),
+                )
 
         await self.redis_manager.resync_tenant_limits(tenant_id)
 
@@ -474,20 +535,31 @@ class RayTaskDispatcher:
 
         _log.warning("[RECONCILE] %s: %s", task_id, error_message)
 
-        await self.redis_manager.update_task_status(
-            task_id,
-            TaskStatus.FAILURE,
+        terminalization = await self.redis_manager.finalize_task_failure_atomic(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            task_size=task_size,
             error_message=error_message,
         )
-        await self.redis_manager.set_task_dispatch_state(task_id, None)
-        await self.redis_manager.publish_update(
-            TaskUpdate(
-                task_id=task_id,
-                task_status=TaskStatus.FAILURE,
-                error_message=error_message,
+        if (
+            terminalization.status_changed
+            and terminalization.final_status == TaskStatus.FAILURE
+        ):
+            await self.redis_manager.publish_update(
+                TaskUpdate(
+                    task_id=task_id,
+                    task_status=TaskStatus.FAILURE,
+                    error_message=error_message,
+                )
             )
-        )
-        await self.redis_manager.complete_task_atomic(tenant_id, task_id, task_size)
+
+    def _get_task_processing_stale_after(self) -> float:
+        """Return the stale cutoff for task heartbeats.
+
+        A fixed multiplier keeps configuration simple and avoids hidden coupling
+        between heartbeat cadence and stale-task reconciliation.
+        """
+        return self.config.heartbeat_interval * 4
 
     async def get_stats(self) -> dict[str, Any]:
         """Get comprehensive dispatcher statistics.

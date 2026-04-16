@@ -30,6 +30,7 @@ from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
 )
+from docling_jobkit.orchestrators.ray.models import TaskUpdate
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 
 _log = logging.getLogger(__name__)
@@ -177,6 +178,44 @@ class DocumentProcessorDeployment:
                 f"Replica {self.replica_id}: Task {task.task_id} completed "
                 f"in {duration:.2f}s"
             )
+
+            terminalization = await self.redis_manager.finalize_task_success_atomic(
+                tenant_id=tenant_id,
+                task_id=task.task_id,
+                task_size=len(task.sources),
+                result=result,
+            )
+            if (
+                terminalization.status_changed
+                and terminalization.final_status == TaskStatus.SUCCESS
+                and terminalization.result_key is not None
+            ):
+                try:
+                    await self.redis_manager.publish_update(
+                        TaskUpdate(
+                            task_id=task.task_id,
+                            task_status=TaskStatus.SUCCESS,
+                            result_key=terminalization.result_key,
+                            progress=None,
+                        )
+                    )
+                    await self.redis_manager.update_tenant_stats(
+                        tenant_id,
+                        delta_total_tasks=1,
+                        delta_total_documents=len(task.sources),
+                        delta_successful_documents=result.num_succeeded,
+                        delta_failed_documents=result.num_failed,
+                    )
+                except Exception as exc:
+                    _log.warning(
+                        f"Replica {self.replica_id}: Durable success follow-up failed "
+                        f"for task {task.task_id}: {exc}"
+                    )
+            elif terminalization.final_status == TaskStatus.FAILURE:
+                _log.warning(
+                    f"Replica {self.replica_id}: Task {task.task_id} completed after "
+                    "a terminal FAILURE was already recorded; preserving FAILURE"
+                )
 
             return result
 

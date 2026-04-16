@@ -10,7 +10,7 @@ from typing import Optional
 import msgpack
 from redis.asyncio import Redis
 from redis.asyncio.connection import ConnectionPool
-from redis.exceptions import WatchError
+from redis.exceptions import NoScriptError, WatchError
 
 from docling.datamodel.service.tasks import TaskType
 
@@ -19,6 +19,7 @@ from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.ray.models import (
     RedisTaskMetadata,
+    TaskTerminalizationResult,
     TaskUpdate,
     TenantLimits,
     TenantStats,
@@ -26,6 +27,14 @@ from docling_jobkit.orchestrators.ray.models import (
 from docling_jobkit.orchestrators.serialization import make_msgpack_safe
 
 _log = logging.getLogger(__name__)
+
+_UPDATE_TASK_PROCESSING_HEARTBEAT_LUA = """
+if redis.call('EXISTS', KEYS[1]) == 1 then
+    redis.call('HSET', KEYS[1], 'heartbeat_at', ARGV[1])
+    return 1
+end
+return 0
+"""
 
 
 class RedisStateManager:
@@ -96,6 +105,7 @@ class RedisStateManager:
         # Connection pool and client will be created in connect()
         self.pool: Optional[ConnectionPool] = None
         self.redis: Optional[Redis] = None
+        self._update_task_processing_heartbeat_sha: Optional[str] = None
 
     def _compute_processing_ttl(self, task_timeout: Optional[float]) -> int:
         if task_timeout is not None:
@@ -122,6 +132,7 @@ class RedisStateManager:
                 decode_responses=False,  # We handle encoding/decoding
             )
             self.redis = Redis(connection_pool=self.pool)
+            self._update_task_processing_heartbeat_sha = None
             _log.info(f"Connected to Redis at {self.redis_url}")
 
     async def disconnect(self):
@@ -129,6 +140,7 @@ class RedisStateManager:
         if self.redis:
             await self.redis.aclose()
             self.redis = None
+            self._update_task_processing_heartbeat_sha = None
         if self.pool:
             await self.pool.aclose()
             self.pool = None
@@ -487,10 +499,7 @@ class RedisStateManager:
             await self.connect()
 
         result_key = f"{self.results_prefix}:task:{task_id}:result"
-
-        # Serialize result using msgpack (make safe for msgpack serialization)
-        safe_data = make_msgpack_safe(result.model_dump())
-        result_data = msgpack.packb(safe_data, use_bin_type=True)
+        result_data = self._serialize_task_result(result)
 
         # Store with TTL
         redis = self._ensure_redis()
@@ -499,6 +508,12 @@ class RedisStateManager:
         _log.debug(f"Stored result for task {task_id} with TTL {self.results_ttl}s")
 
         return result_key
+
+    @staticmethod
+    def _serialize_task_result(result: DoclingTaskResult) -> bytes:
+        """Serialize a task result for Redis storage."""
+        safe_data = make_msgpack_safe(result.model_dump())
+        return msgpack.packb(safe_data, use_bin_type=True)
 
     async def get_task_result(self, task_id: str) -> Optional[DoclingTaskResult]:
         """Retrieve task result from Redis.
@@ -881,6 +896,143 @@ class RedisStateManager:
                 except WatchError:
                     continue
 
+    async def finalize_task_success_atomic(
+        self,
+        tenant_id: str,
+        task_id: str,
+        task_size: int,
+        result: DoclingTaskResult,
+    ) -> TaskTerminalizationResult:
+        """Durably finalize a task to SUCCESS exactly once."""
+        result_key = f"{self.results_prefix}:task:{task_id}:result"
+        result_data = self._serialize_task_result(result)
+        return await self._finalize_task_terminal_state_atomic(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            task_size=task_size,
+            terminal_status=TaskStatus.SUCCESS,
+            result_key=result_key,
+            result_data=result_data,
+        )
+
+    async def finalize_task_failure_atomic(
+        self,
+        tenant_id: str,
+        task_id: str,
+        task_size: int,
+        error_message: str,
+    ) -> TaskTerminalizationResult:
+        """Durably finalize a task to FAILURE exactly once."""
+        return await self._finalize_task_terminal_state_atomic(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            task_size=task_size,
+            terminal_status=TaskStatus.FAILURE,
+            error_message=error_message,
+        )
+
+    async def _finalize_task_terminal_state_atomic(
+        self,
+        tenant_id: str,
+        task_id: str,
+        task_size: int,
+        terminal_status: TaskStatus,
+        error_message: Optional[str] = None,
+        result_key: Optional[str] = None,
+        result_data: Optional[bytes] = None,
+    ) -> TaskTerminalizationResult:
+        """Finalize metadata + cleanup atomically while preserving the first terminal state."""
+        if not self.redis:
+            await self.connect()
+
+        task_key = f"task:{task_id}"
+        active_key = f"tenant:{tenant_id}:active_tasks"
+        limits_key = f"tenant:{tenant_id}:limits"
+        processing_key = f"task:{task_id}:processing"
+        redis = self._ensure_redis()
+
+        async with redis.pipeline(transaction=True) as pipe:
+            while True:
+                try:
+                    await pipe.watch(task_key, active_key, limits_key)
+
+                    status_raw = await redis.hget(task_key, "status")  # type: ignore[misc]
+                    current_status = (
+                        TaskStatus(status_raw.decode("utf-8")) if status_raw else None
+                    )
+
+                    sismember_result = pipe.sismember(active_key, task_id)
+                    if inspect.isawaitable(sismember_result):
+                        was_active = bool(await sismember_result)
+                    else:
+                        was_active = bool(sismember_result)
+
+                    pipe.multi()
+
+                    if (
+                        terminal_status == TaskStatus.SUCCESS
+                        and current_status != TaskStatus.FAILURE
+                        and result_key is not None
+                        and result_data is not None
+                    ):
+                        pipe.setex(result_key, self.results_ttl, result_data)
+
+                    if current_status not in (
+                        TaskStatus.SUCCESS,
+                        TaskStatus.FAILURE,
+                    ):
+                        timestamp = datetime.datetime.now(
+                            datetime.timezone.utc
+                        ).isoformat()
+                        updates = {
+                            "status": terminal_status.value,
+                            "last_update_at": timestamp,
+                            "finished_at": timestamp,
+                        }
+                        if (
+                            terminal_status == TaskStatus.FAILURE
+                            and error_message is not None
+                        ):
+                            updates["error_message"] = error_message
+                        pipe.hset(task_key, mapping=updates)
+
+                    fields_to_delete = ["dispatch_state"]
+                    if terminal_status == TaskStatus.SUCCESS:
+                        fields_to_delete.append("error_message")
+                    pipe.hdel(task_key, *fields_to_delete)
+                    pipe.delete(processing_key)
+
+                    if was_active:
+                        pipe.srem(active_key, task_id)
+                        pipe.hincrby(limits_key, "active_tasks", -1)
+                        if self.max_documents is not None:
+                            pipe.hincrby(limits_key, "active_documents", -task_size)
+
+                    await pipe.execute()
+
+                    status_changed = current_status not in (
+                        TaskStatus.SUCCESS,
+                        TaskStatus.FAILURE,
+                    )
+                    final_status = (
+                        terminal_status
+                        if status_changed or current_status is None
+                        else current_status
+                    )
+                    return TaskTerminalizationResult(
+                        final_status=final_status,
+                        status_changed=status_changed,
+                        capacity_released=was_active,
+                        result_key=(
+                            result_key
+                            if terminal_status == TaskStatus.SUCCESS
+                            and final_status == TaskStatus.SUCCESS
+                            else None
+                        ),
+                    )
+                except WatchError:
+                    continue
+
     async def get_tenant_active_task_count(self, tenant_id: str) -> int:
         """Get number of active tasks for tenant from Redis set.
 
@@ -1000,9 +1152,44 @@ class RedisStateManager:
                 "tenant_id": tenant_id,
                 "status": "processing",
                 "processing_started_at": str(now_timestamp),
+                "heartbeat_at": str(now_timestamp),
             },
         )
         await redis.expire(processing_key, self.processing_ttl)  # type: ignore[misc]
+
+    async def update_task_processing_heartbeat(self, task_id: str) -> bool:
+        """Refresh the processing heartbeat without extending the processing-key TTL."""
+        if not self.redis:
+            await self.connect()
+
+        processing_key = f"task:{task_id}:processing"
+        redis = self._ensure_redis()
+        now_timestamp = str(datetime.datetime.now(datetime.timezone.utc).timestamp())
+
+        if self._update_task_processing_heartbeat_sha is None:
+            self._update_task_processing_heartbeat_sha = await redis.script_load(  # type: ignore[misc]
+                _UPDATE_TASK_PROCESSING_HEARTBEAT_LUA
+            )
+
+        try:
+            updated = await redis.evalsha(  # type: ignore[misc]
+                self._update_task_processing_heartbeat_sha,
+                1,
+                processing_key,
+                now_timestamp,
+            )
+        except NoScriptError:
+            self._update_task_processing_heartbeat_sha = await redis.script_load(  # type: ignore[misc]
+                _UPDATE_TASK_PROCESSING_HEARTBEAT_LUA
+            )
+            updated = await redis.evalsha(  # type: ignore[misc]
+                self._update_task_processing_heartbeat_sha,
+                1,
+                processing_key,
+                now_timestamp,
+            )
+
+        return bool(updated)
 
     async def get_task_processing_state(self, task_id: str) -> dict:
         """Get task processing state.

@@ -210,6 +210,10 @@ class RayOrchestratorConfig(BaseSettings):
     enable_heartbeat: bool = Field(
         default=True, description="Enable dispatcher heartbeat monitoring"
     )
+    heartbeat_interval: float = Field(
+        default=30.0,
+        description="Seconds between processing-heartbeat updates for active tasks",
+    )
 
     # Resource Management & Memory Monitoring
     ray_memory_limit_per_actor: Optional[str] = Field(
@@ -256,5 +260,8 @@ class RayOrchestratorConfig(BaseSettings):
             self.redis_gate_concurrency = max(
                 1, self.redis_max_connections - self.redis_gate_reserved_connections
             )
+
+        if self.heartbeat_interval <= 0:
+            raise ValueError("heartbeat_interval must be > 0")
 
         return self

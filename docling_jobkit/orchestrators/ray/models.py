@@ -1,6 +1,7 @@
 """Data models for Ray orchestrator."""
 
 import datetime
+from dataclasses import dataclass
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -186,3 +187,13 @@ class RedisTaskMetadata(BaseModel):
         task.finished_at = self.finished_at
         task.last_update_at = self.last_update_at
         return task
+
+
+@dataclass(frozen=True)
+class TaskTerminalizationResult:
+    """Outcome of an idempotent terminalization attempt."""
+
+    final_status: TaskStatus
+    status_changed: bool
+    capacity_released: bool
+    result_key: Optional[str] = None
