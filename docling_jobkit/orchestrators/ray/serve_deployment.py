@@ -185,18 +185,6 @@ class DocumentProcessorDeployment:
             if workdir.exists():
                 shutil.rmtree(workdir, ignore_errors=True)
 
-            # Clean up processing state (actor created it, actor deletes it)
-            try:
-                processing_key = f"task:{task.task_id}:processing"
-                await self.redis_manager._ensure_redis().delete(processing_key)
-                _log.debug(
-                    f"Replica {self.replica_id}: Cleaned up processing state for {task.task_id}"
-                )
-            except Exception as e:
-                _log.warning(
-                    f"Replica {self.replica_id}: Failed to clean up processing state: {e}"
-                )
-
     async def _process_convert_with_retry(
         self, task: Task, workdir: Path
     ) -> DoclingTaskResult:
