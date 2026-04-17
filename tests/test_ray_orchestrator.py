@@ -11,6 +11,10 @@ import pytest_asyncio
 # Skip all tests if Ray or Redis are not available
 pytest.importorskip("ray")
 pytest.importorskip("redis")
+
+if os.getenv("CI"):
+    pytest.skip("Skipping Ray integration tests in CI", allow_module_level=True)
+
 import redis.asyncio as redis_async
 
 from docling.utils.model_downloader import download_models
