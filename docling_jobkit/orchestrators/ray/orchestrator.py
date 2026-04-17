@@ -453,7 +453,15 @@ class RayOrchestrator(BaseOrchestrator):
             await self.init_task_tracking(task)
             return task
 
-        return metadata.apply_to_task(task)
+        task.task_type = metadata.task_type
+        task.task_status = metadata.status
+        task.metadata["tenant_id"] = metadata.tenant_id
+        task.error_message = metadata.error_message
+        task.created_at = metadata.created_at
+        task.started_at = metadata.started_at
+        task.finished_at = metadata.finished_at
+        task.last_update_at = metadata.last_update_at
+        return task
 
     async def enqueue(
         self,

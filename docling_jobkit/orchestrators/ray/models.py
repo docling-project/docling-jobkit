@@ -172,18 +172,6 @@ class RedisTaskMetadata(BaseModel):
             last_update_at=self.last_update_at,
         )
 
-    def apply_to_task(self, task: Task) -> Task:
-        """Refresh an existing in-memory task from durable Redis metadata."""
-        task.task_type = self.task_type
-        task.task_status = self.status
-        task.metadata["tenant_id"] = self.tenant_id
-        task.error_message = self.error_message
-        task.created_at = self.created_at
-        task.started_at = self.started_at
-        task.finished_at = self.finished_at
-        task.last_update_at = self.last_update_at
-        return task
-
 
 @dataclass(frozen=True)
 class TaskTerminalizationResult:
