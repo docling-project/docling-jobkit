@@ -395,15 +395,19 @@ class RayOrchestrator(BaseOrchestrator):
             raise DispatcherUnavailableError("Ray dispatcher loop is not running")
 
     async def _supervise_dispatcher(self) -> None:
-        """Keep the local dispatcher binding refreshed and healthy.
+        """Keep Ray runtime initialized, dispatcher binding refreshed, and health verified.
 
-        Tracks continuous unhealthiness duration so is_liveness_healthy()
+        Handles the full lifecycle from initial Ray init through steady-state health
+        checks, so process_queue() can start the supervisor without waiting for Ray to
+        be available. Tracks continuous unhealthiness duration so is_liveness_healthy()
         can report failure after the configured deadline.
         """
         poll_interval = max(1.0, self.config.dispatcher_interval)
 
         while True:
             try:
+                if self.deployment_handle is None:
+                    await self._initialize_ray_runtime()
                 if self.dispatcher is None:
                     await self._refresh_dispatcher_runtime()
                 await self.ensure_dispatcher_ready()
@@ -651,11 +655,12 @@ class RayOrchestrator(BaseOrchestrator):
             return await self.redis_manager.get_task_result(task_id)
 
     async def process_queue(self):
-        """Start local supervision and pub/sub handling for the shared dispatcher."""
+        """Start local supervision and pub/sub handling for the shared dispatcher.
+
+        Ray runtime initialization is handled lazily inside the supervisor loop, so
+        this method returns quickly even when the Ray head is unavailable at startup.
+        """
         await self.redis_manager.connect()
-        await self._initialize_ray_runtime()
-        await self._refresh_dispatcher_runtime()
-        await self.ensure_dispatcher_ready()
 
         _log.info("Starting Ray orchestrator queue processing")
         self._dispatcher_supervisor_task = asyncio.create_task(
