@@ -106,9 +106,6 @@ class RedisTaskMetadata(BaseModel):
     error_message: Optional[str] = Field(
         default=None, description="Failure message if the task failed"
     )
-    dispatch_state: Optional[str] = Field(
-        default=None, description="Internal dispatch state for the task"
-    )
     started_at: Optional[datetime.datetime] = Field(
         default=None, description="UTC timestamp when processing started"
     )
@@ -156,7 +153,6 @@ class RedisTaskMetadata(BaseModel):
             created_at=created_at,
             last_update_at=last_update_at,
             error_message=redis_mapping.get("error_message"),
-            dispatch_state=redis_mapping.get("dispatch_state"),
             started_at=cls._parse_optional_datetime(redis_mapping.get("started_at")),
             finished_at=cls._parse_optional_datetime(redis_mapping.get("finished_at")),
             retry_count=int(redis_mapping.get("retry_count", "0")),

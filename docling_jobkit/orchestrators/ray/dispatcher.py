@@ -360,7 +360,6 @@ class RayTaskDispatcher:
 
         try:
             _log.info("[TASK-START] %s: processing %s documents", task_id, task_size)
-            await self.redis_manager.set_task_dispatch_state(task_id, "dispatched")
 
             response = self.deployment_handle.process_task.remote(task)
             await asyncio.to_thread(
@@ -429,9 +428,7 @@ class RayTaskDispatcher:
 
         for task_id in active_task_ids:
             metadata = await self.redis_manager.get_task_metadata_model(task_id)
-            dispatch_hash = await self.redis_manager.get_task_dispatch_state_hash(
-                task_id
-            )
+            dispatch_hash = await self.redis_manager.get_task_dispatch_hash(task_id)
 
             if not dispatch_hash:
                 if metadata is None or metadata.status != TaskStatus.STARTED:

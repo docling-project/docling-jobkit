@@ -379,110 +379,6 @@ class RedisStateManager:
             return None
         return RedisTaskMetadata.from_redis_mapping(metadata)
 
-    async def set_task_dispatch_state(
-        self, task_id: str, dispatch_state: Optional[str]
-    ) -> None:
-        """Set internal dispatch state for a task.
-
-        Args:
-            task_id: Task identifier
-            dispatch_state: One of "queued", "dispatched", or None to clear
-        """
-        if not self.redis:
-            await self.connect()
-
-        task_key = f"task:{task_id}"
-        redis = self._ensure_redis()
-
-        if dispatch_state is None:
-            # Clear the dispatch_state field
-            await redis.hdel(task_key, "dispatch_state")  # type: ignore[misc]
-        else:
-            await redis.hset(task_key, "dispatch_state", dispatch_state)  # type: ignore[misc]
-
-    async def get_task_dispatch_state(self, task_id: str) -> Optional[str]:
-        """Get internal dispatch state for a task.
-
-        Args:
-            task_id: Task identifier
-
-        Returns:
-            "queued", "dispatched", or None if not set
-        """
-        if not self.redis:
-            await self.connect()
-
-        task_key = f"task:{task_id}"
-        redis = self._ensure_redis()
-        state = await redis.hget(task_key, "dispatch_state")  # type: ignore[misc]
-        return state.decode("utf-8") if state else None
-
-    async def get_tenant_dispatched_task_count(self, tenant_id: str) -> int:
-        """Count tasks in dispatched state for a tenant.
-
-        Returns:
-            Number of tasks with dispatch_state="dispatched" and status=PENDING
-        """
-        if not self.redis:
-            await self.connect()
-
-        active_key = f"tenant:{tenant_id}:active_tasks"
-        redis = self._ensure_redis()
-        task_ids = await redis.smembers(active_key)  # type: ignore[misc]
-
-        count = 0
-        for task_id_bytes in task_ids:
-            task_id = task_id_bytes.decode("utf-8")
-            metadata = await self.get_task_metadata(task_id)
-
-            # Count if status is PENDING and dispatch_state is "dispatched"
-            if (
-                metadata.get("status") == TaskStatus.PENDING.value
-                and metadata.get("dispatch_state") == "dispatched"
-            ):
-                count += 1
-
-        return count
-
-    async def get_user_dispatched_task_count(self, user_id: str) -> int:
-        """Backward-compatible alias for the tenant-based helper."""
-        return await self.get_tenant_dispatched_task_count(user_id)
-
-    async def get_tenant_running_task_count(self, tenant_id: str) -> int:
-        """Count tasks actively running for a tenant.
-
-        Uses processing state instead of task metadata for more reliable counting.
-        A task is considered "running" if it has processing state with status="processing".
-
-        Returns:
-            Number of tasks with processing status="processing" (actively being processed)
-        """
-        if not self.redis:
-            await self.connect()
-
-        active_key = f"tenant:{tenant_id}:active_tasks"
-        redis = self._ensure_redis()
-        task_ids = await redis.smembers(active_key)  # type: ignore[misc]
-
-        count = 0
-        for task_id_bytes in task_ids:
-            task_id = task_id_bytes.decode("utf-8")
-
-            # Check processing state instead of task metadata
-            # Processing state is deleted when task completes, so it's more reliable
-            dispatch_hash = await self.get_task_dispatch_state_hash(task_id)
-
-            # Count if dispatch hash exists and status is "processing"
-            # (status="dispatched" means sent to actor but not yet started)
-            if dispatch_hash and dispatch_hash.get("status") == "processing":
-                count += 1
-
-        return count
-
-    async def get_user_running_task_count(self, user_id: str) -> int:
-        """Backward-compatible alias for the tenant-based helper."""
-        return await self.get_tenant_running_task_count(user_id)
-
     # Task Results Operations
 
     async def store_task_result(self, task_id: str, result: DoclingTaskResult) -> str:
@@ -825,7 +721,6 @@ class RedisStateManager:
                     dispatch_key,
                     mapping={
                         "tenant_id": tenant_id,
-                        "status": "dispatched",
                         "dispatched_at": str(now_timestamp),
                         "task_size": str(task_size),
                     },
@@ -844,58 +739,6 @@ class RedisStateManager:
                 # Transaction failed due to concurrent modification or other error
                 _log.debug(f"[REDIS-ATOMIC] Failed to dispatch task {task_id}: {e}")
                 return False
-
-    async def complete_task_atomic(
-        self, tenant_id: str, task_id: str, task_size: int
-    ) -> bool:
-        """Atomically complete a task: remove from active set, update limits.
-
-        Uses optimistic locking so cleanup remains idempotent when multiple
-        callers race to complete the same task.
-
-        Args:
-            tenant_id: Tenant identifier
-            task_id: Task identifier
-            task_size: Number of documents in task
-
-        Returns:
-            True when the task was actively tracked and counters were released.
-        """
-        active_key = f"tenant:{tenant_id}:active_tasks"
-        limits_key = f"tenant:{tenant_id}:limits"
-        dispatch_key = f"task:{task_id}:dispatch"
-        execution_key = f"task:{task_id}:execution"
-
-        redis = self._ensure_redis()
-
-        async with redis.pipeline(transaction=True) as pipe:
-            while True:
-                try:
-                    await pipe.watch(active_key, limits_key)
-                    sismember_result = pipe.sismember(active_key, task_id)
-                    if inspect.isawaitable(sismember_result):
-                        was_active = bool(await sismember_result)
-                    else:
-                        was_active = bool(sismember_result)
-
-                    pipe.multi()
-                    pipe.delete(dispatch_key, execution_key)
-                    if was_active:
-                        pipe.srem(active_key, task_id)
-                        pipe.hincrby(limits_key, "active_tasks", -1)
-                        if self.max_documents is not None:
-                            pipe.hincrby(limits_key, "active_documents", -task_size)
-
-                    await pipe.execute()
-                    _log.debug(
-                        "[REDIS-ATOMIC] Completed task %s for tenant %s (released=%s)",
-                        task_id,
-                        tenant_id,
-                        was_active,
-                    )
-                    return was_active
-                except WatchError:
-                    continue
 
     async def finalize_task_success_atomic(
         self,
@@ -998,10 +841,8 @@ class RedisStateManager:
                             updates["error_message"] = error_message
                         pipe.hset(task_key, mapping=updates)
 
-                    fields_to_delete = ["dispatch_state"]
                     if terminal_status == TaskStatus.SUCCESS:
-                        fields_to_delete.append("error_message")
-                    pipe.hdel(task_key, *fields_to_delete)
+                        pipe.hdel(task_key, "error_message")
                     pipe.delete(dispatch_key, execution_key)
 
                     if was_active:
@@ -1138,34 +979,14 @@ class RedisStateManager:
         await redis.hset(limits_key, mapping=limits_dict)  # type: ignore[misc]
         return limits
 
-    async def mark_task_processing(self, task_id: str, tenant_id: str) -> None:
-        """Mark task as actively processing.
-
-        Args:
-            task_id: Task identifier
-            tenant_id: Tenant identifier
-        """
-        dispatch_key = f"task:{task_id}:dispatch"
-        redis = self._ensure_redis()
-        now_timestamp = datetime.datetime.now(datetime.timezone.utc).timestamp()
-        await redis.hset(  # type: ignore[misc]
-            dispatch_key,
-            mapping={
-                "tenant_id": tenant_id,
-                "status": "processing",
-                "processing_started_at": str(now_timestamp),
-            },
-        )
-        await redis.expire(dispatch_key, self.processing_ttl)  # type: ignore[misc]
-
-    async def get_task_dispatch_state_hash(self, task_id: str) -> dict:
-        """Get task processing state.
+    async def get_task_dispatch_hash(self, task_id: str) -> dict:
+        """Get the dispatcher-owned dispatch state hash for a task.
 
         Args:
             task_id: Task identifier
 
         Returns:
-            Processing state dictionary
+            Dispatch state dictionary containing tenant_id, dispatched_at, and task_size
         """
         dispatch_key = f"task:{task_id}:dispatch"
         redis = self._ensure_redis()

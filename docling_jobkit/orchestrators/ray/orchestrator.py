@@ -548,7 +548,6 @@ class RayOrchestrator(BaseOrchestrator):
                 task_size=len(sources),
                 status=TaskStatus.PENDING,
             )
-            await self.redis_manager.set_task_dispatch_state(task_id, "queued")
             await self.redis_manager.enqueue_task(tenant_id, task)
             await self.init_task_tracking(task)
 
