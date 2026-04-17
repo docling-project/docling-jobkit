@@ -461,7 +461,20 @@ async def test_clear_converters_clears_caches():
     )
 
     # Wait for task to complete
-    await _wait_task_complete(orchestrator, task.task_id, max_wait=30)
+    assert await _wait_task_complete(orchestrator, task.task_id, max_wait=30), (
+        "Chunking task did not complete within 30 seconds"
+    )
+
+    task_status = await orchestrator.task_status(task.task_id)
+    task_result = await orchestrator.task_result(task.task_id)
+
+    assert task_result is not None, "Chunking task result should be available"
+    assert isinstance(task_result.result, ChunkedDocumentResult)
+    assert task_result.num_succeeded > 0, (
+        "Chunking test precondition failed: no documents were chunked successfully. "
+        f"Final task status was {task_status.task_status!r} with "
+        f"num_failed={task_result.num_failed}."
+    )
 
     # Verify worker_cms list is populated (workers with non-shared models)
     assert len(orchestrator.worker_cms) > 0, (
