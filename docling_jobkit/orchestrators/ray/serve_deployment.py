@@ -582,11 +582,23 @@ def create_deployment(
     )
 
     # Create deployment with configuration
+    deployment_options = {
+        "name": deployment_name,
+        "autoscaling_config": autoscaling_config,
+        "ray_actor_options": ray_actor_options,
+        "max_ongoing_requests": max_ongoing_requests,
+    }
+    if config.graceful_shutdown_wait_loop_s is not None:
+        deployment_options["graceful_shutdown_wait_loop_s"] = (
+            config.graceful_shutdown_wait_loop_s
+        )
+    if config.graceful_shutdown_timeout_s is not None:
+        deployment_options["graceful_shutdown_timeout_s"] = (
+            config.graceful_shutdown_timeout_s
+        )
+
     deployment = DocumentProcessorDeployment.options(  # type: ignore[attr-defined]
-        name=deployment_name,
-        autoscaling_config=autoscaling_config,
-        ray_actor_options=ray_actor_options,
-        max_ongoing_requests=max_ongoing_requests,
+        **deployment_options,
     ).bind(
         converter_manager_config=converter_manager_config,
         config=config,

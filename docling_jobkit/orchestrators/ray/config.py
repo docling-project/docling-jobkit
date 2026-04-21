@@ -158,6 +158,22 @@ class RayOrchestratorConfig(BaseSettings):
         default=600.0,
         description="Seconds to wait before scaling down (10 minutes default)",
     )
+    graceful_shutdown_wait_loop_s: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Seconds between Serve replica drain checks during shutdown "
+            "(None = Ray Serve default)."
+        ),
+    )
+    graceful_shutdown_timeout_s: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Maximum seconds to wait for a draining Serve replica before "
+            "force-killing it (None = Ray Serve default)."
+        ),
+    )
     ray_num_cpus_per_actor: float = Field(
         default=1.0, description="Number of CPUs to allocate per Ray Serve replica"
     )
