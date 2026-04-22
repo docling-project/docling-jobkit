@@ -177,19 +177,19 @@ class RayOrchestratorConfig(BaseSettings):
     ray_num_cpus_per_actor: float = Field(
         default=1.0, description="Number of CPUs to allocate per Ray Serve replica"
     )
-    enable_pdf_page_chunk_fanout: bool = Field(
+    enable_pdf_page_slice_fanout: bool = Field(
         default=False,
         description="Enable internal PDF page-slicing fan-out for eligible Ray tasks",
     )
-    max_page_chunk_size: int = Field(
+    max_page_slice_size: int = Field(
         default=10,
         ge=1,
-        description="Maximum page count per internal child chunk when fan-out is enabled",
+        description="Maximum page count per internal child slice when fan-out is enabled",
     )
-    max_page_chunk_parallelism: Optional[int] = Field(
+    max_page_slice_parallelism: Optional[int] = Field(
         default=None,
         ge=1,
-        description="Optional cap on concurrent child chunk requests per parent task",
+        description="Optional cap on concurrent child slice requests per parent task",
     )
     coordinator_target_requests_per_replica: Optional[int] = Field(
         default=None,

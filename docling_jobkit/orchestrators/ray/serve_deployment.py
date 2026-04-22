@@ -51,12 +51,12 @@ from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
 )
 from docling_jobkit.orchestrators.ray.models import (
-    ChunkConvertRequest,
-    ChunkResult,
-    ChunkSpec,
     MaterializedConvertRequest,
     PassthroughTaskRequest,
-    SplitPlan,
+    SliceConvertRequest,
+    SlicePlan,
+    SliceResult,
+    SliceSpec,
     TaskUpdate,
     WorkerConvertResult,
     WorkerRequest,
@@ -109,11 +109,11 @@ def _materialized_stream(filename: str, payload: bytes) -> DocumentStream:
     return DocumentStream(name=filename, stream=BytesIO(payload))
 
 
-def _build_split_plan(
+def _build_slice_plan(
     total_pages: int,
     requested_page_range: tuple[int, int],
-    max_page_chunk_size: int,
-) -> SplitPlan:
+    max_page_slice_size: int,
+) -> SlicePlan:
     start_page, end_page = requested_page_range
     if start_page > total_pages:
         raise ValueError(
@@ -121,27 +121,27 @@ def _build_split_plan(
         )
 
     effective_range = (start_page, min(end_page, total_pages))
-    chunks: list[ChunkSpec] = []
-    chunk_index = 0
-    for chunk_start in range(
-        effective_range[0], effective_range[1] + 1, max_page_chunk_size
+    slices: list[SliceSpec] = []
+    slice_index = 0
+    for slice_start in range(
+        effective_range[0], effective_range[1] + 1, max_page_slice_size
     ):
-        chunk_end = min(chunk_start + max_page_chunk_size - 1, effective_range[1])
-        chunks.append(
-            ChunkSpec(page_range=(chunk_start, chunk_end), chunk_index=chunk_index)
+        slice_end = min(slice_start + max_page_slice_size - 1, effective_range[1])
+        slices.append(
+            SliceSpec(page_range=(slice_start, slice_end), slice_index=slice_index)
         )
-        chunk_index += 1
+        slice_index += 1
 
-    return SplitPlan(
+    return SlicePlan(
         total_pages=total_pages,
-        chunks=chunks,
+        slices=slices,
         effective_page_range=effective_range,
     )
 
 
-def _merge_timings(chunk_results: list[ChunkResult]) -> dict[str, ProfilingItem]:
+def _merge_timings(slice_results: list[SliceResult]) -> dict[str, ProfilingItem]:
     merged: dict[str, ProfilingItem] = {}
-    for chunk_result in chunk_results:
+    for chunk_result in slice_results:
         for name, item in chunk_result.timings.items():
             if name not in merged:
                 merged[name] = deepcopy(item)
@@ -155,12 +155,12 @@ def _merge_timings(chunk_results: list[ChunkResult]) -> dict[str, ProfilingItem]
     return merged
 
 
-def _build_failed_chunk_result(
+def _build_failed_slice_result(
     page_range: tuple[int, int],
-    chunk_index: int,
+    slice_index: int,
     exc: Exception,
-) -> ChunkResult:
-    return ChunkResult(
+) -> SliceResult:
+    return SliceResult(
         status=ConversionStatus.FAILURE,
         errors=[
             ErrorItem(
@@ -170,12 +170,12 @@ def _build_failed_chunk_result(
             )
         ],
         page_range=page_range,
-        chunk_index=chunk_index,
+        slice_index=slice_index,
     )
 
 
-def _assemble_chunk_results(chunk_results: list[ChunkResult]) -> ConversionResult:
-    ordered_results = sorted(chunk_results, key=lambda result: result.chunk_index)
+def _assemble_slice_results(slice_results: list[SliceResult]) -> ConversionResult:
+    ordered_results = sorted(slice_results, key=lambda result: result.slice_index)
     successful_results = [
         result
         for result in ordered_results
@@ -273,7 +273,7 @@ class PageWorkerDeployment:
 
     async def process_worker_request(
         self, request: WorkerRequest
-    ) -> WorkerConvertResult | ChunkResult:
+    ) -> WorkerConvertResult | SliceResult:
         if self.config.enable_oom_protection and PSUTIL_AVAILABLE:
             await self._check_memory()
 
@@ -289,10 +289,10 @@ class PageWorkerDeployment:
                 lambda: self._process_materialized_convert(request),
             )
             self.documents_processed += len(result.conversion_results)
-        elif isinstance(request, ChunkConvertRequest):
+        elif isinstance(request, SliceConvertRequest):
             result = await self._run_with_retry(
                 f"{request.filename}:{request.page_range}",
-                lambda: self._process_chunk_convert(request),
+                lambda: self._process_slice_convert(request),
             )
             if _is_exportable_status(result.status):
                 self.documents_processed += 1
@@ -358,7 +358,7 @@ class PageWorkerDeployment:
         )
         return WorkerConvertResult(conversion_results=conv_results)
 
-    def _process_chunk_convert(self, request: ChunkConvertRequest) -> ChunkResult:
+    def _process_slice_convert(self, request: SliceConvertRequest) -> SliceResult:
         payload = ray.get(request.artifact_ref)
         options = request.options.model_copy(update={"page_range": request.page_range})
         conv_results = list(
@@ -368,10 +368,10 @@ class PageWorkerDeployment:
             )
         )
         if not conv_results:
-            raise RuntimeError("Chunk conversion returned no results")
+            raise RuntimeError("Slice conversion returned no results")
 
         conv_result = conv_results[0]
-        return ChunkResult(
+        return SliceResult(
             status=conv_result.status,
             document=conv_result.document
             if _is_exportable_status(conv_result.status)
@@ -379,7 +379,7 @@ class PageWorkerDeployment:
             errors=conv_result.errors,
             timings=conv_result.timings,
             page_range=request.page_range,
-            chunk_index=request.chunk_index,
+            slice_index=request.slice_index,
             input=conv_result.input,
         )
 
@@ -656,34 +656,36 @@ class FanoutCoordinatorDeployment:
                 ),
             )
             artifact_ref = ray.put(materialized.content_bytes)
+            page_count = materialized.page_count
+            filename = materialized.filename
+            del (
+                materialized
+            )  # release heap copy; bytes live in plasma store via artifact_ref
             try:
-                split_plan = _build_split_plan(
-                    total_pages=materialized.page_count,
+                slice_plan = _build_slice_plan(
+                    total_pages=page_count,
                     requested_page_range=convert_options.page_range,
-                    max_page_chunk_size=self.config.max_page_chunk_size,
+                    max_page_slice_size=self.config.max_page_slice_size,
                 )
                 effective_pages = (
-                    split_plan.effective_page_range[1]
-                    - split_plan.effective_page_range[0]
+                    slice_plan.effective_page_range[1]
+                    - slice_plan.effective_page_range[0]
                     + 1
                 )
-                if (
-                    self.config.enable_pdf_page_chunk_fanout
-                    and effective_pages > self.config.max_page_chunk_size
-                ):
-                    chunk_results = await self._run_chunk_plan(
+                if effective_pages > self.config.max_page_slice_size:
+                    slice_results = await self._run_slice_plan(
                         artifact_ref=artifact_ref,
-                        filename=materialized.filename,
-                        split_plan=split_plan,
+                        filename=filename,
+                        slice_plan=slice_plan,
                         options=convert_options,
                     )
-                    conv_results = [_assemble_chunk_results(chunk_results)]
+                    conv_results = [_assemble_slice_results(slice_results)]
                 else:
                     worker_result = (
                         await self.worker_handle.process_worker_request.remote(
                             MaterializedConvertRequest(
                                 artifact_ref=artifact_ref,
-                                filename=materialized.filename,
+                                filename=filename,
                                 options=convert_options,
                             )
                         )
@@ -721,45 +723,46 @@ class FanoutCoordinatorDeployment:
 
     def _should_materialize_pdf(self, task: Task) -> bool:
         return (
-            task.task_type == TaskType.CONVERT
+            self.config.enable_pdf_page_slice_fanout
+            and task.task_type == TaskType.CONVERT
             and len(task.sources) == 1
             and _is_pdf_source(task.sources[0])
         )
 
-    async def _run_chunk_plan(
+    async def _run_slice_plan(
         self,
         artifact_ref: Any,
         filename: str,
-        split_plan: SplitPlan,
+        slice_plan: SlicePlan,
         options: ConvertDocumentsOptions,
-    ) -> list[ChunkResult]:
+    ) -> list[SliceResult]:
         requests = [
-            ChunkConvertRequest(
+            SliceConvertRequest(
                 artifact_ref=artifact_ref,
                 filename=filename,
                 options=options,
-                page_range=chunk.page_range,
-                chunk_index=chunk.chunk_index,
+                page_range=page_slice.page_range,
+                slice_index=page_slice.slice_index,
             )
-            for chunk in split_plan.chunks
+            for page_slice in slice_plan.slices
         ]
 
-        parallelism = self.config.max_page_chunk_parallelism
+        parallelism = self.config.max_page_slice_parallelism
         if parallelism is None:
             gathered_results = await asyncio.gather(
-                *(self._execute_chunk_request(request) for request in requests)
+                *(self._execute_slice_request(request) for request in requests)
             )
             return list(gathered_results)
 
-        in_flight: set[asyncio.Task[ChunkResult]] = set()
+        in_flight: set[asyncio.Task[SliceResult]] = set()
         pending_requests = iter(requests)
-        collected_results: list[ChunkResult] = []
+        collected_results: list[SliceResult] = []
 
         for _ in range(min(parallelism, len(requests))):
             request = next(pending_requests, None)
             if request is None:
                 break
-            in_flight.add(asyncio.create_task(self._execute_chunk_request(request)))
+            in_flight.add(asyncio.create_task(self._execute_slice_request(request)))
 
         while in_flight:
             done, in_flight = await asyncio.wait(
@@ -770,25 +773,25 @@ class FanoutCoordinatorDeployment:
                 next_request = next(pending_requests, None)
                 if next_request is not None:
                     in_flight.add(
-                        asyncio.create_task(self._execute_chunk_request(next_request))
+                        asyncio.create_task(self._execute_slice_request(next_request))
                     )
 
         return collected_results
 
-    async def _execute_chunk_request(self, request: ChunkConvertRequest) -> ChunkResult:
+    async def _execute_slice_request(self, request: SliceConvertRequest) -> SliceResult:
         try:
             return await self.worker_handle.process_worker_request.remote(request)
         except Exception as exc:
             _log.warning(
-                "Coordinator replica %s: chunk %s for %s failed: %s",
+                "Coordinator replica %s: slice %s for %s failed: %s",
                 self.replica_id,
                 request.page_range,
                 request.filename,
                 exc,
             )
-            return _build_failed_chunk_result(
+            return _build_failed_slice_result(
                 page_range=request.page_range,
-                chunk_index=request.chunk_index,
+                slice_index=request.slice_index,
                 exc=exc,
             )
 

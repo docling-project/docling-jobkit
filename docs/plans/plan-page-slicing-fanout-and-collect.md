@@ -236,6 +236,7 @@ Implemented in `docling-jobkit`:
 - Added internal Ray models for `SplitPlan`, `ChunkSpec`, `ChunkResult`, and the worker request/result payloads in `orchestrators/ray/models.py`.
 - Added the internal fan-out config in `orchestrators/ray/config.py`:
   `enable_pdf_page_chunk_fanout`, `max_page_chunk_size`, `max_page_chunk_parallelism`, plus only the coordinator-specific overrides that remained necessary: `coordinator_target_requests_per_replica`, `coordinator_max_ongoing_requests_per_replica`, `coordinator_num_cpus`, and `coordinator_memory_limit`.
+- Kept deployment-wide autoscaling and lifecycle controls shared on purpose: `min_actors`, `max_actors`, `upscale_delay_s`, `downscale_delay_s`, and `graceful_shutdown_*` still apply to both coordinator and worker.
 - Kept the dispatcher contract stable: the dispatcher still submits a single parent task through `process_task(task)` on the coordinator handle.
 - Implemented single-source PDF convert orchestration:
   coordinator preflight/materialization, `ray.put()` shared artifact, optional page-range split plan, bounded or unbounded child fan-out, chunk collection, and final assembly with `DoclingDocument.concatenate`.
@@ -254,3 +255,22 @@ Validation run:
 Notes:
 - The worker request models pass filename metadata plus a Ray `ObjectRef`; the full materialized bytes remain owned by the coordinator-local `MaterializedSource`.
 - Fan-out eligibility is locked to single-source PDF `CONVERT` tasks, matching the v1 scope.
+
+## Handoff Note
+
+State at handoff:
+- The implementation builds, the targeted Ray tests pass, `ruff` passes for the refactored config validator, and targeted `mypy` checks pass for the touched Ray/materialization modules.
+- The coordinator-specific config surface was intentionally reduced. Shared deployment knobs stay shared; only coordinator target concurrency and resource sizing remain separately configurable.
+
+Important remaining validation:
+- Run an end-to-end Ray integration test with a real cluster/Serve deployment to verify the coordinator-to-worker child request path, especially fan-out above threshold and parent finalization on partial chunk failure.
+- Verify production-safe defaults for `coordinator_target_requests_per_replica` and `coordinator_max_ongoing_requests_per_replica` under expected queue pressure; current defaults favor allowing the coordinator to wait on multiple children without blocking a replica per parent.
+- Confirm whether filename-based PDF eligibility is sufficient for current callers, or whether eligibility should be tightened around normalized input format detection for edge cases.
+
+Useful files for the next cycle:
+- `docling_jobkit/orchestrators/ray/serve_deployment.py`
+- `docling_jobkit/orchestrators/ray/config.py`
+- `docling_jobkit/convert/materialization.py`
+- `docling_jobkit/tests/test_ray_fanout.py`
+- `docling_serve/docling_serve/settings.py`
+- `docling_serve/docling_serve/orchestrator_factory.py`

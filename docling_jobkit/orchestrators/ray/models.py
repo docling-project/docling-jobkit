@@ -187,34 +187,34 @@ class TaskTerminalizationResult:
     result_key: Optional[str] = None
 
 
-class ChunkSpec(BaseModel):
-    page_range: tuple[int, int] = Field(description="Absolute page range for the chunk")
-    chunk_index: int = Field(description="Ascending chunk index in the split plan")
+class SliceSpec(BaseModel):
+    page_range: tuple[int, int] = Field(description="Absolute page range for the slice")
+    slice_index: int = Field(description="Ascending slice index in the slice plan")
 
 
-class ChunkResult(BaseModel):
+class SliceResult(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    status: ConversionStatus = Field(description="Conversion status for the chunk")
+    status: ConversionStatus = Field(description="Conversion status for the slice")
     document: Optional[DoclingDocument] = Field(
-        default=None, description="Converted document for a successful chunk"
+        default=None, description="Converted document for a successful slice"
     )
     errors: list[ErrorItem] = Field(
-        default_factory=list, description="Errors returned for the chunk"
+        default_factory=list, description="Errors returned for the slice"
     )
     timings: dict[str, Any] = Field(
-        default_factory=dict, description="Profiling timings for the chunk"
+        default_factory=dict, description="Profiling timings for the slice"
     )
-    page_range: tuple[int, int] = Field(description="Absolute page range for the chunk")
-    chunk_index: int = Field(description="Ascending chunk index in the split plan")
+    page_range: tuple[int, int] = Field(description="Absolute page range for the slice")
+    slice_index: int = Field(description="Ascending slice index in the slice plan")
     input: Optional[InputDocument] = Field(
         default=None, description="Input document metadata from Docling"
     )
 
 
-class SplitPlan(BaseModel):
+class SlicePlan(BaseModel):
     total_pages: int = Field(description="Total pages in the materialized source PDF")
-    chunks: list[ChunkSpec] = Field(description="Chunk plan in ascending page order")
+    slices: list[SliceSpec] = Field(description="Slice plan in ascending page order")
     effective_page_range: tuple[int, int] = Field(
         description="Caller page range intersected with the source page count"
     )
@@ -234,19 +234,19 @@ class MaterializedConvertRequest(BaseModel):
     options: ConvertDocumentsOptions = Field(description="Parent conversion options")
 
 
-class ChunkConvertRequest(BaseModel):
+class SliceConvertRequest(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    kind: str = Field(default="chunk_convert")
+    kind: str = Field(default="slice_convert")
     artifact_ref: Any = Field(description="Ray ObjectRef with shared PDF bytes")
     filename: str = Field(description="Filename for the materialized PDF")
     options: ConvertDocumentsOptions = Field(description="Parent conversion options")
     page_range: tuple[int, int] = Field(description="Absolute child page range")
-    chunk_index: int = Field(description="Ascending child chunk index")
+    slice_index: int = Field(description="Ascending child slice index")
 
 
 WorkerRequest = (
-    PassthroughTaskRequest | MaterializedConvertRequest | ChunkConvertRequest
+    PassthroughTaskRequest | MaterializedConvertRequest | SliceConvertRequest
 )
 
 
