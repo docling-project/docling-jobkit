@@ -177,6 +177,36 @@ class RayOrchestratorConfig(BaseSettings):
     ray_num_cpus_per_actor: float = Field(
         default=1.0, description="Number of CPUs to allocate per Ray Serve replica"
     )
+    enable_pdf_page_chunk_fanout: bool = Field(
+        default=False,
+        description="Enable internal PDF page-slicing fan-out for eligible Ray tasks",
+    )
+    max_page_chunk_size: int = Field(
+        default=10,
+        ge=1,
+        description="Maximum page count per internal child chunk when fan-out is enabled",
+    )
+    max_page_chunk_parallelism: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Optional cap on concurrent child chunk requests per parent task",
+    )
+    coordinator_target_requests_per_replica: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Coordinator autoscaling target requests per replica",
+    )
+    coordinator_max_ongoing_requests_per_replica: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Coordinator hard cap on in-flight requests per replica",
+    )
+    coordinator_num_cpus: Optional[float] = Field(
+        default=None, gt=0, description="Coordinator CPU allocation per replica"
+    )
+    coordinator_memory_limit: Optional[str] = Field(
+        default=None, description="Coordinator memory limit"
+    )
 
     # Fault Tolerance & Retry Configuration
     max_task_retries: int = Field(
@@ -260,9 +290,7 @@ class RayOrchestratorConfig(BaseSettings):
         default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR)"
     )
 
-    @model_validator(mode="after")
-    def validate_request_concurrency(self) -> "RayOrchestratorConfig":
-        """Ensure Serve autoscaling target does not exceed the hard replica cap."""
+    def _validate_worker_request_concurrency(self) -> None:
         if (
             self.max_ongoing_requests_per_replica is not None
             and self.target_requests_per_replica > self.max_ongoing_requests_per_replica
@@ -271,6 +299,45 @@ class RayOrchestratorConfig(BaseSettings):
                 "target_requests_per_replica must be <= "
                 "max_ongoing_requests_per_replica"
             )
+
+    def _normalize_coordinator_config(self) -> None:
+        if self.coordinator_target_requests_per_replica is None:
+            self.coordinator_target_requests_per_replica = max(
+                self.target_requests_per_replica,
+                self.coordinator_max_ongoing_requests_per_replica or 1,
+            )
+
+        if self.coordinator_max_ongoing_requests_per_replica is None:
+            self.coordinator_max_ongoing_requests_per_replica = max(
+                self.max_ongoing_requests_per_replica
+                or self.target_requests_per_replica,
+                self.coordinator_target_requests_per_replica,
+            )
+
+        if self.coordinator_num_cpus is None:
+            self.coordinator_num_cpus = 0.5
+
+        if self.coordinator_memory_limit is None:
+            self.coordinator_memory_limit = self.ray_memory_limit_per_actor
+
+    def _validate_coordinator_request_concurrency(self) -> None:
+        assert self.coordinator_target_requests_per_replica is not None
+        assert self.coordinator_max_ongoing_requests_per_replica is not None
+        if (
+            self.coordinator_target_requests_per_replica
+            > self.coordinator_max_ongoing_requests_per_replica
+        ):
+            raise ValueError(
+                "coordinator_target_requests_per_replica must be <= "
+                "coordinator_max_ongoing_requests_per_replica"
+            )
+
+    @model_validator(mode="after")
+    def validate_request_concurrency(self) -> "RayOrchestratorConfig":
+        """Ensure Serve autoscaling target does not exceed the hard replica cap."""
+        self._validate_worker_request_concurrency()
+        self._normalize_coordinator_config()
+        self._validate_coordinator_request_concurrency()
 
         if self.redis_gate_concurrency is None:
             self.redis_gate_concurrency = max(

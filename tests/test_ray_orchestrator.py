@@ -402,57 +402,93 @@ async def test_on_result_fetched_ray():
 
 
 def test_create_deployment_sets_hard_replica_concurrency_limit():
-    """Ray Serve deployment should set a hard per-replica concurrency cap."""
+    """Ray Serve deployments should set explicit hard per-replica concurrency caps."""
     from unittest.mock import MagicMock, patch
 
     from docling_jobkit.orchestrators.ray.serve_deployment import create_deployment
 
     config = RayOrchestratorConfig(
         redis_url="redis://localhost:6379/",
+        coordinator_target_requests_per_replica=4,
+        coordinator_max_ongoing_requests_per_replica=8,
         target_requests_per_replica=1,
         max_ongoing_requests_per_replica=1,
     )
 
-    mock_bound_deployment = MagicMock()
-    mock_options_result = MagicMock()
-    mock_options_result.bind.return_value = mock_bound_deployment
+    mock_worker = MagicMock(name="worker")
+    mock_coordinator = MagicMock(name="coordinator")
+    mock_worker_options = MagicMock()
+    mock_worker_options.bind.return_value = mock_worker
+    mock_coordinator_options = MagicMock()
+    mock_coordinator_options.bind.return_value = mock_coordinator
 
-    with patch(
-        "docling_jobkit.orchestrators.ray.serve_deployment.DocumentProcessorDeployment.options",
-        return_value=mock_options_result,
-    ) as mock_options:
+    with (
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment.PageWorkerDeployment.options",
+            return_value=mock_worker_options,
+        ) as mock_worker_options_call,
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment.FanoutCoordinatorDeployment.options",
+            return_value=mock_coordinator_options,
+        ) as mock_coordinator_options_call,
+    ):
         deployment = create_deployment(
             converter_manager_config=MagicMock(),
             config=config,
             redis_url=config.redis_url,
         )
 
-    assert deployment is mock_bound_deployment
-    assert mock_options.call_args.kwargs["max_ongoing_requests"] == 1
+    assert deployment is mock_coordinator
+    assert mock_worker_options_call.call_args.kwargs["max_ongoing_requests"] == 1
+    assert mock_coordinator_options_call.call_args.kwargs["max_ongoing_requests"] == 8
+    assert (
+        mock_coordinator_options_call.call_args.kwargs["autoscaling_config"][
+            "target_num_ongoing_requests_per_replica"
+        ]
+        == 4
+    )
 
 
 def test_create_deployment_defaults_replica_cap_to_autoscaling_target():
-    """Unset hard cap should inherit the autoscaling target."""
+    """Unset split hard caps should inherit their respective autoscaling targets."""
     from unittest.mock import MagicMock, patch
 
     from docling_jobkit.orchestrators.ray.serve_deployment import create_deployment
 
     config = RayOrchestratorConfig(
         redis_url="redis://localhost:6379/",
+        coordinator_target_requests_per_replica=None,
+        coordinator_max_ongoing_requests_per_replica=None,
         target_requests_per_replica=2,
+        max_ongoing_requests_per_replica=None,
     )
 
-    mock_options_result = MagicMock()
-    mock_options_result.bind.return_value = MagicMock()
+    mock_worker_options = MagicMock()
+    mock_worker_options.bind.return_value = MagicMock()
+    mock_coordinator_options = MagicMock()
+    mock_coordinator_options.bind.return_value = MagicMock()
 
-    with patch(
-        "docling_jobkit.orchestrators.ray.serve_deployment.DocumentProcessorDeployment.options",
-        return_value=mock_options_result,
-    ) as mock_options:
+    with (
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment.PageWorkerDeployment.options",
+            return_value=mock_worker_options,
+        ) as mock_worker_options_call,
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment.FanoutCoordinatorDeployment.options",
+            return_value=mock_coordinator_options,
+        ) as mock_coordinator_options_call,
+    ):
         create_deployment(
             converter_manager_config=MagicMock(),
             config=config,
             redis_url=config.redis_url,
         )
 
-    assert mock_options.call_args.kwargs["max_ongoing_requests"] == 2
+    assert mock_worker_options_call.call_args.kwargs["max_ongoing_requests"] == 2
+    assert mock_coordinator_options_call.call_args.kwargs["max_ongoing_requests"] == 2
+    assert (
+        mock_coordinator_options_call.call_args.kwargs["autoscaling_config"][
+            "target_num_ongoing_requests_per_replica"
+        ]
+        == 2
+    )

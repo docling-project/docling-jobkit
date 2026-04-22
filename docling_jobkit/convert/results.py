@@ -37,6 +37,10 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
+def _is_exportable_status(status: ConversionStatus) -> bool:
+    return status in (ConversionStatus.SUCCESS, ConversionStatus.PARTIAL_SUCCESS)
+
+
 def _export_document_as_content(
     conv_res: ConversionResult,
     export_json: bool,
@@ -49,7 +53,7 @@ def _export_document_as_content(
 ) -> ExportDocumentResponse:
     document = ExportDocumentResponse(filename=conv_res.input.file.name)
 
-    if conv_res.status == ConversionStatus.SUCCESS:
+    if _is_exportable_status(conv_res.status):
         new_doc = conv_res.document._make_copy_with_refmode(
             Path(), image_mode, page_no=None
         )
@@ -92,7 +96,7 @@ def _export_documents_as_files(
     artifacts_dir = Path("artifacts/")  # will be relative to the fname
 
     for conv_res in conv_results:
-        if conv_res.status == ConversionStatus.SUCCESS:
+        if _is_exportable_status(conv_res.status):
             success_count += 1
             doc_filename = conv_res.input.file.stem
 
@@ -192,7 +196,7 @@ def process_export_results(
         conv_results_list.append(conv_res)
 
         # Track for final summary
-        if conv_res.status == ConversionStatus.SUCCESS:
+        if _is_exportable_status(conv_res.status):
             docs_succeeded.append(SucceededDocsItem(source=str(conv_res.input.file)))
         else:
             docs_failed.append(
@@ -283,8 +287,8 @@ def process_export_results(
             errors=conv_res.errors,
         )
 
-        num_succeeded = 1 if conv_res.status == ConversionStatus.SUCCESS else 0
-        num_failed = 1 if conv_res.status != ConversionStatus.SUCCESS else 0
+        num_succeeded = 1 if _is_exportable_status(conv_res.status) else 0
+        num_failed = 1 if not _is_exportable_status(conv_res.status) else 0
 
     # Multiple documents were processed, or we are forced returning as a file
     else:

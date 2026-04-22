@@ -2,11 +2,15 @@
 
 import datetime
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from docling.datamodel.base_models import ConversionStatus, ErrorItem
+from docling.datamodel.document import ConversionResult, InputDocument
+from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
+from docling_core.types.doc.document import DoclingDocument
 
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
@@ -181,3 +185,74 @@ class TaskTerminalizationResult:
     status_changed: bool
     capacity_released: bool
     result_key: Optional[str] = None
+
+
+class ChunkSpec(BaseModel):
+    page_range: tuple[int, int] = Field(description="Absolute page range for the chunk")
+    chunk_index: int = Field(description="Ascending chunk index in the split plan")
+
+
+class ChunkResult(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    status: ConversionStatus = Field(description="Conversion status for the chunk")
+    document: Optional[DoclingDocument] = Field(
+        default=None, description="Converted document for a successful chunk"
+    )
+    errors: list[ErrorItem] = Field(
+        default_factory=list, description="Errors returned for the chunk"
+    )
+    timings: dict[str, Any] = Field(
+        default_factory=dict, description="Profiling timings for the chunk"
+    )
+    page_range: tuple[int, int] = Field(description="Absolute page range for the chunk")
+    chunk_index: int = Field(description="Ascending chunk index in the split plan")
+    input: Optional[InputDocument] = Field(
+        default=None, description="Input document metadata from Docling"
+    )
+
+
+class SplitPlan(BaseModel):
+    total_pages: int = Field(description="Total pages in the materialized source PDF")
+    chunks: list[ChunkSpec] = Field(description="Chunk plan in ascending page order")
+    effective_page_range: tuple[int, int] = Field(
+        description="Caller page range intersected with the source page count"
+    )
+
+
+class PassthroughTaskRequest(BaseModel):
+    kind: str = Field(default="passthrough_task")
+    task: Task = Field(description="Original parent task")
+
+
+class MaterializedConvertRequest(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    kind: str = Field(default="materialized_convert")
+    artifact_ref: Any = Field(description="Ray ObjectRef with shared PDF bytes")
+    filename: str = Field(description="Filename for the materialized PDF")
+    options: ConvertDocumentsOptions = Field(description="Parent conversion options")
+
+
+class ChunkConvertRequest(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    kind: str = Field(default="chunk_convert")
+    artifact_ref: Any = Field(description="Ray ObjectRef with shared PDF bytes")
+    filename: str = Field(description="Filename for the materialized PDF")
+    options: ConvertDocumentsOptions = Field(description="Parent conversion options")
+    page_range: tuple[int, int] = Field(description="Absolute child page range")
+    chunk_index: int = Field(description="Ascending child chunk index")
+
+
+WorkerRequest = (
+    PassthroughTaskRequest | MaterializedConvertRequest | ChunkConvertRequest
+)
+
+
+class WorkerConvertResult(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    conversion_results: list[ConversionResult] = Field(
+        description="Raw conversion results returned by the worker"
+    )

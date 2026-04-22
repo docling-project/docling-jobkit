@@ -227,3 +227,30 @@ No new task-level terminal status: `TaskStatus` remains `PENDING / STARTED / SUC
 - `max_num_pages` and `max_file_size` are hard gates applied before fan-out; fan-out does not bypass them.
 - Task-level status stays binary (`SUCCESS` / `FAILURE`); partial page coverage is expressed in the result document's `ConversionStatus`, not in `TaskStatus`.
 - There is no automatic parent retry in the current system; coordinator death terminally fails the parent task.
+
+## Appendix: Implemented
+
+Implemented in `docling-jobkit`:
+- Added `convert/materialization.py` with canonical single-source PDF materialization + preflight, including `MaterializationLimits`, `MaterializedSource`, and limit-specific failures.
+- Split the Ray Serve processing plane into `FanoutCoordinatorDeployment` and `PageWorkerDeployment` in `orchestrators/ray/serve_deployment.py`.
+- Added internal Ray models for `SplitPlan`, `ChunkSpec`, `ChunkResult`, and the worker request/result payloads in `orchestrators/ray/models.py`.
+- Added the internal fan-out config in `orchestrators/ray/config.py`:
+  `enable_pdf_page_chunk_fanout`, `max_page_chunk_size`, `max_page_chunk_parallelism`, plus only the coordinator-specific overrides that remained necessary: `coordinator_target_requests_per_replica`, `coordinator_max_ongoing_requests_per_replica`, `coordinator_num_cpus`, and `coordinator_memory_limit`.
+- Kept the dispatcher contract stable: the dispatcher still submits a single parent task through `process_task(task)` on the coordinator handle.
+- Implemented single-source PDF convert orchestration:
+  coordinator preflight/materialization, `ray.put()` shared artifact, optional page-range split plan, bounded or unbounded child fan-out, chunk collection, and final assembly with `DoclingDocument.concatenate`.
+- Preserved parent-owned Redis lifecycle in the coordinator: STARTED update, execution lease heartbeat, durable success/failure terminalization, pub/sub updates, and tenant stats.
+- Updated `convert/results.py` so `ConversionStatus.PARTIAL_SUCCESS` is exportable and counted as a successful logical document for result packaging and stats.
+
+Implemented in `docling-serve`:
+- Added Ray settings for the fan-out feature flags and the minimal coordinator override set in `docling_serve/settings.py`.
+- Wired those settings into `RayOrchestratorConfig` construction in `docling_serve/orchestrator_factory.py`.
+
+Validation run:
+- `uv run pytest -q tests/test_ray_fanout.py`
+- `uv run pytest -q tests/test_ray_orchestrator.py -k create_deployment`
+- `uv run pytest -q tests/test_ray_dispatcher_hardening.py -k 'document_processor_deployment_stringifies_replica_id or serve_replica_does_not_delete_dispatch_key'`
+
+Notes:
+- The worker request models pass filename metadata plus a Ray `ObjectRef`; the full materialized bytes remain owned by the coordinator-local `MaterializedSource`.
+- Fan-out eligibility is locked to single-source PDF `CONVERT` tasks, matching the v1 scope.
