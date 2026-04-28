@@ -1,18 +1,17 @@
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock
 
 from docling.datamodel.base_models import ConversionStatus
-from docling.datamodel.document import ConversionResult, InputDocument
 
 from docling_jobkit.convert.chunking import (
     DocumentChunkerManager,
-    process_chunk_results,
+    process_chunkable_results,
 )
 from docling_jobkit.datamodel.chunking import (
     HierarchicalChunkerOptions,
     HybridChunkerOptions,
 )
+from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import (
     ChunkedDocumentResult,
     ExportDocumentResponse,
@@ -67,13 +66,12 @@ class TestDocumentChunker:
 
     def test_chunk_conversion_result_failure(self):
         """Test chunking with failed conversion result."""
-        # Create failed conversion result with minimal required fields
-        failed_result = Mock(spec=ConversionResult)
-        failed_result.input = Mock(spec=InputDocument)
-        failed_result.input.file = Path("file.pdf")
-        failed_result.status = ConversionStatus.FAILURE
-        failed_result.errors = []
-        failed_result.timings = {}
+        failed_result = ExportableDocument(
+            file=Path("file.pdf"),
+            status=ConversionStatus.FAILURE,
+            errors=[],
+            timings={},
+        )
 
         workdir = tempfile.mkdtemp()
 
@@ -83,9 +81,9 @@ class TestDocumentChunker:
             chunking_options=HybridChunkerOptions(),
             target=InBodyTarget(),
         )
-        task_result = process_chunk_results(
+        task_result = process_chunkable_results(
             task=task,
-            conv_results=[failed_result],
+            exportable_documents=[failed_result],
             work_dir=workdir,
         )
         result = task_result.result

@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 from pydantic import BaseModel, Field
 
 from docling.datamodel.base_models import ConversionStatus
-from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.callbacks import (
     DocumentCompletedItem,
     FailedDocsItem,
@@ -226,25 +225,6 @@ class DocumentChunkerManager:
             chunk_items.append(chunk_item)
 
         return chunk_items
-
-
-def process_chunk_results(
-    task: Task,
-    conv_results: Iterable[ConversionResult],
-    work_dir: Path,
-    chunker_manager: Optional[DocumentChunkerManager] = None,
-    callback_invoker: Optional["CallbackInvoker"] = None,
-) -> DoclingTaskResult:
-    return process_chunkable_results(
-        task=task,
-        exportable_documents=(
-            ExportableDocument.from_conversion_result(conv_res)
-            for conv_res in conv_results
-        ),
-        work_dir=work_dir,
-        chunker_manager=chunker_manager,
-        callback_invoker=callback_invoker,
-    )
 
 
 def process_chunkable_results(
