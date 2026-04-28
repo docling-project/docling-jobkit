@@ -22,6 +22,7 @@ from docling.datamodel.base_models import (
     DocumentStream,
     ErrorItem,
 )
+from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.sources import FileSource, HttpSource
 from docling.datamodel.service.tasks import TaskType
@@ -270,6 +271,9 @@ class PageWorkerDeployment:
         )
         self.cm = DoclingConverterManager(config=converter_manager_config)
         _log.setLevel(self.config.log_level.upper())
+        self.scratch_dir = config.scratch_dir
+        if self.scratch_dir is not None:
+            self.scratch_dir.mkdir(exist_ok=True, parents=True)
 
         self.tasks_processed = 0
         self.documents_processed = 0
@@ -283,15 +287,30 @@ class PageWorkerDeployment:
             await self._check_memory()
 
         if isinstance(request, PassthroughTaskRequest):
-            result = await self._run_with_retry(
+            conv_results = await self._run_with_retry(
                 request.task.task_id,
-                lambda: self._process_passthrough_task(request.task),
+                lambda: self._convert_passthrough_task(request.task),
+            )
+            result = self._build_task_result(
+                request.task,
+                [
+                    ExportableDocument.from_conversion_result(conv_res)
+                    for conv_res in conv_results
+                ],
             )
             self.documents_processed += result.task_result.num_converted
         elif isinstance(request, MaterializedConvertRequest):
-            result = await self._run_with_retry(
+            conv_results = await self._run_with_retry(
                 request.filename,
-                lambda: self._process_materialized_convert(request),
+                lambda: self._convert_materialized_request(request),
+            )
+            result = self._build_task_result(
+                request.task,
+                [
+                    ExportableDocument.from_conversion_result(conv_res)
+                    for conv_res in conv_results
+                ],
+                expected_doc_count=request.source_count,
             )
             self.documents_processed += result.task_result.num_converted
         elif isinstance(request, SliceConvertRequest):
@@ -359,6 +378,7 @@ class PageWorkerDeployment:
         }
         if self.config.scratch_dir is not None:
             temp_dir_kwargs["dir"] = str(self.config.scratch_dir)
+            Path(temp_dir_kwargs["dir"]).mkdir(exist_ok=True, parents=True)
 
         with tempfile.TemporaryDirectory(**temp_dir_kwargs) as temp_dir:
             workdir = Path(temp_dir)
@@ -384,32 +404,24 @@ class PageWorkerDeployment:
 
         return WorkerTaskResult(task_result=task_result)
 
-    def _process_passthrough_task(self, task: Task) -> WorkerTaskResult:
+    def _convert_passthrough_task(self, task: Task) -> list[ConversionResult]:
         convert_sources, headers = _build_convert_sources(task)
         convert_opts = task.convert_options or ConvertDocumentsOptions()
-        exportable_documents = [
-            ExportableDocument.from_conversion_result(conv_res)
-            for conv_res in self.cm.convert_documents(
+        return list(
+            self.cm.convert_documents(
                 sources=convert_sources, options=convert_opts, headers=headers
             )
-        ]
-        return self._build_task_result(task, exportable_documents)
+        )
 
-    def _process_materialized_convert(
+    def _convert_materialized_request(
         self, request: MaterializedConvertRequest
-    ) -> WorkerTaskResult:
+    ) -> list[ConversionResult]:
         payload = ray.get(request.artifact_ref)
-        exportable_documents = [
-            ExportableDocument.from_conversion_result(conv_res)
-            for conv_res in self.cm.convert_documents(
+        return list(
+            self.cm.convert_documents(
                 sources=[_materialized_stream(request.filename, payload)],
                 options=request.task.convert_options or ConvertDocumentsOptions(),
             )
-        ]
-        return self._build_task_result(
-            request.task,
-            exportable_documents,
-            expected_doc_count=request.source_count,
         )
 
     def _process_slice_convert(
