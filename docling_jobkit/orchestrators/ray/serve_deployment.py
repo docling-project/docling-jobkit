@@ -22,7 +22,6 @@ from docling.datamodel.base_models import (
     DocumentStream,
     ErrorItem,
 )
-from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.sources import FileSource, HttpSource
 from docling.datamodel.service.tasks import TaskType
@@ -31,7 +30,7 @@ from docling_core.types.doc.document import DoclingDocument
 
 from docling_jobkit.convert.chunking import (
     DocumentChunkerManager,
-    process_chunk_results,
+    process_chunkable_results,
 )
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
@@ -41,7 +40,8 @@ from docling_jobkit.convert.materialization import (
     MaterializationLimits,
     materialize_and_preflight,
 )
-from docling_jobkit.convert.results import process_export_results
+from docling_jobkit.convert.results import process_exportable_results
+from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
@@ -55,11 +55,10 @@ from docling_jobkit.orchestrators.ray.models import (
     PassthroughTaskRequest,
     SliceConvertRequest,
     SlicePlan,
-    SliceResult,
     SliceSpec,
     TaskUpdate,
-    WorkerConvertResult,
     WorkerRequest,
+    WorkerTaskResult,
 )
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 
@@ -139,10 +138,12 @@ def _build_slice_plan(
     )
 
 
-def _merge_timings(slice_results: list[SliceResult]) -> dict[str, ProfilingItem]:
+def _merge_timings(
+    exportable_documents: list[ExportableDocument],
+) -> dict[str, ProfilingItem]:
     merged: dict[str, ProfilingItem] = {}
-    for chunk_result in slice_results:
-        for name, item in chunk_result.timings.items():
+    for exportable_document in exportable_documents:
+        for name, item in exportable_document.timings.items():
             if name not in merged:
                 merged[name] = deepcopy(item)
                 continue
@@ -156,11 +157,13 @@ def _merge_timings(slice_results: list[SliceResult]) -> dict[str, ProfilingItem]
 
 
 def _build_failed_slice_result(
+    filename: str,
     page_range: tuple[int, int],
     slice_index: int,
     exc: Exception,
-) -> SliceResult:
-    return SliceResult(
+) -> ExportableDocument:
+    return ExportableDocument(
+        file=Path(filename),
         status=ConversionStatus.FAILURE,
         errors=[
             ErrorItem(
@@ -174,8 +177,16 @@ def _build_failed_slice_result(
     )
 
 
-def _assemble_slice_results(slice_results: list[SliceResult]) -> ConversionResult:
-    ordered_results = sorted(slice_results, key=lambda result: result.slice_index)
+def _slice_sort_key(result: ExportableDocument) -> int:
+    if result.slice_index is None:
+        raise RuntimeError("Slice result is missing slice_index")
+    return result.slice_index
+
+
+def _assemble_slice_results(
+    slice_results: list[ExportableDocument],
+) -> ExportableDocument:
+    ordered_results = sorted(slice_results, key=_slice_sort_key)
     successful_results = [
         result
         for result in ordered_results
@@ -183,13 +194,6 @@ def _assemble_slice_results(slice_results: list[SliceResult]) -> ConversionResul
     ]
     if not successful_results:
         raise RuntimeError("No successful child chunks were produced")
-
-    input_doc = next(
-        (result.input for result in successful_results if result.input is not None),
-        None,
-    )
-    if input_doc is None:
-        raise RuntimeError("Successful child chunks did not return input metadata")
 
     assembled_doc = (
         successful_results[0].document
@@ -209,8 +213,9 @@ def _assemble_slice_results(slice_results: list[SliceResult]) -> ConversionResul
     )
     errors = [error for result in ordered_results for error in result.errors]
 
-    return ConversionResult(
-        input=input_doc,
+    return ExportableDocument(
+        file=successful_results[0].file,
+        document_hash=successful_results[0].document_hash,
         status=final_status,
         errors=errors,
         timings=_merge_timings(ordered_results),
@@ -273,7 +278,7 @@ class PageWorkerDeployment:
 
     async def process_worker_request(
         self, request: WorkerRequest
-    ) -> WorkerConvertResult | SliceResult:
+    ) -> WorkerTaskResult | ExportableDocument:
         if self.config.enable_oom_protection and PSUTIL_AVAILABLE:
             await self._check_memory()
 
@@ -282,13 +287,13 @@ class PageWorkerDeployment:
                 request.task.task_id,
                 lambda: self._process_passthrough_task(request.task),
             )
-            self.documents_processed += len(result.conversion_results)
+            self.documents_processed += result.task_result.num_converted
         elif isinstance(request, MaterializedConvertRequest):
             result = await self._run_with_retry(
                 request.filename,
                 lambda: self._process_materialized_convert(request),
             )
-            self.documents_processed += len(result.conversion_results)
+            self.documents_processed += result.task_result.num_converted
         elif isinstance(request, SliceConvertRequest):
             result = await self._run_with_retry(
                 f"{request.filename}:{request.page_range}",
@@ -334,31 +339,82 @@ class PageWorkerDeployment:
 
         raise last_exception or RuntimeError("Worker request failed")
 
-    def _process_passthrough_task(self, task: Task) -> WorkerConvertResult:
+    def _get_chunker_manager(self) -> DocumentChunkerManager:
+        chunker_manager = getattr(self, "_chunker_manager", None)
+        if chunker_manager is None:
+            chunker_manager = DocumentChunkerManager()
+            self._chunker_manager = chunker_manager
+        return chunker_manager
+
+    def _build_task_result(
+        self,
+        task: Task,
+        exportable_documents: list[ExportableDocument],
+        *,
+        expected_doc_count: Optional[int] = None,
+    ) -> WorkerTaskResult:
+        callback_invoker = _build_callback_invoker(task)
+        temp_dir_kwargs: dict[str, Any] = {
+            "prefix": f"docling_worker_{task.task_id}_",
+        }
+        if self.config.scratch_dir is not None:
+            temp_dir_kwargs["dir"] = str(self.config.scratch_dir)
+
+        with tempfile.TemporaryDirectory(**temp_dir_kwargs) as temp_dir:
+            workdir = Path(temp_dir)
+            if task.task_type == TaskType.CONVERT:
+                task_result = process_exportable_results(
+                    task=task,
+                    exportable_documents=exportable_documents,
+                    work_dir=workdir,
+                    callback_invoker=callback_invoker,
+                    expected_doc_count=expected_doc_count,
+                )
+            elif task.task_type == TaskType.CHUNK:
+                task_result = process_chunkable_results(
+                    task=task,
+                    exportable_documents=exportable_documents,
+                    work_dir=workdir,
+                    chunker_manager=self._get_chunker_manager(),
+                    callback_invoker=callback_invoker,
+                    expected_doc_count=expected_doc_count,
+                )
+            else:
+                raise ValueError(f"Unsupported task type: {task.task_type}")
+
+        return WorkerTaskResult(task_result=task_result)
+
+    def _process_passthrough_task(self, task: Task) -> WorkerTaskResult:
         convert_sources, headers = _build_convert_sources(task)
         convert_opts = task.convert_options or ConvertDocumentsOptions()
-        conv_results = list(
-            self.cm.convert_documents(
-                sources=convert_sources,
-                options=convert_opts,
-                headers=headers,
+        exportable_documents = [
+            ExportableDocument.from_conversion_result(conv_res)
+            for conv_res in self.cm.convert_documents(
+                sources=convert_sources, options=convert_opts, headers=headers
             )
-        )
-        return WorkerConvertResult(conversion_results=conv_results)
+        ]
+        return self._build_task_result(task, exportable_documents)
 
     def _process_materialized_convert(
         self, request: MaterializedConvertRequest
-    ) -> WorkerConvertResult:
+    ) -> WorkerTaskResult:
         payload = ray.get(request.artifact_ref)
-        conv_results = list(
-            self.cm.convert_documents(
+        exportable_documents = [
+            ExportableDocument.from_conversion_result(conv_res)
+            for conv_res in self.cm.convert_documents(
                 sources=[_materialized_stream(request.filename, payload)],
-                options=request.options,
+                options=request.task.convert_options or ConvertDocumentsOptions(),
             )
+        ]
+        return self._build_task_result(
+            request.task,
+            exportable_documents,
+            expected_doc_count=request.source_count,
         )
-        return WorkerConvertResult(conversion_results=conv_results)
 
-    def _process_slice_convert(self, request: SliceConvertRequest) -> SliceResult:
+    def _process_slice_convert(
+        self, request: SliceConvertRequest
+    ) -> ExportableDocument:
         payload = ray.get(request.artifact_ref)
         options = request.options.model_copy(update={"page_range": request.page_range})
         conv_results = list(
@@ -370,17 +426,10 @@ class PageWorkerDeployment:
         if not conv_results:
             raise RuntimeError("Slice conversion returned no results")
 
-        conv_result = conv_results[0]
-        return SliceResult(
-            status=conv_result.status,
-            document=conv_result.document
-            if _is_exportable_status(conv_result.status)
-            else None,
-            errors=conv_result.errors,
-            timings=conv_result.timings,
+        return ExportableDocument.from_conversion_result(
+            conv_results[0],
             page_range=request.page_range,
             slice_index=request.slice_index,
-            input=conv_result.input,
         )
 
     async def _check_memory(self) -> None:
@@ -639,7 +688,6 @@ class FanoutCoordinatorDeployment:
     async def _process_convert_task(
         self, task: Task, workdir: Path
     ) -> DoclingTaskResult:
-        callback_invoker = _build_callback_invoker(task)
         convert_options = task.convert_options or ConvertDocumentsOptions()
 
         if self._should_materialize_pdf(task):
@@ -679,47 +727,40 @@ class FanoutCoordinatorDeployment:
                         slice_plan=slice_plan,
                         options=convert_options,
                     )
-                    conv_results = [_assemble_slice_results(slice_results)]
+                    callback_invoker = _build_callback_invoker(task)
+                    return await asyncio.to_thread(
+                        process_exportable_results,
+                        task,
+                        [_assemble_slice_results(slice_results)],
+                        workdir,
+                        callback_invoker,
+                    )
                 else:
                     worker_result = (
                         await self.worker_handle.process_worker_request.remote(
                             MaterializedConvertRequest(
                                 artifact_ref=artifact_ref,
                                 filename=filename,
-                                options=convert_options,
+                                task=task.model_copy(update={"sources": []}),
+                                source_count=len(task.sources),
                             )
                         )
                     )
-                    conv_results = worker_result.conversion_results
+                    return worker_result.task_result
             finally:
                 del artifact_ref
         else:
             worker_result = await self.worker_handle.process_worker_request.remote(
                 PassthroughTaskRequest(task=task)
             )
-            conv_results = worker_result.conversion_results
-
-        return await asyncio.to_thread(
-            process_export_results,
-            task,
-            conv_results,
-            workdir,
-            callback_invoker,
-        )
+            return worker_result.task_result
 
     async def _process_chunk_task(self, task: Task, workdir: Path) -> DoclingTaskResult:
-        callback_invoker = _build_callback_invoker(task)
+        del workdir
         worker_result = await self.worker_handle.process_worker_request.remote(
             PassthroughTaskRequest(task=task)
         )
-        return await asyncio.to_thread(
-            process_chunk_results,
-            task,
-            worker_result.conversion_results,
-            workdir,
-            DocumentChunkerManager(),
-            callback_invoker,
-        )
+        return worker_result.task_result
 
     def _should_materialize_pdf(self, task: Task) -> bool:
         return (
@@ -735,7 +776,7 @@ class FanoutCoordinatorDeployment:
         filename: str,
         slice_plan: SlicePlan,
         options: ConvertDocumentsOptions,
-    ) -> list[SliceResult]:
+    ) -> list[ExportableDocument]:
         requests = [
             SliceConvertRequest(
                 artifact_ref=artifact_ref,
@@ -754,9 +795,9 @@ class FanoutCoordinatorDeployment:
             )
             return list(gathered_results)
 
-        in_flight: set[asyncio.Task[SliceResult]] = set()
+        in_flight: set[asyncio.Task[ExportableDocument]] = set()
         pending_requests = iter(requests)
-        collected_results: list[SliceResult] = []
+        collected_results: list[ExportableDocument] = []
 
         for _ in range(min(parallelism, len(requests))):
             request = next(pending_requests, None)
@@ -778,7 +819,9 @@ class FanoutCoordinatorDeployment:
 
         return collected_results
 
-    async def _execute_slice_request(self, request: SliceConvertRequest) -> SliceResult:
+    async def _execute_slice_request(
+        self, request: SliceConvertRequest
+    ) -> ExportableDocument:
         try:
             return await self.worker_handle.process_worker_request.remote(request)
         except Exception as exc:
@@ -790,6 +833,7 @@ class FanoutCoordinatorDeployment:
                 exc,
             )
             return _build_failed_slice_result(
+                filename=request.filename,
                 page_range=request.page_range,
                 slice_index=request.slice_index,
                 exc=exc,

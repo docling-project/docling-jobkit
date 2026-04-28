@@ -4,14 +4,12 @@ import datetime
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
-from docling.datamodel.base_models import ConversionStatus, ErrorItem
-from docling.datamodel.document import ConversionResult, InputDocument
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
-from docling_core.types.doc.document import DoclingDocument
 
+from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 
@@ -192,26 +190,6 @@ class SliceSpec(BaseModel):
     slice_index: int = Field(description="Ascending slice index in the slice plan")
 
 
-class SliceResult(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    status: ConversionStatus = Field(description="Conversion status for the slice")
-    document: Optional[DoclingDocument] = Field(
-        default=None, description="Converted document for a successful slice"
-    )
-    errors: list[ErrorItem] = Field(
-        default_factory=list, description="Errors returned for the slice"
-    )
-    timings: dict[str, Any] = Field(
-        default_factory=dict, description="Profiling timings for the slice"
-    )
-    page_range: tuple[int, int] = Field(description="Absolute page range for the slice")
-    slice_index: int = Field(description="Ascending slice index in the slice plan")
-    input: Optional[InputDocument] = Field(
-        default=None, description="Input document metadata from Docling"
-    )
-
-
 class SlicePlan(BaseModel):
     total_pages: int = Field(description="Total pages in the materialized source PDF")
     slices: list[SliceSpec] = Field(description="Slice plan in ascending page order")
@@ -226,17 +204,14 @@ class PassthroughTaskRequest(BaseModel):
 
 
 class MaterializedConvertRequest(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
     kind: str = Field(default="materialized_convert")
     artifact_ref: Any = Field(description="Ray ObjectRef with shared PDF bytes")
     filename: str = Field(description="Filename for the materialized PDF")
-    options: ConvertDocumentsOptions = Field(description="Parent conversion options")
+    task: Task = Field(description="Parent task metadata with sources stripped")
+    source_count: int = Field(description="Original source count for callbacks")
 
 
 class SliceConvertRequest(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
     kind: str = Field(default="slice_convert")
     artifact_ref: Any = Field(description="Ray ObjectRef with shared PDF bytes")
     filename: str = Field(description="Filename for the materialized PDF")
@@ -250,9 +225,5 @@ WorkerRequest = (
 )
 
 
-class WorkerConvertResult(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    conversion_results: list[ConversionResult] = Field(
-        description="Raw conversion results returned by the worker"
-    )
+class WorkerTaskResult(BaseModel):
+    task_result: DoclingTaskResult = Field(description="Final task result")

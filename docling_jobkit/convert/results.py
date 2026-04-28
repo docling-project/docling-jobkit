@@ -21,6 +21,7 @@ from docling.datamodel.service.callbacks import (
 from docling.datamodel.service.targets import InBodyTarget, PutTarget
 from docling_core.types.doc import ImageRefMode
 
+from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import (
     DoclingTaskResult,
     ExportDocumentResponse,
@@ -42,7 +43,7 @@ def _is_exportable_status(status: ConversionStatus) -> bool:
 
 
 def _export_document_as_content(
-    conv_res: ConversionResult,
+    exportable_document: ExportableDocument,
     export_json: bool,
     export_html: bool,
     export_md: bool,
@@ -51,10 +52,13 @@ def _export_document_as_content(
     image_mode: ImageRefMode,
     md_page_break_placeholder: str,
 ) -> ExportDocumentResponse:
-    document = ExportDocumentResponse(filename=conv_res.input.file.name)
+    document = ExportDocumentResponse(filename=exportable_document.file.name)
 
-    if _is_exportable_status(conv_res.status):
-        new_doc = conv_res.document._make_copy_with_refmode(
+    if (
+        _is_exportable_status(exportable_document.status)
+        and exportable_document.document is not None
+    ):
+        new_doc = exportable_document.document._make_copy_with_refmode(
             Path(), image_mode, page_no=None
         )
 
@@ -80,7 +84,7 @@ def _export_document_as_content(
 
 
 def _export_documents_as_files(
-    conv_results: Iterable[ConversionResult],
+    exportable_documents: Iterable[ExportableDocument],
     output_dir: Path,
     export_json: bool,
     export_html: bool,
@@ -95,16 +99,19 @@ def _export_documents_as_files(
 
     artifacts_dir = Path("artifacts/")  # will be relative to the fname
 
-    for conv_res in conv_results:
-        if _is_exportable_status(conv_res.status):
+    for exportable_document in exportable_documents:
+        if (
+            _is_exportable_status(exportable_document.status)
+            and exportable_document.document is not None
+        ):
             success_count += 1
-            doc_filename = conv_res.input.file.stem
+            doc_filename = exportable_document.file.stem
 
             # Export JSON format:
             if export_json:
                 fname = output_dir / f"{doc_filename}.json"
                 _log.info(f"writing JSON output to {fname}")
-                conv_res.document.save_as_json(
+                exportable_document.document.save_as_json(
                     filename=fname,
                     image_mode=image_export_mode,
                     artifacts_dir=artifacts_dir,
@@ -114,7 +121,7 @@ def _export_documents_as_files(
             if export_html:
                 fname = output_dir / f"{doc_filename}.html"
                 _log.info(f"writing HTML output to {fname}")
-                conv_res.document.save_as_html(
+                exportable_document.document.save_as_html(
                     filename=fname,
                     image_mode=image_export_mode,
                     artifacts_dir=artifacts_dir,
@@ -124,7 +131,7 @@ def _export_documents_as_files(
             if export_txt:
                 fname = output_dir / f"{doc_filename}.txt"
                 _log.info(f"writing TXT output to {fname}")
-                conv_res.document.save_as_markdown(
+                exportable_document.document.save_as_markdown(
                     filename=fname,
                     strict_text=True,
                     image_mode=ImageRefMode.PLACEHOLDER,
@@ -134,7 +141,7 @@ def _export_documents_as_files(
             if export_md:
                 fname = output_dir / f"{doc_filename}.md"
                 _log.info(f"writing Markdown output to {fname}")
-                conv_res.document.save_as_markdown(
+                exportable_document.document.save_as_markdown(
                     filename=fname,
                     artifacts_dir=artifacts_dir,
                     image_mode=image_export_mode,
@@ -145,10 +152,10 @@ def _export_documents_as_files(
             if export_doctags:
                 fname = output_dir / f"{doc_filename}.doctags"
                 _log.info(f"writing Doc Tags output to {fname}")
-                conv_res.document.save_as_doctags(filename=fname)
+                exportable_document.document.save_as_doctags(filename=fname)
 
         else:
-            _log.warning(f"Document {conv_res.input.file} failed to convert.")
+            _log.warning(f"Document {exportable_document.file} failed to convert.")
             failure_count += 1
 
     conv_result = (
@@ -162,21 +169,26 @@ def _export_documents_as_files(
     return success_count, failure_count, conv_result
 
 
-def process_export_results(
+def process_exportable_results(
     task: Task,
-    conv_results: Iterable[ConversionResult],
+    exportable_documents: Iterable[ExportableDocument],
     work_dir: Path,
     callback_invoker: Optional["CallbackInvoker"] = None,
+    expected_doc_count: Optional[int] = None,
 ) -> DoclingTaskResult:
     conversion_options = task.convert_options
     if conversion_options is None:
-        raise RuntimeError("process_export_results called without task.convert_options")
+        raise RuntimeError(
+            "process_exportable_results called without task.convert_options"
+        )
 
     # Let's start by processing the documents
     start_time = time.monotonic()
 
     # 1. Send ProgressSetNumDocs at start
-    total_docs = len(task.sources)
+    total_docs = (
+        expected_doc_count if expected_doc_count is not None else len(task.sources)
+    )
     if callback_invoker and task.callbacks and total_docs:
         callback_invoker.invoke_callbacks_async(
             callbacks=task.callbacks,
@@ -187,38 +199,53 @@ def process_export_results(
     # 2. Process documents and send ProgressDocumentCompleted for each
     # IMPORTANT: conv_results is a lazy iterator from convert_documents()
     # The actual conversion happens as we iterate through it
-    conv_results_list = []
+    documents_list = []
     docs_succeeded: list[SucceededDocsItem] = []
     docs_failed: list[FailedDocsItem] = []
 
-    for idx, conv_res in enumerate(conv_results):
-        # Document has JUST been converted (lazy evaluation triggered here)
-        conv_results_list.append(conv_res)
+    for idx, exportable_document in enumerate(exportable_documents):
+        documents_list.append(exportable_document)
 
         # Track for final summary
-        if _is_exportable_status(conv_res.status):
-            docs_succeeded.append(SucceededDocsItem(source=str(conv_res.input.file)))
+        if _is_exportable_status(exportable_document.status):
+            docs_succeeded.append(
+                SucceededDocsItem(source=str(exportable_document.file))
+            )
         else:
             docs_failed.append(
                 FailedDocsItem(
-                    source=str(conv_res.input.file),
-                    error=str(conv_res.errors) if conv_res.errors else "Unknown error",
+                    source=str(exportable_document.file),
+                    error=(
+                        str(exportable_document.errors)
+                        if exportable_document.errors
+                        else "Unknown error"
+                    ),
                 )
             )
 
         # Send per-document callback (non-blocking)
         if callback_invoker and task.callbacks:
             document_info = DocumentCompletedItem(
-                source=str(conv_res.input.file),
-                status=conv_res.status,
-                num_pages=(len(conv_res.document.pages) if conv_res.document else None),
-                processing_time=(
-                    sum(sum(item.times) for item in conv_res.timings.values())
-                    if conv_res.timings
+                source=str(exportable_document.file),
+                status=exportable_document.status,
+                num_pages=(
+                    len(exportable_document.document.pages)
+                    if exportable_document.document
                     else None
                 ),
-                doc_hash=conv_res.input.document_hash,
-                error=str(conv_res.errors) if conv_res.errors else None,
+                processing_time=(
+                    sum(
+                        sum(item.times) for item in exportable_document.timings.values()
+                    )
+                    if exportable_document.timings
+                    else None
+                ),
+                doc_hash=exportable_document.document_hash,
+                error=(
+                    str(exportable_document.errors)
+                    if exportable_document.errors
+                    else None
+                ),
             )
 
             callback_invoker.invoke_callbacks_async(
@@ -231,12 +258,14 @@ def process_export_results(
                 ),
             )
 
-    conv_results = conv_results_list
+    exportable_documents = documents_list
     processing_time = time.monotonic() - start_time
 
-    _log.info(f"Processed {len(conv_results)} docs in {processing_time:.2f} seconds.")
+    _log.info(
+        f"Processed {len(exportable_documents)} docs in {processing_time:.2f} seconds."
+    )
 
-    if len(conv_results) == 0:
+    if len(exportable_documents) == 0:
         raise RuntimeError("No documents were generated by Docling.")
 
     # 3. Send ProgressUpdateProcessed at end with final summary
@@ -266,11 +295,11 @@ def process_export_results(
     export_doctags = OutputFormat.DOCTAGS in conversion_options.to_formats
 
     # Only 1 document was processed, and we are not returning it as a file
-    if len(conv_results) == 1 and isinstance(task.target, InBodyTarget):
-        conv_res = conv_results[0]
+    if len(exportable_documents) == 1 and isinstance(task.target, InBodyTarget):
+        exportable_document = exportable_documents[0]
 
         content = _export_document_as_content(
-            conv_res,
+            exportable_document,
             export_json=export_json,
             export_html=export_html,
             export_md=export_md,
@@ -281,14 +310,14 @@ def process_export_results(
         )
         task_result = ExportResult(
             content=content,
-            status=conv_res.status,
+            status=exportable_document.status,
             # processing_time=processing_time,
-            timings=conv_res.timings,
-            errors=conv_res.errors,
+            timings=exportable_document.timings,
+            errors=exportable_document.errors,
         )
 
-        num_succeeded = 1 if _is_exportable_status(conv_res.status) else 0
-        num_failed = 1 if not _is_exportable_status(conv_res.status) else 0
+        num_succeeded = 1 if _is_exportable_status(exportable_document.status) else 0
+        num_failed = 1 if not _is_exportable_status(exportable_document.status) else 0
 
     # Multiple documents were processed, or we are forced returning as a file
     else:
@@ -298,7 +327,7 @@ def process_export_results(
 
         # Export the documents
         num_succeeded, num_failed, _conv_result = _export_documents_as_files(
-            conv_results=conv_results,
+            exportable_documents=exportable_documents,
             output_dir=output_dir,
             export_json=export_json,
             export_html=export_html,
@@ -340,5 +369,22 @@ def process_export_results(
         processing_time=processing_time,
         num_succeeded=num_succeeded,
         num_failed=num_failed,
-        num_converted=len(conv_results),
+        num_converted=len(exportable_documents),
+    )
+
+
+def process_export_results(
+    task: Task,
+    conv_results: Iterable[ConversionResult],
+    work_dir: Path,
+    callback_invoker: Optional["CallbackInvoker"] = None,
+) -> DoclingTaskResult:
+    return process_exportable_results(
+        task=task,
+        exportable_documents=(
+            ExportableDocument.from_conversion_result(conv_res)
+            for conv_res in conv_results
+        ),
+        work_dir=work_dir,
+        callback_invoker=callback_invoker,
     )

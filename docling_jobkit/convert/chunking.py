@@ -38,6 +38,7 @@ from docling_core.transforms.chunker.tokenizer.huggingface import (
 from docling_core.types.doc.document import DoclingDocument, ImageRefMode
 
 from docling_jobkit.convert.results import _export_document_as_content
+from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import (
     ChunkedDocumentResult,
     ChunkedDocumentResultItem,
@@ -234,13 +235,35 @@ def process_chunk_results(
     chunker_manager: Optional[DocumentChunkerManager] = None,
     callback_invoker: Optional["CallbackInvoker"] = None,
 ) -> DoclingTaskResult:
+    return process_chunkable_results(
+        task=task,
+        exportable_documents=(
+            ExportableDocument.from_conversion_result(conv_res)
+            for conv_res in conv_results
+        ),
+        work_dir=work_dir,
+        chunker_manager=chunker_manager,
+        callback_invoker=callback_invoker,
+    )
+
+
+def process_chunkable_results(
+    task: Task,
+    exportable_documents: Iterable[ExportableDocument],
+    work_dir: Path,
+    chunker_manager: Optional[DocumentChunkerManager] = None,
+    callback_invoker: Optional["CallbackInvoker"] = None,
+    expected_doc_count: Optional[int] = None,
+) -> DoclingTaskResult:
     # Let's start by processing the documents
     start_time = time.monotonic()
     chunking_options = task.chunking_options or HybridChunkerOptions()
     conversion_options = task.convert_options or ConvertDocumentsOptions()
 
     # 1. Send ProgressSetNumDocs at start
-    total_docs = len(task.sources)
+    total_docs = (
+        expected_doc_count if expected_doc_count is not None else len(task.sources)
+    )
     if callback_invoker and task.callbacks and total_docs:
         callback_invoker.invoke_callbacks_async(
             callbacks=task.callbacks,
@@ -259,14 +282,17 @@ def process_chunk_results(
 
     # TODO: DocumentChunkerManager should be initialized outside for really working as a cache
     chunker_manager = chunker_manager or DocumentChunkerManager()
-    for idx, conv_res in enumerate(conv_results):
-        errors = conv_res.errors
-        filename = conv_res.input.file.name
-        if conv_res.status == ConversionStatus.SUCCESS:
+    for idx, exportable_document in enumerate(exportable_documents):
+        errors = exportable_document.errors
+        filename = exportable_document.file.name
+        if (
+            exportable_document.status == ConversionStatus.SUCCESS
+            and exportable_document.document is not None
+        ):
             try:
                 chunks.extend(
                     chunker_manager.chunk_document(
-                        document=conv_res.document,
+                        document=exportable_document.document,
                         filename=filename,
                         options=chunking_options,
                     )
@@ -274,7 +300,7 @@ def process_chunk_results(
                 num_succeeded += 1
             except Exception as e:
                 _log.exception(
-                    f"Document chunking failed for {conv_res.input.file}: {e}",
+                    f"Document chunking failed for {exportable_document.file}: {e}",
                     stack_info=True,
                 )
                 num_failed += 1
@@ -289,16 +315,18 @@ def process_chunk_results(
                 # ]
 
         else:
-            _log.warning(f"Document {conv_res.input.file} failed to convert.")
+            _log.warning(f"Document {exportable_document.file} failed to convert.")
             num_failed += 1
 
         # Track for final summary
-        if conv_res.status == ConversionStatus.SUCCESS:
-            docs_succeeded.append(SucceededDocsItem(source=str(conv_res.input.file)))
+        if exportable_document.status == ConversionStatus.SUCCESS:
+            docs_succeeded.append(
+                SucceededDocsItem(source=str(exportable_document.file))
+            )
         else:
             docs_failed.append(
                 FailedDocsItem(
-                    source=str(conv_res.input.file),
+                    source=str(exportable_document.file),
                     error=str(errors) if errors else "Unknown error",
                 )
             )
@@ -306,15 +334,21 @@ def process_chunk_results(
         # 2. Send per-document callback (non-blocking)
         if callback_invoker and task.callbacks:
             document_info = DocumentCompletedItem(
-                source=str(conv_res.input.file),
-                status=conv_res.status,
-                num_pages=(len(conv_res.document.pages) if conv_res.document else None),
-                processing_time=(
-                    sum(sum(item.times) for item in conv_res.timings.values())
-                    if conv_res.timings
+                source=str(exportable_document.file),
+                status=exportable_document.status,
+                num_pages=(
+                    len(exportable_document.document.pages)
+                    if exportable_document.document
                     else None
                 ),
-                doc_hash=conv_res.input.document_hash,
+                processing_time=(
+                    sum(
+                        sum(item.times) for item in exportable_document.timings.values()
+                    )
+                    if exportable_document.timings
+                    else None
+                ),
+                doc_hash=exportable_document.document_hash,
                 error=str(errors) if errors else None,
             )
 
@@ -336,7 +370,7 @@ def process_chunk_results(
                 raise RuntimeError("InBodyTarget cannot use REFERENCED image mode.")
 
             doc_content = _export_document_as_content(
-                conv_res,
+                exportable_document,
                 export_json=True,
                 export_doctags=False,
                 export_html=False,
@@ -350,8 +384,8 @@ def process_chunk_results(
 
         doc_result = ExportResult(
             content=doc_content,
-            status=conv_res.status,
-            timings=conv_res.timings,
+            status=exportable_document.status,
+            timings=exportable_document.timings,
             errors=errors,
         )
 
