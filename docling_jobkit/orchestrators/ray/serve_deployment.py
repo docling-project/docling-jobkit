@@ -8,6 +8,7 @@ import gc
 import logging
 import shutil
 import tempfile
+import time
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
@@ -287,6 +288,7 @@ class PageWorkerDeployment:
             await self._check_memory()
 
         if isinstance(request, PassthroughTaskRequest):
+            request_start = time.monotonic()
             conv_results = await self._run_with_retry(
                 request.task.task_id,
                 lambda: self._convert_passthrough_task(request.task),
@@ -297,9 +299,11 @@ class PageWorkerDeployment:
                     ExportableDocument.from_conversion_result(conv_res)
                     for conv_res in conv_results
                 ],
+                start_time=request_start,
             )
             self.documents_processed += result.task_result.num_converted
         elif isinstance(request, MaterializedConvertRequest):
+            request_start = time.monotonic()
             conv_results = await self._run_with_retry(
                 request.filename,
                 lambda: self._convert_materialized_request(request),
@@ -311,6 +315,7 @@ class PageWorkerDeployment:
                     for conv_res in conv_results
                 ],
                 expected_doc_count=request.source_count,
+                start_time=request_start,
             )
             self.documents_processed += result.task_result.num_converted
         elif isinstance(request, SliceConvertRequest):
@@ -371,6 +376,7 @@ class PageWorkerDeployment:
         exportable_documents: list[ExportableDocument],
         *,
         expected_doc_count: Optional[int] = None,
+        start_time: Optional[float] = None,
     ) -> WorkerTaskResult:
         callback_invoker = _build_callback_invoker(task)
         temp_dir_kwargs: dict[str, Any] = {
@@ -389,6 +395,7 @@ class PageWorkerDeployment:
                     work_dir=workdir,
                     callback_invoker=callback_invoker,
                     expected_doc_count=expected_doc_count,
+                    start_time=start_time,
                 )
             elif task.task_type == TaskType.CHUNK:
                 task_result = process_chunkable_results(
@@ -398,6 +405,7 @@ class PageWorkerDeployment:
                     chunker_manager=self._get_chunker_manager(),
                     callback_invoker=callback_invoker,
                     expected_doc_count=expected_doc_count,
+                    start_time=start_time,
                 )
             else:
                 raise ValueError(f"Unsupported task type: {task.task_type}")

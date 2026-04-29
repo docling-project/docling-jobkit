@@ -234,9 +234,10 @@ def process_chunkable_results(
     chunker_manager: Optional[DocumentChunkerManager] = None,
     callback_invoker: Optional["CallbackInvoker"] = None,
     expected_doc_count: Optional[int] = None,
+    start_time: Optional[float] = None,
 ) -> DoclingTaskResult:
     # Let's start by processing the documents
-    start_time = time.monotonic()
+    start_time = start_time if start_time is not None else time.monotonic()
     chunking_options = task.chunking_options or HybridChunkerOptions()
     conversion_options = task.convert_options or ConvertDocumentsOptions()
 

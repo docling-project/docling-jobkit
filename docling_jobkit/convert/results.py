@@ -169,12 +169,42 @@ def _export_documents_as_files(
     return success_count, failure_count, conv_result
 
 
+def _upload_to_put_target(
+    url: str,
+    file_path: Path,
+    max_retries: int = 3,
+    retry_delay: float = 1.0,
+) -> None:
+    last_exc: Optional[Exception] = None
+    for attempt in range(max_retries):
+        try:
+            with file_path.open("rb") as file_data:
+                r = httpx.put(url, files={"file": file_data})
+                r.raise_for_status()
+            return
+        except Exception as exc:
+            last_exc = exc
+            _log.warning(
+                "Upload to %s failed (attempt %d/%d): %s",
+                url,
+                attempt + 1,
+                max_retries,
+                exc,
+            )
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay * (attempt + 1))
+    raise RuntimeError(
+        f"Failed to upload zip to target url after {max_retries} attempts."
+    ) from last_exc
+
+
 def process_exportable_results(
     task: Task,
     exportable_documents: Iterable[ExportableDocument],
     work_dir: Path,
     callback_invoker: Optional["CallbackInvoker"] = None,
     expected_doc_count: Optional[int] = None,
+    start_time: Optional[float] = None,
 ) -> DoclingTaskResult:
     conversion_options = task.convert_options
     if conversion_options is None:
@@ -183,7 +213,7 @@ def process_exportable_results(
         )
 
     # Let's start by processing the documents
-    start_time = time.monotonic()
+    start_time = start_time if start_time is not None else time.monotonic()
 
     # 1. Send ProgressSetNumDocs at start
     total_docs = (
@@ -350,16 +380,8 @@ def process_exportable_results(
         )
 
         if isinstance(task.target, PutTarget):
-            try:
-                with file_path.open("rb") as file_data:
-                    r = httpx.put(str(task.target.url), files={"file": file_data})
-                    r.raise_for_status()
-                task_result = RemoteTargetResult()
-            except Exception as exc:
-                _log.error("An error occour while uploading zip to s3", exc_info=exc)
-                raise RuntimeError(
-                    "An error occour while uploading zip to the target url."
-                )
+            _upload_to_put_target(str(task.target.url), file_path)
+            task_result = RemoteTargetResult()
 
         else:
             task_result = ZipArchiveResult(content=file_path.read_bytes())
