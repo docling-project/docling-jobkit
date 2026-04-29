@@ -709,6 +709,7 @@ class FanoutCoordinatorDeployment:
         self, task: Task, workdir: Path
     ) -> DoclingTaskResult:
         convert_options = task.convert_options or ConvertDocumentsOptions()
+        materialized_start_time = time.monotonic()
 
         if self._should_materialize_pdf(task):
             source = task.sources[0]
@@ -754,6 +755,7 @@ class FanoutCoordinatorDeployment:
                         [_assemble_slice_results(slice_results)],
                         workdir,
                         callback_invoker,
+                        start_time=materialized_start_time,
                     )
                 else:
                     worker_result = (
