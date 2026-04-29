@@ -2,6 +2,7 @@ import hashlib
 import logging
 import threading
 import time
+import warnings
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
@@ -9,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 from pydantic import BaseModel, Field
 
 from docling.datamodel.base_models import ConversionStatus
+from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.callbacks import (
     DocumentCompletedItem,
     FailedDocsItem,
@@ -410,4 +412,28 @@ def process_chunkable_results(
         num_succeeded=num_succeeded,
         num_failed=num_failed,
         num_converted=num_total,
+    )
+
+
+def process_chunk_results(
+    task: Task,
+    conv_results: Iterable[ConversionResult],
+    work_dir: Path,
+    chunker_manager: Optional[DocumentChunkerManager] = None,
+    callback_invoker: Optional["CallbackInvoker"] = None,
+) -> DoclingTaskResult:
+    warnings.warn(
+        "process_chunk_results() is deprecated; use process_chunkable_results()",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return process_chunkable_results(
+        task=task,
+        exportable_documents=(
+            ExportableDocument.from_conversion_result(conv_res)
+            for conv_res in conv_results
+        ),
+        work_dir=work_dir,
+        chunker_manager=chunker_manager,
+        callback_invoker=callback_invoker,
     )

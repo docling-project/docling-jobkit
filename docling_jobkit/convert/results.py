@@ -2,6 +2,7 @@ import logging
 import os
 import shutil
 import time
+import warnings
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -9,7 +10,7 @@ from typing import TYPE_CHECKING, Optional
 import httpx
 
 from docling.datamodel.base_models import OutputFormat
-from docling.datamodel.document import ConversionStatus
+from docling.datamodel.document import ConversionResult, ConversionStatus
 from docling.datamodel.service.callbacks import (
     DocumentCompletedItem,
     FailedDocsItem,
@@ -392,4 +393,26 @@ def process_exportable_results(
         num_succeeded=num_succeeded,
         num_failed=num_failed,
         num_converted=len(exportable_documents),
+    )
+
+
+def process_export_results(
+    task: Task,
+    conv_results: Iterable[ConversionResult],
+    work_dir: Path,
+    callback_invoker: Optional["CallbackInvoker"] = None,
+) -> DoclingTaskResult:
+    warnings.warn(
+        "process_export_results() is deprecated; use process_exportable_results()",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return process_exportable_results(
+        task=task,
+        exportable_documents=(
+            ExportableDocument.from_conversion_result(conv_res)
+            for conv_res in conv_results
+        ),
+        work_dir=work_dir,
+        callback_invoker=callback_invoker,
     )
