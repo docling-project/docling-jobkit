@@ -11,6 +11,8 @@ from typing import Any, Optional
 import msgpack
 import redis
 import redis.asyncio as async_redis
+import redis.asyncio.sentinel as async_sentinel
+import redis.sentinel as sentinel
 from pydantic import BaseModel, model_validator
 from rq import Queue
 from rq.exceptions import NoSuchJobError
@@ -56,6 +58,22 @@ class RQOrchestratorConfig(BaseModel):
     zombie_reaper_max_age: float = 3600.0
     result_removal_delay: int = 300  # seconds until result key expires after fetch
 
+    # Redis Sentinel configuration. When `redis_sentinel_hosts` and
+    # `redis_sentinel_service_name` are both set, all sync and async Redis
+    # clients are created via `redis.sentinel.Sentinel.master_for(...)` and
+    # `redis_url` is ignored. Each entry in `redis_sentinel_hosts` may be
+    # `host` (port defaults to 26379) or `host:port`.
+    redis_sentinel_hosts: Optional[list[str]] = None
+    redis_sentinel_service_name: Optional[str] = None
+    redis_sentinel_db: int = 0
+    redis_sentinel_username: Optional[str] = None
+    redis_sentinel_password: Optional[str] = None
+    # Credentials used to authenticate to the Sentinel daemons themselves
+    # (separate from the Redis master credentials above).
+    redis_sentinel_auth_username: Optional[str] = None
+    redis_sentinel_auth_password: Optional[str] = None
+    redis_sentinel_ssl: bool = False
+
     @model_validator(mode="after")
     def resolve_redis_gate_concurrency(self) -> "RQOrchestratorConfig":
         if self.redis_gate_concurrency is None:
@@ -63,6 +81,103 @@ class RQOrchestratorConfig(BaseModel):
                 1, self.redis_max_connections - self.redis_gate_reserved_connections
             )
         return self
+
+    @model_validator(mode="after")
+    def validate_sentinel_config(self) -> "RQOrchestratorConfig":
+        if bool(self.redis_sentinel_hosts) ^ bool(self.redis_sentinel_service_name):
+            raise ValueError(
+                "redis_sentinel_hosts and redis_sentinel_service_name must be "
+                "set together"
+            )
+        return self
+
+    @property
+    def use_sentinel(self) -> bool:
+        return bool(self.redis_sentinel_hosts and self.redis_sentinel_service_name)
+
+
+def _parse_sentinel_hosts(hosts: list[str]) -> list[tuple[str, int]]:
+    parsed: list[tuple[str, int]] = []
+    for entry in hosts:
+        host, _, port = entry.rpartition(":")
+        if host:
+            parsed.append((host, int(port)))
+        else:
+            # No colon — `entry` is the host, default Sentinel port.
+            parsed.append((port, 26379))
+    return parsed
+
+
+def _master_kwargs(config: RQOrchestratorConfig) -> dict[str, Any]:
+    """Connection kwargs passed to Sentinel.master_for() for the Redis master."""
+    kwargs: dict[str, Any] = {
+        "db": config.redis_sentinel_db,
+        "max_connections": config.redis_max_connections,
+        "socket_timeout": config.redis_socket_timeout,
+        "socket_connect_timeout": config.redis_socket_connect_timeout,
+    }
+    if config.redis_sentinel_username is not None:
+        kwargs["username"] = config.redis_sentinel_username
+    if config.redis_sentinel_password is not None:
+        kwargs["password"] = config.redis_sentinel_password
+    if config.redis_sentinel_ssl:
+        kwargs["ssl"] = True
+    return kwargs
+
+
+def _sentinel_kwargs(config: RQOrchestratorConfig) -> dict[str, Any]:
+    """Connection kwargs used to talk to the Sentinel daemons themselves."""
+    kwargs: dict[str, Any] = {
+        "socket_timeout": config.redis_socket_timeout,
+        "socket_connect_timeout": config.redis_socket_connect_timeout,
+    }
+    if config.redis_sentinel_auth_username is not None:
+        kwargs["username"] = config.redis_sentinel_auth_username
+    if config.redis_sentinel_auth_password is not None:
+        kwargs["password"] = config.redis_sentinel_auth_password
+    return kwargs
+
+
+def make_sync_redis(config: RQOrchestratorConfig) -> redis.Redis:
+    """Create a sync Redis client. Routes to Sentinel master when configured."""
+    if config.use_sentinel:
+        assert config.redis_sentinel_hosts is not None  # for type checker
+        assert config.redis_sentinel_service_name is not None
+        sentinel_client = sentinel.Sentinel(
+            _parse_sentinel_hosts(config.redis_sentinel_hosts),
+            sentinel_kwargs=_sentinel_kwargs(config),
+        )
+        return sentinel_client.master_for(
+            config.redis_sentinel_service_name, **_master_kwargs(config)
+        )
+    pool = redis.ConnectionPool.from_url(
+        config.redis_url,
+        max_connections=config.redis_max_connections,
+        socket_timeout=config.redis_socket_timeout,
+        socket_connect_timeout=config.redis_socket_connect_timeout,
+    )
+    return redis.Redis(connection_pool=pool)
+
+
+def make_async_redis(config: RQOrchestratorConfig) -> async_redis.Redis:
+    """Create an async Redis client. Routes to Sentinel master when configured."""
+    if config.use_sentinel:
+        assert config.redis_sentinel_hosts is not None
+        assert config.redis_sentinel_service_name is not None
+        sentinel_client = async_sentinel.Sentinel(
+            _parse_sentinel_hosts(config.redis_sentinel_hosts),
+            sentinel_kwargs=_sentinel_kwargs(config),
+        )
+        return sentinel_client.master_for(
+            config.redis_sentinel_service_name, **_master_kwargs(config)
+        )
+    pool = async_redis.ConnectionPool.from_url(
+        config.redis_url,
+        max_connections=config.redis_max_connections,
+        socket_timeout=config.redis_socket_timeout,
+        socket_connect_timeout=config.redis_socket_connect_timeout,
+    )
+    return async_redis.Redis(connection_pool=pool)
 
 
 class _TaskUpdate(BaseModel):
@@ -89,14 +204,7 @@ _TASK_METADATA_PREFIX = "docling:tasks:"
 class RQOrchestrator(BaseOrchestrator):
     @staticmethod
     def make_rq_queue(config: RQOrchestratorConfig) -> tuple[redis.Redis, Queue]:
-        # Create connection pool with configurable size
-        pool = redis.ConnectionPool.from_url(
-            config.redis_url,
-            max_connections=config.redis_max_connections,
-            socket_timeout=config.redis_socket_timeout,
-            socket_connect_timeout=config.redis_socket_connect_timeout,
-        )
-        conn = redis.Redis(connection_pool=pool)
+        conn = make_sync_redis(config)
         rq_queue = Queue(
             "convert",
             connection=conn,
@@ -104,11 +212,21 @@ class RQOrchestrator(BaseOrchestrator):
             result_ttl=config.results_ttl,
             failure_ttl=config.failure_ttl,
         )
-        _log.info(
-            f"RQ Redis connection pool initialized with max_connections="
-            f"{config.redis_max_connections}, socket_timeout={config.redis_socket_timeout}, "
-            f"socket_connect_timeout={config.redis_socket_connect_timeout}"
-        )
+        if config.use_sentinel:
+            _log.info(
+                f"RQ Redis Sentinel connection initialized: "
+                f"service_name={config.redis_sentinel_service_name}, "
+                f"sentinels={config.redis_sentinel_hosts}, "
+                f"max_connections={config.redis_max_connections}, "
+                f"socket_timeout={config.redis_socket_timeout}, "
+                f"socket_connect_timeout={config.redis_socket_connect_timeout}"
+            )
+        else:
+            _log.info(
+                f"RQ Redis connection pool initialized with max_connections="
+                f"{config.redis_max_connections}, socket_timeout={config.redis_socket_timeout}, "
+                f"socket_connect_timeout={config.redis_socket_connect_timeout}"
+            )
         return conn, rq_queue
 
     def __init__(
@@ -121,16 +239,7 @@ class RQOrchestrator(BaseOrchestrator):
         self._redis_gate = RedisCallerGate(self.config.redis_gate_concurrency)
         self._redis_conn, self._rq_queue = self.make_rq_queue(self.config)
 
-        # Create async connection pool with same configuration
-        self._async_redis_pool = async_redis.ConnectionPool.from_url(
-            self.config.redis_url,
-            max_connections=config.redis_max_connections,
-            socket_timeout=config.redis_socket_timeout,
-            socket_connect_timeout=config.redis_socket_connect_timeout,
-        )
-        self._async_redis_conn = async_redis.Redis(
-            connection_pool=self._async_redis_pool
-        )
+        self._async_redis_conn = make_async_redis(self.config)
         self._task_result_keys: dict[str, str] = {}
         self._rq_job_function = "docling_jobkit.orchestrators.rq.worker.docling_task"
         _log.info(
@@ -744,9 +853,10 @@ class RQOrchestrator(BaseOrchestrator):
     async def close(self):
         """Close Redis connection pools and release resources."""
         try:
-            # Close async connection pool
-            await self._async_redis_conn.aclose()
-            await self._async_redis_pool.aclose()
+            # Close async client; the underlying ConnectionPool (standard or
+            # SentinelConnectionPool) is owned by the client and torn down
+            # by aclose().
+            await self._async_redis_conn.aclose(close_connection_pool=True)
             _log.info("Async Redis connection pool closed")
         except Exception as e:
             _log.error(f"Error closing async Redis connection pool: {e}")

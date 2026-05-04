@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, Optional, Union
 
 import msgpack
-import redis as sync_redis
 from rq import SimpleWorker, get_current_job
 
 from docling.datamodel.base_models import DocumentStream
@@ -29,6 +28,7 @@ from docling_jobkit.orchestrators.rq.orchestrator import (
     RQOrchestrator,
     RQOrchestratorConfig,
     _TaskUpdate,
+    make_sync_redis,
 )
 from docling_jobkit.orchestrators.serialization import make_msgpack_safe
 
@@ -69,7 +69,9 @@ class CustomRQWorker(SimpleWorker):
         key = f"{self.orchestrator_config.heartbeat_key_prefix}:{job_id}"
         conn = None
         try:
-            conn = sync_redis.Redis.from_url(self.orchestrator_config.redis_url)
+            # Routes through Sentinel when configured so heartbeats follow
+            # master failover rather than getting stuck on a stale endpoint.
+            conn = make_sync_redis(self.orchestrator_config)
             # Write immediately so the key exists before the first watchdog scan.
             conn.set(key, "1", ex=_HEARTBEAT_TTL)
             while not stop_event.wait(timeout=_HEARTBEAT_INTERVAL):
