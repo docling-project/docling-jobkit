@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 import httpx
+import httpx
 from pydantic import BaseModel, Field
 
-from docling.datamodel.base_models import ConversionStatus
+from docling.datamodel.base_models import ConversionStatus, OutputFormat
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.callbacks import (
     DocumentCompletedItem,
@@ -31,6 +32,7 @@ from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.targets import InBodyTarget, PutTarget
 from docling_core.transforms.chunker import BaseChunker
 from docling_core.transforms.chunker.hierarchical_chunker import (
+    ChunkingDocSerializer,
     ChunkingSerializerProvider,
     DocChunk,
     HierarchicalChunker,
@@ -38,6 +40,10 @@ from docling_core.transforms.chunker.hierarchical_chunker import (
 from docling_core.transforms.chunker.hybrid_chunker import HybridChunker
 from docling_core.transforms.chunker.tokenizer.huggingface import (
     HuggingFaceTokenizer,
+)
+from docling_core.transforms.serializer.markdown import (
+    MarkdownParams,
+    MarkdownTableSerializer,
 )
 from docling_core.types.doc.document import DoclingDocument, ImageRefMode
 
@@ -61,21 +67,32 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
+DEFAULT_IMAGE_PLACEHOLDER = "![Image]"
 
-class MarkdownTableSerializerProvider(ChunkingSerializerProvider):
-    """Serializer provider that uses markdown table format for table serialization."""
 
-    def get_serializer(self, doc):
-        """Get a serializer that uses markdown table format."""
-        from docling_core.transforms.chunker.hierarchical_chunker import (
-            ChunkingDocSerializer,
-        )
-        from docling_core.transforms.serializer.markdown import MarkdownTableSerializer
+class SerializerProviderFactory:
+    """Factory for creating serializer providers based on chunking options."""
 
-        return ChunkingDocSerializer(
-            doc=doc,
-            table_serializer=MarkdownTableSerializer(),
-        )
+    @staticmethod
+    def create_serializer_provider(**kwargs: Any) -> ChunkingSerializerProvider:
+        """Create a serializer provider based on chunking options."""
+        use_markdown_tables = bool(kwargs.get("use_markdown_tables"))
+        use_markdown_images = bool(kwargs.get("use_markdown_images"))
+        if not use_markdown_tables and not use_markdown_images:
+            return ChunkingSerializerProvider()
+
+        class CustomSerializerProvider(ChunkingSerializerProvider):
+            def get_serializer(self, doc: DoclingDocument):
+                serializers: dict[str, Any] = {}
+                if use_markdown_tables:
+                    serializers["table_serializer"] = MarkdownTableSerializer()
+                params = None
+
+                if use_markdown_images:
+                    params = MarkdownParams(image_placeholder=DEFAULT_IMAGE_PLACEHOLDER)
+                return ChunkingDocSerializer(doc=doc, params=params, **serializers)
+
+        return CustomSerializerProvider()
 
 
 class DocumentChunkerConfig(BaseModel):
@@ -92,8 +109,13 @@ class DocumentChunkerConfig(BaseModel):
 class DocumentChunkerManager:
     """Handles document chunking for RAG workflows using chunkers from docling-core."""
 
-    def __init__(self, config: Optional[DocumentChunkerConfig] = None):
+    def __init__(
+        self,
+        config: Optional[DocumentChunkerConfig] = None,
+        conversion_options: Optional[ConvertDocumentsOptions] = None,
+    ):
         self.config = config or DocumentChunkerConfig()
+        self.conversion_options = conversion_options
         self._cache_lock = threading.Lock()
         self._options_map: dict[bytes, BaseChunkerOptions] = {}
         self._get_chunker_from_cache = self._create_chunker_cache()
@@ -106,13 +128,29 @@ class DocumentChunkerManager:
             try:
                 options = self._options_map[cache_key]
 
+                use_markdown_tables = (
+                    options.use_markdown_tables
+                    if hasattr(options, "use_markdown_tables")
+                    else False
+                )
+                use_markdown_images = False
+                if (
+                    self.conversion_options
+                    and self.conversion_options.image_export_mode is not None
+                    and self.conversion_options.image_export_mode
+                    != ImageRefMode.PLACEHOLDER
+                ):
+                    use_markdown_images = True
+                _log.debug(
+                    f"Using serializer options - Markdown Tables: {use_markdown_tables}, Markdown Images: {use_markdown_images}"
+                )
                 # Create serializer provider based on markdown table option
-                if options.use_markdown_tables:
-                    serializer_provider: ChunkingSerializerProvider = (
-                        MarkdownTableSerializerProvider()
+                serializer_provider = (
+                    SerializerProviderFactory.create_serializer_provider(
+                        use_markdown_tables=use_markdown_tables,
+                        use_markdown_images=use_markdown_images,
                     )
-                else:
-                    serializer_provider = ChunkingSerializerProvider()
+                )
 
                 if isinstance(options, HybridChunkerOptions):
                     # Create tokenizer
@@ -209,6 +247,8 @@ class DocumentChunkerManager:
             # Store additional metadata
             if doc_chunk.meta.origin:
                 metadata["origin"] = doc_chunk.meta.origin
+            if DEFAULT_IMAGE_PLACEHOLDER in doc_chunk.text:
+                metadata["has_image"] = True
 
             # Get the text
             text = chunker.contextualize(doc_chunk)
