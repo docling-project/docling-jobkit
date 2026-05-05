@@ -1481,7 +1481,7 @@ class DoclingConverterManager:
 
         if request.image_export_mode != ImageRefMode.PLACEHOLDER:
             pipeline_options.generate_page_images = True
-            if request.image_export_mode == ImageRefMode.REFERENCED:
+            if request.image_export_mode == ImageRefMode.REFERENCED or request.image_export_mode == ImageRefMode.EMBEDDED:
                 pipeline_options.generate_picture_images = True
             if request.images_scale:
                 pipeline_options.images_scale = request.images_scale

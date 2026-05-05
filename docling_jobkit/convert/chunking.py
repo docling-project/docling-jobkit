@@ -2,13 +2,16 @@ import hashlib
 import logging
 import threading
 import time
+import os
+import shutil
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
+import httpx
 from pydantic import BaseModel, Field
 
-from docling.datamodel.base_models import ConversionStatus
+from docling.datamodel.base_models import ConversionStatus, OutputFormat
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.callbacks import (
     DocumentCompletedItem,
@@ -24,7 +27,7 @@ from docling.datamodel.service.chunking import (
     HybridChunkerOptions,
 )
 from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.targets import InBodyTarget
+from docling.datamodel.service.targets import InBodyTarget, PutTarget
 from docling_core.transforms.chunker import BaseChunker
 from docling_core.transforms.chunker.hierarchical_chunker import (
     ChunkingSerializerProvider,
@@ -37,13 +40,15 @@ from docling_core.transforms.chunker.tokenizer.huggingface import (
 )
 from docling_core.types.doc.document import DoclingDocument, ImageRefMode
 
-from docling_jobkit.convert.results import _export_document_as_content
+from docling_jobkit.convert.results import _export_document_as_content, _export_documents_as_files
 from docling_jobkit.datamodel.result import (
     ChunkedDocumentResult,
     ChunkedDocumentResultItem,
     DoclingTaskResult,
     ExportDocumentResponse,
     ExportResult,
+    RemoteTargetResult,
+    ZipArchiveResult
 )
 from docling_jobkit.datamodel.task import Task
 
@@ -251,6 +256,7 @@ def process_chunk_results(
     # We have some results, let's prepare the response
     task_result: ChunkedDocumentResult
     chunks: list[ChunkedDocumentResultItem] = []
+    conv_results_list = []
     documents: list[ExportResult] = []
     num_succeeded = 0
     num_failed = 0
@@ -261,6 +267,8 @@ def process_chunk_results(
     chunker_manager = chunker_manager or DocumentChunkerManager()
     for idx, conv_res in enumerate(conv_results):
         errors = conv_res.errors
+        # Document has JUST been converted (lazy evaluation triggered here)
+        conv_results_list.append(conv_res)
         filename = conv_res.input.file.name
         if conv_res.status == ConversionStatus.SUCCESS:
             try:
@@ -357,6 +365,7 @@ def process_chunk_results(
 
         documents.append(doc_result)
 
+    conv_results = conv_results_list
     num_total = num_succeeded + num_failed
     processing_time = time.monotonic() - start_time
     _log.info(
@@ -377,6 +386,13 @@ def process_chunk_results(
             ),
         )
 
+    # Export results based on target type and options
+    # Booleans to know what to export
+    export_json = OutputFormat.JSON in conversion_options.to_formats
+    export_html = OutputFormat.HTML in conversion_options.to_formats
+    export_md = OutputFormat.MARKDOWN in conversion_options.to_formats
+    export_txt = OutputFormat.TEXT in conversion_options.to_formats
+    export_doctags = OutputFormat.DOCTAGS in conversion_options.to_formats
     if isinstance(task.target, InBodyTarget):
         task_result = ChunkedDocumentResult(
             chunks=chunks,
@@ -387,7 +403,43 @@ def process_chunk_results(
 
     # Multiple documents were processed, or we are forced returning as a file
     else:
-        raise NotImplementedError("Saving chunks to a file is not yet supported.")
+        # Temporary directory to store the outputs
+        output_dir = work_dir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        # Export the documents
+        num_succeeded, num_failed, _conv_result = _export_documents_as_files(
+            conv_results=conv_results,
+            output_dir=output_dir,
+            export_json=export_json,
+            export_html=export_html,
+            export_md=export_md,
+            export_txt=export_txt,
+            export_doctags=export_doctags,
+            image_export_mode=conversion_options.image_export_mode,
+            md_page_break_placeholder=conversion_options.md_page_break_placeholder,
+        )
+        files = os.listdir(output_dir)
+        if len(files) == 0:
+            raise RuntimeError("No documents were exported.")
+        file_path = work_dir / "converted_docs.zip"
+        shutil.make_archive(
+            base_name=str(file_path.with_suffix("")),
+            format="zip",
+            root_dir=output_dir,
+        )
+        if isinstance(task.target, PutTarget):
+            try:
+                with file_path.open("rb") as file_data:
+                    r = httpx.put(str(task.target.url), files={"file": file_data})
+                    r.raise_for_status()
+                task_result = RemoteTargetResult()
+            except Exception as exc:
+                _log.error("An error occour while uploading zip to s3", exc_info=exc)
+                raise RuntimeError(
+                    "An error occour while uploading zip to the target url."
+                )
+        else:
+            task_result = ZipArchiveResult(content=file_path.read_bytes())
 
     return DoclingTaskResult(
         result=task_result,
