@@ -922,13 +922,29 @@ class DoclingConverterManager:
         """Parse VLM options from preset OR custom config."""
         # Option 1: Preset (recommended)
         if request.vlm_pipeline_preset:
-            return self._get_options_from_preset(
+            result = self._get_options_from_preset(
                 request.vlm_pipeline_preset,
                 self.vlm_preset_registry,
                 "VLM",
                 self.config.allowed_vlm_engines,
                 VlmConvertOptions.from_preset,
             )
+
+            # Custom presets return raw dicts - convert to VlmConvertOptions
+            if isinstance(result, dict):
+                config_dict = result.copy()
+
+                # Instantiate the correct engine options class
+                if "engine_options" in config_dict and isinstance(
+                    config_dict["engine_options"], dict
+                ):
+                    config_dict["engine_options"] = self._instantiate_engine_options(
+                        config_dict["engine_options"]
+                    )
+
+                return VlmConvertOptions.model_validate(config_dict)
+
+            return result
 
         # Option 2: Custom config (if allowed)
         if request.vlm_pipeline_custom_config:
