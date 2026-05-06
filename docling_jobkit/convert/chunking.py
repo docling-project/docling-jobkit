@@ -1,9 +1,9 @@
 import hashlib
 import logging
-import threading
-import time
 import os
 import shutil
+import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
@@ -40,7 +40,10 @@ from docling_core.transforms.chunker.tokenizer.huggingface import (
 )
 from docling_core.types.doc.document import DoclingDocument, ImageRefMode
 
-from docling_jobkit.convert.results import _export_document_as_content, _export_documents_as_files
+from docling_jobkit.convert.results import (
+    _export_document_as_content,
+    _export_documents_as_files,
+)
 from docling_jobkit.datamodel.result import (
     ChunkedDocumentResult,
     ChunkedDocumentResultItem,
@@ -48,7 +51,8 @@ from docling_jobkit.datamodel.result import (
     ExportDocumentResponse,
     ExportResult,
     RemoteTargetResult,
-    ZipArchiveResult
+    ResultType,
+    ZipArchiveResult,
 )
 from docling_jobkit.datamodel.task import Task
 
@@ -254,7 +258,7 @@ def process_chunk_results(
         )
 
     # We have some results, let's prepare the response
-    task_result: ChunkedDocumentResult
+    task_result: ResultType
     chunks: list[ChunkedDocumentResultItem] = []
     conv_results_list = []
     documents: list[ExportResult] = []
