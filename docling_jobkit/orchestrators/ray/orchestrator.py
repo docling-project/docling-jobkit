@@ -32,7 +32,7 @@ from docling_jobkit.orchestrators.base_orchestrator import (
 )
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.ray.dispatcher import RayTaskDispatcher
-from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
+from docling_jobkit.orchestrators.ray.state_manager import RedisStateManager
 from docling_jobkit.orchestrators.ray.serve_deployment import deploy_processor
 
 _log = logging.getLogger(__name__)
