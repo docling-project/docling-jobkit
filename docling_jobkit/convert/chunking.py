@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -11,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 import httpx
 from pydantic import BaseModel, Field
 
-from docling.datamodel.base_models import ConversionStatus, OutputFormat
+from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.callbacks import (
     DocumentCompletedItem,
@@ -42,7 +43,6 @@ from docling_core.types.doc.document import DoclingDocument, ImageRefMode
 
 from docling_jobkit.convert.results import (
     _export_document_as_content,
-    _export_documents_as_files,
 )
 from docling_jobkit.datamodel.result import (
     ChunkedDocumentResult,
@@ -236,6 +236,58 @@ class DocumentChunkerManager:
         return chunk_items
 
 
+def _export_document_for_chunking(
+    conv_res: ConversionResult,
+    output_dir: Path,
+    image_mode: ImageRefMode,
+) -> ExportDocumentResponse:
+    """Extract document content for chunking and ensure artifacts are on disk.
+
+    If ``image_mode`` is ``REFERENCED``, a temporary JSON export is performed
+    so that the ``artifacts/`` directory is created as a side-effect; the
+    temporary file is then removed because the converted content is already
+    embedded inside ``chunked_result.json``.
+    """
+    document = ExportDocumentResponse(filename=conv_res.input.file.name)
+
+    if conv_res.status == ConversionStatus.SUCCESS:
+        artifacts_dir = output_dir / "artifacts"
+        new_doc = conv_res.document._make_copy_with_refmode(
+            artifacts_dir,
+            image_mode,
+            page_no=None,
+            reference_path=output_dir,
+        )
+        document.json_content = new_doc
+
+        if image_mode == ImageRefMode.REFERENCED:
+            temp_fname = output_dir / f"{conv_res.input.file.stem}.json"
+            conv_res.document.save_as_json(
+                filename=temp_fname,
+                image_mode=image_mode,
+                artifacts_dir=artifacts_dir,
+            )
+            temp_fname.unlink(missing_ok=True)
+
+    return document
+
+
+def _export_chunking_result(
+    result: ChunkedDocumentResult,
+    output_dir: Path,
+) -> None:
+    """Write the consolidated chunking result as ``chunked_result.json``."""
+    fname = output_dir / "chunked_result.json"
+    _log.info(f"writing chunk output to {fname}")
+    with fname.open("w", encoding="utf-8") as f:
+        json.dump(
+            result.model_dump(mode="json"),
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+
 def process_chunk_results(
     task: Task,
     conv_results: Iterable[ConversionResult],
@@ -340,23 +392,33 @@ def process_chunk_results(
                 ),
             )
 
-        if (
-            isinstance(task.target, InBodyTarget)
-            and task.chunking_export_options.include_converted_doc
-        ):
-            if conversion_options.image_export_mode == ImageRefMode.REFERENCED:
+        if task.chunking_export_options.include_converted_doc:
+            if (
+                isinstance(task.target, InBodyTarget)
+                and conversion_options.image_export_mode == ImageRefMode.REFERENCED
+            ):
                 raise RuntimeError("InBodyTarget cannot use REFERENCED image mode.")
 
-            doc_content = _export_document_as_content(
-                conv_res,
-                export_json=True,
-                export_doctags=False,
-                export_html=False,
-                export_md=False,
-                export_txt=False,
-                image_mode=conversion_options.image_export_mode,
-                md_page_break_placeholder=conversion_options.md_page_break_placeholder,
-            )
+            if isinstance(task.target, InBodyTarget):
+                doc_content = _export_document_as_content(
+                    conv_res,
+                    export_json=True,
+                    export_doctags=False,
+                    export_html=False,
+                    export_md=False,
+                    export_txt=False,
+                    image_mode=conversion_options.image_export_mode,
+                    md_page_break_placeholder=conversion_options.md_page_break_placeholder,
+                )
+            else:
+                # Temporary directory to store the outputs
+                output_dir = work_dir / "output"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                doc_content = _export_document_for_chunking(
+                    conv_res,
+                    output_dir=output_dir,
+                    image_mode=conversion_options.image_export_mode,
+                )
         else:
             doc_content = ExportDocumentResponse(filename=filename)
 
@@ -392,11 +454,6 @@ def process_chunk_results(
 
     # Export results based on target type and options
     # Booleans to know what to export
-    export_json = OutputFormat.JSON in conversion_options.to_formats
-    export_html = OutputFormat.HTML in conversion_options.to_formats
-    export_md = OutputFormat.MARKDOWN in conversion_options.to_formats
-    export_txt = OutputFormat.TEXT in conversion_options.to_formats
-    export_doctags = OutputFormat.DOCTAGS in conversion_options.to_formats
     if isinstance(task.target, InBodyTarget):
         task_result = ChunkedDocumentResult(
             chunks=chunks,
@@ -407,20 +464,16 @@ def process_chunk_results(
 
     # Multiple documents were processed, or we are forced returning as a file
     else:
-        # Temporary directory to store the outputs
-        output_dir = work_dir / "output"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        # Export the documents
-        num_succeeded, num_failed, _conv_result = _export_documents_as_files(
-            conv_results=conv_results,
+        # Export the consolidated chunking result (including artifacts)
+        chunked_result = ChunkedDocumentResult(
+            chunks=chunks,
+            documents=documents,
+            processing_time=processing_time,
+            chunking_info=chunking_options.model_dump(mode="json"),
+        )
+        _export_chunking_result(
+            result=chunked_result,
             output_dir=output_dir,
-            export_json=export_json,
-            export_html=export_html,
-            export_md=export_md,
-            export_txt=export_txt,
-            export_doctags=export_doctags,
-            image_export_mode=conversion_options.image_export_mode,
-            md_page_break_placeholder=conversion_options.md_page_break_placeholder,
         )
         files = os.listdir(output_dir)
         if len(files) == 0:
