@@ -7,6 +7,7 @@ import uuid
 import warnings
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import parse_qs, unquote, urlparse
 
 import msgpack
 import redis
@@ -39,6 +40,99 @@ from docling_jobkit.orchestrators.base_orchestrator import (
 _log = logging.getLogger(__name__)
 
 
+_SENTINEL_URL_SCHEMES = ("redis+sentinel://", "rediss+sentinel://")
+
+
+class _SentinelUrlConfig(BaseModel):
+    """Parsed `redis+sentinel://` URL, ready to feed Sentinel.master_for()."""
+
+    hosts: list[tuple[str, int]]
+    service_name: str
+    db: int = 0
+    username: Optional[str] = None
+    password: Optional[str] = None
+    sentinel_username: Optional[str] = None
+    sentinel_password: Optional[str] = None
+    ssl: bool = False
+
+
+def _parse_sentinel_url(url: str) -> _SentinelUrlConfig:
+    """Parse `redis+sentinel://[user:pass@]h1[:p1][,h2[:p2]...]/master[/db][?…]`.
+
+    redis-py's own `from_url` rejects this scheme, so we parse it ourselves.
+    Comma-separated sentinel hosts go in the netloc; the master name (and
+    optional db) live in the path; sentinel-side credentials and `ssl` ride
+    in query params (URL userinfo is reserved for the Redis master itself).
+
+    `rediss+sentinel://` is accepted as a synonym for `?ssl=true`.
+    """
+    if not url.startswith(_SENTINEL_URL_SCHEMES):
+        raise ValueError(
+            f"Sentinel URL must start with one of {_SENTINEL_URL_SCHEMES}"
+        )
+
+    parsed = urlparse(url)
+    netloc = parsed.netloc
+    if "@" in netloc:
+        userinfo, _, hostpart = netloc.rpartition("@")
+    else:
+        userinfo, hostpart = "", netloc
+
+    username: Optional[str] = None
+    password: Optional[str] = None
+    if userinfo:
+        if ":" in userinfo:
+            user, _, pwd = userinfo.partition(":")
+            username = unquote(user) if user else None
+            password = unquote(pwd) if pwd else None
+        else:
+            username = unquote(userinfo)
+
+    if not hostpart:
+        raise ValueError("Sentinel URL must include at least one sentinel host")
+    hosts: list[tuple[str, int]] = []
+    for entry in hostpart.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        host, sep, port = entry.rpartition(":")
+        if sep:
+            hosts.append((host, int(port)))
+        else:
+            hosts.append((port, 26379))
+    if not hosts:
+        raise ValueError("Sentinel URL must include at least one sentinel host")
+
+    path_parts = [p for p in parsed.path.split("/") if p]
+    if not path_parts:
+        raise ValueError(
+            "Sentinel URL must include the master/service name in the path "
+            "(e.g. /mymaster)"
+        )
+    service_name = unquote(path_parts[0])
+    db = int(path_parts[1]) if len(path_parts) > 1 else 0
+
+    query = {k: v[-1] for k, v in parse_qs(parsed.query).items() if v}
+    ssl = parsed.scheme == "rediss+sentinel" or _to_bool(query.get("ssl"))
+
+    return _SentinelUrlConfig(
+        hosts=hosts,
+        service_name=service_name,
+        db=db,
+        username=username,
+        password=password,
+        sentinel_username=query.get("sentinel_username"),
+        sentinel_password=query.get("sentinel_password"),
+        ssl=ssl,
+    )
+
+
+def _to_bool(value: Optional[str]) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "t", "yes", "y", "on"}
+
+
 class RQOrchestratorConfig(BaseModel):
     redis_url: str = "redis://localhost:6379/"
     results_ttl: int = 3_600 * 4
@@ -58,11 +152,20 @@ class RQOrchestratorConfig(BaseModel):
     zombie_reaper_max_age: float = 3600.0
     result_removal_delay: int = 300  # seconds until result key expires after fetch
 
-    # Redis Sentinel configuration. When `redis_sentinel_hosts` and
-    # `redis_sentinel_service_name` are both set, all sync and async Redis
-    # clients are created via `redis.sentinel.Sentinel.master_for(...)` and
-    # `redis_url` is ignored. Each entry in `redis_sentinel_hosts` may be
-    # `host` (port defaults to 26379) or `host:port`.
+    # Redis Sentinel can be configured two ways:
+    #
+    # 1. URL form (preferred) — set `redis_url` to
+    #    `redis+sentinel://[user:pass@]h1[:p],h2[:p],…/service_name[/db][?…]`.
+    #    Use `rediss+sentinel://` (or `?ssl=true`) for TLS to the master.
+    #    Query params: `sentinel_username`, `sentinel_password` (creds for the
+    #    Sentinel daemons themselves, separate from the master creds in the
+    #    userinfo), and `ssl`.
+    #
+    # 2. Explicit fields below — for programmatic configuration where building
+    #    a URL is awkward. When `redis_sentinel_hosts` and
+    #    `redis_sentinel_service_name` are both set they take priority over
+    #    `redis_url`. Each entry in `redis_sentinel_hosts` may be `host`
+    #    (port defaults to 26379) or `host:port`.
     redis_sentinel_hosts: Optional[list[str]] = None
     redis_sentinel_service_name: Optional[str] = None
     redis_sentinel_db: int = 0
@@ -89,66 +192,90 @@ class RQOrchestratorConfig(BaseModel):
                 "redis_sentinel_hosts and redis_sentinel_service_name must be "
                 "set together"
             )
+        if self.redis_url.startswith(_SENTINEL_URL_SCHEMES):
+            # Validate the URL eagerly so misconfigurations surface at config
+            # construction, not on the first connection attempt.
+            _parse_sentinel_url(self.redis_url)
         return self
 
     @property
     def use_sentinel(self) -> bool:
-        return bool(self.redis_sentinel_hosts and self.redis_sentinel_service_name)
+        if self.redis_sentinel_hosts and self.redis_sentinel_service_name:
+            return True
+        return self.redis_url.startswith(_SENTINEL_URL_SCHEMES)
 
 
-def _parse_sentinel_hosts(hosts: list[str]) -> list[tuple[str, int]]:
-    parsed: list[tuple[str, int]] = []
-    for entry in hosts:
-        host, _, port = entry.rpartition(":")
-        if host:
-            parsed.append((host, int(port)))
-        else:
-            # No colon — `entry` is the host, default Sentinel port.
-            parsed.append((port, 26379))
-    return parsed
+def _resolve_sentinel(config: RQOrchestratorConfig) -> _SentinelUrlConfig:
+    """Collapse either configuration form into a single parsed structure.
+
+    Explicit fields win over the URL when both are set, matching the
+    `use_sentinel` precedence in `RQOrchestratorConfig`.
+    """
+    if config.redis_sentinel_hosts and config.redis_sentinel_service_name:
+        hosts: list[tuple[str, int]] = []
+        for entry in config.redis_sentinel_hosts:
+            host, sep, port = entry.rpartition(":")
+            if sep:
+                hosts.append((host, int(port)))
+            else:
+                hosts.append((port, 26379))
+        return _SentinelUrlConfig(
+            hosts=hosts,
+            service_name=config.redis_sentinel_service_name,
+            db=config.redis_sentinel_db,
+            username=config.redis_sentinel_username,
+            password=config.redis_sentinel_password,
+            sentinel_username=config.redis_sentinel_auth_username,
+            sentinel_password=config.redis_sentinel_auth_password,
+            ssl=config.redis_sentinel_ssl,
+        )
+    return _parse_sentinel_url(config.redis_url)
 
 
-def _master_kwargs(config: RQOrchestratorConfig) -> dict[str, Any]:
+def _master_kwargs(
+    parsed: _SentinelUrlConfig, config: RQOrchestratorConfig
+) -> dict[str, Any]:
     """Connection kwargs passed to Sentinel.master_for() for the Redis master."""
     kwargs: dict[str, Any] = {
-        "db": config.redis_sentinel_db,
+        "db": parsed.db,
         "max_connections": config.redis_max_connections,
         "socket_timeout": config.redis_socket_timeout,
         "socket_connect_timeout": config.redis_socket_connect_timeout,
     }
-    if config.redis_sentinel_username is not None:
-        kwargs["username"] = config.redis_sentinel_username
-    if config.redis_sentinel_password is not None:
-        kwargs["password"] = config.redis_sentinel_password
-    if config.redis_sentinel_ssl:
+    if parsed.username is not None:
+        kwargs["username"] = parsed.username
+    if parsed.password is not None:
+        kwargs["password"] = parsed.password
+    if parsed.ssl:
         kwargs["ssl"] = True
     return kwargs
 
 
-def _sentinel_kwargs(config: RQOrchestratorConfig) -> dict[str, Any]:
+def _sentinel_kwargs(
+    parsed: _SentinelUrlConfig, config: RQOrchestratorConfig
+) -> dict[str, Any]:
     """Connection kwargs used to talk to the Sentinel daemons themselves."""
     kwargs: dict[str, Any] = {
         "socket_timeout": config.redis_socket_timeout,
         "socket_connect_timeout": config.redis_socket_connect_timeout,
     }
-    if config.redis_sentinel_auth_username is not None:
-        kwargs["username"] = config.redis_sentinel_auth_username
-    if config.redis_sentinel_auth_password is not None:
-        kwargs["password"] = config.redis_sentinel_auth_password
+    if parsed.sentinel_username is not None:
+        kwargs["username"] = parsed.sentinel_username
+    if parsed.sentinel_password is not None:
+        kwargs["password"] = parsed.sentinel_password
     return kwargs
 
 
 def make_sync_redis(config: RQOrchestratorConfig) -> redis.Redis:
     """Create a sync Redis client. Routes to Sentinel master when configured."""
     if config.use_sentinel:
-        assert config.redis_sentinel_hosts is not None  # for type checker
-        assert config.redis_sentinel_service_name is not None
+        parsed = _resolve_sentinel(config)
         sentinel_client = sentinel.Sentinel(
-            _parse_sentinel_hosts(config.redis_sentinel_hosts),
-            sentinel_kwargs=_sentinel_kwargs(config),
+            parsed.hosts,
+            sentinel_kwargs=_sentinel_kwargs(parsed, config),
         )
         return sentinel_client.master_for(
-            config.redis_sentinel_service_name, **_master_kwargs(config)
+            parsed.service_name, **_master_kwargs(parsed, config)
         )
     pool = redis.ConnectionPool.from_url(
         config.redis_url,
@@ -162,14 +289,13 @@ def make_sync_redis(config: RQOrchestratorConfig) -> redis.Redis:
 def make_async_redis(config: RQOrchestratorConfig) -> async_redis.Redis:
     """Create an async Redis client. Routes to Sentinel master when configured."""
     if config.use_sentinel:
-        assert config.redis_sentinel_hosts is not None
-        assert config.redis_sentinel_service_name is not None
+        parsed = _resolve_sentinel(config)
         sentinel_client = async_sentinel.Sentinel(
-            _parse_sentinel_hosts(config.redis_sentinel_hosts),
-            sentinel_kwargs=_sentinel_kwargs(config),
+            parsed.hosts,
+            sentinel_kwargs=_sentinel_kwargs(parsed, config),
         )
         return sentinel_client.master_for(
-            config.redis_sentinel_service_name, **_master_kwargs(config)
+            parsed.service_name, **_master_kwargs(parsed, config)
         )
     pool = async_redis.ConnectionPool.from_url(
         config.redis_url,
@@ -213,10 +339,11 @@ class RQOrchestrator(BaseOrchestrator):
             failure_ttl=config.failure_ttl,
         )
         if config.use_sentinel:
+            parsed = _resolve_sentinel(config)
             _log.info(
                 f"RQ Redis Sentinel connection initialized: "
-                f"service_name={config.redis_sentinel_service_name}, "
-                f"sentinels={config.redis_sentinel_hosts}, "
+                f"service_name={parsed.service_name}, "
+                f"sentinels={parsed.hosts}, db={parsed.db}, ssl={parsed.ssl}, "
                 f"max_connections={config.redis_max_connections}, "
                 f"socket_timeout={config.redis_socket_timeout}, "
                 f"socket_connect_timeout={config.redis_socket_connect_timeout}"
