@@ -1278,20 +1278,25 @@ class DoclingConverterManager:
         self, request: ConvertDocumentsOptions
     ) -> Any:
         """Parse picture classification options - preset OR custom config."""
+        from docling.datamodel.picture_classification_options import (
+            DocumentPictureClassifierOptions,
+        )
 
-        # Option 1: Preset (recommended)
-        if request.picture_classification_preset:
-            preset_info = self.picture_classification_preset_registry.get(
-                request.picture_classification_preset
-            )
+        def _create_options_from_preset(preset_id: str) -> Any:
+            """Create picture classification options from a preset ID."""
+            preset_info = self.picture_classification_preset_registry.get(preset_id)
             if not preset_info:
-                raise ValueError(
-                    f"Unknown picture classification preset: {request.picture_classification_preset}"
-                )
+                raise ValueError(f"Unknown picture classification preset: {preset_id}")
 
             if preset_info["source"] == "custom":
-                # Custom preset from manager config - stored as complete options
-                return preset_info["options"]
+                # Custom preset from manager config - stored as complete options dict
+                result = preset_info["options"]
+
+                # Custom presets return raw dicts - convert to DocumentPictureClassifierOptions
+                if isinstance(result, dict):
+                    return DocumentPictureClassifierOptions.model_validate(result)
+
+                return result
             else:
                 # Docling preset - use preset_id
                 # Note: When PictureClassificationFactory is available, use:
@@ -1299,6 +1304,10 @@ class DoclingConverterManager:
                 # return self.picture_classification_factory.create_options_from_preset(preset_id)
                 # For now, return None as factory is not yet available
                 return None
+
+        # Option 1: Preset (recommended)
+        if request.picture_classification_preset:
+            return _create_options_from_preset(request.picture_classification_preset)
 
         # Option 2: Custom config
         if request.picture_classification_custom_config:
@@ -1309,11 +1318,7 @@ class DoclingConverterManager:
 
         # Option 3: Use default if do_picture_classification is enabled
         if request.do_picture_classification:
-            # Note: When factory is available, use:
-            # return self.picture_classification_factory.create_options_from_preset(
-            #     self.config.default_picture_classification_preset
-            # )
-            return None
+            return _create_options_from_preset("default")
 
         return None
 
