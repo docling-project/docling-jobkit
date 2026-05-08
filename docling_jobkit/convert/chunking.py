@@ -10,10 +10,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 import httpx
-import httpx
 from pydantic import BaseModel, Field
 
-from docling.datamodel.base_models import ConversionStatus, OutputFormat
+from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.callbacks import (
     DocumentCompletedItem,
@@ -373,15 +372,12 @@ def process_chunk_results(
 
     # TODO: DocumentChunkerManager should be initialized outside for really working as a cache
     chunker_manager = chunker_manager or DocumentChunkerManager()
-<<<<<<< HEAD
 
     output_dir: Optional[Path] = None
     if not isinstance(task.target, InBodyTarget):
         output_dir = work_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-=======
->>>>>>> fd347f4 (pass conversion options through chunk_document to fix cache key and shared-state race)
     for idx, conv_res in enumerate(conv_results):
         errors = conv_res.errors
         # Document has JUST been converted (lazy evaluation triggered here)
