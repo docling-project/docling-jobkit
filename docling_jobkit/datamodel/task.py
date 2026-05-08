@@ -68,7 +68,7 @@ class Task(BaseModel):
                 DeprecationWarning,
                 stacklevel=2,
             )
-            values["conversion_options"] = values["options"]
+            values["convert_options"] = values["options"]
         return values
 
     def set_status(self, status: TaskStatus):
