@@ -67,6 +67,9 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 DEFAULT_IMAGE_PLACEHOLDER = "![Image]"
+# TODO: Once md_image_placeholder is exposed in ConvertDocumentsOptions
+# (docling main library), replace this constant with the user-provided
+# runtime value passed through the options object.
 
 
 class SerializerProviderFactory:
