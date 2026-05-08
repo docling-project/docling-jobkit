@@ -497,41 +497,60 @@ class RQOrchestrator(BaseOrchestrator):
         _log.debug("Listening for updates...")
 
         # Listen for messages
-        async for message in pubsub.listen():
-            if message["type"] == "message":
-                data = _TaskUpdate.model_validate_json(message["data"])
-                try:
-                    task = await self.get_raw_task(task_id=data.task_id)
-                    if task.is_completed():
-                        _log.debug("Task already completed. No update will be done.")
-                        continue
+        try:
+            async for message in pubsub.listen():
+                if message["type"] == "message":
+                    data = _TaskUpdate.model_validate_json(message["data"])
+                    try:
+                        task = await self.get_raw_task(task_id=data.task_id)
+                        if task.is_completed():
+                            _log.debug(
+                                "Task already completed. No update will be done."
+                            )
+                            continue
 
-                    # Update the status
-                    task.set_status(data.task_status)
-                    # Store error message on failure
-                    if (
-                        data.task_status == TaskStatus.FAILURE
-                        and data.error_message is not None
-                    ):
-                        task.error_message = data.error_message
-                    # Update the results lookup
-                    if (
-                        data.task_status == TaskStatus.SUCCESS
-                        and data.result_key is not None
-                    ):
-                        self._task_result_keys[data.task_id] = data.result_key
+                        # Update the status
+                        task.set_status(data.task_status)
+                        # Store error message on failure
+                        if (
+                            data.task_status == TaskStatus.FAILURE
+                            and data.error_message is not None
+                        ):
+                            task.error_message = data.error_message
+                        # Update the results lookup
+                        if (
+                            data.task_status == TaskStatus.SUCCESS
+                            and data.result_key is not None
+                        ):
+                            self._task_result_keys[data.task_id] = data.result_key
 
-                    await self._on_task_status_changed(task)
+                        await self._on_task_status_changed(task)
 
-                    if self.notifier:
-                        try:
-                            await self.notifier.notify_task_subscribers(task.task_id)
-                            await self.notifier.notify_queue_positions()
-                        except Exception as e:
-                            _log.error(f"Notifier error for task {data.task_id}: {e}")
+                        if self.notifier:
+                            try:
+                                await self.notifier.notify_task_subscribers(
+                                    task.task_id
+                                )
+                                await self.notifier.notify_queue_positions()
+                            except Exception as e:
+                                _log.error(
+                                    f"Notifier error for task {data.task_id}: {e}"
+                                )
 
-                except TaskNotFoundError:
-                    _log.warning(f"Task {data.task_id} not found.")
+                    except TaskNotFoundError:
+                        _log.warning(f"Task {data.task_id} not found.")
+        except (
+            asyncio.CancelledError,
+            redis.exceptions.ConnectionError,
+            redis.exceptions.TimeoutError,
+        ):
+            _log.debug("Pub/sub listener stopped (shutdown).")
+        finally:
+            try:
+                await pubsub.unsubscribe(self.config.sub_channel)
+                await pubsub.aclose()
+            except Exception:
+                pass
 
     async def _watchdog_task(self) -> None:
         """Detect orphaned STARTED tasks whose worker heartbeat key has expired.
