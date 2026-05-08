@@ -321,6 +321,12 @@ def process_chunk_results(
 
     # TODO: DocumentChunkerManager should be initialized outside for really working as a cache
     chunker_manager = chunker_manager or DocumentChunkerManager()
+
+    output_dir: Optional[Path] = None
+    if not isinstance(task.target, InBodyTarget):
+        output_dir = work_dir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
     for idx, conv_res in enumerate(conv_results):
         errors = conv_res.errors
         # Document has JUST been converted (lazy evaluation triggered here)
@@ -410,10 +416,7 @@ def process_chunk_results(
                     image_mode=conversion_options.image_export_mode,
                     md_page_break_placeholder=conversion_options.md_page_break_placeholder,
                 )
-            else:
-                # Temporary directory to store the outputs
-                output_dir = work_dir / "output"
-                output_dir.mkdir(parents=True, exist_ok=True)
+            elif output_dir is not None:
                 doc_content = _export_document_for_chunking(
                     conv_res,
                     output_dir=output_dir,
@@ -463,7 +466,7 @@ def process_chunk_results(
         )
 
     # Multiple documents were processed, or we are forced returning as a file
-    else:
+    elif output_dir is not None:
         # Export the consolidated chunking result (including artifacts)
         chunked_result = ChunkedDocumentResult(
             chunks=chunks,
