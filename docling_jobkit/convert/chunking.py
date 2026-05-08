@@ -112,12 +112,12 @@ class DocumentChunkerManager:
     def __init__(
         self,
         config: Optional[DocumentChunkerConfig] = None,
-        conversion_options: Optional[ConvertDocumentsOptions] = None,
     ):
         self.config = config or DocumentChunkerConfig()
-        self.conversion_options = conversion_options
         self._cache_lock = threading.Lock()
-        self._options_map: dict[bytes, BaseChunkerOptions] = {}
+        self._options_map: dict[
+            bytes, tuple[BaseChunkerOptions, Optional[ConvertDocumentsOptions]]
+        ] = {}
         self._get_chunker_from_cache = self._create_chunker_cache()
 
     def _create_chunker_cache(self):
@@ -126,7 +126,7 @@ class DocumentChunkerManager:
         @lru_cache(maxsize=self.config.cache_size)
         def _get_chunker_from_cache(cache_key: bytes) -> BaseChunker:
             try:
-                options = self._options_map[cache_key]
+                options, conversion_options = self._options_map[cache_key]
 
                 use_markdown_tables = (
                     options.use_markdown_tables
@@ -135,10 +135,9 @@ class DocumentChunkerManager:
                 )
                 use_markdown_images = False
                 if (
-                    self.conversion_options
-                    and self.conversion_options.image_export_mode is not None
-                    and self.conversion_options.image_export_mode
-                    != ImageRefMode.PLACEHOLDER
+                    conversion_options
+                    and conversion_options.image_export_mode is not None
+                    and conversion_options.image_export_mode != ImageRefMode.PLACEHOLDER
                 ):
                     use_markdown_images = True
                 _log.debug(
@@ -191,22 +190,34 @@ class DocumentChunkerManager:
 
         return _get_chunker_from_cache
 
-    def _get_chunker(self, options: BaseChunkerOptions) -> BaseChunker:
+    def _get_chunker(
+        self,
+        options: BaseChunkerOptions,
+        conversion_options: Optional[ConvertDocumentsOptions] = None,
+    ) -> BaseChunker:
         """Get or create a cached BaseChunker instance."""
-        # Create a cache key based on chunking options using the same pattern as the repo
-        cache_key = self._generate_cache_key(options)
+        cache_key = self._generate_cache_key(options, conversion_options)
 
         with self._cache_lock:
-            self._options_map[cache_key] = options
+            self._options_map[cache_key] = (options, conversion_options)
             return self._get_chunker_from_cache(cache_key)
 
-    def _generate_cache_key(self, options: BaseChunkerOptions) -> bytes:
+    def _generate_cache_key(
+        self,
+        options: BaseChunkerOptions,
+        conversion_options: Optional[ConvertDocumentsOptions] = None,
+    ) -> bytes:
         """Generate a deterministic cache key from chunking options."""
-        serialized_data = options.model_dump_json(serialize_as_any=True)
-        options_hash = hashlib.sha1(
-            serialized_data.encode(), usedforsecurity=False
-        ).digest()
-        return options_hash
+        chunking_data = options.model_dump_json(serialize_as_any=True)
+
+        image_mode = (
+            conversion_options.image_export_mode.value
+            if conversion_options and conversion_options.image_export_mode
+            else ImageRefMode.PLACEHOLDER.value
+        )
+
+        key_string = f"{chunking_data}|img_mode={image_mode}"
+        return hashlib.sha1(key_string.encode(), usedforsecurity=False).digest()
 
     def clear_cache(self):
         """Clear the chunker cache."""
@@ -218,10 +229,11 @@ class DocumentChunkerManager:
         document: DoclingDocument,
         filename: str,
         options: BaseChunkerOptions,
+        conversion_options: Optional[ConvertDocumentsOptions] = None,
     ) -> Iterable[ChunkedDocumentResultItem]:
         """Chunk a document using chunker from docling-core."""
 
-        chunker = self._get_chunker(options)
+        chunker = self._get_chunker(options, conversion_options)
 
         chunks = list(chunker.chunk(document))
 
@@ -361,12 +373,15 @@ def process_chunk_results(
 
     # TODO: DocumentChunkerManager should be initialized outside for really working as a cache
     chunker_manager = chunker_manager or DocumentChunkerManager()
+<<<<<<< HEAD
 
     output_dir: Optional[Path] = None
     if not isinstance(task.target, InBodyTarget):
         output_dir = work_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
+=======
+>>>>>>> fd347f4 (pass conversion options through chunk_document to fix cache key and shared-state race)
     for idx, conv_res in enumerate(conv_results):
         errors = conv_res.errors
         # Document has JUST been converted (lazy evaluation triggered here)
@@ -379,6 +394,7 @@ def process_chunk_results(
                         document=conv_res.document,
                         filename=filename,
                         options=chunking_options,
+                        conversion_options=conversion_options,
                     )
                 )
                 num_succeeded += 1

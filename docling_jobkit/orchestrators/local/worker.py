@@ -105,7 +105,7 @@ class AsyncLocalWorker:
                             task=task,
                             conv_results=conv_results,
                             work_dir=workdir,
-                            chunker_manager=None,
+                            chunker_manager=self.orchestrator.chunker_manager,
                             callback_invoker=callback_invoker,
                         )
 
