@@ -133,7 +133,7 @@ class RedisStateManager:
             )
             self.redis = Redis(connection_pool=self.pool)
             self._update_task_execution_heartbeat_sha = None
-            _log.info(f"Connected to Redis at {self.redis_url}")
+            _log.debug("Connected to Redis at %s", self.redis_url)
 
     async def disconnect(self):
         """Close Redis connection and pool."""
@@ -144,7 +144,7 @@ class RedisStateManager:
         if self.pool:
             await self.pool.aclose()
             self.pool = None
-        _log.info("Disconnected from Redis")
+        _log.debug("Disconnected from Redis")
 
     def _ensure_redis(self) -> Redis:
         """Ensure redis is connected and return it."""

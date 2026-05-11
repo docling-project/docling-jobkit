@@ -409,8 +409,10 @@ def test_create_deployment_sets_hard_replica_concurrency_limit():
 
     config = RayOrchestratorConfig(
         redis_url="redis://localhost:6379/",
+        min_actors=4,
         coordinator_target_requests_per_replica=4,
         coordinator_max_ongoing_requests_per_replica=8,
+        coordinator_min_actors=1,
         target_requests_per_replica=1,
         max_ongoing_requests_per_replica=1,
     )
@@ -440,7 +442,17 @@ def test_create_deployment_sets_hard_replica_concurrency_limit():
 
     assert deployment is mock_coordinator
     assert mock_worker_options_call.call_args.kwargs["max_ongoing_requests"] == 1
+    assert (
+        mock_worker_options_call.call_args.kwargs["autoscaling_config"]["min_replicas"]
+        == 4
+    )
     assert mock_coordinator_options_call.call_args.kwargs["max_ongoing_requests"] == 8
+    assert (
+        mock_coordinator_options_call.call_args.kwargs["autoscaling_config"][
+            "min_replicas"
+        ]
+        == 1
+    )
     assert (
         mock_coordinator_options_call.call_args.kwargs["autoscaling_config"][
             "target_num_ongoing_requests_per_replica"
@@ -485,7 +497,17 @@ def test_create_deployment_defaults_replica_cap_to_autoscaling_target():
         )
 
     assert mock_worker_options_call.call_args.kwargs["max_ongoing_requests"] == 2
+    assert (
+        mock_worker_options_call.call_args.kwargs["autoscaling_config"]["min_replicas"]
+        == 1
+    )
     assert mock_coordinator_options_call.call_args.kwargs["max_ongoing_requests"] == 2
+    assert (
+        mock_coordinator_options_call.call_args.kwargs["autoscaling_config"][
+            "min_replicas"
+        ]
+        == 1
+    )
     assert (
         mock_coordinator_options_call.call_args.kwargs["autoscaling_config"][
             "target_num_ongoing_requests_per_replica"

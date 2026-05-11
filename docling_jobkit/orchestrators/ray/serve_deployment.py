@@ -959,6 +959,10 @@ def create_deployment(
         config.coordinator_max_ongoing_requests_per_replica
     )
     coordinator_num_cpus = config.coordinator_num_cpus
+    coordinator_min_actors = config.coordinator_min_actors
+    coordinator_max_actors = config.coordinator_max_actors
+    assert coordinator_min_actors is not None
+    assert coordinator_max_actors is not None
     assert coordinator_target_requests_per_replica is not None
     assert coordinator_max_ongoing_requests_per_replica is not None
     assert coordinator_num_cpus is not None
@@ -981,8 +985,8 @@ def create_deployment(
     )
     coordinator_options = _build_deployment_options(
         name=deployment_name,
-        min_replicas=config.min_actors,
-        max_replicas=config.max_actors,
+        min_replicas=coordinator_min_actors,
+        max_replicas=coordinator_max_actors,
         target_requests_per_replica=coordinator_target_requests_per_replica,
         max_ongoing_requests=coordinator_max_ongoing_requests_per_replica,
         num_cpus=coordinator_num_cpus,

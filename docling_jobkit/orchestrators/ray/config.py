@@ -191,6 +191,16 @@ class RayOrchestratorConfig(BaseSettings):
         ge=1,
         description="Optional cap on concurrent child slice requests per parent task",
     )
+    coordinator_min_actors: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Coordinator autoscaling minimum replicas; defaults to min_actors",
+    )
+    coordinator_max_actors: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Coordinator autoscaling maximum replicas; defaults to max_actors",
+    )
     coordinator_target_requests_per_replica: Optional[int] = Field(
         default=None,
         ge=1,
@@ -301,6 +311,12 @@ class RayOrchestratorConfig(BaseSettings):
             )
 
     def _normalize_coordinator_config(self) -> None:
+        if self.coordinator_min_actors is None:
+            self.coordinator_min_actors = self.min_actors
+
+        if self.coordinator_max_actors is None:
+            self.coordinator_max_actors = self.max_actors
+
         if self.coordinator_target_requests_per_replica is None:
             self.coordinator_target_requests_per_replica = max(
                 self.target_requests_per_replica,
