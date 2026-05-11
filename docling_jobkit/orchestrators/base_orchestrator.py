@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel
+
 from docling.datamodel.service.callbacks import CallbackSpec, ProgressCallbackRequest
 from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling.datamodel.service.options import ConvertDocumentsOptions

@@ -1,6 +1,5 @@
 """Tests for the get_capacity() method on orchestrators."""
 
-import asyncio
 
 import pytest
 import pytest_asyncio
@@ -46,10 +45,6 @@ class TestSystemCapacityModel:
 class TestBaseOrchestratorCapacity:
     @pytest.mark.asyncio
     async def test_default_returns_none(self):
-        from docling_jobkit.datamodel.chunking import ChunkingExportOptions
-        from docling_jobkit.datamodel.result import DoclingTaskResult
-        from docling_jobkit.datamodel.task import TaskSource
-        from docling_jobkit.datamodel.task_targets import TaskTarget
 
         class StubOrchestrator(BaseOrchestrator):
             async def enqueue(self, sources, target, **kwargs):
