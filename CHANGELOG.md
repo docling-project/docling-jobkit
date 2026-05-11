@@ -1,3 +1,17 @@
+## [v1.18.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.18.1) - 2026-05-07
+
+### Fix
+
+* Handling of picture classifier options ([#143](https://github.com/docling-project/docling-jobkit/issues/143)) ([`41ca07c`](https://github.com/docling-project/docling-jobkit/commit/41ca07cc862c52d7f2fb8b6c41a28c1d59f90e6f))
+* Corrected the return datatype from dict to VlmConvertOptions; if request has vlm_pipeline_preset set ([#124](https://github.com/docling-project/docling-jobkit/issues/124)) ([`fe55d97`](https://github.com/docling-project/docling-jobkit/commit/fe55d971063e9336cd9b10fe4b91e440e1bdc258))
+* **rq:** Suppress spurious shutdown errors from pub/sub listener ([#131](https://github.com/docling-project/docling-jobkit/issues/131)) ([`1a7d0a4`](https://github.com/docling-project/docling-jobkit/commit/1a7d0a4f97caf87ec353cfafece5280a899032e2))
+
+## [v1.18.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.18.0) - 2026-04-24
+
+### Feature
+
+* Expose ray settings for scaledown control ([#127](https://github.com/docling-project/docling-jobkit/issues/127)) ([`1e9ed53`](https://github.com/docling-project/docling-jobkit/commit/1e9ed53115c080f8d7bb58d899255a0373c565a1))
+
 ## [v1.17.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.17.1) - 2026-04-17
 
 ### Fix
