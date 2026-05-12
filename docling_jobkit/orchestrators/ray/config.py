@@ -81,8 +81,20 @@ class RayOrchestratorConfig(BaseSettings):
 
     # Fair Dispatcher Configuration
     dispatcher_interval: float = Field(
-        default=2.0,
-        description="Seconds between dispatch rounds (how often to check for new tasks)",
+        default=30.0,
+        description=(
+            "Slow-path resync cadence in seconds. "
+            "The dispatcher wakes immediately on new work; "
+            "this is a fallback for reconciliation and missed-wakeup recovery."
+        ),
+    )
+    supervisor_poll_interval: float = Field(
+        default=5.0,
+        description=(
+            "Seconds between supervisor health-check iterations. "
+            "Kept separate from dispatcher_interval so health detection cadence "
+            "is not affected by slow-path tuning."
+        ),
     )
 
     # Per-User Limits

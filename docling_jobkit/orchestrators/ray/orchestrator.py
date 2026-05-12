@@ -402,7 +402,7 @@ class RayOrchestrator(BaseOrchestrator):
         be available. Tracks continuous unhealthiness duration so is_liveness_healthy()
         can report failure after the configured deadline.
         """
-        poll_interval = max(1.0, self.config.dispatcher_interval)
+        poll_interval = self.config.supervisor_poll_interval
 
         while True:
             try:
@@ -562,6 +562,9 @@ class RayOrchestrator(BaseOrchestrator):
             )
             await self.redis_manager.enqueue_task(tenant_id, task)
             await self.init_task_tracking(task)
+
+            if self.dispatcher is not None:
+                self.dispatcher.wake.remote(tenant_id=tenant_id)
 
             _log.debug(f"Task {task_id} enqueued successfully")
             return task
