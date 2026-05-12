@@ -8,4 +8,10 @@
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
 | #2163 | 11:39 AM | ⚖️ | Major architectural review rejecting ray.remote approach in favor of dual-deployment Serve pattern | ~726 |
+
+### May 8, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #2363 | 1:51 PM | ✅ | Internal replica conversion pipeline added to data types diagram | ~639 |
 </claude-mem-context>

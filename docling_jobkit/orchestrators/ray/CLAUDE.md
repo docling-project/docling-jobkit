@@ -8,4 +8,16 @@
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
 | #2163 | 11:39 AM | ⚖️ | Major architectural review rejecting ray.remote approach in favor of dual-deployment Serve pattern | ~726 |
+
+### May 8, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #2361 | 1:34 PM | ✅ | Ray orchestrator architecture documentation restructured and expanded | ~748 |
+
+### May 11, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #2412 | 4:53 PM | 🟣 | PDF Page-Slicing Fanout Architecture with Independent Coordinator/Worker Scaling | ~892 |
 </claude-mem-context>

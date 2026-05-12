@@ -35,6 +35,7 @@ from docling_jobkit.orchestrators.rq.orchestrator import (
     _TaskUpdate,
 )
 from docling_jobkit.orchestrators.serialization import make_msgpack_safe
+from docling_jobkit.public_errors import build_public_task_error
 
 _log = logging.getLogger(__name__)
 
@@ -165,6 +166,7 @@ def _run_docling_task(
                         exportable_documents=exportable_documents,
                         work_dir=workdir,
                         callback_invoker=callback_invoker,
+                        debug_error_details=orchestrator_config.debug_error_details,
                     )
             elif task.task_type == TaskType.CHUNK:
                 with phase_cm("process_chunk_results"):
@@ -173,6 +175,7 @@ def _run_docling_task(
                         exportable_documents=exportable_documents,
                         work_dir=workdir,
                         callback_invoker=callback_invoker,
+                        debug_error_details=orchestrator_config.debug_error_details,
                     )
             else:
                 raise RuntimeError(f"Unsupported task type: {task.task_type}")
@@ -210,7 +213,10 @@ def _run_docling_task(
                 _TaskUpdate(
                     task_id=task_id,
                     task_status=TaskStatus.FAILURE,
-                    error_message=str(e),
+                    error_message=build_public_task_error(
+                        e,
+                        debug_enabled=orchestrator_config.debug_error_details,
+                    ),
                 ).model_dump_json(),
             )
         raise

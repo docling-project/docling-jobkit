@@ -19,9 +19,7 @@ from ray import serve
 
 from docling.datamodel.base_models import (
     ConversionStatus,
-    DoclingComponentType,
     DocumentStream,
-    ErrorItem,
 )
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.options import ConvertDocumentsOptions
@@ -63,6 +61,10 @@ from docling_jobkit.orchestrators.ray.models import (
     WorkerTaskResult,
 )
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
+from docling_jobkit.public_errors import (
+    build_public_error_item,
+    build_public_task_error,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -163,17 +165,13 @@ def _build_failed_slice_result(
     page_range: tuple[int, int],
     slice_index: int,
     exc: Exception,
+    *,
+    debug_error_details: bool,
 ) -> ExportableDocument:
     return ExportableDocument(
         file=Path(filename),
         status=ConversionStatus.FAILURE,
-        errors=[
-            ErrorItem(
-                component_type=DoclingComponentType.PIPELINE,
-                module_name=type(exc).__name__,
-                error_message=str(exc) or type(exc).__name__,
-            )
-        ],
+        errors=[build_public_error_item(exc, debug_enabled=debug_error_details)],
         page_range=page_range,
         slice_index=slice_index,
     )
@@ -394,6 +392,7 @@ class PageWorkerDeployment:
                     exportable_documents=exportable_documents,
                     work_dir=workdir,
                     callback_invoker=callback_invoker,
+                    debug_error_details=self.config.debug_error_details,
                     expected_doc_count=expected_doc_count,
                     start_time=start_time,
                 )
@@ -404,6 +403,7 @@ class PageWorkerDeployment:
                     work_dir=workdir,
                     chunker_manager=self._get_chunker_manager(),
                     callback_invoker=callback_invoker,
+                    debug_error_details=self.config.debug_error_details,
                     expected_doc_count=expected_doc_count,
                     start_time=start_time,
                 )
@@ -653,7 +653,10 @@ class FanoutCoordinatorDeployment:
             )
             return result
         except Exception as exc:
-            error_message = str(exc) or exc.__class__.__name__
+            error_message = build_public_task_error(
+                exc,
+                debug_enabled=self.config.debug_error_details,
+            )
             terminalization = await self.redis_manager.finalize_task_failure_atomic(
                 tenant_id=tenant_id,
                 task_id=task.task_id,
@@ -859,6 +862,7 @@ class FanoutCoordinatorDeployment:
                 page_range=request.page_range,
                 slice_index=request.slice_index,
                 exc=exc,
+                debug_error_details=self.config.debug_error_details,
             )
 
     async def _maintain_execution_heartbeat(self, task_id: str) -> None:

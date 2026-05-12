@@ -32,6 +32,7 @@ from docling_jobkit.datamodel.result import (
     ZipArchiveResult,
 )
 from docling_jobkit.datamodel.task import Task
+from docling_jobkit.public_errors import render_public_error_list
 
 if TYPE_CHECKING:
     from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
@@ -204,6 +205,7 @@ def process_exportable_results(
     exportable_documents: Iterable[ExportableDocument],
     work_dir: Path,
     callback_invoker: Optional["CallbackInvoker"] = None,
+    debug_error_details: bool = False,
     expected_doc_count: Optional[int] = None,
     start_time: Optional[float] = None,
 ) -> DoclingTaskResult:
@@ -247,9 +249,11 @@ def process_exportable_results(
                 FailedDocsItem(
                     source=str(exportable_document.file),
                     error=(
-                        str(exportable_document.errors)
-                        if exportable_document.errors
-                        else "Unknown error"
+                        render_public_error_list(
+                            exportable_document.errors,
+                            debug_enabled=debug_error_details,
+                        )
+                        or "Unknown error"
                     ),
                 )
             )
@@ -272,10 +276,9 @@ def process_exportable_results(
                     else None
                 ),
                 doc_hash=exportable_document.document_hash,
-                error=(
-                    str(exportable_document.errors)
-                    if exportable_document.errors
-                    else None
+                error=render_public_error_list(
+                    exportable_document.errors,
+                    debug_enabled=debug_error_details,
                 ),
             )
 

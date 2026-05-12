@@ -19,6 +19,7 @@ from docling_jobkit.orchestrators.ray.models import (
     TaskUpdate,
 )
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
+from docling_jobkit.public_errors import build_public_task_error
 
 _log = logging.getLogger(__name__)
 
@@ -374,7 +375,10 @@ class RayTaskDispatcher:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            error_message = str(exc) or exc.__class__.__name__
+            error_message = build_public_task_error(
+                exc,
+                debug_enabled=self.config.debug_error_details,
+            )
             _log.error("[TASK-FAILURE] %s: %s", task_id, error_message, exc_info=True)
 
             terminalization = await self.redis_manager.finalize_task_failure_atomic(

@@ -299,6 +299,10 @@ class RayOrchestratorConfig(BaseSettings):
     log_level: str = Field(
         default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR)"
     )
+    debug_error_details: bool = Field(
+        default=False,
+        description="Return raw infrastructure exception detail in public task/document errors",
+    )
 
     def _validate_worker_request_concurrency(self) -> None:
         if (
