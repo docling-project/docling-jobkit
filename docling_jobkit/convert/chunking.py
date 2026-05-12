@@ -41,7 +41,6 @@ from docling_core.transforms.chunker.tokenizer.huggingface import (
     HuggingFaceTokenizer,
 )
 from docling_core.transforms.serializer.markdown import (
-    MarkdownParams,
     MarkdownTableSerializer,
 )
 from docling_core.types.doc.document import DoclingDocument, ImageRefMode
@@ -72,29 +71,34 @@ DEFAULT_IMAGE_PLACEHOLDER = "![Image]"
 # runtime value passed through the options object.
 
 
-class SerializerProviderFactory:
-    """Factory for creating serializer providers based on chunking options."""
+class MarkdownChunkingSerializerProvider(ChunkingSerializerProvider):
+    """Custom serializer provider that can be configured to use markdown serializers based on chunking options."""
 
-    @staticmethod
-    def create_serializer_provider(**kwargs: Any) -> ChunkingSerializerProvider:
-        """Create a serializer provider based on chunking options."""
-        use_markdown_tables = bool(kwargs.get("use_markdown_tables"))
-        use_markdown_images = bool(kwargs.get("use_markdown_images"))
-        if not use_markdown_tables and not use_markdown_images:
-            return ChunkingSerializerProvider()
+    def __init__(
+        self,
+        *,
+        use_markdown_tables: bool = False,
+        use_markdown_images: bool = False,
+        image_placeholder: Optional[str] = None,
+    ):
+        self._use_markdown_tables = use_markdown_tables
+        self._use_markdown_images = use_markdown_images
+        self._image_placeholder = image_placeholder
 
-        class CustomSerializerProvider(ChunkingSerializerProvider):
-            def get_serializer(self, doc: DoclingDocument):
-                serializers: dict[str, Any] = {}
-                if use_markdown_tables:
-                    serializers["table_serializer"] = MarkdownTableSerializer()
-                params = None
-
-                if use_markdown_images:
-                    params = MarkdownParams(image_placeholder=DEFAULT_IMAGE_PLACEHOLDER)
-                return ChunkingDocSerializer(doc=doc, params=params, **serializers)
-
-        return CustomSerializerProvider()
+    def get_serializer(self, doc: DoclingDocument):
+        serializers: dict[str, Any] = {}
+        if self._use_markdown_tables:
+            serializers["table_serializer"] = MarkdownTableSerializer()
+        params = None
+        default = ChunkingDocSerializer.model_fields["params"].default
+        if self._use_markdown_images:
+            params = default.model_copy(
+                update={
+                    "image_placeholder": self._image_placeholder
+                    or DEFAULT_IMAGE_PLACEHOLDER
+                }
+            )
+        return ChunkingDocSerializer(doc=doc, params=params, **serializers)
 
 
 class DocumentChunkerConfig(BaseModel):
@@ -118,7 +122,7 @@ class DocumentChunkerManager:
         self.config = config or DocumentChunkerConfig()
         self._cache_lock = threading.Lock()
         self._options_map: dict[
-            bytes, tuple[BaseChunkerOptions, Optional[ConvertDocumentsOptions]]
+            bytes, tuple[BaseChunkerOptions, ConvertDocumentsOptions]
         ] = {}
         self._get_chunker_from_cache = self._create_chunker_cache()
 
@@ -130,27 +134,19 @@ class DocumentChunkerManager:
             try:
                 options, conversion_options = self._options_map[cache_key]
 
-                use_markdown_tables = (
-                    options.use_markdown_tables
-                    if hasattr(options, "use_markdown_tables")
-                    else False
-                )
+                use_markdown_tables = options.use_markdown_tables
                 use_markdown_images = False
-                if (
-                    conversion_options
-                    and conversion_options.image_export_mode is not None
-                    and conversion_options.image_export_mode != ImageRefMode.PLACEHOLDER
-                ):
+                if conversion_options.image_export_mode != ImageRefMode.PLACEHOLDER:
                     use_markdown_images = True
                 _log.debug(
                     f"Using serializer options - Markdown Tables: {use_markdown_tables}, Markdown Images: {use_markdown_images}"
                 )
                 # Create serializer provider based on markdown table option
-                serializer_provider = (
-                    SerializerProviderFactory.create_serializer_provider(
-                        use_markdown_tables=use_markdown_tables,
-                        use_markdown_images=use_markdown_images,
-                    )
+                serializer_provider = MarkdownChunkingSerializerProvider(
+                    use_markdown_tables=use_markdown_tables,
+                    use_markdown_images=use_markdown_images,
+                    # TODO: Pass the image placeholder from the chunking options once it's exposed in the main docling library. For now, we use a default constant.
+                    image_placeholder=DEFAULT_IMAGE_PLACEHOLDER,
                 )
 
                 if isinstance(options, HybridChunkerOptions):
@@ -195,7 +191,7 @@ class DocumentChunkerManager:
     def _get_chunker(
         self,
         options: BaseChunkerOptions,
-        conversion_options: Optional[ConvertDocumentsOptions] = None,
+        conversion_options: ConvertDocumentsOptions,
     ) -> BaseChunker:
         """Get or create a cached BaseChunker instance."""
         cache_key = self._generate_cache_key(options, conversion_options)
@@ -207,19 +203,18 @@ class DocumentChunkerManager:
     def _generate_cache_key(
         self,
         options: BaseChunkerOptions,
-        conversion_options: Optional[ConvertDocumentsOptions] = None,
+        conversion_options: ConvertDocumentsOptions,
     ) -> bytes:
         """Generate a deterministic cache key from chunking options."""
-        chunking_data = options.model_dump_json(serialize_as_any=True)
-
-        image_mode = (
-            conversion_options.image_export_mode.value
-            if conversion_options and conversion_options.image_export_mode
-            else ImageRefMode.PLACEHOLDER.value
+        key_data = json.dumps(
+            {
+                "chunker": json.loads(options.model_dump_json(serialize_as_any=True)),
+                "img_mode": conversion_options.image_export_mode.value,
+                "img_placeholder": DEFAULT_IMAGE_PLACEHOLDER,  # This should be replaced with the actual placeholder from options once it's exposed in the main library
+            },
+            sort_keys=True,
         )
-
-        key_string = f"{chunking_data}|img_mode={image_mode}"
-        return hashlib.sha1(key_string.encode(), usedforsecurity=False).digest()
+        return hashlib.sha1(key_data.encode(), usedforsecurity=False).digest()
 
     def clear_cache(self):
         """Clear the chunker cache."""
@@ -231,7 +226,7 @@ class DocumentChunkerManager:
         document: DoclingDocument,
         filename: str,
         options: BaseChunkerOptions,
-        conversion_options: Optional[ConvertDocumentsOptions] = None,
+        conversion_options: ConvertDocumentsOptions,
     ) -> Iterable[ChunkedDocumentResultItem]:
         """Chunk a document using chunker from docling-core."""
 
@@ -261,8 +256,11 @@ class DocumentChunkerManager:
             # Store additional metadata
             if doc_chunk.meta.origin:
                 metadata["origin"] = doc_chunk.meta.origin
-            if DEFAULT_IMAGE_PLACEHOLDER in doc_chunk.text:
-                metadata["has_image"] = True
+
+            metadata["has_image"] = any(
+                item.self_ref.startswith("#/pictures/")
+                for item in doc_chunk.meta.doc_items
+            )
 
             # Get the text
             text = chunker.contextualize(doc_chunk)
@@ -382,6 +380,10 @@ def process_chunk_results(
         output_dir.mkdir(parents=True, exist_ok=True)
 
     for idx, conv_res in enumerate(conv_results):
+        # Add detailed logging for each document conversion result , in case errors in conversion or chunking occur we can easily identify the bug.
+        _log.debug(
+            f"Document {conv_res.input.file.name} | status={conv_res.status} | errors={conv_res.errors}"
+        )
         errors = conv_res.errors
         # Document has JUST been converted (lazy evaluation triggered here)
         conv_results_list.append(conv_res)
