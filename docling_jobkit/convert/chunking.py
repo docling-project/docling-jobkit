@@ -121,9 +121,7 @@ class DocumentChunkerManager:
     ):
         self.config = config or DocumentChunkerConfig()
         self._cache_lock = threading.Lock()
-        self._options_map: dict[
-            bytes, tuple[BaseChunkerOptions, ConvertDocumentsOptions]
-        ] = {}
+        self._options_map: dict[bytes, BaseChunkerOptions] = {}
         self._get_chunker_from_cache = self._create_chunker_cache()
 
     def _create_chunker_cache(self):
@@ -132,21 +130,27 @@ class DocumentChunkerManager:
         @lru_cache(maxsize=self.config.cache_size)
         def _get_chunker_from_cache(cache_key: bytes) -> BaseChunker:
             try:
-                options, conversion_options = self._options_map[cache_key]
+                options = self._options_map[cache_key]
 
                 use_markdown_tables = options.use_markdown_tables
                 use_markdown_images = False
-                if conversion_options.image_export_mode != ImageRefMode.PLACEHOLDER:
-                    use_markdown_images = True
-                _log.debug(
-                    f"Using serializer options - Markdown Tables: {use_markdown_tables}, Markdown Images: {use_markdown_images}"
-                )
+                image_placeholder = ""
+
+                # Check if the optiosn use markdown images, if yes get the placeholder or use the default one.
+                # For now hasattr will be used to bypass the Pypy check when the image placeholder and use markdown images option is not yet available in the main docling library.
+                # TODO: Refactor this once the options are exposed in the main docling library, we can directly use options.image_placeholder and options.use_markdown_images instead of hasattr and default constant.
+
+                if hasattr(options, "use_markdown_images"):
+                    use_markdown_images = options.use_markdown_images
+                    if use_markdown_images:
+                        if hasattr(options, "image_placeholder"):
+                            image_placeholder = options.image_placeholder
+
                 # Create serializer provider based on markdown table option
                 serializer_provider = MarkdownChunkingSerializerProvider(
                     use_markdown_tables=use_markdown_tables,
                     use_markdown_images=use_markdown_images,
-                    # TODO: Pass the image placeholder from the chunking options once it's exposed in the main docling library. For now, we use a default constant.
-                    image_placeholder=DEFAULT_IMAGE_PLACEHOLDER,
+                    image_placeholder=image_placeholder,
                 )
 
                 if isinstance(options, HybridChunkerOptions):
@@ -191,30 +195,23 @@ class DocumentChunkerManager:
     def _get_chunker(
         self,
         options: BaseChunkerOptions,
-        conversion_options: ConvertDocumentsOptions,
     ) -> BaseChunker:
         """Get or create a cached BaseChunker instance."""
-        cache_key = self._generate_cache_key(options, conversion_options)
+        cache_key = self._generate_cache_key(options)
 
         with self._cache_lock:
-            self._options_map[cache_key] = (options, conversion_options)
+            self._options_map[cache_key] = options
             return self._get_chunker_from_cache(cache_key)
 
     def _generate_cache_key(
         self,
         options: BaseChunkerOptions,
-        conversion_options: ConvertDocumentsOptions,
     ) -> bytes:
         """Generate a deterministic cache key from chunking options."""
-        key_data = json.dumps(
-            {
-                "chunker": json.loads(options.model_dump_json(serialize_as_any=True)),
-                "img_mode": conversion_options.image_export_mode.value,
-                "img_placeholder": DEFAULT_IMAGE_PLACEHOLDER,  # This should be replaced with the actual placeholder from options once it's exposed in the main library
-            },
-            sort_keys=True,
-        )
-        return hashlib.sha1(key_data.encode(), usedforsecurity=False).digest()
+        # BasechunkerOptions will have the image_placeholder options that way we only need the basechunker options to generate the cache key.
+        chunking_data = options.model_dump_json(serialize_as_any=True)
+
+        return hashlib.sha1(chunking_data.encode(), usedforsecurity=False).digest()
 
     def clear_cache(self):
         """Clear the chunker cache."""
@@ -226,11 +223,10 @@ class DocumentChunkerManager:
         document: DoclingDocument,
         filename: str,
         options: BaseChunkerOptions,
-        conversion_options: ConvertDocumentsOptions,
     ) -> Iterable[ChunkedDocumentResultItem]:
         """Chunk a document using chunker from docling-core."""
 
-        chunker = self._get_chunker(options, conversion_options)
+        chunker = self._get_chunker(options)
 
         chunks = list(chunker.chunk(document))
 
@@ -395,7 +391,6 @@ def process_chunk_results(
                         document=conv_res.document,
                         filename=filename,
                         options=chunking_options,
-                        conversion_options=conversion_options,
                     )
                 )
                 num_succeeded += 1
