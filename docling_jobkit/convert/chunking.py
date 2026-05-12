@@ -89,16 +89,16 @@ class MarkdownChunkingSerializerProvider(ChunkingSerializerProvider):
         serializers: dict[str, Any] = {}
         if self._use_markdown_tables:
             serializers["table_serializer"] = MarkdownTableSerializer()
-        params = None
-        default = ChunkingDocSerializer.model_fields["params"].default
+        markdownParams = ChunkingDocSerializer.model_fields["params"].default
         if self._use_markdown_images:
-            params = default.model_copy(
+            markdownParams = markdownParams.model_copy(
                 update={
                     "image_placeholder": self._image_placeholder
                     or DEFAULT_IMAGE_PLACEHOLDER
                 }
             )
-        return ChunkingDocSerializer(doc=doc, params=params, **serializers)
+
+        return ChunkingDocSerializer(doc=doc, params=markdownParams, **serializers)
 
 
 class DocumentChunkerConfig(BaseModel):
