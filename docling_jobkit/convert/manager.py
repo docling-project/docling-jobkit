@@ -1484,7 +1484,7 @@ class DoclingConverterManager:
                 picture_classification_options
             )
 
-        if request.image_export_mode != ImageRefMode.PLACEHOLDER:
+        if request.include_images and request.image_export_mode != ImageRefMode.PLACEHOLDER:
             pipeline_options.generate_page_images = True
             if request.image_export_mode == ImageRefMode.REFERENCED:
                 pipeline_options.generate_picture_images = True
