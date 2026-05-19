@@ -270,13 +270,22 @@ class RayOrchestrator(BaseOrchestrator):
         if self.deployment_handle is None:
             raise DispatcherUnavailableError("Ray runtime is not initialized")
 
+        dispatcher_kwargs: dict[str, Any] = {
+            "name": self.dispatcher_name,
+            "lifetime": "detached",
+            "get_if_exists": True,
+            "num_cpus": self.config.dispatcher_num_cpus,
+            "max_restarts": self.config.dispatcher_max_restarts,
+            "max_task_retries": self.config.dispatcher_max_task_retries,
+        }
+        if self.config.dispatcher_memory_request is not None:
+            dispatcher_kwargs["memory"] = _parse_memory_string(
+                self.config.dispatcher_memory_request
+            )
+
         _log.info("Binding to named Ray Task Dispatcher actor")
         return RayTaskDispatcher.options(  # type: ignore[attr-defined]
-            name=self.dispatcher_name,
-            lifetime="detached",
-            get_if_exists=True,
-            max_restarts=self.config.dispatcher_max_restarts,
-            max_task_retries=self.config.dispatcher_max_task_retries,
+            **dispatcher_kwargs
         ).remote(self.config, self.deployment_handle)
 
     async def _initialize_ray_runtime(self) -> None:
@@ -324,7 +333,7 @@ class RayOrchestrator(BaseOrchestrator):
                 converter_manager_config=self.cm.config,
                 config=config,
                 redis_url=config.redis_url,
-                deployment_name="docling_processor",
+                app_name="docling_processor",
             )
             self.dispatcher = self._bind_dispatcher()
             _log.info("Ray runtime initialized")
