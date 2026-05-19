@@ -1,6 +1,7 @@
 """Configuration for Ray orchestrator."""
 
 import logging
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -8,6 +9,26 @@ from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _log = logging.getLogger(__name__)
+
+_IEC_MULTIPLIERS = {"gi": 1024**3, "mi": 1024**2, "ki": 1024}
+_SI_MULTIPLIERS = {"b": 1, "kb": 1024, "mb": 1024**2, "gb": 1024**3, "tb": 1024**4}
+
+
+def parse_memory_bytes(value: Optional[str]) -> Optional[int]:
+    """Parse a memory string to bytes. Returns None for None/empty input.
+
+    Accepts IEC binary prefixes (1Gi, 512Mi) and SI suffixes (8GB, 512MB).
+    """
+    if not value:
+        return None
+    m = re.match(r"^(\d+(?:\.\d+)?)\s*(Gi|Mi|Ki|GB|MB|KB|TB|B)$", value, re.IGNORECASE)
+    if not m:
+        raise ValueError(
+            f"Invalid memory format: {value!r} (expected e.g. '8Gi', '512MB')"
+        )
+    amount, unit = m.groups()
+    multiplier = _IEC_MULTIPLIERS.get(unit.lower()) or _SI_MULTIPLIERS[unit.lower()]
+    return int(float(amount) * multiplier)
 
 
 class RayOrchestratorConfig(BaseSettings):
