@@ -417,20 +417,20 @@ def test_create_deployment_sets_hard_replica_concurrency_limit():
         max_ongoing_requests_per_replica=1,
     )
 
-    mock_worker = MagicMock(name="worker")
+    mock_converter = MagicMock(name="converter")
     mock_coordinator = MagicMock(name="coordinator")
-    mock_worker_options = MagicMock()
-    mock_worker_options.bind.return_value = mock_worker
+    mock_converter_options = MagicMock()
+    mock_converter_options.bind.return_value = mock_converter
     mock_coordinator_options = MagicMock()
     mock_coordinator_options.bind.return_value = mock_coordinator
 
     with (
         patch(
-            "docling_jobkit.orchestrators.ray.serve_deployment.PageWorkerDeployment.options",
-            return_value=mock_worker_options,
-        ) as mock_worker_options_call,
+            "docling_jobkit.orchestrators.ray.serve_deployment.DoclingProcessorConverterDeployment.options",
+            return_value=mock_converter_options,
+        ) as mock_converter_options_call,
         patch(
-            "docling_jobkit.orchestrators.ray.serve_deployment.FanoutCoordinatorDeployment.options",
+            "docling_jobkit.orchestrators.ray.serve_deployment.DoclingProcessorCoordinatorDeployment.options",
             return_value=mock_coordinator_options,
         ) as mock_coordinator_options_call,
     ):
@@ -441,9 +441,11 @@ def test_create_deployment_sets_hard_replica_concurrency_limit():
         )
 
     assert deployment is mock_coordinator
-    assert mock_worker_options_call.call_args.kwargs["max_ongoing_requests"] == 1
+    assert mock_converter_options_call.call_args.kwargs["max_ongoing_requests"] == 1
     assert (
-        mock_worker_options_call.call_args.kwargs["autoscaling_config"]["min_replicas"]
+        mock_converter_options_call.call_args.kwargs["autoscaling_config"][
+            "min_replicas"
+        ]
         == 4
     )
     assert mock_coordinator_options_call.call_args.kwargs["max_ongoing_requests"] == 8
@@ -475,18 +477,18 @@ def test_create_deployment_defaults_replica_cap_to_autoscaling_target():
         max_ongoing_requests_per_replica=None,
     )
 
-    mock_worker_options = MagicMock()
-    mock_worker_options.bind.return_value = MagicMock()
+    mock_converter_options = MagicMock()
+    mock_converter_options.bind.return_value = MagicMock()
     mock_coordinator_options = MagicMock()
     mock_coordinator_options.bind.return_value = MagicMock()
 
     with (
         patch(
-            "docling_jobkit.orchestrators.ray.serve_deployment.PageWorkerDeployment.options",
-            return_value=mock_worker_options,
-        ) as mock_worker_options_call,
+            "docling_jobkit.orchestrators.ray.serve_deployment.DoclingProcessorConverterDeployment.options",
+            return_value=mock_converter_options,
+        ) as mock_converter_options_call,
         patch(
-            "docling_jobkit.orchestrators.ray.serve_deployment.FanoutCoordinatorDeployment.options",
+            "docling_jobkit.orchestrators.ray.serve_deployment.DoclingProcessorCoordinatorDeployment.options",
             return_value=mock_coordinator_options,
         ) as mock_coordinator_options_call,
     ):
@@ -496,9 +498,11 @@ def test_create_deployment_defaults_replica_cap_to_autoscaling_target():
             redis_url=config.redis_url,
         )
 
-    assert mock_worker_options_call.call_args.kwargs["max_ongoing_requests"] == 2
+    assert mock_converter_options_call.call_args.kwargs["max_ongoing_requests"] == 2
     assert (
-        mock_worker_options_call.call_args.kwargs["autoscaling_config"]["min_replicas"]
+        mock_converter_options_call.call_args.kwargs["autoscaling_config"][
+            "min_replicas"
+        ]
         == 1
     )
     assert mock_coordinator_options_call.call_args.kwargs["max_ongoing_requests"] == 2

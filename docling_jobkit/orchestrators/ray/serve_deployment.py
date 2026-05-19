@@ -1,4 +1,4 @@
-"""Ray Serve coordinator/worker deployments for document processing."""
+"""Ray Serve coordinator/converter deployments for document processing."""
 
 from __future__ import annotations
 
@@ -53,14 +53,14 @@ from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
 )
 from docling_jobkit.orchestrators.ray.models import (
+    ConverterRequest,
+    ConverterTaskResult,
     MaterializedConvertRequest,
     PassthroughTaskRequest,
     SliceConvertRequest,
     SlicePlan,
     SliceSpec,
     TaskUpdate,
-    WorkerRequest,
-    WorkerTaskResult,
 )
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 
@@ -248,8 +248,8 @@ def _parse_memory_limit_bytes(limit_str: Optional[str]) -> Optional[int]:
 
 
 @serve.deployment
-class PageWorkerDeployment:
-    """Warm conversion worker with no Redis lifecycle responsibility."""
+class DoclingProcessorConverterDeployment:
+    """Warm conversion replica with no Redis lifecycle responsibility."""
 
     def __init__(
         self,
@@ -268,7 +268,8 @@ class PageWorkerDeployment:
             self.replica_id = "unknown"
 
         _log.info(
-            "Worker replica %s: initializing DoclingConverterManager", self.replica_id
+            "Converter replica %s: initializing DoclingConverterManager",
+            self.replica_id,
         )
         self.cm = DoclingConverterManager(config=converter_manager_config)
         _log.setLevel(self.config.log_level.upper())
@@ -281,9 +282,9 @@ class PageWorkerDeployment:
         self.last_task_time: Optional[datetime.datetime] = None
         self.memory_warnings = 0
 
-    async def process_worker_request(
-        self, request: WorkerRequest
-    ) -> WorkerTaskResult | ExportableDocument:
+    async def process_converter_request(
+        self, request: ConverterRequest
+    ) -> ConverterTaskResult | ExportableDocument:
         if self.config.enable_oom_protection and PSUTIL_AVAILABLE:
             await self._check_memory()
 
@@ -326,7 +327,7 @@ class PageWorkerDeployment:
             if _is_exportable_status(result.status):
                 self.documents_processed += 1
         else:
-            raise ValueError(f"Unsupported worker request: {type(request)!r}")
+            raise ValueError(f"Unsupported converter request: {type(request)!r}")
 
         self.tasks_processed += 1
         self.last_task_time = datetime.datetime.now(datetime.timezone.utc)
@@ -344,7 +345,7 @@ class PageWorkerDeployment:
                 last_exception = exc
                 if attempt < max_retries:
                     _log.warning(
-                        "Worker replica %s: %s failed (attempt %s/%s): %s",
+                        "Converter replica %s: %s failed (attempt %s/%s): %s",
                         self.replica_id,
                         task_label,
                         attempt + 1,
@@ -354,14 +355,14 @@ class PageWorkerDeployment:
                     await asyncio.sleep(retry_delay)
                 else:
                     _log.error(
-                        "Worker replica %s: %s failed after %s attempts: %s",
+                        "Converter replica %s: %s failed after %s attempts: %s",
                         self.replica_id,
                         task_label,
                         max_retries + 1,
                         exc,
                     )
 
-        raise last_exception or RuntimeError("Worker request failed")
+        raise last_exception or RuntimeError("Converter request failed")
 
     def _get_chunker_manager(self) -> DocumentChunkerManager:
         chunker_manager = getattr(self, "_chunker_manager", None)
@@ -377,10 +378,10 @@ class PageWorkerDeployment:
         *,
         expected_doc_count: Optional[int] = None,
         start_time: Optional[float] = None,
-    ) -> WorkerTaskResult:
+    ) -> ConverterTaskResult:
         callback_invoker = _build_callback_invoker(task)
         temp_dir_kwargs: dict[str, Any] = {
-            "prefix": f"docling_worker_{task.task_id}_",
+            "prefix": f"docling_converter_{task.task_id}_",
         }
         if self.config.scratch_dir is not None:
             temp_dir_kwargs["dir"] = str(self.config.scratch_dir)
@@ -410,7 +411,7 @@ class PageWorkerDeployment:
             else:
                 raise ValueError(f"Unsupported task type: {task.task_type}")
 
-        return WorkerTaskResult(task_result=task_result)
+        return ConverterTaskResult(task_result=task_result)
 
     def _convert_passthrough_task(self, task: Task) -> list[ConversionResult]:
         convert_sources, headers = _build_convert_sources(task)
@@ -471,7 +472,7 @@ class PageWorkerDeployment:
             if memory_mb > limit_mb * self.config.memory_warning_threshold:
                 self.memory_warnings += 1
                 _log.warning(
-                    "Worker replica %s: high memory usage %.0fMB / %.0fMB",
+                    "Converter replica %s: high memory usage %.0fMB / %.0fMB",
                     self.replica_id,
                     memory_mb,
                     limit_mb,
@@ -481,7 +482,9 @@ class PageWorkerDeployment:
                     self.memory_warnings = 0
         except Exception as exc:  # pragma: no cover - observability only
             _log.warning(
-                "Worker replica %s: memory check failed: %s", self.replica_id, exc
+                "Converter replica %s: memory check failed: %s",
+                self.replica_id,
+                exc,
             )
 
     async def health_check(self) -> dict[str, Any]:
@@ -508,14 +511,14 @@ class PageWorkerDeployment:
         }
 
     async def clear_cache(self) -> None:
-        _log.info("Worker replica %s: clearing converter cache", self.replica_id)
+        _log.info("Converter replica %s: clearing converter cache", self.replica_id)
         self.cm.clear_cache()
         gc.collect()
         self.memory_warnings = 0
 
 
 @serve.deployment
-class FanoutCoordinatorDeployment:
+class DoclingProcessorCoordinatorDeployment:
     """Cheap coordinator that owns the parent task lifecycle and result assembly."""
 
     def __init__(
@@ -523,13 +526,13 @@ class FanoutCoordinatorDeployment:
         converter_manager_config: DoclingConverterManagerConfig,
         config: RayOrchestratorConfig,
         redis_url: str,
-        worker_handle: Any,
+        converter_handle: Any,
     ) -> None:
         configure_ray_actor_logging(config.log_level)
 
         self.config = config
         self.converter_manager_config = converter_manager_config
-        self.worker_handle = worker_handle
+        self.converter_handle = converter_handle
 
         try:
             replica_context = serve.get_replica_context()
@@ -758,8 +761,8 @@ class FanoutCoordinatorDeployment:
                         start_time=materialized_start_time,
                     )
                 else:
-                    worker_result = (
-                        await self.worker_handle.process_worker_request.remote(
+                    converter_result = (
+                        await self.converter_handle.process_converter_request.remote(
                             MaterializedConvertRequest(
                                 artifact_ref=artifact_ref,
                                 filename=filename,
@@ -768,21 +771,23 @@ class FanoutCoordinatorDeployment:
                             )
                         )
                     )
-                    return worker_result.task_result
+                    return converter_result.task_result
             finally:
                 del artifact_ref
         else:
-            worker_result = await self.worker_handle.process_worker_request.remote(
-                PassthroughTaskRequest(task=task)
+            converter_result = (
+                await self.converter_handle.process_converter_request.remote(
+                    PassthroughTaskRequest(task=task)
+                )
             )
-            return worker_result.task_result
+            return converter_result.task_result
 
     async def _process_chunk_task(self, task: Task, workdir: Path) -> DoclingTaskResult:
         del workdir
-        worker_result = await self.worker_handle.process_worker_request.remote(
+        converter_result = await self.converter_handle.process_converter_request.remote(
             PassthroughTaskRequest(task=task)
         )
-        return worker_result.task_result
+        return converter_result.task_result
 
     def _should_materialize_pdf(self, task: Task) -> bool:
         return (
@@ -845,7 +850,7 @@ class FanoutCoordinatorDeployment:
         self, request: SliceConvertRequest
     ) -> ExportableDocument:
         try:
-            return await self.worker_handle.process_worker_request.remote(request)
+            return await self.converter_handle.process_converter_request.remote(request)
         except Exception as exc:
             _log.warning(
                 "Coordinator replica %s: slice %s for %s failed: %s",
@@ -884,7 +889,7 @@ class FanoutCoordinatorDeployment:
     async def health_check(self) -> dict[str, Any]:
         return {
             "replica_id": self.replica_id,
-            "healthy": self.worker_handle is not None,
+            "healthy": self.converter_handle is not None,
             "tasks_processed": self.tasks_processed,
             "documents_processed": self.documents_processed,
             "last_task_time": (
@@ -901,9 +906,6 @@ class FanoutCoordinatorDeployment:
                 self.last_task_time.isoformat() if self.last_task_time else None
             ),
         }
-
-
-DocumentProcessorDeployment = PageWorkerDeployment
 
 
 def _build_deployment_options(
@@ -950,7 +952,7 @@ def create_deployment(
     converter_manager_config: DoclingConverterManagerConfig,
     config: RayOrchestratorConfig,
     redis_url: str,
-    deployment_name: str = "document_processor",
+    app_name: str = "docling_processor",
 ) -> Any:
     coordinator_target_requests_per_replica = (
         config.coordinator_target_requests_per_replica
@@ -967,8 +969,8 @@ def create_deployment(
     assert coordinator_max_ongoing_requests_per_replica is not None
     assert coordinator_actor_num_cpus is not None
 
-    worker_options = _build_deployment_options(
-        name=f"{deployment_name}_worker",
+    converter_options = _build_deployment_options(
+        name="converter",
         min_replicas=config.min_actors,
         max_replicas=config.max_actors,
         target_requests_per_replica=config.target_requests_per_replica,
@@ -984,7 +986,7 @@ def create_deployment(
         graceful_shutdown_timeout_s=config.graceful_shutdown_timeout_s,
     )
     coordinator_options = _build_deployment_options(
-        name=deployment_name,
+        name="coordinator",
         min_replicas=coordinator_min_actors,
         max_replicas=coordinator_max_actors,
         target_requests_per_replica=coordinator_target_requests_per_replica,
@@ -998,22 +1000,25 @@ def create_deployment(
     )
 
     _log.info(
-        "Creating Ray Serve coordinator '%s' and worker '%s'",
-        deployment_name,
-        worker_options["name"],
+        "Creating Ray Serve app '%s' with coordinator '%s' and converter '%s'",
+        app_name,
+        coordinator_options["name"],
+        converter_options["name"],
     )
 
-    worker = PageWorkerDeployment.options(**worker_options).bind(  # type: ignore[attr-defined]
+    converter = DoclingProcessorConverterDeployment.options(  # type: ignore[attr-defined]
+        **converter_options
+    ).bind(
         converter_manager_config=converter_manager_config,
         config=config,
     )
-    coordinator = FanoutCoordinatorDeployment.options(  # type: ignore[attr-defined]
+    coordinator = DoclingProcessorCoordinatorDeployment.options(  # type: ignore[attr-defined]
         **coordinator_options,
     ).bind(
         converter_manager_config=converter_manager_config,
         config=config,
         redis_url=redis_url,
-        worker_handle=worker,
+        converter_handle=converter,
     )
     return coordinator
 
@@ -1022,17 +1027,15 @@ def deploy_processor(
     converter_manager_config: DoclingConverterManagerConfig,
     config: RayOrchestratorConfig,
     redis_url: str,
-    deployment_name: str = "document_processor",
+    app_name: str = "docling_processor",
 ) -> Any:
     deployment = create_deployment(
         converter_manager_config=converter_manager_config,
         config=config,
         redis_url=redis_url,
-        deployment_name=deployment_name,
+        app_name=app_name,
     )
 
-    handle = serve.run(
-        deployment, name=deployment_name, route_prefix=f"/{deployment_name}"
-    )
-    _log.info("Ray Serve deployment '%s' is running", deployment_name)
+    handle = serve.run(deployment, name=app_name, route_prefix=f"/{app_name}")
+    _log.info("Ray Serve app '%s' is running", app_name)
     return handle

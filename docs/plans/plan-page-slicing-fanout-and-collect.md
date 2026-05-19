@@ -10,38 +10,38 @@ The locked v1 scope and non-goals are summarized in the final section of this do
 ## Summary
 Implement PDF page-chunk fan-out as a **logical parent task with ephemeral internal child executions**, not as Redis-visible child tasks.
 
-Split the current monolithic `DocumentProcessorDeployment` into two cooperating Ray Serve deployments with different resource profiles:
+Split the current monolithic Ray Serve document processor deployment into two cooperating deployments with different resource profiles:
 
-- **`FanoutCoordinatorDeployment`** (new, cheap): owns the parent task lifecycle — execution lease heartbeat, Redis finalization, source materialization, split planning, result assembly. Runs with relaxed concurrency (`max_ongoing_requests > 1`) because its work is mostly I/O and waiting. Holds no model weights, needs no GPU.
-- **`PageWorkerDeployment`** (renamed from current `DocumentProcessorDeployment`): owns warm `DoclingConverterManager` instances and executes conversion work. Keeps `max_ongoing_requests=1` to preserve thread-safety. Receives pre-materialized PDF bytes as a `ray.ObjectRef` plus a page range; returns a conversion result. Has no Redis lifecycle responsibility.
+- **`DoclingProcessorCoordinatorDeployment`** (new, cheap): owns the parent task lifecycle — execution lease heartbeat, Redis finalization, source materialization, split planning, result assembly. Runs with relaxed concurrency (`max_ongoing_requests > 1`) because its work is mostly I/O and waiting. Holds no model weights, needs no GPU.
+- **`DoclingProcessorConverterDeployment`**: owns warm `DoclingConverterManager` instances and executes conversion work. Keeps `max_ongoing_requests=1` to preserve thread-safety. Receives pre-materialized PDF bytes as a `ray.ObjectRef` plus a page range; returns a conversion result. Has no Redis lifecycle responsibility.
 
-The coordinator receives every parent task from the dispatcher. For single-source PDF tasks above the chunk threshold, it fans out N child requests to the worker deployment, awaits them asynchronously, and assembles the result. For all other tasks, it sends a single request to the worker and passes the result through. The coordinator is never resource-idle on a heavy replica — the worst case is a cheap coordinator slot waiting, while GPU-capable worker slots remain available for real conversion work.
+The coordinator receives every parent task from the dispatcher. For single-source PDF tasks above the chunk threshold, it fans out N child requests to the converter deployment, awaits them asynchronously, and assembles the result. For all other tasks, it sends a single request to the converter and passes the result through. The coordinator is never resource-idle on a heavy replica — the worst case is a cheap coordinator slot waiting, while GPU-capable converter slots remain available for real conversion work.
 
 This avoids:
 - N repeated HTTP downloads for one remote PDF.
 - N base64 copies of one uploaded PDF in Redis.
 - Reworking the Redis scheduler to understand durable parent/child task graphs in v1.
 - Deadlocking the Serve replica pool: coordinator and worker are separate deployments; parents never compete with children for the same replica pool.
-- Re-initializing `DoclingConverterManager` per child: worker replicas stay warm across all child requests, exactly as today.
+- Re-initializing `DoclingConverterManager` per child: converter replicas stay warm across all child requests, exactly as today.
 
 ## Implementation Changes
 
 ### 1. Two-deployment architecture
 
-Replace the single `DocumentProcessorDeployment` with two cooperating deployments deployed together:
+Replace the single-deployment layout with two cooperating deployments deployed together:
 
-**`FanoutCoordinatorDeployment`**
+**`DoclingProcessorCoordinatorDeployment`**
 - Resource budget: `num_cpus=0.5`, moderate memory (enough to hold a materialized PDF and an assembled DoclingDocument), `num_gpus=0`.
 - `max_ongoing_requests`: relaxed (e.g. 4–8) — coordinator work is async waiting, not CPU-bound.
-- Holds: `RedisStateManager`, execution lease heartbeat logic, finalization calls, handle to `PageWorkerDeployment`.
+- Holds: `RedisStateManager`, execution lease heartbeat logic, finalization calls, handle to `DoclingProcessorConverterDeployment`.
 - Does not hold a `DoclingConverterManager`.
 
-**`PageWorkerDeployment`** (current `DocumentProcessorDeployment` stripped of lifecycle ownership)
+**`DoclingProcessorConverterDeployment`**
 - Resource budget: unchanged (full GPU + memory for warm models).
 - `max_ongoing_requests=1`: required by thread-unsafe `DocumentConverter` and preserved for every replica that holds a warmed `DoclingConverterManager`.
 - Holds: persistent `DoclingConverterManager` (`self.cm`) exactly as today.
-- Public Serve entry point: `process_worker_request(request: WorkerRequest)` where `WorkerRequest` is a discriminated union with variants for `chunk_convert`, `materialized_convert`, and `passthrough_task`.
-- Internal helpers may still be named `process_chunk` / `_process_materialized_convert` / `_process_passthrough_task`, but they are worker-internal branches behind one Serve boundary.
+- Public Serve entry point: `process_converter_request(request: ConverterRequest)` where `ConverterRequest` is a discriminated union with variants for `chunk_convert`, `materialized_convert`, and `passthrough_task`.
+- Internal helpers may still be named `process_chunk` / `_process_materialized_convert` / `_process_passthrough_task`, but they are converter-internal branches behind one Serve boundary.
 - Does **not** call `finalize_task_*_atomic`, does **not** maintain an execution lease. It is a pure conversion service.
 
 The dispatcher routes all tasks to the coordinator handle (one handle, same as today, just pointing to the new coordinator deployment). The dispatcher is otherwise unchanged.
@@ -87,7 +87,7 @@ Page counting uses `pypdfium2` via `PyPdfiumDocumentBackend` — already a trans
 
 ### 5. Child execution contract
 
-Children are Ray Serve requests to `PageWorkerDeployment`, not `ray.remote` functions. This preserves warm `DoclingConverterManager` reuse: worker replicas keep their model state between child requests exactly as they do between sequential task calls today. The warm converter is the reason the current Serve design is performant for OCR/VLM-heavy workloads; child requests must share it.
+Children are Ray Serve requests to `DoclingProcessorConverterDeployment`, not `ray.remote` functions. This preserves warm `DoclingConverterManager` reuse: converter replicas keep their model state between child requests exactly as they do between sequential task calls today. The warm converter is the reason the current Serve design is performant for OCR/VLM-heavy workloads; child requests must share it.
 
 Child input to the worker's `chunk_convert` request variant:
 - `artifact_ref: ray.ObjectRef` — reference to materialized PDF bytes in the plasma store
@@ -108,7 +108,7 @@ Do not split into physical sub-PDFs in v1.
 
 ### 6. Child parallelism and coordinator occupancy
 
-Parent tasks still consume tenant slot counters as one logical task and one logical document. Child requests to the worker deployment are internal and must not increment Redis tenant counters.
+Parent tasks still consume tenant slot counters as one logical task and one logical document. Child requests to the converter deployment are internal and must not increment Redis tenant counters.
 
 The coordinator awaits child futures asynchronously over Serve handle futures. The coordinator replica is not CPU-bound while waiting, and because coordinator replicas carry no GPU or heavy model resources, the idle cost during the wait is low — a cheap coordinator slot, not a GPU.
 
@@ -141,11 +141,11 @@ Public response contract is unchanged: sync endpoints wait on the parent; async 
 No request API changes in v1.
 
 New internal deployment:
-- `FanoutCoordinatorDeployment` (replaces `DocumentProcessorDeployment` as dispatcher entry point)
-- `PageWorkerDeployment` (replaces `DocumentProcessorDeployment` as conversion backend)
+- `DoclingProcessorCoordinatorDeployment` as dispatcher entry point
+- `DoclingProcessorConverterDeployment` as conversion backend
 
 New internal request model:
-- `WorkerRequest` as a discriminated union with `chunk_convert`, `materialized_convert`, and `passthrough_task` variants
+- `ConverterRequest` as a discriminated union with `chunk_convert`, `materialized_convert`, and `passthrough_task` variants
 
 New Ray config flags:
 - `enable_pdf_page_chunk_fanout: bool`
@@ -199,7 +199,7 @@ No new task-level terminal status: `TaskStatus` remains `PENDING / STARTED / SUC
   - when `max_page_chunk_parallelism` is set, coordinator never exceeds that many in-flight worker requests
   - when `max_page_chunk_parallelism` is unset, coordinator may submit the full child set
 - Warm converter reuse:
-  - worker replicas do not re-initialize `DoclingConverterManager` between child requests from the same or different parents
+  - converter replicas do not re-initialize `DoclingConverterManager` between child requests from the same or different parents
 - Tenant fairness:
   - two tenants each submitting one large PDF still schedule at parent fairness boundaries
   - child worker requests do not change Redis `active_tasks` / `active_documents`
@@ -232,7 +232,7 @@ No new task-level terminal status: `TaskStatus` remains `PENDING / STARTED / SUC
 
 Implemented in `docling-jobkit`:
 - Added `convert/materialization.py` with canonical single-source PDF materialization + preflight, including `MaterializationLimits`, `MaterializedSource`, and limit-specific failures.
-- Split the Ray Serve processing plane into `FanoutCoordinatorDeployment` and `PageWorkerDeployment` in `orchestrators/ray/serve_deployment.py`.
+- Split the Ray Serve processing plane into `DoclingProcessorCoordinatorDeployment` and `DoclingProcessorConverterDeployment` in `orchestrators/ray/serve_deployment.py`.
 - Added internal Ray models for `SplitPlan`, `ChunkSpec`, `ChunkResult`, and the worker request/result payloads in `orchestrators/ray/models.py`.
 - Added the internal fan-out config in `orchestrators/ray/config.py`:
   `enable_pdf_page_chunk_fanout`, `max_page_chunk_size`, `max_page_chunk_parallelism`, plus only the coordinator-specific overrides that remained necessary: `coordinator_target_requests_per_replica`, `coordinator_max_ongoing_requests_per_replica`, `coordinator_num_cpus`, and `coordinator_memory_limit`.

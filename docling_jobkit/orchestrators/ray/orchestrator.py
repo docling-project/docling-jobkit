@@ -333,7 +333,7 @@ class RayOrchestrator(BaseOrchestrator):
                 converter_manager_config=self.cm.config,
                 config=config,
                 redis_url=config.redis_url,
-                deployment_name="docling_processor",
+                app_name="docling_processor",
             )
             self.dispatcher = self._bind_dispatcher()
             _log.info("Ray runtime initialized")

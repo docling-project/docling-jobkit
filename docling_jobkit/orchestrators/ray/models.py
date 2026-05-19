@@ -220,10 +220,10 @@ class SliceConvertRequest(BaseModel):
     slice_index: int = Field(description="Ascending child slice index")
 
 
-WorkerRequest = (
+ConverterRequest = (
     PassthroughTaskRequest | MaterializedConvertRequest | SliceConvertRequest
 )
 
 
-class WorkerTaskResult(BaseModel):
+class ConverterTaskResult(BaseModel):
     task_result: DoclingTaskResult = Field(description="Final task result")
