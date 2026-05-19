@@ -65,10 +65,8 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
+# Default placeholder for image references when markdown image serialization is enable.
 DEFAULT_IMAGE_PLACEHOLDER = "![Image]"
-# TODO: Once md_image_placeholder is exposed in ConvertDocumentsOptions
-# (docling main library), replace this constant with the user-provided
-# runtime value passed through the options object.
 
 
 class MarkdownChunkingSerializerProvider(ChunkingSerializerProvider):
@@ -92,10 +90,7 @@ class MarkdownChunkingSerializerProvider(ChunkingSerializerProvider):
         markdownParams = ChunkingDocSerializer.model_fields["params"].default
         if self._use_markdown_images:
             markdownParams = markdownParams.model_copy(
-                update={
-                    "image_placeholder": self._image_placeholder
-                    or DEFAULT_IMAGE_PLACEHOLDER
-                }
+                update={"image_placeholder": self._image_placeholder}
             )
 
         return ChunkingDocSerializer(doc=doc, params=markdownParams, **serializers)
@@ -133,18 +128,11 @@ class DocumentChunkerManager:
                 options = self._options_map[cache_key]
 
                 use_markdown_tables = options.use_markdown_tables
-                use_markdown_images = False
-                image_placeholder = ""
+                use_markdown_images = options.use_markdown_images
+                image_placeholder = DEFAULT_IMAGE_PLACEHOLDER
 
-                # Check if the optiosn use markdown images, if yes get the placeholder or use the default one.
-                # For now hasattr will be used to bypass the Pypy check when the image placeholder and use markdown images option is not yet available in the main docling library.
-                # TODO: Refactor this once the options are exposed in the main docling library, we can directly use options.image_placeholder and options.use_markdown_images instead of hasattr and default constant.
-
-                if hasattr(options, "use_markdown_images"):
-                    use_markdown_images = options.use_markdown_images
-                    if use_markdown_images:
-                        if hasattr(options, "image_placeholder"):
-                            image_placeholder = options.image_placeholder
+                if use_markdown_images:
+                    image_placeholder = options.image_placeholder
 
                 # Create serializer provider based on markdown table option
                 serializer_provider = MarkdownChunkingSerializerProvider(
