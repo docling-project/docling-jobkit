@@ -46,7 +46,10 @@ from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
-from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
+from docling_jobkit.orchestrators.ray.config import (
+    RayOrchestratorConfig,
+    parse_memory_bytes,
+)
 from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
 )
@@ -232,17 +235,6 @@ def _build_callback_invoker(task: Task) -> Optional[CallbackInvoker]:
         timeout=30.0,
         retry_delay=1.0,
     )
-
-
-def _parse_memory_limit_bytes(limit_str: Optional[str]) -> Optional[int]:
-    if not limit_str:
-        return None
-
-    if limit_str.endswith("GB"):
-        return int(float(limit_str[:-2]) * 1024 * 1024 * 1024)
-    if limit_str.endswith("MB"):
-        return int(float(limit_str[:-2]) * 1024 * 1024)
-    return int(limit_str)
 
 
 @serve.deployment
@@ -464,7 +456,7 @@ class DoclingProcessorConverterDeployment:
             if not limit_str:
                 return
 
-            limit_bytes = _parse_memory_limit_bytes(limit_str)
+            limit_bytes = parse_memory_bytes(limit_str)
             if limit_bytes is None:
                 return
 
@@ -934,7 +926,7 @@ def _build_deployment_options(
         "max_ongoing_requests": max_ongoing_requests,
     }
 
-    memory_bytes = _parse_memory_limit_bytes(memory_limit)
+    memory_bytes = parse_memory_bytes(memory_limit)
     if memory_bytes is not None:
         deployment_options["ray_actor_options"]["memory"] = memory_bytes
     if graceful_shutdown_wait_loop_s is not None:
