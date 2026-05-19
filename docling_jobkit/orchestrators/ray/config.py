@@ -197,7 +197,10 @@ class RayOrchestratorConfig(BaseSettings):
     max_page_slice_parallelism: Optional[int] = Field(
         default=None,
         ge=1,
-        description="Optional cap on concurrent child slice requests per parent task",
+        description=(
+            "Concurrent child slice requests per parent task. "
+            "Defaults to max_concurrent_tasks when unset."
+        ),
     )
     coordinator_min_actors: Optional[int] = Field(
         default=None,
@@ -341,6 +344,9 @@ class RayOrchestratorConfig(BaseSettings):
             )
 
     def _normalize_coordinator_config(self) -> None:
+        if self.max_page_slice_parallelism is None:
+            self.max_page_slice_parallelism = self.max_concurrent_tasks
+
         if self.coordinator_min_actors is None:
             self.coordinator_min_actors = self.min_actors
 

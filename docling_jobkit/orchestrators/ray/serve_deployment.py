@@ -816,12 +816,7 @@ class DoclingProcessorCoordinatorDeployment:
         ]
 
         parallelism = self.config.max_page_slice_parallelism
-        if parallelism is None:
-            gathered_results = await asyncio.gather(
-                *(self._execute_slice_request(request) for request in requests)
-            )
-            return list(gathered_results)
-
+        assert parallelism is not None
         in_flight: set[asyncio.Task[ExportableDocument]] = set()
         pending_requests = iter(requests)
         collected_results: list[ExportableDocument] = []
