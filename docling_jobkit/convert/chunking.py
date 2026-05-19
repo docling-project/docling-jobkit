@@ -65,9 +65,6 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-# Default placeholder for image references when markdown image serialization is enable.
-DEFAULT_IMAGE_PLACEHOLDER = "![Image]"
-
 
 class MarkdownChunkingSerializerProvider(ChunkingSerializerProvider):
     """Custom serializer provider that can be configured to use markdown serializers based on chunking options."""
@@ -127,18 +124,11 @@ class DocumentChunkerManager:
             try:
                 options = self._options_map[cache_key]
 
-                use_markdown_tables = options.use_markdown_tables
-                use_markdown_images = options.use_markdown_images
-                image_placeholder = DEFAULT_IMAGE_PLACEHOLDER
-
-                if use_markdown_images:
-                    image_placeholder = options.image_placeholder
-
                 # Create serializer provider based on markdown table option
                 serializer_provider = MarkdownChunkingSerializerProvider(
-                    use_markdown_tables=use_markdown_tables,
-                    use_markdown_images=use_markdown_images,
-                    image_placeholder=image_placeholder,
+                    use_markdown_tables=options.use_markdown_tables,
+                    use_markdown_images=options.use_markdown_images,
+                    image_placeholder=options.image_placeholder,
                 )
 
                 if isinstance(options, HybridChunkerOptions):

@@ -211,14 +211,10 @@ module = [
     "pandas.*",
     "msgpack.*",
     "mlx_vlm.*",
-    "google.auth.*",
-    "google.oauth2.*",
     "googleapiclient.*",
     "google_auth_oauthlib.*",
     "ray.*",
     "codeflare_sdk.*",
-    "redis.*",
-    "rq.*",
 ]
 ignore_missing_imports = true
 
