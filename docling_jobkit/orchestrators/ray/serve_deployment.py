@@ -459,7 +459,7 @@ class PageWorkerDeployment:
         try:
             process = psutil.Process()
             memory_mb = process.memory_info().rss / 1024 / 1024
-            limit_str = self.config.ray_memory_limit_per_actor
+            limit_str = self.config.converter_actor_memory_request
             if not limit_str:
                 return
 
@@ -958,14 +958,14 @@ def create_deployment(
     coordinator_max_ongoing_requests_per_replica = (
         config.coordinator_max_ongoing_requests_per_replica
     )
-    coordinator_num_cpus = config.coordinator_num_cpus
+    coordinator_actor_num_cpus = config.coordinator_actor_num_cpus
     coordinator_min_actors = config.coordinator_min_actors
     coordinator_max_actors = config.coordinator_max_actors
     assert coordinator_min_actors is not None
     assert coordinator_max_actors is not None
     assert coordinator_target_requests_per_replica is not None
     assert coordinator_max_ongoing_requests_per_replica is not None
-    assert coordinator_num_cpus is not None
+    assert coordinator_actor_num_cpus is not None
 
     worker_options = _build_deployment_options(
         name=f"{deployment_name}_worker",
@@ -976,8 +976,8 @@ def create_deployment(
             config.max_ongoing_requests_per_replica
             or config.target_requests_per_replica
         ),
-        num_cpus=config.ray_num_cpus_per_actor,
-        memory_limit=config.ray_memory_limit_per_actor,
+        num_cpus=config.converter_actor_num_cpus,
+        memory_limit=config.converter_actor_memory_request,
         upscale_delay_s=config.upscale_delay_s,
         downscale_delay_s=config.downscale_delay_s,
         graceful_shutdown_wait_loop_s=config.graceful_shutdown_wait_loop_s,
@@ -989,8 +989,8 @@ def create_deployment(
         max_replicas=coordinator_max_actors,
         target_requests_per_replica=coordinator_target_requests_per_replica,
         max_ongoing_requests=coordinator_max_ongoing_requests_per_replica,
-        num_cpus=coordinator_num_cpus,
-        memory_limit=config.coordinator_memory_limit,
+        num_cpus=coordinator_actor_num_cpus,
+        memory_limit=config.coordinator_actor_memory_request,
         upscale_delay_s=config.upscale_delay_s,
         downscale_delay_s=config.downscale_delay_s,
         graceful_shutdown_wait_loop_s=config.graceful_shutdown_wait_loop_s,

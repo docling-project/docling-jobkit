@@ -1,10 +1,13 @@
 """Configuration for Ray orchestrator."""
 
+import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_log = logging.getLogger(__name__)
 
 
 class RayOrchestratorConfig(BaseSettings):
@@ -174,8 +177,13 @@ class RayOrchestratorConfig(BaseSettings):
             "force-killing it (None = Ray Serve default)."
         ),
     )
-    ray_num_cpus_per_actor: float = Field(
-        default=1.0, description="Number of CPUs to allocate per Ray Serve replica"
+    converter_actor_num_cpus: float = Field(
+        default=1.0,
+        description="Number of CPUs to allocate per Ray Serve replica",
+        validation_alias=AliasChoices(
+            "converter_actor_num_cpus",
+            "ray_num_cpus_per_actor",
+        ),
     )
     enable_pdf_page_slice_fanout: bool = Field(
         default=False,
@@ -211,11 +219,22 @@ class RayOrchestratorConfig(BaseSettings):
         ge=1,
         description="Coordinator hard cap on in-flight requests per replica",
     )
-    coordinator_num_cpus: Optional[float] = Field(
-        default=None, gt=0, description="Coordinator CPU allocation per replica"
+    coordinator_actor_num_cpus: float = Field(
+        default=0.25,
+        gt=0,
+        description="Coordinator Ray CPU request per replica",
+        validation_alias=AliasChoices(
+            "coordinator_actor_num_cpus",
+            "coordinator_num_cpus",
+        ),
     )
-    coordinator_memory_limit: Optional[str] = Field(
-        default=None, description="Coordinator memory limit"
+    coordinator_actor_memory_request: Optional[str] = Field(
+        default=None,
+        description="Coordinator Ray memory request per replica",
+        validation_alias=AliasChoices(
+            "coordinator_actor_memory_request",
+            "coordinator_memory_limit",
+        ),
     )
 
     # Fault Tolerance & Retry Configuration
@@ -236,6 +255,13 @@ class RayOrchestratorConfig(BaseSettings):
     )
     dispatcher_max_task_retries: int = Field(
         default=3, description="Ray-level task retries for dispatcher operations"
+    )
+    dispatcher_num_cpus: float = Field(
+        default=0.25, gt=0, description="Ray CPU request for the dispatcher actor"
+    )
+    dispatcher_memory_request: Optional[str] = Field(
+        default=None,
+        description='Ray memory request for the dispatcher actor (e.g., "256MB")',
     )
 
     # Timeouts
@@ -272,9 +298,13 @@ class RayOrchestratorConfig(BaseSettings):
     )
 
     # Resource Management & Memory Monitoring
-    ray_memory_limit_per_actor: Optional[str] = Field(
+    converter_actor_memory_request: Optional[str] = Field(
         default=None,
-        description='Memory limit per Ray actor (e.g., "4GB")',
+        description='Ray memory request per converter actor (e.g., "8GB")',
+        validation_alias=AliasChoices(
+            "converter_actor_memory_request",
+            "ray_memory_limit_per_actor",
+        ),
     )
     ray_object_store_memory: Optional[str] = Field(
         default=None,
@@ -330,11 +360,24 @@ class RayOrchestratorConfig(BaseSettings):
                 self.coordinator_target_requests_per_replica,
             )
 
-        if self.coordinator_num_cpus is None:
-            self.coordinator_num_cpus = 0.5
+        if self.coordinator_actor_memory_request is None:
+            self.coordinator_actor_memory_request = self.converter_actor_memory_request
 
-        if self.coordinator_memory_limit is None:
-            self.coordinator_memory_limit = self.ray_memory_limit_per_actor
+    @model_validator(mode="before")
+    @classmethod
+    def warn_deprecated_ray_settings(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            deprecated_keys = {
+                "ray_num_cpus_per_actor": "converter_actor_num_cpus",
+                "ray_memory_limit_per_actor": "converter_actor_memory_request",
+                "coordinator_num_cpus": "coordinator_actor_num_cpus",
+                "coordinator_memory_limit": "coordinator_actor_memory_request",
+            }
+            for old_key, new_key in deprecated_keys.items():
+                if old_key in data:
+                    _log.warning("%s is deprecated; use %s instead.", old_key, new_key)
+
+        return data
 
     def _validate_coordinator_request_concurrency(self) -> None:
         assert self.coordinator_target_requests_per_replica is not None
