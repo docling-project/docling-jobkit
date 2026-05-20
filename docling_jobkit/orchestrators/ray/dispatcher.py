@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import logging
 import math
+from collections import deque
 from typing import Any, Optional
 
 import ray
@@ -19,6 +20,7 @@ from docling_jobkit.orchestrators.ray.models import (
     TaskUpdate,
 )
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
+from docling_jobkit.public_errors import build_public_task_error
 
 _log = logging.getLogger(__name__)
 
@@ -77,6 +79,12 @@ class RayTaskDispatcher:
         self._dispatch_loop_task: Optional[asyncio.Task[None]] = None
         self._runtime_lock = asyncio.Lock()
 
+        self._wake_event: asyncio.Event = asyncio.Event()
+        self._active_tenant_ids: set[str] = set()
+        self._active_tenant_order: deque[str] = deque()
+        self._last_reconcile: float = 0.0
+        self._reconcile_interval: float = 30.0
+
         _log.setLevel(self.config.log_level.upper())
         _log.info("RayTaskDispatcher initialized")
 
@@ -103,9 +111,10 @@ class RayTaskDispatcher:
                     7200,
                 )
 
-            # Treat 3 missed dispatch intervals as a stale dispatcher heartbeat.
+            # Heartbeat is refreshed on the reconciliation cadence, not on every
+            # dispatch tick, so the TTL must reflect that cadence.
             self.redis_manager.dispatcher_heartbeat_ttl = max(
-                math.ceil(config.dispatcher_interval * 3),
+                math.ceil(self._reconcile_interval * 3),
                 1,
             )
             _log.setLevel(self.config.log_level.upper())
@@ -137,6 +146,24 @@ class RayTaskDispatcher:
         """Get the last dispatcher heartbeat timestamp for health monitoring."""
         return self.last_heartbeat
 
+    async def wake(self, tenant_id: str | None = None) -> None:
+        """Signal the dispatcher to run a dispatch pass immediately.
+
+        Called fire-and-forget from the orchestrator after enqueue.
+        """
+        if tenant_id is not None and tenant_id not in self._active_tenant_ids:
+            self._active_tenant_ids.add(tenant_id)
+            self._active_tenant_order.append(tenant_id)
+        self._wake_event.set()
+
+    async def _resync_active_tenants(self) -> None:
+        """Rebuild the in-memory ordered tenant ring from Redis (one SCAN)."""
+        tenants = await self.redis_manager.get_all_tenants_with_tasks()
+        for t in tenants:
+            if t not in self._active_tenant_ids:
+                self._active_tenant_ids.add(t)
+                self._active_tenant_order.append(t)
+
     async def is_active(self) -> bool:
         """Check whether the background dispatch loop is currently running."""
         return self._dispatch_loop_running()
@@ -147,6 +174,10 @@ class RayTaskDispatcher:
 
         await self.redis_manager.connect()
         self.active = True
+        self._wake_event.clear()
+        self._active_tenant_ids.clear()
+        self._active_tenant_order.clear()
+        self._last_reconcile = 0.0
         self._dispatch_loop_task = asyncio.create_task(self._run_dispatch_loop())
         _log.info("Started Ray dispatcher background loop")
 
@@ -157,24 +188,36 @@ class RayTaskDispatcher:
 
     async def _run_dispatch_loop(self) -> None:
         """Run the long-lived dispatcher loop with heartbeat and reconciliation."""
-        round_count = 0
         current_task = asyncio.current_task()
 
         try:
-            await self._reconcile_active_tasks()
+            await self._resync_active_tenants()
 
             while self.active:
-                round_count += 1
+                try:
+                    await asyncio.wait_for(
+                        self._wake_event.wait(),
+                        timeout=self.config.dispatcher_interval,
+                    )
+                except asyncio.TimeoutError:
+                    pass
+                self._wake_event.clear()
+
                 self.last_heartbeat = datetime.datetime.now(datetime.timezone.utc)
 
-                if self.config.enable_heartbeat:
-                    await self.redis_manager.update_dispatcher_heartbeat()
-
-                if round_count % 10 == 0:
-                    await self._log_dispatcher_stats()
-
                 await self._dispatch_round()
-                await asyncio.sleep(self.config.dispatcher_interval)
+
+                now = asyncio.get_event_loop().time()
+                if now - self._last_reconcile >= self._reconcile_interval:
+                    await self._reconcile_active_tasks()
+                    await self._resync_active_tenants()
+                    if self.config.enable_heartbeat:
+                        await self.redis_manager.update_dispatcher_heartbeat()
+                    self._last_reconcile = now
+                    # Consume any capacity freed by reconciliation without waiting
+                    # for the next wakeup event.
+                    await self._dispatch_round()
+
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -233,31 +276,28 @@ class RayTaskDispatcher:
         _log.debug("=" * 60)
 
     async def _dispatch_round(self) -> None:
-        """Execute one round of fair tenant dispatching.
+        """Execute one round of fair tenant dispatching using the in-memory ordered ring.
 
-        Algorithm:
-        1. Reconcile Redis active-task state against live processing keys.
-        2. Discover all tenants with queued work.
-        3. For each tenant in round-robin order:
-           a. Read current active-task usage from Redis.
-           b. Launch tasks until the tenant reaches its concurrency limit.
-           c. Skip the tenant if it is already at capacity or no task can be dispatched.
-
-        Reconciliation intentionally only fails tasks that had already reached
-        STARTED but no longer have processing state. Tasks still sitting in
-        Ray Serve's backlog may remain in "dispatched" state for a long time,
-        so they are left unresolved rather than being aged out heuristically.
+        Iterates the snapshot of active tenants in arrival order (deque). Tenants
+        removed from _active_tenant_ids during dispatch are skipped as stale deque
+        entries and not re-appended. No Redis SCAN is performed here.
         """
-        await self._reconcile_active_tasks()
-
-        tenants = await self.redis_manager.get_all_tenants_with_tasks()
-        if not tenants:
-            _log.debug("[DISPATCH-ROUND] No tenants with pending tasks")
+        if not self._active_tenant_ids:
+            _log.debug("[DISPATCH-ROUND] No active tenants")
             return
 
-        _log.debug("[DISPATCH-ROUND] Starting: %s tenants with tasks", len(tenants))
+        _log.debug(
+            "[DISPATCH-ROUND] Starting: %s active tenants", len(self._active_tenant_ids)
+        )
 
-        for tenant_id in tenants:
+        active_snapshot = len(self._active_tenant_order)
+        for _ in range(active_snapshot):
+            if not self._active_tenant_order:
+                break
+            tenant_id = self._active_tenant_order.popleft()
+            if tenant_id not in self._active_tenant_ids:
+                continue  # already removed; stale deque entry
+
             try:
                 active_count = await self.redis_manager.get_tenant_active_task_count(
                     tenant_id
@@ -298,6 +338,9 @@ class RayTaskDispatcher:
                     exc_info=True,
                 )
 
+            if tenant_id in self._active_tenant_ids:
+                self._active_tenant_order.append(tenant_id)
+
         _log.debug("[DISPATCH-ROUND] Completed")
 
     async def _dispatch_tenant_task(self, tenant_id: str) -> bool:
@@ -312,6 +355,7 @@ class RayTaskDispatcher:
         task = await self.redis_manager.peek_task(tenant_id)
         if task is None:
             _log.debug("[DISPATCH] Tenant %s: no tasks in queue", tenant_id)
+            self._active_tenant_ids.discard(tenant_id)
             return False
 
         task_size = len(task.sources)
@@ -371,10 +415,15 @@ class RayTaskDispatcher:
                 "[TASK-SUCCESS] %s: replica completed; durable success is replica-owned",
                 task_id,
             )
+            # Capacity freed by the replica; wake dispatch loop for queued work.
+            self._wake_event.set()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            error_message = str(exc) or exc.__class__.__name__
+            error_message = build_public_task_error(
+                exc,
+                debug_enabled=self.config.debug_error_details,
+            )
             _log.error("[TASK-FAILURE] %s: %s", task_id, error_message, exc_info=True)
 
             terminalization = await self.redis_manager.finalize_task_failure_atomic(
@@ -405,6 +454,8 @@ class RayTaskDispatcher:
                     "[TASK-FAILURE] %s: preserving existing durable SUCCESS",
                     task_id,
                 )
+            # Capacity freed; wake dispatch loop for queued work.
+            self._wake_event.set()
 
     async def _reconcile_active_tasks(self) -> None:
         """Reconcile active-task bookkeeping after dispatcher startup and per round.

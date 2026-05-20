@@ -61,6 +61,7 @@ from docling_jobkit.datamodel.result import (
     ZipArchiveResult,
 )
 from docling_jobkit.datamodel.task import Task
+from docling_jobkit.public_errors import render_public_error_list
 
 if TYPE_CHECKING:
     from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
@@ -329,6 +330,7 @@ def process_chunkable_results(
     work_dir: Path,
     chunker_manager: Optional[DocumentChunkerManager] = None,
     callback_invoker: Optional["CallbackInvoker"] = None,
+    debug_error_details: bool = False,
     expected_doc_count: Optional[int] = None,
     start_time: Optional[float] = None,
 ) -> DoclingTaskResult:
@@ -416,7 +418,13 @@ def process_chunkable_results(
             docs_failed.append(
                 FailedDocsItem(
                     source=str(exportable_document.file),
-                    error=str(errors) if errors else "Unknown error",
+                    error=(
+                        render_public_error_list(
+                            errors,
+                            debug_enabled=debug_error_details,
+                        )
+                        or "Unknown error"
+                    ),
                 )
             )
 
@@ -438,7 +446,10 @@ def process_chunkable_results(
                     else None
                 ),
                 doc_hash=exportable_document.document_hash,
-                error=str(errors) if errors else None,
+                error=render_public_error_list(
+                    errors,
+                    debug_enabled=debug_error_details,
+                ),
             )
 
             callback_invoker.invoke_callbacks_async(

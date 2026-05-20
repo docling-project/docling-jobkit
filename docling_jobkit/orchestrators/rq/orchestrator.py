@@ -55,6 +55,7 @@ class RQOrchestratorConfig(BaseModel):
     zombie_reaper_interval: float = 300.0
     zombie_reaper_max_age: float = 3600.0
     result_removal_delay: int = 300  # seconds until result key expires after fetch
+    debug_error_details: bool = False
 
     @model_validator(mode="after")
     def resolve_redis_gate_concurrency(self) -> "RQOrchestratorConfig":
