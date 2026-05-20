@@ -32,6 +32,7 @@ from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.targets import InBodyTarget, PutTarget
 from docling_core.transforms.chunker import BaseChunker
 from docling_core.transforms.chunker.hierarchical_chunker import (
+    ChunkingDocSerializer,
     ChunkingSerializerProvider,
     DocChunk,
     HierarchicalChunker,
@@ -39,6 +40,9 @@ from docling_core.transforms.chunker.hierarchical_chunker import (
 from docling_core.transforms.chunker.hybrid_chunker import HybridChunker
 from docling_core.transforms.chunker.tokenizer.huggingface import (
     HuggingFaceTokenizer,
+)
+from docling_core.transforms.serializer.markdown import (
+    MarkdownTableSerializer,
 )
 from docling_core.types.doc.document import DoclingDocument, ImageRefMode
 
@@ -64,20 +68,31 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
-class MarkdownTableSerializerProvider(ChunkingSerializerProvider):
-    """Serializer provider that uses markdown table format for table serialization."""
+class MarkdownChunkingSerializerProvider(ChunkingSerializerProvider):
+    """Custom serializer provider that can be configured to use markdown serializers based on chunking options."""
 
-    def get_serializer(self, doc):
-        """Get a serializer that uses markdown table format."""
-        from docling_core.transforms.chunker.hierarchical_chunker import (
-            ChunkingDocSerializer,
-        )
-        from docling_core.transforms.serializer.markdown import MarkdownTableSerializer
+    def __init__(
+        self,
+        *,
+        use_markdown_tables: bool = False,
+        use_markdown_images: bool = False,
+        image_placeholder: Optional[str] = None,
+    ):
+        self._use_markdown_tables = use_markdown_tables
+        self._use_markdown_images = use_markdown_images
+        self._image_placeholder = image_placeholder
 
-        return ChunkingDocSerializer(
-            doc=doc,
-            table_serializer=MarkdownTableSerializer(),
-        )
+    def get_serializer(self, doc: DoclingDocument):
+        serializers: dict[str, Any] = {}
+        if self._use_markdown_tables:
+            serializers["table_serializer"] = MarkdownTableSerializer()
+        markdownParams = ChunkingDocSerializer.model_fields["params"].default
+        if self._use_markdown_images:
+            markdownParams = markdownParams.model_copy(
+                update={"image_placeholder": self._image_placeholder}
+            )
+
+        return ChunkingDocSerializer(doc=doc, params=markdownParams, **serializers)
 
 
 class DocumentChunkerConfig(BaseModel):
@@ -94,7 +109,10 @@ class DocumentChunkerConfig(BaseModel):
 class DocumentChunkerManager:
     """Handles document chunking for RAG workflows using chunkers from docling-core."""
 
-    def __init__(self, config: Optional[DocumentChunkerConfig] = None):
+    def __init__(
+        self,
+        config: Optional[DocumentChunkerConfig] = None,
+    ):
         self.config = config or DocumentChunkerConfig()
         self._cache_lock = threading.Lock()
         self._options_map: dict[bytes, BaseChunkerOptions] = {}
@@ -109,12 +127,11 @@ class DocumentChunkerManager:
                 options = self._options_map[cache_key]
 
                 # Create serializer provider based on markdown table option
-                if options.use_markdown_tables:
-                    serializer_provider: ChunkingSerializerProvider = (
-                        MarkdownTableSerializerProvider()
-                    )
-                else:
-                    serializer_provider = ChunkingSerializerProvider()
+                serializer_provider = MarkdownChunkingSerializerProvider(
+                    use_markdown_tables=options.use_markdown_tables,
+                    use_markdown_images=options.use_markdown_images,
+                    image_placeholder=options.image_placeholder,
+                )
 
                 if isinstance(options, HybridChunkerOptions):
                     # Create tokenizer
@@ -155,22 +172,26 @@ class DocumentChunkerManager:
 
         return _get_chunker_from_cache
 
-    def _get_chunker(self, options: BaseChunkerOptions) -> BaseChunker:
+    def _get_chunker(
+        self,
+        options: BaseChunkerOptions,
+    ) -> BaseChunker:
         """Get or create a cached BaseChunker instance."""
-        # Create a cache key based on chunking options using the same pattern as the repo
         cache_key = self._generate_cache_key(options)
 
         with self._cache_lock:
             self._options_map[cache_key] = options
             return self._get_chunker_from_cache(cache_key)
 
-    def _generate_cache_key(self, options: BaseChunkerOptions) -> bytes:
+    def _generate_cache_key(
+        self,
+        options: BaseChunkerOptions,
+    ) -> bytes:
         """Generate a deterministic cache key from chunking options."""
-        serialized_data = options.model_dump_json(serialize_as_any=True)
-        options_hash = hashlib.sha1(
-            serialized_data.encode(), usedforsecurity=False
-        ).digest()
-        return options_hash
+        # BasechunkerOptions will have the image_placeholder options that way we only need the basechunker options to generate the cache key.
+        chunking_data = options.model_dump_json(serialize_as_any=True)
+
+        return hashlib.sha1(chunking_data.encode(), usedforsecurity=False).digest()
 
     def clear_cache(self):
         """Clear the chunker cache."""
@@ -211,6 +232,11 @@ class DocumentChunkerManager:
             # Store additional metadata
             if doc_chunk.meta.origin:
                 metadata["origin"] = doc_chunk.meta.origin
+
+            metadata["has_image"] = any(
+                item.self_ref.startswith("#/pictures/")
+                for item in doc_chunk.meta.doc_items
+            )
 
             # Get the text
             text = chunker.contextualize(doc_chunk)
@@ -340,6 +366,12 @@ def process_chunkable_results(
         output_dir.mkdir(parents=True, exist_ok=True)
 
     for idx, exportable_document in enumerate(exportable_documents):
+        _log.debug(
+            "Document %s | status=%s | errors=%s",
+            exportable_document.file.name,
+            exportable_document.status,
+            exportable_document.errors,
+        )
         errors = exportable_document.errors
         filename = exportable_document.file.name
         if (
