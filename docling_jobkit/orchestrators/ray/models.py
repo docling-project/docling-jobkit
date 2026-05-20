@@ -2,12 +2,14 @@
 
 import datetime
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
+from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 
@@ -181,3 +183,47 @@ class TaskTerminalizationResult:
     status_changed: bool
     capacity_released: bool
     result_key: Optional[str] = None
+
+
+class SliceSpec(BaseModel):
+    page_range: tuple[int, int] = Field(description="Absolute page range for the slice")
+    slice_index: int = Field(description="Ascending slice index in the slice plan")
+
+
+class SlicePlan(BaseModel):
+    total_pages: int = Field(description="Total pages in the materialized source PDF")
+    slices: list[SliceSpec] = Field(description="Slice plan in ascending page order")
+    effective_page_range: tuple[int, int] = Field(
+        description="Caller page range intersected with the source page count"
+    )
+
+
+class PassthroughTaskRequest(BaseModel):
+    kind: str = Field(default="passthrough_task")
+    task: Task = Field(description="Original parent task")
+
+
+class MaterializedConvertRequest(BaseModel):
+    kind: str = Field(default="materialized_convert")
+    artifact_ref: Any = Field(description="Ray ObjectRef with shared PDF bytes")
+    filename: str = Field(description="Filename for the materialized PDF")
+    task: Task = Field(description="Parent task metadata with sources stripped")
+    source_count: int = Field(description="Original source count for callbacks")
+
+
+class SliceConvertRequest(BaseModel):
+    kind: str = Field(default="slice_convert")
+    artifact_ref: Any = Field(description="Ray ObjectRef with shared PDF bytes")
+    filename: str = Field(description="Filename for the materialized PDF")
+    options: ConvertDocumentsOptions = Field(description="Parent conversion options")
+    page_range: tuple[int, int] = Field(description="Absolute child page range")
+    slice_index: int = Field(description="Ascending child slice index")
+
+
+ConverterRequest = (
+    PassthroughTaskRequest | MaterializedConvertRequest | SliceConvertRequest
+)
+
+
+class ConverterTaskResult(BaseModel):
+    task_result: DoclingTaskResult = Field(description="Final task result")

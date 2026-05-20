@@ -42,6 +42,15 @@ class TestRayRedisGate:
         )
         assert config.redis_gate_concurrency == 10
 
+    def test_slice_parallelism_defaults_to_max_concurrent_tasks(self):
+        config = RayOrchestratorConfig(
+            redis_url="redis://localhost:6379/",
+            max_concurrent_tasks=7,
+            max_page_slice_parallelism=None,
+        )
+
+        assert config.max_page_slice_parallelism == 7
+
     @pytest.mark.asyncio
     async def test_enqueue_raises_backpressure_when_gate_saturated(self):
         config = RayOrchestratorConfig(

@@ -5,6 +5,7 @@ import os
 import shutil
 import threading
 import time
+import warnings
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
@@ -48,6 +49,7 @@ from docling_core.types.doc.document import DoclingDocument, ImageRefMode
 from docling_jobkit.convert.results import (
     _export_document_as_content,
 )
+from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import (
     ChunkedDocumentResult,
     ChunkedDocumentResultItem,
@@ -263,7 +265,7 @@ class DocumentChunkerManager:
 
 
 def _export_document_for_chunking(
-    conv_res: ConversionResult,
+    exportable_document: ExportableDocument,
     output_dir: Path,
     image_mode: ImageRefMode,
 ) -> ExportDocumentResponse:
@@ -274,11 +276,18 @@ def _export_document_for_chunking(
     temporary file is then removed because the converted content is already
     embedded inside ``chunked_result.json``.
     """
-    document = ExportDocumentResponse(filename=conv_res.input.file.name)
+    document = ExportDocumentResponse(filename=exportable_document.file.name)
 
-    if conv_res.status == ConversionStatus.SUCCESS:
+    if (
+        exportable_document.status
+        in (
+            ConversionStatus.SUCCESS,
+            ConversionStatus.PARTIAL_SUCCESS,
+        )
+        and exportable_document.document is not None
+    ):
         artifacts_dir = output_dir / "artifacts"
-        new_doc = conv_res.document._make_copy_with_refmode(
+        new_doc = exportable_document.document._make_copy_with_refmode(
             artifacts_dir,
             image_mode,
             page_no=None,
@@ -287,8 +296,8 @@ def _export_document_for_chunking(
         document.json_content = new_doc
 
         if image_mode == ImageRefMode.REFERENCED:
-            temp_fname = output_dir / f"{conv_res.input.file.stem}.json"
-            conv_res.document.save_as_json(
+            temp_fname = output_dir / f"{exportable_document.file.stem}.json"
+            exportable_document.document.save_as_json(
                 filename=temp_fname,
                 image_mode=image_mode,
                 artifacts_dir=artifacts_dir,
@@ -314,20 +323,24 @@ def _export_chunking_result(
         )
 
 
-def process_chunk_results(
+def process_chunkable_results(
     task: Task,
-    conv_results: Iterable[ConversionResult],
+    exportable_documents: Iterable[ExportableDocument],
     work_dir: Path,
     chunker_manager: Optional[DocumentChunkerManager] = None,
     callback_invoker: Optional["CallbackInvoker"] = None,
+    expected_doc_count: Optional[int] = None,
+    start_time: Optional[float] = None,
 ) -> DoclingTaskResult:
     # Let's start by processing the documents
-    start_time = time.monotonic()
+    start_time = start_time if start_time is not None else time.monotonic()
     chunking_options = task.chunking_options or HybridChunkerOptions()
     conversion_options = task.convert_options or ConvertDocumentsOptions()
 
     # 1. Send ProgressSetNumDocs at start
-    total_docs = len(task.sources)
+    total_docs = (
+        expected_doc_count if expected_doc_count is not None else len(task.sources)
+    )
     if callback_invoker and task.callbacks and total_docs:
         callback_invoker.invoke_callbacks_async(
             callbacks=task.callbacks,
@@ -338,7 +351,6 @@ def process_chunk_results(
     # We have some results, let's prepare the response
     task_result: ResultType
     chunks: list[ChunkedDocumentResultItem] = []
-    conv_results_list = []
     documents: list[ExportResult] = []
     num_succeeded = 0
     num_failed = 0
@@ -353,20 +365,23 @@ def process_chunk_results(
         output_dir = work_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    for idx, conv_res in enumerate(conv_results):
-        # Add detailed logging for each document conversion result , in case errors in conversion or chunking occur we can easily identify the bug.
+    for idx, exportable_document in enumerate(exportable_documents):
         _log.debug(
-            f"Document {conv_res.input.file.name} | status={conv_res.status} | errors={conv_res.errors}"
+            "Document %s | status=%s | errors=%s",
+            exportable_document.file.name,
+            exportable_document.status,
+            exportable_document.errors,
         )
-        errors = conv_res.errors
-        # Document has JUST been converted (lazy evaluation triggered here)
-        conv_results_list.append(conv_res)
-        filename = conv_res.input.file.name
-        if conv_res.status == ConversionStatus.SUCCESS:
+        errors = exportable_document.errors
+        filename = exportable_document.file.name
+        if (
+            exportable_document.status == ConversionStatus.SUCCESS
+            and exportable_document.document is not None
+        ):
             try:
                 chunks.extend(
                     chunker_manager.chunk_document(
-                        document=conv_res.document,
+                        document=exportable_document.document,
                         filename=filename,
                         options=chunking_options,
                     )
@@ -374,7 +389,7 @@ def process_chunk_results(
                 num_succeeded += 1
             except Exception as e:
                 _log.exception(
-                    f"Document chunking failed for {conv_res.input.file}: {e}",
+                    f"Document chunking failed for {exportable_document.file}: {e}",
                     stack_info=True,
                 )
                 num_failed += 1
@@ -389,16 +404,18 @@ def process_chunk_results(
                 # ]
 
         else:
-            _log.warning(f"Document {conv_res.input.file} failed to convert.")
+            _log.warning(f"Document {exportable_document.file} failed to convert.")
             num_failed += 1
 
         # Track for final summary
-        if conv_res.status == ConversionStatus.SUCCESS:
-            docs_succeeded.append(SucceededDocsItem(source=str(conv_res.input.file)))
+        if exportable_document.status == ConversionStatus.SUCCESS:
+            docs_succeeded.append(
+                SucceededDocsItem(source=str(exportable_document.file))
+            )
         else:
             docs_failed.append(
                 FailedDocsItem(
-                    source=str(conv_res.input.file),
+                    source=str(exportable_document.file),
                     error=str(errors) if errors else "Unknown error",
                 )
             )
@@ -406,15 +423,21 @@ def process_chunk_results(
         # 2. Send per-document callback (non-blocking)
         if callback_invoker and task.callbacks:
             document_info = DocumentCompletedItem(
-                source=str(conv_res.input.file),
-                status=conv_res.status,
-                num_pages=(len(conv_res.document.pages) if conv_res.document else None),
-                processing_time=(
-                    sum(sum(item.times) for item in conv_res.timings.values())
-                    if conv_res.timings
+                source=str(exportable_document.file),
+                status=exportable_document.status,
+                num_pages=(
+                    len(exportable_document.document.pages)
+                    if exportable_document.document
                     else None
                 ),
-                doc_hash=conv_res.input.document_hash,
+                processing_time=(
+                    sum(
+                        sum(item.times) for item in exportable_document.timings.values()
+                    )
+                    if exportable_document.timings
+                    else None
+                ),
+                doc_hash=exportable_document.document_hash,
                 error=str(errors) if errors else None,
             )
 
@@ -437,7 +460,7 @@ def process_chunk_results(
 
             if isinstance(task.target, InBodyTarget):
                 doc_content = _export_document_as_content(
-                    conv_res,
+                    exportable_document,
                     export_json=True,
                     export_doctags=False,
                     export_html=False,
@@ -448,7 +471,7 @@ def process_chunk_results(
                 )
             elif output_dir is not None:
                 doc_content = _export_document_for_chunking(
-                    conv_res,
+                    exportable_document,
                     output_dir=output_dir,
                     image_mode=conversion_options.image_export_mode,
                 )
@@ -457,14 +480,12 @@ def process_chunk_results(
 
         doc_result = ExportResult(
             content=doc_content,
-            status=conv_res.status,
-            timings=conv_res.timings,
+            status=exportable_document.status,
+            timings=exportable_document.timings,
             errors=errors,
         )
 
         documents.append(doc_result)
-
-    conv_results = conv_results_list
     num_total = num_succeeded + num_failed
     processing_time = time.monotonic() - start_time
     _log.info(
@@ -537,4 +558,28 @@ def process_chunk_results(
         num_succeeded=num_succeeded,
         num_failed=num_failed,
         num_converted=num_total,
+    )
+
+
+def process_chunk_results(
+    task: Task,
+    conv_results: Iterable[ConversionResult],
+    work_dir: Path,
+    chunker_manager: Optional[DocumentChunkerManager] = None,
+    callback_invoker: Optional["CallbackInvoker"] = None,
+) -> DoclingTaskResult:
+    warnings.warn(
+        "process_chunk_results() is deprecated; use process_chunkable_results()",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return process_chunkable_results(
+        task=task,
+        exportable_documents=(
+            ExportableDocument.from_conversion_result(conv_res)
+            for conv_res in conv_results
+        ),
+        work_dir=work_dir,
+        chunker_manager=chunker_manager,
+        callback_invoker=callback_invoker,
     )

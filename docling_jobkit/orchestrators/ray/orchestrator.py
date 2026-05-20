@@ -30,44 +30,15 @@ from docling_jobkit.orchestrators.base_orchestrator import (
     OrchestratorError,
     TaskNotFoundError,
 )
-from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
+from docling_jobkit.orchestrators.ray.config import (
+    RayOrchestratorConfig,
+    parse_memory_bytes,
+)
 from docling_jobkit.orchestrators.ray.dispatcher import RayTaskDispatcher
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 from docling_jobkit.orchestrators.ray.serve_deployment import deploy_processor
 
 _log = logging.getLogger(__name__)
-
-
-def _parse_memory_string(memory_str: str) -> int:
-    """Parse memory string like '10GB' to bytes.
-
-    Args:
-        memory_str: Memory string (e.g., "10GB", "512MB", "1024KB")
-
-    Returns:
-        Memory size in bytes
-
-    Raises:
-        ValueError: If format is invalid
-    """
-    import re
-
-    match = re.match(r"(\d+(?:\.\d+)?)\s*([KMGT]?B?)", memory_str.upper())
-    if not match:
-        raise ValueError(f"Invalid memory format: {memory_str}")
-
-    value, unit = match.groups()
-    value = float(value)
-
-    multipliers = {
-        "B": 1,
-        "KB": 1024,
-        "MB": 1024**2,
-        "GB": 1024**3,
-        "TB": 1024**4,
-    }
-
-    return int(value * multipliers.get(unit, 1))
 
 
 class QueueLimitExceededError(OrchestratorError):
@@ -255,7 +226,7 @@ class RayOrchestrator(BaseOrchestrator):
 
         if config.ray_object_store_memory:
             try:
-                memory_bytes = _parse_memory_string(config.ray_object_store_memory)
+                memory_bytes = parse_memory_bytes(config.ray_object_store_memory)
                 init_kwargs["object_store_memory"] = memory_bytes
                 _log.info(
                     f"Setting Ray object store memory to {config.ray_object_store_memory}"
@@ -270,13 +241,22 @@ class RayOrchestrator(BaseOrchestrator):
         if self.deployment_handle is None:
             raise DispatcherUnavailableError("Ray runtime is not initialized")
 
+        dispatcher_kwargs: dict[str, Any] = {
+            "name": self.dispatcher_name,
+            "lifetime": "detached",
+            "get_if_exists": True,
+            "num_cpus": self.config.dispatcher_num_cpus,
+            "max_restarts": self.config.dispatcher_max_restarts,
+            "max_task_retries": self.config.dispatcher_max_task_retries,
+        }
+        if self.config.dispatcher_memory_request is not None:
+            dispatcher_kwargs["memory"] = parse_memory_bytes(
+                self.config.dispatcher_memory_request
+            )
+
         _log.info("Binding to named Ray Task Dispatcher actor")
         return RayTaskDispatcher.options(  # type: ignore[attr-defined]
-            name=self.dispatcher_name,
-            lifetime="detached",
-            get_if_exists=True,
-            max_restarts=self.config.dispatcher_max_restarts,
-            max_task_retries=self.config.dispatcher_max_task_retries,
+            **dispatcher_kwargs
         ).remote(self.config, self.deployment_handle)
 
     async def _initialize_ray_runtime(self) -> None:
@@ -324,7 +304,7 @@ class RayOrchestrator(BaseOrchestrator):
                 converter_manager_config=self.cm.config,
                 config=config,
                 redis_url=config.redis_url,
-                deployment_name="docling_processor",
+                app_name="docling_processor",
             )
             self.dispatcher = self._bind_dispatcher()
             _log.info("Ray runtime initialized")

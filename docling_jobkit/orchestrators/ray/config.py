@@ -1,10 +1,34 @@
 """Configuration for Ray orchestrator."""
 
+import logging
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_log = logging.getLogger(__name__)
+
+_IEC_MULTIPLIERS = {"gi": 1024**3, "mi": 1024**2, "ki": 1024}
+_SI_MULTIPLIERS = {"b": 1, "kb": 1024, "mb": 1024**2, "gb": 1024**3, "tb": 1024**4}
+
+
+def parse_memory_bytes(value: Optional[str]) -> Optional[int]:
+    """Parse a memory string to bytes. Returns None for None/empty input.
+
+    Accepts IEC binary prefixes (1Gi, 512Mi) and SI suffixes (8GB, 512MB).
+    """
+    if not value:
+        return None
+    m = re.match(r"^(\d+(?:\.\d+)?)\s*(Gi|Mi|Ki|GB|MB|KB|TB|B)$", value, re.IGNORECASE)
+    if not m:
+        raise ValueError(
+            f"Invalid memory format: {value!r} (expected e.g. '8Gi', '512MB')"
+        )
+    amount, unit = m.groups()
+    multiplier = _IEC_MULTIPLIERS.get(unit.lower()) or _SI_MULTIPLIERS[unit.lower()]
+    return int(float(amount) * multiplier)
 
 
 class RayOrchestratorConfig(BaseSettings):
@@ -174,8 +198,67 @@ class RayOrchestratorConfig(BaseSettings):
             "force-killing it (None = Ray Serve default)."
         ),
     )
-    ray_num_cpus_per_actor: float = Field(
-        default=1.0, description="Number of CPUs to allocate per Ray Serve replica"
+    converter_actor_num_cpus: float = Field(
+        default=1.0,
+        description="Number of CPUs to allocate per Ray Serve replica",
+        validation_alias=AliasChoices(
+            "converter_actor_num_cpus",
+            "ray_num_cpus_per_actor",
+        ),
+    )
+    enable_pdf_page_slice_fanout: bool = Field(
+        default=False,
+        description="Enable internal PDF page-slicing fan-out for eligible Ray tasks",
+    )
+    max_page_slice_size: int = Field(
+        default=10,
+        ge=1,
+        description="Maximum page count per internal child slice when fan-out is enabled",
+    )
+    max_page_slice_parallelism: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Concurrent child slice requests per parent task. "
+            "Defaults to max_concurrent_tasks when unset."
+        ),
+    )
+    coordinator_min_actors: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Coordinator autoscaling minimum replicas; defaults to min_actors",
+    )
+    coordinator_max_actors: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Coordinator autoscaling maximum replicas; defaults to max_actors",
+    )
+    coordinator_target_requests_per_replica: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Coordinator autoscaling target requests per replica",
+    )
+    coordinator_max_ongoing_requests_per_replica: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Coordinator hard cap on in-flight requests per replica",
+    )
+    coordinator_actor_num_cpus: float = Field(
+        default=0.25,
+        gt=0,
+        description="Coordinator Ray CPU request per replica",
+        validation_alias=AliasChoices(
+            "coordinator_actor_num_cpus",
+            "coordinator_num_cpus",
+        ),
+    )
+    coordinator_actor_memory_request: Optional[str] = Field(
+        default=None,
+        description="Coordinator Ray memory request per replica",
+        validation_alias=AliasChoices(
+            "coordinator_actor_memory_request",
+            "coordinator_memory_limit",
+        ),
     )
 
     # Fault Tolerance & Retry Configuration
@@ -196,6 +279,13 @@ class RayOrchestratorConfig(BaseSettings):
     )
     dispatcher_max_task_retries: int = Field(
         default=3, description="Ray-level task retries for dispatcher operations"
+    )
+    dispatcher_num_cpus: float = Field(
+        default=0.25, gt=0, description="Ray CPU request for the dispatcher actor"
+    )
+    dispatcher_memory_request: Optional[str] = Field(
+        default=None,
+        description='Ray memory request for the dispatcher actor (e.g., "256MB")',
     )
 
     # Timeouts
@@ -232,9 +322,13 @@ class RayOrchestratorConfig(BaseSettings):
     )
 
     # Resource Management & Memory Monitoring
-    ray_memory_limit_per_actor: Optional[str] = Field(
+    converter_actor_memory_request: Optional[str] = Field(
         default=None,
-        description='Memory limit per Ray actor (e.g., "4GB")',
+        description='Ray memory request per converter actor (e.g., "8GB")',
+        validation_alias=AliasChoices(
+            "converter_actor_memory_request",
+            "ray_memory_limit_per_actor",
+        ),
     )
     ray_object_store_memory: Optional[str] = Field(
         default=None,
@@ -260,9 +354,7 @@ class RayOrchestratorConfig(BaseSettings):
         default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR)"
     )
 
-    @model_validator(mode="after")
-    def validate_request_concurrency(self) -> "RayOrchestratorConfig":
-        """Ensure Serve autoscaling target does not exceed the hard replica cap."""
+    def _validate_worker_request_concurrency(self) -> None:
         if (
             self.max_ongoing_requests_per_replica is not None
             and self.target_requests_per_replica > self.max_ongoing_requests_per_replica
@@ -271,6 +363,67 @@ class RayOrchestratorConfig(BaseSettings):
                 "target_requests_per_replica must be <= "
                 "max_ongoing_requests_per_replica"
             )
+
+    def _normalize_coordinator_config(self) -> None:
+        if self.max_page_slice_parallelism is None:
+            self.max_page_slice_parallelism = self.max_concurrent_tasks
+
+        if self.coordinator_min_actors is None:
+            self.coordinator_min_actors = self.min_actors
+
+        if self.coordinator_max_actors is None:
+            self.coordinator_max_actors = self.max_actors
+
+        if self.coordinator_target_requests_per_replica is None:
+            self.coordinator_target_requests_per_replica = max(
+                self.target_requests_per_replica,
+                self.coordinator_max_ongoing_requests_per_replica or 1,
+            )
+
+        if self.coordinator_max_ongoing_requests_per_replica is None:
+            self.coordinator_max_ongoing_requests_per_replica = max(
+                self.max_ongoing_requests_per_replica
+                or self.target_requests_per_replica,
+                self.coordinator_target_requests_per_replica,
+            )
+
+        if self.coordinator_actor_memory_request is None:
+            self.coordinator_actor_memory_request = self.converter_actor_memory_request
+
+    @model_validator(mode="before")
+    @classmethod
+    def warn_deprecated_ray_settings(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            deprecated_keys = {
+                "ray_num_cpus_per_actor": "converter_actor_num_cpus",
+                "ray_memory_limit_per_actor": "converter_actor_memory_request",
+                "coordinator_num_cpus": "coordinator_actor_num_cpus",
+                "coordinator_memory_limit": "coordinator_actor_memory_request",
+            }
+            for old_key, new_key in deprecated_keys.items():
+                if old_key in data:
+                    _log.warning("%s is deprecated; use %s instead.", old_key, new_key)
+
+        return data
+
+    def _validate_coordinator_request_concurrency(self) -> None:
+        assert self.coordinator_target_requests_per_replica is not None
+        assert self.coordinator_max_ongoing_requests_per_replica is not None
+        if (
+            self.coordinator_target_requests_per_replica
+            > self.coordinator_max_ongoing_requests_per_replica
+        ):
+            raise ValueError(
+                "coordinator_target_requests_per_replica must be <= "
+                "coordinator_max_ongoing_requests_per_replica"
+            )
+
+    @model_validator(mode="after")
+    def validate_request_concurrency(self) -> "RayOrchestratorConfig":
+        """Ensure Serve autoscaling target does not exceed the hard replica cap."""
+        self._validate_worker_request_concurrency()
+        self._normalize_coordinator_config()
+        self._validate_coordinator_request_concurrency()
 
         if self.redis_gate_concurrency is None:
             self.redis_gate_concurrency = max(

@@ -24,7 +24,7 @@ from docling.datamodel.stage_model_specs import ObjectDetectionModelSpec
 from docling.models.utils.hf_model_download import download_hf_model
 from docling.utils.model_downloader import download_models
 
-from docling_jobkit.convert.chunking import process_chunk_results
+from docling_jobkit.convert.chunking import process_chunkable_results
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
@@ -517,7 +517,7 @@ async def test_clear_converters_clears_caches():
 
 @pytest.mark.asyncio
 async def test_chunker_manager_shared_across_workers():
-    """Test that chunker_manager is passed to process_chunk_results in workers."""
+    """Test that chunker_manager is passed to process_chunkable_results in workers."""
     from unittest.mock import patch
 
     cm_config = DoclingConverterManagerConfig()
@@ -533,10 +533,10 @@ async def test_chunker_manager_shared_across_workers():
     # Start queue processing
     queue_task = asyncio.create_task(orchestrator.process_queue())
 
-    # Patch process_chunk_results to capture the call arguments
+    # Patch process_chunkable_results to capture the call arguments
     with patch(
-        "docling_jobkit.orchestrators.local.worker.process_chunk_results",
-        wraps=process_chunk_results,
+        "docling_jobkit.orchestrators.local.worker.process_chunkable_results",
+        wraps=process_chunkable_results,
     ) as mock_process:
         # Enqueue a chunking task
         doc_filename = Path(__file__).parent / "2206.01062v1-pg4.pdf"
@@ -562,14 +562,14 @@ async def test_chunker_manager_shared_across_workers():
         assert task_result is not None
         assert isinstance(task_result.result, ChunkedDocumentResult)
 
-        # Verify process_chunk_results was called with the orchestrator's chunker_manager
-        assert mock_process.called, "process_chunk_results should have been called"
+        # Verify process_chunkable_results was called with the orchestrator's chunker_manager
+        assert mock_process.called, "process_chunkable_results should have been called"
         call_kwargs = mock_process.call_args.kwargs
         assert "chunker_manager" in call_kwargs, (
             "chunker_manager should be passed as kwarg"
         )
         assert call_kwargs["chunker_manager"] is expected_chunker_manager, (
-            "The same chunker_manager instance from orchestrator should be passed to process_chunk_results"
+            "The same chunker_manager instance from orchestrator should be passed to process_chunkable_results"
         )
 
     # Cleanup

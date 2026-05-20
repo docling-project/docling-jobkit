@@ -6,19 +6,19 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from docling.datamodel.base_models import ConversionStatus
-from docling.datamodel.document import ConversionResult, InputDocument
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.targets import ZipTarget
 
 from docling_jobkit.convert.chunking import (
     DocumentChunkerManager,
     _export_chunking_result,
-    process_chunk_results,
+    process_chunkable_results,
 )
 from docling_jobkit.datamodel.chunking import (
     HierarchicalChunkerOptions,
     HybridChunkerOptions,
 )
+from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import (
     ChunkedDocumentResult,
     ChunkedDocumentResultItem,
@@ -75,13 +75,12 @@ class TestDocumentChunker:
 
     def test_chunk_conversion_result_failure(self):
         """Test chunking with failed conversion result."""
-        # Create failed conversion result with minimal required fields
-        failed_result = Mock(spec=ConversionResult)
-        failed_result.input = Mock(spec=InputDocument)
-        failed_result.input.file = Path("file.pdf")
-        failed_result.status = ConversionStatus.FAILURE
-        failed_result.errors = []
-        failed_result.timings = {}
+        failed_result = ExportableDocument(
+            file=Path("file.pdf"),
+            status=ConversionStatus.FAILURE,
+            errors=[],
+            timings={},
+        )
 
         workdir = tempfile.mkdtemp()
 
@@ -91,9 +90,9 @@ class TestDocumentChunker:
             chunking_options=HybridChunkerOptions(),
             target=InBodyTarget(),
         )
-        task_result = process_chunk_results(
+        task_result = process_chunkable_results(
             task=task,
-            conv_results=[failed_result],
+            exportable_documents=[failed_result],
             work_dir=workdir,
         )
         result = task_result.result
@@ -238,14 +237,17 @@ class TestChunkedDocumentResponse:
 
     def test_chunk_conversion_result_zip_target(self):
         """Test chunking with zip target exports chunks into the archive."""
-        conv_res = Mock(spec=ConversionResult)
-        conv_res.input = Mock()
-        conv_res.input.file = Path("test.pdf")
-        conv_res.status = ConversionStatus.SUCCESS
-        conv_res.errors = []
-        conv_res.timings = {}
-        conv_res.document = Mock()
-        conv_res.document.pages = [Mock()]
+        exportable_document = ExportableDocument.model_construct(
+            file=Path("test.pdf"),
+            document_hash=None,
+            status=ConversionStatus.SUCCESS,
+            errors=[],
+            timings={},
+            document=Mock(),
+            page_range=None,
+            slice_index=None,
+        )
+        exportable_document.document.pages = [Mock()]
 
         chunk_manager = Mock(spec=DocumentChunkerManager)
         chunk_manager.chunk_document.return_value = [
@@ -275,9 +277,9 @@ class TestChunkedDocumentResponse:
             convert_options=ConvertDocumentsOptions(),
         )
 
-        task_result = process_chunk_results(
+        task_result = process_chunkable_results(
             task=task,
-            conv_results=[conv_res],
+            exportable_documents=[exportable_document],
             work_dir=Path(workdir),
             chunker_manager=chunk_manager,
         )

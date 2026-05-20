@@ -8,9 +8,10 @@ from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.sources import FileSource, HttpSource
 from docling.datamodel.service.tasks import TaskType
 
-from docling_jobkit.convert.chunking import process_chunk_results
+from docling_jobkit.convert.chunking import process_chunkable_results
 from docling_jobkit.convert.manager import DoclingConverterManager
-from docling_jobkit.convert.results import process_export_results
+from docling_jobkit.convert.results import process_exportable_results
+from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
@@ -61,14 +62,7 @@ class AsyncLocalWorker:
                     # Notify clients about queue updates
                     await self.orchestrator.notifier.notify_queue_positions()
 
-                # Initialize callback invoker if callbacks are configured
-                callback_invoker = None
-                if task.callbacks:
-                    callback_invoker = CallbackInvoker(
-                        max_retries=3,
-                        timeout=30.0,
-                        retry_delay=1.0,
-                    )
+                callback_invoker = CallbackInvoker() if task.callbacks else None
 
                 # Define a callback function to send progress updates to the client.
                 def run_task() -> DoclingTaskResult:
@@ -90,20 +84,24 @@ class AsyncLocalWorker:
                         options=task.convert_options,
                         headers=headers,
                     )
+                    exportable_documents = (
+                        ExportableDocument.from_conversion_result(conv_res)
+                        for conv_res in conv_results
+                    )
 
                     # The real processing will happen here
                     processed_results: DoclingTaskResult
                     if task.task_type == TaskType.CONVERT:
-                        processed_results = process_export_results(
+                        processed_results = process_exportable_results(
                             task=task,
-                            conv_results=conv_results,
+                            exportable_documents=exportable_documents,
                             work_dir=workdir,
                             callback_invoker=callback_invoker,
                         )
                     elif task.task_type == TaskType.CHUNK:
-                        processed_results = process_chunk_results(
+                        processed_results = process_chunkable_results(
                             task=task,
-                            conv_results=conv_results,
+                            exportable_documents=exportable_documents,
                             work_dir=workdir,
                             chunker_manager=self.orchestrator.chunker_manager,
                             callback_invoker=callback_invoker,
