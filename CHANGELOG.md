@@ -1,3 +1,16 @@
+## [v1.19.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.19.0) - 2026-05-20
+
+### Feature
+
+* Event-driven ray dispatcher ([#148](https://github.com/docling-project/docling-jobkit/issues/148)) ([`ec28a43`](https://github.com/docling-project/docling-jobkit/commit/ec28a432550dfc08c365788f1079b19b1f709ae5))
+* PDF page slicing and concurrent processing for long docs ([#128](https://github.com/docling-project/docling-jobkit/issues/128)) ([`2ded0f0`](https://github.com/docling-project/docling-jobkit/commit/2ded0f05e01f7a940dba87f8f18ae13819f498db))
+* Add Image Position References to Document Chunks ([#141](https://github.com/docling-project/docling-jobkit/issues/141)) ([`589c861`](https://github.com/docling-project/docling-jobkit/commit/589c861171baaa920cde3e68bb7269739e54f1a7))
+* Implement file/ZIP export for chunking pipeline (support to_formats + ZipTarget) ([#140](https://github.com/docling-project/docling-jobkit/issues/140)) ([`b6b2e02`](https://github.com/docling-project/docling-jobkit/commit/b6b2e02a2d7762038335681b00b00087855d4b3e))
+
+### Documentation
+
+* **security:** Add GitHub Private Vulnerability Reporting ([#144](https://github.com/docling-project/docling-jobkit/issues/144)) ([`e94922a`](https://github.com/docling-project/docling-jobkit/commit/e94922a33387c6bfdb632bda833acf3088c3cc47))
+
 ## [v1.18.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.18.1) - 2026-05-07
 
 ### Fix
