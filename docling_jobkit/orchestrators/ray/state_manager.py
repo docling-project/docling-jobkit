@@ -17,6 +17,7 @@ from docling.datamodel.service.tasks import TaskType
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
+from docling_jobkit.orchestrators import _redis as _redis_factory
 from docling_jobkit.orchestrators.ray.models import (
     RedisTaskMetadata,
     TaskTerminalizationResult,
@@ -67,7 +68,7 @@ class RedisStateManager:
         """Initialize Redis state manager.
 
         Args:
-            redis_url: Redis connection URL (supports standard, sentinel, cluster)
+            redis_url: Redis connection URL
             results_ttl: Time-to-live for task results in seconds
             results_prefix: Prefix for result keys
             sub_channel: Pub/sub channel name for task updates
@@ -119,21 +120,29 @@ class RedisStateManager:
     async def connect(self):
         """Establish Redis connection.
 
-        Creates the connection pool in the current event loop to avoid
-        'Future attached to a different loop' errors.
+        Creates the connection pool / Sentinel-resolved client in the current
+        event loop to avoid 'Future attached to a different loop' errors.
         """
         if self.redis is None:
-            # Create connection pool in the current event loop
-            self.pool = ConnectionPool.from_url(
-                self.redis_url,
+            settings = _redis_factory.RedisSettings(
+                url=self.redis_url,
                 max_connections=self.max_connections,
                 socket_timeout=self.socket_timeout,
                 socket_connect_timeout=self.socket_connect_timeout,
                 decode_responses=False,  # We handle encoding/decoding
             )
-            self.redis = Redis(connection_pool=self.pool)
+            self.redis = _redis_factory.make_async_client(settings)
+            self.pool = self.redis.connection_pool
             self._update_task_execution_heartbeat_sha = None
-            _log.info(f"Connected to Redis at {self.redis_url}")
+            if _redis_factory.detect_mode(self.redis_url) == _redis_factory.RedisMode.SENTINEL:
+                target = _redis_factory.parse_sentinel_url(self.redis_url)
+                _log.info(
+                    f"Connected to Redis via Sentinel: "
+                    f"service={target.service_name}, sentinels={target.hosts}, "
+                    f"db={target.db}, ssl={target.ssl}"
+                )
+            else:
+                _log.info(f"Connected to Redis at {self.redis_url}")
 
     async def disconnect(self):
         """Close Redis connection and pool."""

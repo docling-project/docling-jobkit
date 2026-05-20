@@ -354,7 +354,7 @@ async def test_expire_result():
     """RedisStateManager.expire_result calls redis.expire with correct args."""
     from unittest.mock import AsyncMock
 
-    from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
+    from docling_jobkit.orchestrators.ray.state_manager import RedisStateManager
 
     manager = RedisStateManager(redis_url="redis://localhost:6379/")
     manager.redis = AsyncMock()

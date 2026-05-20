@@ -27,7 +27,7 @@ The Ray Orchestrator implements a fair round-robin scheduling algorithm at the t
 ### 3. Fault Tolerance
 - **Automatic retries**: Configurable retry logic for failed tasks
 - **Ray Actor recovery**: Dispatcher automatically restarts on failure
-- **Redis HA support**: Compatible with Redis Sentinel and Redis Cluster
+- **Redis HA support**: Compatible with Redis Sentinel via `redis+sentinel://` URLs (Redis Cluster is not supported — orchestrator transactions span multiple keys and would surface CROSSSLOT errors)
 - **OOM protection**: Handles out-of-memory conditions gracefully
 
 ### 4. Scalability
@@ -162,12 +162,36 @@ orchestrator = RayOrchestrator(
 )
 ```
 
+### Redis Connection URL
+
+`redis_url` accepts the following schemes:
+
+| Scheme | Example | Use |
+|---|---|---|
+| `redis://` | `redis://host:6379/0` | Single node |
+| `rediss://` | `rediss://host:6380/0` | Single node, TLS |
+| `unix://` | `unix:///var/run/redis.sock` | Unix socket |
+| `redis+sentinel://` | `redis+sentinel://[user:pass@]h1[:p],h2[:p],…/master[/db][?…]` | Sentinel HA |
+| `rediss+sentinel://` | as above, synonym for `?ssl=true` | Sentinel HA, TLS to master |
+
+Sentinel URL parts:
+
+- `userinfo` — Redis master credentials
+- comma-separated netloc hosts — Sentinel daemons (default port `26379`)
+- path — master/service name and optional db (default `0`)
+- query params:
+  - `sentinel_username`, `sentinel_password` — credentials for the Sentinel daemons themselves (separate from the master credentials in the userinfo)
+  - `ssl=true` — TLS to the master (alternative to using `rediss+sentinel://`)
+
+Redis Cluster is not supported: orchestrator transactions and Lua scripts span keys that would land on different hash slots (CROSSSLOT). Cluster URLs and `?cluster=…` are rejected at config-build time.
+
 ### Advanced Configuration
 
 ```python
 config = RayOrchestratorConfig(
-    # Redis HA (Sentinel)
-    redis_url="redis+sentinel://sentinel-host:26379/mymaster/0",
+    # Redis HA (Sentinel) — comma-separate the sentinel daemons in the netloc.
+    # Use rediss+sentinel:// or ?ssl=true for TLS to the master.
+    redis_url="redis+sentinel://sentinel-1:26379,sentinel-2:26379,sentinel-3:26379/mymaster/0",
     redis_max_connections=50,
     
     # Queue limits with rejection

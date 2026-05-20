@@ -18,7 +18,7 @@ from docling_jobkit.orchestrators.ray.models import (
     RedisTaskMetadata,
     TaskUpdate,
 )
-from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
+from docling_jobkit.orchestrators.ray.state_manager import RedisStateManager
 
 _log = logging.getLogger(__name__)
 

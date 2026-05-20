@@ -31,7 +31,7 @@ from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
 )
 from docling_jobkit.orchestrators.ray.models import TaskUpdate
-from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
+from docling_jobkit.orchestrators.ray.state_manager import RedisStateManager
 
 _log = logging.getLogger(__name__)
 

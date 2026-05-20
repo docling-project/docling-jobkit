@@ -6,6 +6,8 @@ from typing import Optional
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from docling_jobkit.orchestrators import _redis as _redis_factory
+
 
 class RayOrchestratorConfig(BaseSettings):
     """Configuration for Ray + Redis orchestrator.
@@ -26,13 +28,13 @@ class RayOrchestratorConfig(BaseSettings):
     )
 
     # Redis Configuration
-    # Supports standard Redis, Redis Sentinel, and Redis Cluster via URL:
+    # Supports standard Redis and Redis Sentinel via URL:
     # - Standard: "redis://localhost:6379/"
-    # - Sentinel: "redis+sentinel://sentinel-host:26379/mymaster/0"
-    # - Cluster: "redis://cluster-node:6379/?cluster=true"
+    # - Sentinel: "redis+sentinel://[user:pass@]h1[:p],h2[:p],…/mymaster[/db]"
+    # See docling_jobkit.orchestrators._redis.detect_mode for the full grammar.
     redis_url: str = Field(
         default="redis://localhost:6379/",
-        description="Redis connection URL (supports standard, sentinel, cluster)",
+        description="Redis connection URL (supports standard and sentinel)",
     )
     redis_max_connections: int = Field(
         default=50, description="Maximum connections in Redis pool"
@@ -280,4 +282,9 @@ class RayOrchestratorConfig(BaseSettings):
         if self.heartbeat_interval <= 0:
             raise ValueError("heartbeat_interval must be > 0")
 
+        return self
+
+    @model_validator(mode="after")
+    def validate_redis_url(self) -> "RayOrchestratorConfig":
+        _redis_factory.validate_url(self.redis_url)
         return self
