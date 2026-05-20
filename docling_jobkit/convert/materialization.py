@@ -14,11 +14,15 @@ from docling.datamodel.service.sources import FileSource, HttpSource
 from docling.datamodel.settings import DocumentLimits
 
 
+# Admission-control parameters applied before any conversion work begins.
 class MaterializationLimits(BaseModel):
     max_file_size: int = Field(description="Maximum allowed source size in bytes")
     max_num_pages: int = Field(description="Maximum allowed PDF page count")
 
 
+# Eagerly-loaded, preflighted source payload shared across coordinator and workers.
+# The byte alias ("bytes") keeps this serialization-compatible with existing
+# Ray object-store and msgpack consumers that expect the original field name.
 class MaterializedSource(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -49,6 +53,16 @@ async def materialize_and_preflight(
     source: FileSource | HttpSource,
     limits: MaterializationLimits,
 ) -> MaterializedSource:
+    """Resolve a source to bytes and run PDF preflight before any conversion.
+
+    Downloading/reading happens here so the coordinator can put the bytes in the
+    Ray object store once and let all worker slices read from it without
+    re-fetching.  InputDocument is opened purely for preflight: PyPdfium validates
+    the file structure and reports the page count without triggering the full
+    pipeline.  Limit checks are performed explicitly so callers receive typed
+    MaterializationLimitExceededError (and can surface it as HTTP 422) instead of
+    the generic validity failure from docling.
+    """
     if isinstance(source, FileSource):
         source_bytes = source.to_document_stream().stream.getvalue()
         filename = source.filename

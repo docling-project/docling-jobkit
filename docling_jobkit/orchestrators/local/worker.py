@@ -62,14 +62,7 @@ class AsyncLocalWorker:
                     # Notify clients about queue updates
                     await self.orchestrator.notifier.notify_queue_positions()
 
-                # Initialize callback invoker if callbacks are configured
-                callback_invoker = None
-                if task.callbacks:
-                    callback_invoker = CallbackInvoker(
-                        max_retries=3,
-                        timeout=30.0,
-                        retry_delay=1.0,
-                    )
+                callback_invoker = CallbackInvoker() if task.callbacks else None
 
                 # Define a callback function to send progress updates to the client.
                 def run_task() -> DoclingTaskResult:

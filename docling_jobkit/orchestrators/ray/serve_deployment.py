@@ -40,7 +40,10 @@ from docling_jobkit.convert.materialization import (
     MaterializationLimits,
     materialize_and_preflight,
 )
-from docling_jobkit.convert.results import process_exportable_results
+from docling_jobkit.convert.results import (
+    _is_exportable_status,
+    process_exportable_results,
+)
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
@@ -80,10 +83,6 @@ except ImportError:
     _log.warning("psutil not available - memory monitoring disabled")
 
 
-def _is_exportable_status(status: ConversionStatus) -> bool:
-    return status in (ConversionStatus.SUCCESS, ConversionStatus.PARTIAL_SUCCESS)
-
-
 def _is_pdf_source(source: Any) -> bool:
     if isinstance(source, FileSource):
         return source.filename.lower().endswith(".pdf")
@@ -109,10 +108,6 @@ def _build_convert_sources(
                 headers = source.headers
 
     return convert_sources, headers
-
-
-def _materialized_stream(filename: str, payload: bytes) -> DocumentStream:
-    return DocumentStream(name=filename, stream=BytesIO(payload))
 
 
 def _build_slice_plan(
@@ -223,17 +218,6 @@ def _assemble_slice_results(
         errors=errors,
         timings=_merge_timings(ordered_results),
         document=assembled_doc,
-    )
-
-
-def _build_callback_invoker(task: Task) -> Optional[CallbackInvoker]:
-    if not task.callbacks:
-        return None
-
-    return CallbackInvoker(
-        max_retries=3,
-        timeout=30.0,
-        retry_delay=1.0,
     )
 
 
@@ -369,7 +353,7 @@ class DoclingProcessorConverterDeployment:
         expected_doc_count: Optional[int] = None,
         start_time: Optional[float] = None,
     ) -> ConverterTaskResult:
-        callback_invoker = _build_callback_invoker(task)
+        callback_invoker = CallbackInvoker() if task.callbacks else None
         temp_dir_kwargs: dict[str, Any] = {
             "prefix": f"docling_converter_{task.task_id}_",
         }
@@ -420,7 +404,9 @@ class DoclingProcessorConverterDeployment:
         payload = ray.get(request.artifact_ref)
         return list(
             self.cm.convert_documents(
-                sources=[_materialized_stream(request.filename, payload)],
+                sources=[
+                    DocumentStream(name=request.filename, stream=BytesIO(payload))
+                ],
                 options=request.task.convert_options or ConvertDocumentsOptions(),
             )
         )
@@ -432,7 +418,9 @@ class DoclingProcessorConverterDeployment:
         options = request.options.model_copy(update={"page_range": request.page_range})
         conv_results = list(
             self.cm.convert_documents(
-                sources=[_materialized_stream(request.filename, payload)],
+                sources=[
+                    DocumentStream(name=request.filename, stream=BytesIO(payload))
+                ],
                 options=options,
             )
         )
@@ -478,29 +466,6 @@ class DoclingProcessorConverterDeployment:
                 self.replica_id,
                 exc,
             )
-
-    async def health_check(self) -> dict[str, Any]:
-        return {
-            "replica_id": self.replica_id,
-            "healthy": self.cm is not None,
-            "tasks_processed": self.tasks_processed,
-            "documents_processed": self.documents_processed,
-            "memory_warnings": self.memory_warnings,
-            "last_task_time": (
-                self.last_task_time.isoformat() if self.last_task_time else None
-            ),
-        }
-
-    async def get_stats(self) -> dict[str, Any]:
-        return {
-            "replica_id": self.replica_id,
-            "tasks_processed": self.tasks_processed,
-            "documents_processed": self.documents_processed,
-            "memory_warnings": self.memory_warnings,
-            "last_task_time": (
-                self.last_task_time.isoformat() if self.last_task_time else None
-            ),
-        }
 
     async def clear_cache(self) -> None:
         _log.info("Converter replica %s: clearing converter cache", self.replica_id)
@@ -746,7 +711,7 @@ class DoclingProcessorCoordinatorDeployment:
                         slice_plan=slice_plan,
                         options=convert_options,
                     )
-                    callback_invoker = _build_callback_invoker(task)
+                    callback_invoker = CallbackInvoker() if task.callbacks else None
                     return await asyncio.to_thread(
                         process_exportable_results,
                         task,
@@ -876,27 +841,6 @@ class DoclingProcessorCoordinatorDeployment:
                     exc,
                 )
             await asyncio.sleep(interval)
-
-    async def health_check(self) -> dict[str, Any]:
-        return {
-            "replica_id": self.replica_id,
-            "healthy": self.converter_handle is not None,
-            "tasks_processed": self.tasks_processed,
-            "documents_processed": self.documents_processed,
-            "last_task_time": (
-                self.last_task_time.isoformat() if self.last_task_time else None
-            ),
-        }
-
-    async def get_stats(self) -> dict[str, Any]:
-        return {
-            "replica_id": self.replica_id,
-            "tasks_processed": self.tasks_processed,
-            "documents_processed": self.documents_processed,
-            "last_task_time": (
-                self.last_task_time.isoformat() if self.last_task_time else None
-            ),
-        }
 
 
 def _build_deployment_options(

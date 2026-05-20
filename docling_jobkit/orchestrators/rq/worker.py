@@ -1,12 +1,9 @@
-import base64
 import logging
 import shutil
 import tempfile
 import threading
-from contextlib import nullcontext
-from io import BytesIO
 from pathlib import Path
-from typing import Any, Callable, ContextManager, Optional, Union
+from typing import Any, Optional, Union
 
 import msgpack
 import redis as sync_redis
@@ -39,53 +36,24 @@ from docling_jobkit.public_errors import build_public_task_error
 
 _log = logging.getLogger(__name__)
 
-_PhaseContextFactory = Callable[[str], ContextManager[Any]]
-_SourcePreparedHook = Callable[[int, Any, dict[str, str], Optional[bytes]], None]
-_SourcesPreparedHook = Callable[[list[dict[str, str]], int, bool], None]
-_ResultStoredHook = Callable[[str, int], None]
-_FailureHook = Callable[[Task, Exception, list[dict[str, str]]], None]
-
-
-def _null_phase_cm(_: str) -> ContextManager[Any]:
-    return nullcontext()
-
 
 def _prepare_convert_sources(
     task: Task,
-    on_source_prepared: Optional[_SourcePreparedHook] = None,
-) -> tuple[
-    list[Union[str, DocumentStream]],
-    Optional[dict[str, Any]],
-    list[dict[str, str]],
-]:
+) -> tuple[list[Union[str, DocumentStream]], Optional[dict[str, Any]]]:
     convert_sources: list[Union[str, DocumentStream]] = []
     headers: Optional[dict[str, Any]] = None
-    source_info: list[dict[str, str]] = []
 
-    for idx, source in enumerate(task.sources):
-        raw_bytes: Optional[bytes] = None
+    for source in task.sources:
         if isinstance(source, DocumentStream):
             convert_sources.append(source)
-            info = {"type": "DocumentStream", "name": source.name}
         elif isinstance(source, FileSource):
-            raw_bytes = base64.b64decode(source.base64_string)
-            convert_sources.append(
-                DocumentStream(stream=BytesIO(raw_bytes), name=source.filename)
-            )
-            info = {"type": "FileSource", "filename": source.filename}
+            convert_sources.append(source.to_document_stream())
         elif isinstance(source, HttpSource):
             convert_sources.append(str(source.url))
-            info = {"type": "HttpSource", "url": str(source.url)}
             if headers is None and source.headers:
                 headers = source.headers
-        else:
-            continue
 
-        source_info.append(info)
-        if on_source_prepared:
-            on_source_prepared(idx, source, info, raw_bytes)
-
-    return convert_sources, headers, source_info
+    return convert_sources, headers
 
 
 def _run_docling_task(
@@ -93,12 +61,6 @@ def _run_docling_task(
     conversion_manager: DoclingConverterManager,
     orchestrator_config: RQOrchestratorConfig,
     scratch_dir: Path,
-    *,
-    phase_cm: Optional[_PhaseContextFactory] = None,
-    on_source_prepared: Optional[_SourcePreparedHook] = None,
-    on_sources_prepared: Optional[_SourcesPreparedHook] = None,
-    on_result_stored: Optional[_ResultStoredHook] = None,
-    on_failure: Optional[_FailureHook] = None,
 ) -> str:
     job = get_current_job()
     assert job is not None
@@ -106,51 +68,31 @@ def _run_docling_task(
     conn = job.connection
     task_id = task.task_id
     workdir = scratch_dir / task_id
-    phase_cm = phase_cm or _null_phase_cm
-    source_info: list[dict[str, str]] = []
     result_key: Optional[str] = None
 
-    callback_invoker = None
-    if task.callbacks:
-        callback_invoker = CallbackInvoker(
-            max_retries=3,
-            timeout=30.0,
-            retry_delay=1.0,
-        )
+    callback_invoker = CallbackInvoker() if task.callbacks else None
 
     try:
-        with phase_cm("notify.task_started"):
-            conn.publish(
-                orchestrator_config.sub_channel,
-                _TaskUpdate(
-                    task_id=task_id,
-                    task_status=TaskStatus.STARTED,
-                ).model_dump_json(),
-            )
+        conn.publish(
+            orchestrator_config.sub_channel,
+            _TaskUpdate(
+                task_id=task_id,
+                task_status=TaskStatus.STARTED,
+            ).model_dump_json(),
+        )
 
-        with phase_cm("prepare_sources"):
-            convert_sources, headers, source_info = _prepare_convert_sources(
-                task,
-                on_source_prepared=on_source_prepared,
-            )
-            if on_sources_prepared:
-                on_sources_prepared(
-                    source_info,
-                    len(convert_sources),
-                    headers is not None,
-                )
+        convert_sources, headers = _prepare_convert_sources(task)
 
         if not conversion_manager:
             raise RuntimeError("No converter")
         if not task.convert_options:
             raise RuntimeError("No conversion options")
 
-        with phase_cm("convert_documents"):
-            conv_results = conversion_manager.convert_documents(
-                sources=convert_sources,
-                options=task.convert_options,
-                headers=headers,
-            )
+        conv_results = conversion_manager.convert_documents(
+            sources=convert_sources,
+            options=task.convert_options,
+            headers=headers,
+        )
 
         exportable_documents = (
             ExportableDocument.from_conversion_result(conv_res)
@@ -158,52 +100,42 @@ def _run_docling_task(
         )
 
         processed_results: DoclingTaskResult
-        with phase_cm("process_results"):
-            if task.task_type == TaskType.CONVERT:
-                with phase_cm("process_export_results"):
-                    processed_results = process_exportable_results(
-                        task=task,
-                        exportable_documents=exportable_documents,
-                        work_dir=workdir,
-                        callback_invoker=callback_invoker,
-                        debug_error_details=orchestrator_config.debug_error_details,
-                    )
-            elif task.task_type == TaskType.CHUNK:
-                with phase_cm("process_chunk_results"):
-                    processed_results = process_chunkable_results(
-                        task=task,
-                        exportable_documents=exportable_documents,
-                        work_dir=workdir,
-                        callback_invoker=callback_invoker,
-                        debug_error_details=orchestrator_config.debug_error_details,
-                    )
-            else:
-                raise RuntimeError(f"Unsupported task type: {task.task_type}")
-
-        with phase_cm("serialize_and_store"):
-            safe_data = make_msgpack_safe(processed_results.model_dump())
-            packed = msgpack.packb(safe_data, use_bin_type=True)
-            result_key = f"{orchestrator_config.results_prefix}:{task_id}"
-            conn.setex(result_key, orchestrator_config.results_ttl, packed)
-            if on_result_stored:
-                on_result_stored(result_key, len(packed))
-
-        with phase_cm("notify.task_success"):
-            conn.publish(
-                orchestrator_config.sub_channel,
-                _TaskUpdate(
-                    task_id=task_id,
-                    task_status=TaskStatus.SUCCESS,
-                    result_key=result_key,
-                ).model_dump_json(),
+        if task.task_type == TaskType.CONVERT:
+            processed_results = process_exportable_results(
+                task=task,
+                exportable_documents=exportable_documents,
+                work_dir=workdir,
+                callback_invoker=callback_invoker,
+                debug_error_details=orchestrator_config.debug_error_details,
             )
+        elif task.task_type == TaskType.CHUNK:
+            processed_results = process_chunkable_results(
+                task=task,
+                exportable_documents=exportable_documents,
+                work_dir=workdir,
+                callback_invoker=callback_invoker,
+                debug_error_details=orchestrator_config.debug_error_details,
+            )
+        else:
+            raise RuntimeError(f"Unsupported task type: {task.task_type}")
+
+        safe_data = make_msgpack_safe(processed_results.model_dump())
+        packed = msgpack.packb(safe_data, use_bin_type=True)
+        result_key = f"{orchestrator_config.results_prefix}:{task_id}"
+        conn.setex(result_key, orchestrator_config.results_ttl, packed)
+
+        conn.publish(
+            orchestrator_config.sub_channel,
+            _TaskUpdate(
+                task_id=task_id,
+                task_status=TaskStatus.SUCCESS,
+                result_key=result_key,
+            ).model_dump_json(),
+        )
 
         return result_key
     except Exception as e:
-        if on_failure:
-            on_failure(task, e, source_info)
-        else:
-            _log.error(f"Conversion task {task_id} failed: {e}")
+        _log.error(f"Conversion task {task_id} failed: {e}")
         # Only publish FAILURE if the result was never committed to Redis; if
         # serialize_and_store succeeded but notify.task_success failed, the
         # result is retrievable and a spurious FAILURE would mislead subscribers.
@@ -221,9 +153,8 @@ def _run_docling_task(
             )
         raise
     finally:
-        with phase_cm("cleanup"):
-            if workdir.exists():
-                shutil.rmtree(workdir)
+        if workdir.exists():
+            shutil.rmtree(workdir)
 
 
 class CustomRQWorker(SimpleWorker):

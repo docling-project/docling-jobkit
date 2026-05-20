@@ -3,19 +3,19 @@
 ## Context
 The current Ray path is `API request -> one Redis task -> one dispatcher admission -> one Serve replica call -> one terminal result`. `page_range` already works end-to-end and the Docling PDF pipelines only instantiate/process pages inside the selected range, so the page-slicing primitive exists today. The missing pieces are orchestration and transport: one logical request needs to become many page-slice executions without re-downloading or re-serializing the same large PDF.
 
-Page numbering is confirmed absolute: when `page_range=(5,10)` is requested, the output `DoclingDocument` contains pages numbered 5–10 (not 1–6). `DoclingDocument.concatenate` therefore works correctly across chunks with no renumbering needed.
+Page numbering is confirmed absolute: when `page_range=(5,10)` is requested, the output `DoclingDocument` contains pages numbered 5–10 (not 1–6). `DoclingDocument.concatenate` therefore works correctly across slices with no renumbering needed.
 
 The locked v1 scope and non-goals are summarized in the final section of this document to avoid repeating the same invariants throughout.
 
 ## Summary
-Implement PDF page-chunk fan-out as a **logical parent task with ephemeral internal child executions**, not as Redis-visible child tasks.
+Implement PDF page-slice fan-out as a **logical parent task with ephemeral internal child executions**, not as Redis-visible child tasks.
 
 Split the current monolithic Ray Serve document processor deployment into two cooperating deployments with different resource profiles:
 
 - **`DoclingProcessorCoordinatorDeployment`** (new, cheap): owns the parent task lifecycle — execution lease heartbeat, Redis finalization, source materialization, split planning, result assembly. Runs with relaxed concurrency (`max_ongoing_requests > 1`) because its work is mostly I/O and waiting. Holds no model weights, needs no GPU.
 - **`DoclingProcessorConverterDeployment`**: owns warm `DoclingConverterManager` instances and executes conversion work. Keeps `max_ongoing_requests=1` to preserve thread-safety. Receives pre-materialized PDF bytes as a `ray.ObjectRef` plus a page range; returns a conversion result. Has no Redis lifecycle responsibility.
 
-The coordinator receives every parent task from the dispatcher. For single-source PDF tasks above the chunk threshold, it fans out N child requests to the converter deployment, awaits them asynchronously, and assembles the result. For all other tasks, it sends a single request to the converter and passes the result through. The coordinator is never resource-idle on a heavy replica — the worst case is a cheap coordinator slot waiting, while GPU-capable converter slots remain available for real conversion work.
+The coordinator receives every parent task from the dispatcher. For single-source PDF tasks whose effective page range exceeds the slice threshold, it fans out N child requests to the converter deployment, awaits them asynchronously, and assembles the result. For all other tasks, it sends a single request to the converter and passes the result through. The coordinator is never resource-idle on a heavy replica — the worst case is a cheap coordinator slot waiting, while GPU-capable converter slots remain available for real conversion work.
 
 This avoids:
 - N repeated HTTP downloads for one remote PDF.
@@ -40,8 +40,8 @@ Replace the single-deployment layout with two cooperating deployments deployed t
 - Resource budget: unchanged (full GPU + memory for warm models).
 - `max_ongoing_requests=1`: required by thread-unsafe `DocumentConverter` and preserved for every replica that holds a warmed `DoclingConverterManager`.
 - Holds: persistent `DoclingConverterManager` (`self.cm`) exactly as today.
-- Public Serve entry point: `process_converter_request(request: ConverterRequest)` where `ConverterRequest` is a discriminated union with variants for `chunk_convert`, `materialized_convert`, and `passthrough_task`.
-- Internal helpers may still be named `process_chunk` / `_process_materialized_convert` / `_process_passthrough_task`, but they are converter-internal branches behind one Serve boundary.
+- Public Serve entry point: `process_converter_request(request: ConverterRequest)` where `ConverterRequest` is a discriminated union with variants for `slice_convert`, `materialized_convert`, and `passthrough_task`.
+- Internal helpers may still be named `process_slice` / `_process_materialized_convert` / `_process_passthrough_task`, but they are converter-internal branches behind one Serve boundary.
 - Does **not** call `finalize_task_*_atomic`, does **not** maintain an execution lease. It is a pure conversion service.
 
 The dispatcher routes all tasks to the coordinator handle (one handle, same as today, just pointing to the new coordinator deployment). The dispatcher is otherwise unchanged.
@@ -62,7 +62,7 @@ Ray's plasma store lives in shared memory and automatically spills to disk under
 
 ### 4. Shared source materialization and preflight helper
 
-Extract a module-level helper `materialize_and_preflight(source, limits) -> MaterializedSource` in `docling-jobkit` and make it the canonical admission/preflight path for single-source PDF inputs. The coordinator uses it for fan-out planning; the worker uses the same helper for its direct materialized path. This avoids two diverging implementations of the same logic without trying to "extract" behavior from `DoclingConverterManager.convert_documents()`, which is currently only a thin wrapper around the lower-level converter call.
+Extract a module-level helper `materialize_and_preflight(source, limits) -> MaterializedSource` in `docling-jobkit` and make it the canonical admission/preflight path for single-source PDF inputs. The coordinator uses it before deciding between sliced fan-out and the single-request materialized path. This avoids two diverging implementations of the same logic without trying to "extract" behavior from `DoclingConverterManager.convert_documents()`, which is currently only a thin wrapper around the lower-level converter call.
 
 `MaterializedSource` contains:
 - `bytes`: the raw PDF bytes
@@ -83,26 +83,27 @@ Source materialization:
 
 Page counting uses `pypdfium2` via `PyPdfiumDocumentBackend` — already a transitive dependency via docling. No additional library needed.
 
-`max_num_pages` is validated against the **total** PDF page count, not the per-chunk size. This is the correct gate: fan-out does not bypass the document size limit, it only provides a more efficient execution strategy for documents that are within limits but large.
+`max_num_pages` is validated against the **total** PDF page count, not the per-slice size. This is the correct gate: fan-out does not bypass the document size limit, it only provides a more efficient execution strategy for documents that are within limits but large.
 
 ### 5. Child execution contract
 
 Children are Ray Serve requests to `DoclingProcessorConverterDeployment`, not `ray.remote` functions. This preserves warm `DoclingConverterManager` reuse: converter replicas keep their model state between child requests exactly as they do between sequential task calls today. The warm converter is the reason the current Serve design is performant for OCR/VLM-heavy workloads; child requests must share it.
 
-Child input to the worker's `chunk_convert` request variant:
+Child input to the worker's `slice_convert` request variant:
 - `artifact_ref: ray.ObjectRef` — reference to materialized PDF bytes in the plasma store
 - `page_range: tuple[int, int]` — sub-slice of the effective page range (see below)
 - `options: ConvertDocumentsOptions` — copied from parent, with `page_range` overridden to the child's sub-range
-- `metadata`: original filename and source metadata needed for export and hashing
+- `filename`: original filename needed for export and hashing
+- `slice_index: int` — ascending position in the slice plan for deterministic reassembly
 
 Caller-supplied `page_range` interaction: if the original request includes `page_range=[10, 50]`, child ranges are sub-slices of that range — `[10, 19]`, `[20, 29]`, …, `[50, 50]`. The child's page range always overrides the parent's convert_options.page_range, not replaces the field wholesale.
 
-Child behavior in the worker's `chunk_convert` branch:
+Child behavior in the worker's `slice_convert` branch:
 - Dereference `artifact_ref` via `ray.get()` to obtain PDF bytes (shared memory, zero-copy on the same node).
 - Build a `DocumentStream` from the bytes.
 - Call `self.cm.convert_documents(...)` with the child page range — exactly the existing warm converter path.
 - Do not reinterpret `max_num_pages` as a per-child limit. The full-document admission gate already ran once during coordinator preflight.
-- Return `ChunkResult(status, document, errors, timings, page_range)`.
+- Return an `ExportableDocument` carrying conversion status, document payload when exportable, errors, timings, `page_range`, and `slice_index`.
 
 Do not split into physical sub-PDFs in v1.
 
@@ -112,7 +113,7 @@ Parent tasks still consume tenant slot counters as one logical task and one logi
 
 The coordinator awaits child futures asynchronously over Serve handle futures. The coordinator replica is not CPU-bound while waiting, and because coordinator replicas carry no GPU or heavy model resources, the idle cost during the wait is low — a cheap coordinator slot, not a GPU.
 
-`max_page_chunk_parallelism` is optional. When set, it caps the number of in-flight child requests: submit up to `min(number_of_chunks, max_page_chunk_parallelism)` initially and refill as children complete, to prevent a single large PDF from saturating the worker pool. When unset, the coordinator may submit all planned child requests at once. Use a bounded work-queue pattern (`asyncio.wait`, `as_completed`, semaphore, or equivalent) only when the cap is enabled; otherwise a plain `gather()` across the full child set is acceptable.
+`max_page_slice_parallelism` bounds the number of in-flight child requests. When explicitly set, it caps slice fan-out directly. When unset, it defaults to `max_concurrent_tasks`, so the default behavior is still bounded and one large PDF cannot flood the worker pool by accident. Use a bounded work-queue pattern (`asyncio.wait`, `as_completed`, semaphore, or equivalent) to submit up to `min(number_of_slices, max_page_slice_parallelism)` initially and refill as children complete.
 
 ### 7. Collect and final result assembly
 
@@ -121,11 +122,13 @@ Await all child futures. Collect all results regardless of individual child outc
 Task-level status remains binary — **`SUCCESS` or `FAILURE`** — consistent with the existing task lifecycle stack (`TaskStatus` in `task.py`, Redis terminalization in `redis_helper.py`, reconciliation in `dispatcher.py`). Document-level partial semantics are already represented in `ConversionStatus.PARTIAL_SUCCESS` within the result payload and are already handled in `results_processor.py`. Introducing a third task-level terminal state would ripple across all of those layers for no additional expressiveness over what the result payload already provides.
 
 Result assembly rules:
-- At least one child succeeds: coordinator assembles a result document from the successful chunks. The assembled document carries `ConversionStatus.PARTIAL_SUCCESS` if any children failed, `ConversionStatus.SUCCESS` if all succeeded. The task is marked **`SUCCESS`** and the result is stored.
+- At least one child succeeds: coordinator assembles a result document from the successful slices. The assembled document carries `ConversionStatus.PARTIAL_SUCCESS` if any children failed, `ConversionStatus.SUCCESS` if all succeeded. The task is marked **`SUCCESS`** and the result is stored.
 - All children fail: task is marked **`FAILURE`**, no result document is stored.
 - Fan-out setup fails before any child launches: task is marked **`FAILURE`** immediately.
 
 Concatenate successful child documents with `DoclingDocument.concatenate` in ascending page-range order. The assembled document is exported through the same export helper as the current single-document path; no new export code path is needed.
+
+Internally, export/result processing should operate on an `ExportableDocument` model rather than directly on `ConversionResult`. This keeps slice metadata (`page_range`, `slice_index`) attached through collection and assembly while preserving the existing export targets and response formats.
 
 Public response contract is unchanged: sync endpoints wait on the parent; async polling and result retrieval expose the parent only; no public child task IDs.
 
@@ -145,32 +148,32 @@ New internal deployment:
 - `DoclingProcessorConverterDeployment` as conversion backend
 
 New internal request model:
-- `ConverterRequest` as a discriminated union with `chunk_convert`, `materialized_convert`, and `passthrough_task` variants
+- `ConverterRequest` as a discriminated union with `slice_convert`, `materialized_convert`, and `passthrough_task` variants
 
 New Ray config flags:
-- `enable_pdf_page_chunk_fanout: bool`
-- `max_page_chunk_size: int`
-- `max_page_chunk_parallelism: int | None`
+- `enable_pdf_page_slice_fanout: bool`
+- `max_page_slice_size: int`
+- `max_page_slice_parallelism: int | None`
 
-Serve deployment settings should split by deployment instead of staying global:
-- Coordinator-specific: `coordinator_min_replicas`, `coordinator_max_replicas`, `coordinator_target_requests_per_replica`, `coordinator_max_ongoing_requests_per_replica`, `coordinator_num_cpus`, `coordinator_memory_limit`, `coordinator_upscale_delay_s`, `coordinator_downscale_delay_s`, `coordinator_graceful_shutdown_wait_loop_s`, `coordinator_graceful_shutdown_timeout_s`
-- Worker-specific: `worker_min_replicas`, `worker_max_replicas`, `worker_target_requests_per_replica`, `worker_max_ongoing_requests_per_replica`, `worker_num_cpus`, `worker_memory_limit`, `worker_upscale_delay_s`, `worker_downscale_delay_s`, `worker_graceful_shutdown_wait_loop_s`, `worker_graceful_shutdown_timeout_s`
-- Shared/global can remain shared in v1: Redis config, dispatcher settings, tenant fairness limits, `task_timeout`, `heartbeat_interval`, `results_ttl`, object store memory, and logging
+Serve deployment settings should stay mostly shared in v1, with only the coordinator overrides split where they materially matter:
+- Coordinator-specific: `coordinator_min_actors`, `coordinator_max_actors`, `coordinator_target_requests_per_replica`, `coordinator_max_ongoing_requests_per_replica`, `coordinator_actor_num_cpus`, `coordinator_actor_memory_request`
+- Worker-specific: `min_actors`, `max_actors`, `target_requests_per_replica`, `max_ongoing_requests_per_replica`, `converter_actor_num_cpus`, `converter_actor_memory_request`
+- Shared/global: `upscale_delay_s`, `downscale_delay_s`, `graceful_shutdown_*`, Redis config, dispatcher settings, tenant fairness limits, `task_timeout`, `heartbeat_interval`, `results_ttl`, object store memory, and logging
 
 New internal models:
 - `MaterializedSource(bytes, page_count, filename)`
-- `ChunkSpec(page_range, chunk_index)`
-- `ChunkResult(status, document, errors, timings, page_range)`
-- `SplitPlan(total_pages, chunks, effective_page_range)`
+- `SliceSpec(page_range, slice_index)`
+- `SlicePlan(total_pages, slices, effective_page_range)`
+- `ExportableDocument(file, document_hash, status, errors, timings, document, page_range, slice_index)`
 
 No new public `TaskType`.
-No new public request option for chunk size.
-No chunk-level progress exposed in v1.
+No new public request option for slice size.
+No slice-level progress exposed in v1.
 No new task-level terminal status: `TaskStatus` remains `PENDING / STARTED / SUCCESS / FAILURE`.
 
-## Opening Questions For Refinement After Handoff
+## Open Questions
 - Should shared artifacts be restart-safe by spilling to a configurable durable store (S3/GCS) rather than relying on Ray's default local disk spilling?
-- Should chunk-level progress be exposed on the parent task, or should status remain coarse?
+- Should slice-level progress be exposed on the parent task, or should status remain coarse?
 - Should later versions support multi-source requests by planning one sub-plan per eligible PDF source?
 - After profiling, is backend-open overhead large enough that sub-PDF creation becomes worth the added complexity?
 - **Coordinator idle cost at scale**: the coordinator replica holds its slot for the full parent task lifetime. With cheap resource budget and relaxed `max_ongoing_requests`, this is acceptable in v1. If coordinator slots become a bottleneck at scale, the Ray Core task DAG approach (`finalize.remote(*child_refs)`) releases the coordinator immediately after submitting children, but requires moving heartbeat and finalization into a plain Ray worker with the supervision trade-offs documented during plan review.
@@ -186,7 +189,7 @@ No new task-level terminal status: `TaskStatus` remains `PENDING / STARTED / SUC
 - PDF exceeds `max_num_pages` or `max_file_size`:
   - coordinator fails parent before creating ObjectRef or sending any worker request
 - PDF above threshold:
-  - correct chunk plan for exact multiples and remainder chunks
+  - correct slice plan for exact multiples and remainder slices
   - children receive correct non-overlapping sub-ranges of the effective page range
   - caller-supplied `page_range` is respected: child ranges are sub-slices, not replacements
   - final concatenated page ordering is correct with no renumbering
@@ -196,8 +199,8 @@ No new task-level terminal status: `TaskStatus` remains `PENDING / STARTED / SUC
   - source bytes are decoded once in the coordinator
   - worker receives ObjectRef, not a copy of the bytes per child
 - Child parallelism:
-  - when `max_page_chunk_parallelism` is set, coordinator never exceeds that many in-flight worker requests
-  - when `max_page_chunk_parallelism` is unset, coordinator may submit the full child set
+  - when `max_page_slice_parallelism` is set, coordinator never exceeds that many in-flight worker requests
+  - when `max_page_slice_parallelism` is unset, coordinator defaults to `max_concurrent_tasks`
 - Warm converter reuse:
   - converter replicas do not re-initialize `DoclingConverterManager` between child requests from the same or different parents
 - Tenant fairness:
@@ -209,7 +212,7 @@ No new task-level terminal status: `TaskStatus` remains `PENDING / STARTED / SUC
 - Partial-success path:
   - one child fails, remaining children complete
   - parent task status is `SUCCESS`
-  - result document carries `ConversionStatus.PARTIAL_SUCCESS` with a gap in the assembled document covering the failed chunk's page range
+  - result document carries `ConversionStatus.PARTIAL_SUCCESS` with a gap in the assembled document covering the failed slice's page range
 - All-failure path:
   - all children fail, parent task status is `FAILURE`, ObjectRef is released
 - Cleanup:
@@ -218,59 +221,12 @@ No new task-level terminal status: `TaskStatus` remains `PENDING / STARTED / SUC
 ## Locked V1 Scope / Non-goals
 - First cut is Ray-only in `docling-jobkit`.
 - Fan-out is eligible only for single-source PDF convert requests. All other formats and all multi-source requests stay on the existing single-task path.
-- Chunking is internal server/orchestrator policy, not a request option.
+- Slicing is internal server/orchestrator policy, not a request option.
 - `page_range` is the only child slicing mechanism in v1; there is no physical sub-PDF splitting.
 - Parent/child means one public parent task plus internal ephemeral Serve child requests, not Redis-visible child tasks.
-- Dispatcher and Redis admission remain parent-granularity; tenant fairness and billing remain parent-logical, and internal child work may be capped by `max_page_chunk_parallelism` when configured.
+- Dispatcher and Redis admission remain parent-granularity; tenant fairness and billing remain parent-logical, and internal child work may be capped by `max_page_slice_parallelism` when configured.
 - Page numbering is absolute in docling output: `page_range=(5,10)` produces pages 5–10, enabling correct concatenation without renumbering.
 - The shared PDF artifact lives in Ray object storage (plasma store) only in v1, with Ray's built-in disk spilling as the OOM safety valve.
 - `max_num_pages` and `max_file_size` are hard gates applied before fan-out; fan-out does not bypass them.
 - Task-level status stays binary (`SUCCESS` / `FAILURE`); partial page coverage is expressed in the result document's `ConversionStatus`, not in `TaskStatus`.
 - There is no automatic parent retry in the current system; coordinator death terminally fails the parent task.
-
-## Appendix: Implemented
-
-Implemented in `docling-jobkit`:
-- Added `convert/materialization.py` with canonical single-source PDF materialization + preflight, including `MaterializationLimits`, `MaterializedSource`, and limit-specific failures.
-- Split the Ray Serve processing plane into `DoclingProcessorCoordinatorDeployment` and `DoclingProcessorConverterDeployment` in `orchestrators/ray/serve_deployment.py`.
-- Added internal Ray models for `SplitPlan`, `ChunkSpec`, `ChunkResult`, and the worker request/result payloads in `orchestrators/ray/models.py`.
-- Added the internal fan-out config in `orchestrators/ray/config.py`:
-  `enable_pdf_page_chunk_fanout`, `max_page_chunk_size`, `max_page_chunk_parallelism`, plus only the coordinator-specific overrides that remained necessary: `coordinator_target_requests_per_replica`, `coordinator_max_ongoing_requests_per_replica`, `coordinator_num_cpus`, and `coordinator_memory_limit`.
-- Kept deployment-wide autoscaling and lifecycle controls shared on purpose: `min_actors`, `max_actors`, `upscale_delay_s`, `downscale_delay_s`, and `graceful_shutdown_*` still apply to both coordinator and worker.
-- Kept the dispatcher contract stable: the dispatcher still submits a single parent task through `process_task(task)` on the coordinator handle.
-- Implemented single-source PDF convert orchestration:
-  coordinator preflight/materialization, `ray.put()` shared artifact, optional page-range split plan, bounded or unbounded child fan-out, chunk collection, and final assembly with `DoclingDocument.concatenate`.
-- Preserved parent-owned Redis lifecycle in the coordinator: STARTED update, execution lease heartbeat, durable success/failure terminalization, pub/sub updates, and tenant stats.
-- Updated `convert/results.py` so `ConversionStatus.PARTIAL_SUCCESS` is exportable and counted as a successful logical document for result packaging and stats.
-
-Implemented in `docling-serve`:
-- Added Ray settings for the fan-out feature flags and the minimal coordinator override set in `docling_serve/settings.py`.
-- Wired those settings into `RayOrchestratorConfig` construction in `docling_serve/orchestrator_factory.py`.
-
-Validation run:
-- `uv run pytest -q tests/test_ray_fanout.py`
-- `uv run pytest -q tests/test_ray_orchestrator.py -k create_deployment`
-- `uv run pytest -q tests/test_ray_dispatcher_hardening.py -k 'document_processor_deployment_stringifies_replica_id or serve_replica_does_not_delete_dispatch_key'`
-
-Notes:
-- The worker request models pass filename metadata plus a Ray `ObjectRef`; the full materialized bytes remain owned by the coordinator-local `MaterializedSource`.
-- Fan-out eligibility is locked to single-source PDF `CONVERT` tasks, matching the v1 scope.
-
-## Handoff Note
-
-State at handoff:
-- The implementation builds, the targeted Ray tests pass, `ruff` passes for the refactored config validator, and targeted `mypy` checks pass for the touched Ray/materialization modules.
-- The coordinator-specific config surface was intentionally reduced. Shared deployment knobs stay shared; only coordinator target concurrency and resource sizing remain separately configurable.
-
-Important remaining validation:
-- Run an end-to-end Ray integration test with a real cluster/Serve deployment to verify the coordinator-to-worker child request path, especially fan-out above threshold and parent finalization on partial chunk failure.
-- Verify production-safe defaults for `coordinator_target_requests_per_replica` and `coordinator_max_ongoing_requests_per_replica` under expected queue pressure; current defaults favor allowing the coordinator to wait on multiple children without blocking a replica per parent.
-- Confirm whether filename-based PDF eligibility is sufficient for current callers, or whether eligibility should be tightened around normalized input format detection for edge cases.
-
-Useful files for the next cycle:
-- `docling_jobkit/orchestrators/ray/serve_deployment.py`
-- `docling_jobkit/orchestrators/ray/config.py`
-- `docling_jobkit/convert/materialization.py`
-- `docling_jobkit/tests/test_ray_fanout.py`
-- `docling_serve/docling_serve/settings.py`
-- `docling_serve/docling_serve/orchestrator_factory.py`

@@ -160,15 +160,11 @@ def _export_documents_as_files(
             _log.warning(f"Document {exportable_document.file} failed to convert.")
             failure_count += 1
 
-    conv_result = (
-        ConversionStatus.SUCCESS if failure_count == 0 else ConversionStatus.FAILURE
-    )
-
     _log.info(
         f"Processed {success_count + failure_count} docs, "
         f"of which {failure_count} failed"
     )
-    return success_count, failure_count, conv_result
+    return success_count, failure_count
 
 
 def _upload_to_put_target(
@@ -360,7 +356,7 @@ def process_exportable_results(
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Export the documents
-        num_succeeded, num_failed, _conv_result = _export_documents_as_files(
+        num_succeeded, num_failed = _export_documents_as_files(
             exportable_documents=exportable_documents,
             output_dir=output_dir,
             export_json=export_json,
