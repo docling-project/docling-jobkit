@@ -1,3 +1,9 @@
+## [v1.19.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.19.1) - 2026-05-20
+
+### Fix
+
+* Add RQ worker hooks and tracing support ([#152](https://github.com/docling-project/docling-jobkit/issues/152)) ([`4a8c697`](https://github.com/docling-project/docling-jobkit/commit/4a8c6978d1e2484ac2941baf10b512a18ca6e017))
+
 ## [v1.19.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.19.0) - 2026-05-20
 
 ### Feature
