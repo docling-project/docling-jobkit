@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Optional
 
 import httpx
 
-from docling.datamodel.base_models import OutputFormat
+from docling.datamodel.base_models import InputFormat, OutputFormat
 from docling.datamodel.document import ConversionResult, ConversionStatus
 from docling.datamodel.service.callbacks import (
     DocumentCompletedItem,
@@ -83,6 +83,41 @@ def _export_document_as_content(
             document.doctags_content = new_doc.export_to_doctags()
 
     return document
+
+
+def _build_document_completed_item(
+    exportable_document: ExportableDocument,
+    *,
+    error: str | None,
+) -> DocumentCompletedItem:
+    document_type: InputFormat | None = exportable_document.document_type
+    num_pages: int | None = None
+    num_characters: int | None = None
+    num_tables: int | None = None
+    num_pictures: int | None = None
+    if exportable_document.document is not None:
+        num_pages = len(exportable_document.document.pages)
+        markdown = exportable_document.document.export_to_markdown()
+        num_characters = len(markdown)
+        num_tables = len(exportable_document.document.tables)
+        num_pictures = len(exportable_document.document.pictures)
+
+    return DocumentCompletedItem(
+        source=str(exportable_document.file),
+        status=exportable_document.status,
+        document_type=document_type,
+        num_pages=num_pages,
+        num_characters=num_characters,
+        num_tables=num_tables,
+        num_pictures=num_pictures,
+        processing_time=(
+            sum(sum(item.times) for item in exportable_document.timings.values())
+            if exportable_document.timings
+            else None
+        ),
+        doc_hash=exportable_document.document_hash,
+        error=error,
+    )
 
 
 def _export_documents_as_files(
@@ -256,22 +291,8 @@ def process_exportable_results(
 
         # Send per-document callback (non-blocking)
         if callback_invoker and task.callbacks:
-            document_info = DocumentCompletedItem(
-                source=str(exportable_document.file),
-                status=exportable_document.status,
-                num_pages=(
-                    len(exportable_document.document.pages)
-                    if exportable_document.document
-                    else None
-                ),
-                processing_time=(
-                    sum(
-                        sum(item.times) for item in exportable_document.timings.values()
-                    )
-                    if exportable_document.timings
-                    else None
-                ),
-                doc_hash=exportable_document.document_hash,
+            document_info = _build_document_completed_item(
+                exportable_document,
                 error=render_public_error_list(
                     exportable_document.errors,
                     debug_enabled=debug_error_details,

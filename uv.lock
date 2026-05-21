@@ -1156,7 +1156,7 @@ version = "1.19.1"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
-    { name = "docling" },
+    { name = "docling-slim", extra = ["standard"] },
     { name = "httpx" },
     { name = "pandas" },
     { name = "pydantic" },
@@ -1211,9 +1211,9 @@ dev = [
 requires-dist = [
     { name = "boto3", specifier = "~=1.35" },
     { name = "codeflare-sdk", marker = "python_full_version >= '3.11' and python_full_version < '3.14' and extra == 'ray'", specifier = ">=0.20.0" },
-    { name = "docling", specifier = ">=2.94.0,<3.0.0" },
     { name = "docling", extras = ["onnxruntime"], marker = "extra == 'onnxruntime'", specifier = ">=2.94.0,<3.0.0" },
     { name = "docling", extras = ["vlm"], marker = "extra == 'vlm'", specifier = ">=2.94.0,<3.0.0" },
+    { name = "docling-slim", extras = ["standard"], git = "https://github.com/docling-project/docling/?rev=feat-docmeta-callback" },
     { name = "google-api-python-client", marker = "extra == 'gdrive'", specifier = ">=2.183.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'gdrive'", specifier = ">=1.2.2" },
     { name = "httpx", specifier = ">=0.28,<1" },
@@ -1286,7 +1286,7 @@ wheels = [
 [[package]]
 name = "docling-slim"
 version = "2.94.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/docling-project/docling/?rev=feat-docmeta-callback#7ff3d5b38b5a343ab767b07351491c84ba9aaa18" }
 dependencies = [
     { name = "certifi" },
     { name = "docling-core" },
@@ -1296,10 +1296,6 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "requests" },
     { name = "tqdm" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b6/ef/b93ea3e4f949f8613b1d44924a8c63c3839c48b299ddb84465ac4f92acd6/docling_slim-2.94.0.tar.gz", hash = "sha256:4e5ba7972b7d13220a029cd9988d4b1ef638e3961c7912b86dc4377fea7842f8", size = 399693, upload-time = "2026-05-18T10:15:02.109Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/15/fc/0550015c6087671eb149770d14a51fd80a794672eff162b7921d2cf9ebb1/docling_slim-2.94.0-py3-none-any.whl", hash = "sha256:9c90e7e381eb9d70e8e64bc01cb1dec875c7d6f6e66d2ac39df14f5bb4a4a3d1", size = 519383, upload-time = "2026-05-18T10:14:59.928Z" },
 ]
 
 [package.optional-dependencies]
