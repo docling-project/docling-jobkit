@@ -42,7 +42,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "docling>=2.94.0,<3.0.0",
+    "docling-slim[standard]>=2.94.0,<3.0.0",
     "pydantic~=2.10",
     "pydantic-settings~=2.4",
     "boto3~=1.35",
@@ -53,10 +53,10 @@ dependencies = [
 
 [project.optional-dependencies]
 vlm = [
-    "docling[vlm]>=2.94.0,<3.0.0",
+    "docling-slim[models-vlm-inline]>=2.95.0,<3.0.0",
 ]
 onnxruntime = [
-    "docling[onnxruntime]>=2.94.0,<3.0.0",
+    "docling-slim[models-onnxruntime]>=2.94.0,<3.0.0",
 ]
 # asr = [
 #     "docling[asr]~=2.53",
@@ -98,8 +98,8 @@ dev = [
 ]
 
 [tool.uv.sources]
-# docling = { git = "https://github.com/docling-project/docling/", rev = "main" }
-# docling = { path = "../docling", editable = true }
+# docling-slim = { git = "https://github.com/docling-project/docling/", rev = "main" }
+# docling-slim = { path = "../docling", editable = true }
 
 
 [tool.uv]

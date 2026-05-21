@@ -3,7 +3,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from docling.datamodel.base_models import ConversionStatus, ErrorItem
+from docling.datamodel.base_models import ConversionStatus, ErrorItem, InputFormat
 from docling.datamodel.document import ConversionResult
 from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
@@ -15,6 +15,9 @@ class ExportableDocument(BaseModel):
     file: PurePath = Field(description="Input filename or path metadata")
     document_hash: Optional[str] = Field(
         default=None, description="Stable hash of the input document"
+    )
+    document_type: Optional[InputFormat] = Field(
+        default=None, description="Detected input document format"
     )
     status: ConversionStatus = Field(description="Conversion status")
     errors: list[ErrorItem] = Field(
@@ -51,6 +54,7 @@ class ExportableDocument(BaseModel):
         return cls(
             file=conversion_result.input.file,
             document_hash=conversion_result.input.document_hash,
+            document_type=conversion_result.input.format,
             status=conversion_result.status,
             errors=conversion_result.errors,
             timings=conversion_result.timings,

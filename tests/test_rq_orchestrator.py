@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Iterable
 import pytest
 import pytest_asyncio
 
-from docling.datamodel.base_models import ConversionStatus
+from docling.datamodel.base_models import ConversionStatus, InputFormat
 
 if TYPE_CHECKING:
     pass
@@ -372,8 +372,15 @@ async def test_convert_with_callbacks(orchestrator: RQOrchestrator, callback_ser
     doc_callback = doc_completed_callbacks[0]["progress"]
     assert doc_callback["document"]["source"] == doc_filename.name
     assert doc_callback["document"]["status"] == ConversionStatus.SUCCESS
+    assert doc_callback["document"]["document_type"] == InputFormat.PDF
     assert doc_callback["document"]["num_pages"] is not None
     assert doc_callback["document"]["num_pages"] > 0
+    assert doc_callback["document"]["num_characters"] is not None
+    assert doc_callback["document"]["num_characters"] > 0
+    assert doc_callback["document"]["num_tables"] is not None
+    assert doc_callback["document"]["num_tables"] >= 0
+    assert doc_callback["document"]["num_pictures"] is not None
+    assert doc_callback["document"]["num_pictures"] >= 0
     assert doc_callback["total_processed"] == 1
     assert doc_callback["total_docs"] == 1
 

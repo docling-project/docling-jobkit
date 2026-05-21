@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.callbacks import (
-    DocumentCompletedItem,
     FailedDocsItem,
     ProgressDocumentCompleted,
     ProgressSetNumDocs,
@@ -47,6 +46,7 @@ from docling_core.transforms.serializer.markdown import (
 from docling_core.types.doc.document import DoclingDocument, ImageRefMode
 
 from docling_jobkit.convert.results import (
+    _build_document_completed_item,
     _export_document_as_content,
 )
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
@@ -430,22 +430,8 @@ def process_chunkable_results(
 
         # 2. Send per-document callback (non-blocking)
         if callback_invoker and task.callbacks:
-            document_info = DocumentCompletedItem(
-                source=str(exportable_document.file),
-                status=exportable_document.status,
-                num_pages=(
-                    len(exportable_document.document.pages)
-                    if exportable_document.document
-                    else None
-                ),
-                processing_time=(
-                    sum(
-                        sum(item.times) for item in exportable_document.timings.values()
-                    )
-                    if exportable_document.timings
-                    else None
-                ),
-                doc_hash=exportable_document.document_hash,
+            document_info = _build_document_completed_item(
+                exportable_document,
                 error=render_public_error_list(
                     errors,
                     debug_enabled=debug_error_details,
