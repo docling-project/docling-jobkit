@@ -53,10 +53,10 @@ dependencies = [
 
 [project.optional-dependencies]
 vlm = [
-    "docling[vlm]>=2.94.0,<3.0.0",
+    "docling-slim[models-vlm-inline]>=2.94.0,<3.0.0",
 ]
 onnxruntime = [
-    "docling[onnxruntime]>=2.94.0,<3.0.0",
+    "docling-slim[models-onnxruntime]>=2.94.0,<3.0.0",
 ]
 # asr = [
 #     "docling[asr]~=2.53",
