@@ -368,6 +368,7 @@ class DoclingProcessorConverterDeployment:
                     task=task,
                     exportable_documents=exportable_documents,
                     work_dir=workdir,
+                    target_config=self.config.target_config,
                     callback_invoker=callback_invoker,
                     debug_error_details=self.config.debug_error_details,
                     expected_doc_count=expected_doc_count,
@@ -714,10 +715,11 @@ class DoclingProcessorCoordinatorDeployment:
                     callback_invoker = CallbackInvoker() if task.callbacks else None
                     return await asyncio.to_thread(
                         process_exportable_results,
-                        task,
-                        [_assemble_slice_results(slice_results)],
-                        workdir,
-                        callback_invoker,
+                        task=task,
+                        exportable_documents=[_assemble_slice_results(slice_results)],
+                        work_dir=workdir,
+                        target_config=self.config.target_config,
+                        callback_invoker=callback_invoker,
                         start_time=materialized_start_time,
                     )
                 else:

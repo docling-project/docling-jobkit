@@ -8,6 +8,8 @@ from typing import Any, Optional
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from docling_jobkit.config.target_config import TargetConfig
+
 _log = logging.getLogger(__name__)
 
 _IEC_MULTIPLIERS = {"gi": 1024**3, "mi": 1024**2, "ki": 1024}
@@ -368,6 +370,10 @@ class RayOrchestratorConfig(BaseSettings):
     debug_error_details: bool = Field(
         default=False,
         description="Return raw infrastructure exception detail in public task/document errors",
+    )
+    target_config: TargetConfig | None = Field(
+        default=None,
+        description="Optional server-managed output target configuration.",
     )
 
     def _validate_worker_request_concurrency(self) -> None:

@@ -54,11 +54,13 @@ from docling_jobkit.datamodel.result import (
     ChunkedDocumentResult,
     ChunkedDocumentResultItem,
     DoclingTaskResult,
+    DocumentResultItem,
     ExportDocumentResponse,
     ExportResult,
     RemoteTargetResult,
     ResultType,
     ZipArchiveResult,
+    _to_export_result,
 )
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.public_errors import render_public_error_list
@@ -475,11 +477,13 @@ def process_chunkable_results(
         else:
             doc_content = ExportDocumentResponse(filename=filename)
 
-        doc_result = ExportResult(
-            content=doc_content,
-            status=exportable_document.status,
-            timings=exportable_document.timings,
-            errors=errors,
+        doc_result = _to_export_result(
+            DocumentResultItem(
+                document=doc_content,
+                status=exportable_document.status,
+                timings=exportable_document.timings,
+                errors=errors,
+            )
         )
 
         documents.append(doc_result)

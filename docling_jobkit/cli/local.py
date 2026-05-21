@@ -7,8 +7,9 @@ from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
 from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.targets import S3Target, ZipTarget
+from docling.datamodel.service.targets import PresignedUrlTarget, S3Target, ZipTarget
 
+from docling_jobkit.cli.validation import ensure_legacy_target_supported
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.convert.manager import (
@@ -49,7 +50,7 @@ JobTaskSource = Annotated[
 ]
 
 JobTaskTarget = Annotated[
-    ZipTarget | LocalPathTarget | S3Target | GoogleDriveTarget,
+    ZipTarget | LocalPathTarget | S3Target | GoogleDriveTarget | PresignedUrlTarget,
     Field(discriminator="kind"),
 ]
 
@@ -92,9 +93,13 @@ def convert(
         config = JobConfig(**raw_data)
     except FileNotFoundError:
         typer.echo(f"❌ File not found: {config_file}")
+        raise typer.Exit(1)
     except ValidationError as e:
         typer.echo("❌ Validation failed:")
         typer.echo(e.json(indent=2))
+        raise typer.Exit(1)
+
+    ensure_legacy_target_supported(config.target)
 
     cm_config = DoclingConverterManagerConfig(
         artifacts_path=artifacts_path,

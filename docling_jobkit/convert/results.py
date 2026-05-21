@@ -4,12 +4,13 @@ import shutil
 import time
 import warnings
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, cast
 
 import httpx
 
-from docling.datamodel.base_models import InputFormat, OutputFormat
+from docling.datamodel.base_models import DocumentStream, InputFormat, OutputFormat
 from docling.datamodel.document import ConversionResult, ConversionStatus
 from docling.datamodel.service.callbacks import (
     DocumentCompletedItem,
@@ -19,17 +20,30 @@ from docling.datamodel.service.callbacks import (
     ProgressUpdateProcessed,
     SucceededDocsItem,
 )
-from docling.datamodel.service.targets import InBodyTarget, PutTarget
+from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.targets import (
+    InBodyTarget,
+    PresignedUrlTarget,
+    PutTarget,
+)
 from docling_core.types.doc import ImageRefMode
 
+from docling_jobkit.config.target_config import TargetConfig
+from docling_jobkit.connectors.s3_presigned_target_processor import (
+    S3PresignedTargetProcessor,
+)
+from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import (
     DoclingTaskResult,
+    DocumentArtifactItem,
+    DocumentResultItem,
     ExportDocumentResponse,
-    ExportResult,
+    PresignedArtifactResult,
     RemoteTargetResult,
     ResultType,
     ZipArchiveResult,
+    _to_export_result,
 )
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.public_errors import render_public_error_list
@@ -38,6 +52,13 @@ if TYPE_CHECKING:
     from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
 
 _log = logging.getLogger(__name__)
+
+
+@dataclass
+class _ExportedArtifactFile:
+    path: Path
+    target_filename: str
+    mime_type: str
 
 
 def _is_exportable_status(status: ConversionStatus) -> bool:
@@ -134,63 +155,20 @@ def _export_documents_as_files(
     success_count = 0
     failure_count = 0
 
-    artifacts_dir = Path("artifacts/")  # will be relative to the fname
-
     for exportable_document in exportable_documents:
-        if (
-            _is_exportable_status(exportable_document.status)
-            and exportable_document.document is not None
+        if _materialize_document_exports(
+            exportable_document,
+            output_dir,
+            export_json=export_json,
+            export_html=export_html,
+            export_md=export_md,
+            export_txt=export_txt,
+            export_doctags=export_doctags,
+            image_export_mode=image_export_mode,
+            md_page_break_placeholder=md_page_break_placeholder,
+            bundle_resources=False,
         ):
             success_count += 1
-            doc_filename = exportable_document.file.stem
-
-            # Export JSON format:
-            if export_json:
-                fname = output_dir / f"{doc_filename}.json"
-                _log.info(f"writing JSON output to {fname}")
-                exportable_document.document.save_as_json(
-                    filename=fname,
-                    image_mode=image_export_mode,
-                    artifacts_dir=artifacts_dir,
-                )
-
-            # Export HTML format:
-            if export_html:
-                fname = output_dir / f"{doc_filename}.html"
-                _log.info(f"writing HTML output to {fname}")
-                exportable_document.document.save_as_html(
-                    filename=fname,
-                    image_mode=image_export_mode,
-                    artifacts_dir=artifacts_dir,
-                )
-
-            # Export Text format:
-            if export_txt:
-                fname = output_dir / f"{doc_filename}.txt"
-                _log.info(f"writing TXT output to {fname}")
-                exportable_document.document.save_as_markdown(
-                    filename=fname,
-                    strict_text=True,
-                    image_mode=ImageRefMode.PLACEHOLDER,
-                )
-
-            # Export Markdown format:
-            if export_md:
-                fname = output_dir / f"{doc_filename}.md"
-                _log.info(f"writing Markdown output to {fname}")
-                exportable_document.document.save_as_markdown(
-                    filename=fname,
-                    artifacts_dir=artifacts_dir,
-                    image_mode=image_export_mode,
-                    page_break_placeholder=md_page_break_placeholder or None,
-                )
-
-            # Export Document Tags format:
-            if export_doctags:
-                fname = output_dir / f"{doc_filename}.doctags"
-                _log.info(f"writing Doc Tags output to {fname}")
-                exportable_document.document.save_as_doctags(filename=fname)
-
         else:
             _log.warning(f"Document {exportable_document.file} failed to convert.")
             failure_count += 1
@@ -231,10 +209,207 @@ def _upload_to_put_target(
     ) from last_exc
 
 
+def _task_source_to_uri(task: Task, source_index: int, fallback_filename: str) -> str:
+    if source_index >= len(task.sources):
+        return fallback_filename
+
+    source = task.sources[source_index]
+    if isinstance(source, HttpSource):
+        return str(source.url)
+    if isinstance(source, FileSource):
+        return source.filename
+    if isinstance(source, S3Coordinates):
+        key_prefix = source.key_prefix.lstrip("/")
+        if key_prefix:
+            return f"s3://{source.bucket}/{key_prefix}"
+        return f"s3://{source.bucket}"
+    if isinstance(source, DocumentStream):
+        return source.name
+    return fallback_filename
+
+
+def _materialize_document_exports(
+    exportable_document: ExportableDocument,
+    output_dir: Path,
+    *,
+    export_json: bool,
+    export_html: bool,
+    export_md: bool,
+    export_txt: bool,
+    export_doctags: bool,
+    image_export_mode: ImageRefMode,
+    md_page_break_placeholder: str,
+    bundle_resources: bool,
+) -> list[_ExportedArtifactFile]:
+    if not (
+        _is_exportable_status(exportable_document.status)
+        and exportable_document.document is not None
+    ):
+        return []
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    artifacts_dir = Path("artifacts")
+    generated: list[_ExportedArtifactFile] = []
+    doc_filename = exportable_document.file.stem
+
+    if export_json:
+        fname = output_dir / f"{doc_filename}.json"
+        _log.info(f"writing JSON output to {fname}")
+        exportable_document.document.save_as_json(
+            filename=fname,
+            image_mode=image_export_mode,
+            artifacts_dir=artifacts_dir,
+        )
+        generated.append(
+            _ExportedArtifactFile(
+                path=fname,
+                target_filename=fname.name,
+                mime_type="application/json",
+            )
+        )
+
+    if export_html:
+        fname = output_dir / f"{doc_filename}.html"
+        _log.info(f"writing HTML output to {fname}")
+        exportable_document.document.save_as_html(
+            filename=fname,
+            image_mode=image_export_mode,
+            artifacts_dir=artifacts_dir,
+        )
+        generated.append(
+            _ExportedArtifactFile(
+                path=fname,
+                target_filename=fname.name,
+                mime_type="text/html",
+            )
+        )
+
+    if export_txt:
+        fname = output_dir / f"{doc_filename}.txt"
+        _log.info(f"writing TXT output to {fname}")
+        exportable_document.document.save_as_markdown(
+            filename=fname,
+            strict_text=True,
+            image_mode=ImageRefMode.PLACEHOLDER,
+        )
+        generated.append(
+            _ExportedArtifactFile(
+                path=fname,
+                target_filename=fname.name,
+                mime_type="text/plain",
+            )
+        )
+
+    if export_md:
+        fname = output_dir / f"{doc_filename}.md"
+        _log.info(f"writing Markdown output to {fname}")
+        exportable_document.document.save_as_markdown(
+            filename=fname,
+            artifacts_dir=artifacts_dir,
+            image_mode=image_export_mode,
+            page_break_placeholder=md_page_break_placeholder or None,
+        )
+        generated.append(
+            _ExportedArtifactFile(
+                path=fname,
+                target_filename=fname.name,
+                mime_type="text/markdown",
+            )
+        )
+
+    if export_doctags:
+        fname = output_dir / f"{doc_filename}.doctags"
+        _log.info(f"writing Doc Tags output to {fname}")
+        exportable_document.document.save_as_doctags(filename=fname)
+        generated.append(
+            _ExportedArtifactFile(
+                path=fname,
+                target_filename=fname.name,
+                mime_type="text/plain",
+            )
+        )
+
+    artifacts_path = output_dir / artifacts_dir
+    if bundle_resources and artifacts_path.exists() and any(artifacts_path.iterdir()):
+        bundle_path = output_dir / f"{doc_filename}_bundle.zip"
+        shutil.make_archive(
+            base_name=str(bundle_path.with_suffix("")),
+            format="zip",
+            root_dir=artifacts_path,
+        )
+        generated.append(
+            _ExportedArtifactFile(
+                path=bundle_path,
+                target_filename=bundle_path.name,
+                mime_type="application/zip",
+            )
+        )
+
+    return generated
+
+
+def _upload_documents_as_presigned_artifacts(
+    *,
+    task: Task,
+    exportable_documents: list[ExportableDocument],
+    output_dir: Path,
+    target_processor: S3PresignedTargetProcessor,
+    export_json: bool,
+    export_html: bool,
+    export_md: bool,
+    export_txt: bool,
+    export_doctags: bool,
+    image_export_mode: ImageRefMode,
+    md_page_break_placeholder: str,
+) -> list[DocumentArtifactItem]:
+    documents: list[DocumentArtifactItem] = []
+
+    for source_index, exportable_document in enumerate(exportable_documents):
+        source_uri = _task_source_to_uri(
+            task,
+            source_index,
+            fallback_filename=exportable_document.file.name,
+        )
+        document_dir = output_dir / f"{source_index:06d}"
+        for artifact in _materialize_document_exports(
+            exportable_document,
+            document_dir,
+            export_json=export_json,
+            export_html=export_html,
+            export_md=export_md,
+            export_txt=export_txt,
+            export_doctags=export_doctags,
+            image_export_mode=image_export_mode,
+            md_page_break_placeholder=md_page_break_placeholder,
+            bundle_resources=True,
+        ):
+            target_processor.upload_file(
+                filename=artifact.path,
+                target_filename=artifact.target_filename,
+                content_type=artifact.mime_type,
+                source_index=source_index,
+                source_uri=source_uri,
+            )
+
+        documents.append(
+            target_processor.build_document_artifact_item(
+                source_index=source_index,
+                source_uri=source_uri,
+                filename=exportable_document.file.name,
+                status=exportable_document.status,
+                errors=exportable_document.errors,
+                timings=exportable_document.timings,
+            )
+        )
+
+    return documents
+
+
 def process_exportable_results(
     task: Task,
     exportable_documents: Iterable[ExportableDocument],
     work_dir: Path,
+    target_config: TargetConfig | None = None,
     callback_invoker: Optional["CallbackInvoker"] = None,
     debug_error_details: bool = False,
     expected_doc_count: Optional[int] = None,
@@ -359,16 +534,49 @@ def process_exportable_results(
             image_mode=conversion_options.image_export_mode,
             md_page_break_placeholder=conversion_options.md_page_break_placeholder,
         )
-        task_result = ExportResult(
-            content=content,
-            status=exportable_document.status,
-            # processing_time=processing_time,
-            timings=exportable_document.timings,
-            errors=exportable_document.errors,
+        task_result = _to_export_result(
+            DocumentResultItem(
+                document=content,
+                status=exportable_document.status,
+                errors=exportable_document.errors,
+                timings=exportable_document.timings,
+            )
         )
 
         num_succeeded = 1 if _is_exportable_status(exportable_document.status) else 0
         num_failed = 1 if not _is_exportable_status(exportable_document.status) else 0
+
+    elif isinstance(task.target, PresignedUrlTarget):
+        output_dir = work_dir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        with get_target_processor(
+            task.target,
+            task=task,
+            target_config=target_config,
+        ) as target_processor:
+            documents = _upload_documents_as_presigned_artifacts(
+                task=task,
+                exportable_documents=exportable_documents,
+                output_dir=output_dir,
+                target_processor=cast(
+                    S3PresignedTargetProcessor,
+                    target_processor,
+                ),
+                export_json=export_json,
+                export_html=export_html,
+                export_md=export_md,
+                export_txt=export_txt,
+                export_doctags=export_doctags,
+                image_export_mode=conversion_options.image_export_mode,
+                md_page_break_placeholder=conversion_options.md_page_break_placeholder,
+            )
+
+        num_succeeded = sum(
+            1 for doc in exportable_documents if _is_exportable_status(doc.status)
+        )
+        num_failed = len(exportable_documents) - num_succeeded
+        task_result = PresignedArtifactResult(documents=documents)
 
     # Multiple documents were processed, or we are forced returning as a file
     else:
@@ -420,6 +628,7 @@ def process_export_results(
     task: Task,
     conv_results: Iterable[ConversionResult],
     work_dir: Path,
+    target_config: TargetConfig | None = None,
     callback_invoker: Optional["CallbackInvoker"] = None,
 ) -> DoclingTaskResult:
     warnings.warn(
@@ -434,5 +643,6 @@ def process_export_results(
             for conv_res in conv_results
         ),
         work_dir=work_dir,
+        target_config=target_config,
         callback_invoker=callback_invoker,
     )

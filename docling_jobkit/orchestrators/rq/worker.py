@@ -159,6 +159,7 @@ def _run_docling_task(
                         task=task,
                         exportable_documents=exportable_documents,
                         work_dir=workdir,
+                        target_config=orchestrator_config.target_config,
                         callback_invoker=callback_invoker,
                         debug_error_details=orchestrator_config.debug_error_details,
                     )
