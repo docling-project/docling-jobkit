@@ -1,3 +1,9 @@
+## [v1.20.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.20.0) - 2026-05-21
+
+### Feature
+
+* Add callback document metadata ([#153](https://github.com/docling-project/docling-jobkit/issues/153)) ([`83f7e5a`](https://github.com/docling-project/docling-jobkit/commit/83f7e5a5a02fe989cd5d19cbdd56612e4bf0c265))
+
 ## [v1.19.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.19.1) - 2026-05-20
 
 ### Fix
