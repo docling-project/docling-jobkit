@@ -21,7 +21,7 @@ from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.sources import FileSource, HttpSource
+from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
@@ -85,6 +85,24 @@ _WATCHDOG_GRACE_PERIOD = (
 )
 _RQ_JOB_GONE = _RQJobGone()
 _TASK_METADATA_PREFIX = "docling:tasks:"
+
+
+def _normalize_runtime_source(
+    source: HttpSource | FileSource | S3Coordinates,
+) -> HttpSource | FileSource | S3Coordinates:
+    if isinstance(source, FileSource):
+        if type(source) is FileSource:
+            return source
+        return FileSource.model_validate(source.model_dump())
+    if isinstance(source, HttpSource):
+        if type(source) is HttpSource:
+            return source
+        return HttpSource.model_validate(source.model_dump())
+    if isinstance(source, S3Coordinates):
+        if type(source) is S3Coordinates:
+            return source
+        return S3Coordinates.model_validate(source.model_dump())
+    raise RuntimeError(f"Unsupported runtime source: {type(source)!r}")
 
 
 class RQOrchestrator(BaseOrchestrator):
@@ -165,15 +183,15 @@ class RQOrchestrator(BaseOrchestrator):
                     stacklevel=2,
                 )
             task_id = str(uuid.uuid4())
-            rq_sources: list[HttpSource | FileSource] = []
+            rq_sources: list[HttpSource | FileSource | S3Coordinates] = []
             for source in sources:
                 if isinstance(source, DocumentStream):
                     encoded_doc = base64.b64encode(source.stream.read()).decode()
                     rq_sources.append(
                         FileSource(filename=source.name, base64_string=encoded_doc)
                     )
-                elif isinstance(source, (HttpSource | FileSource)):
-                    rq_sources.append(source)
+                elif isinstance(source, (HttpSource, FileSource, S3Coordinates)):
+                    rq_sources.append(_normalize_runtime_source(source))
             chunking_export_options = chunking_export_options or ChunkingExportOptions()
             task = Task(
                 task_id=task_id,

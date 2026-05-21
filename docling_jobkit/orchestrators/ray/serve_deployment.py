@@ -12,7 +12,7 @@ import time
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 import ray
 from ray import serve
@@ -23,7 +23,7 @@ from docling.datamodel.base_models import (
 )
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.sources import FileSource, HttpSource
+from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
 from docling.datamodel.service.tasks import TaskType
 from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
@@ -44,6 +44,7 @@ from docling_jobkit.convert.results import (
     _is_exportable_status,
     process_exportable_results,
 )
+from docling_jobkit.convert.source_expansion import expand_task_sources
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
@@ -89,25 +90,6 @@ def _is_pdf_source(source: Any) -> bool:
     if isinstance(source, HttpSource):
         return str(source.url).lower().split("?", 1)[0].endswith(".pdf")
     return False
-
-
-def _build_convert_sources(
-    task: Task,
-) -> tuple[list[Union[str, DocumentStream]], Optional[dict[str, Any]]]:
-    convert_sources: list[Union[str, DocumentStream]] = []
-    headers: Optional[dict[str, Any]] = None
-
-    for source in task.sources:
-        if isinstance(source, DocumentStream):
-            convert_sources.append(source)
-        elif isinstance(source, FileSource):
-            convert_sources.append(source.to_document_stream())
-        elif isinstance(source, HttpSource):
-            convert_sources.append(str(source.url))
-            if headers is None and source.headers:
-                headers = source.headers
-
-    return convert_sources, headers
 
 
 def _build_slice_plan(
@@ -390,7 +372,7 @@ class DoclingProcessorConverterDeployment:
         return ConverterTaskResult(task_result=task_result)
 
     def _convert_passthrough_task(self, task: Task) -> list[ConversionResult]:
-        convert_sources, headers = _build_convert_sources(task)
+        convert_sources, headers = expand_task_sources(task)
         convert_opts = task.convert_options or ConvertDocumentsOptions()
         return list(
             self.cm.convert_documents(
@@ -750,8 +732,12 @@ class DoclingProcessorCoordinatorDeployment:
         return converter_result.task_result
 
     def _should_materialize_pdf(self, task: Task) -> bool:
+        has_s3_source = any(
+            isinstance(source, S3Coordinates) for source in task.sources
+        )
         return (
-            self.config.enable_pdf_page_slice_fanout
+            not has_s3_source
+            and self.config.enable_pdf_page_slice_fanout
             and task.task_type == TaskType.CONVERT
             and len(task.sources) == 1
             and _is_pdf_source(task.sources[0])

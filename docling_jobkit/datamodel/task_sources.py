@@ -3,21 +3,19 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
-from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.requests import (
+    FileSourceRequest,
+    HttpSourceRequest,
+    S3SourceRequest,
+)
 
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
 
-
-class TaskFileSource(FileSource):
-    kind: Literal["file"] = "file"
-
-
-class TaskHttpSource(HttpSource):
-    kind: Literal["http"] = "http"
-
-
-class TaskS3Source(S3Coordinates):
-    kind: Literal["s3"] = "s3"
+# Compatibility aliases for historical jobkit imports. The shared request
+# models in `docling` are the source-kind boundary types for file/http/s3.
+TaskFileSource = FileSourceRequest
+TaskHttpSource = HttpSourceRequest
+TaskS3Source = S3SourceRequest
 
 
 class TaskGoogleDriveSource(GoogleDriveCoordinates):
@@ -81,4 +79,13 @@ TaskSource = Annotated[
     | TaskGoogleDriveSource
     | TaskLocalPathSource,
     Field(discriminator="kind"),
+]
+
+__all__ = [
+    "TaskFileSource",
+    "TaskGoogleDriveSource",
+    "TaskHttpSource",
+    "TaskLocalPathSource",
+    "TaskS3Source",
+    "TaskSource",
 ]
