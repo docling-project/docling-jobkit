@@ -2,7 +2,6 @@ from docling.datamodel.service.responses import (
     ArtifactRef,
     ChunkedDocumentResult,
     ChunkedDocumentResultItem,
-    ConvertDocumentResult,
     DoclingTaskResult,
     DocumentArtifactItem,
     DocumentResultItem,
@@ -13,7 +12,6 @@ from docling.datamodel.service.responses import (
     RemoteTargetResult,
     ResultType,
     ZipArchiveResult,
-    _to_convert_document_response,
     _to_export_result,
 )
 
@@ -21,7 +19,6 @@ __all__ = [
     "ArtifactRef",
     "ChunkedDocumentResult",
     "ChunkedDocumentResultItem",
-    "ConvertDocumentResult",
     "DoclingTaskResult",
     "DocumentArtifactItem",
     "DocumentResultItem",
@@ -32,6 +29,5 @@ __all__ = [
     "RemoteTargetResult",
     "ResultType",
     "ZipArchiveResult",
-    "_to_convert_document_response",
     "_to_export_result",
 ]
