@@ -23,7 +23,7 @@ from docling.datamodel.base_models import (
 )
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.sources import FileSource, HttpSource
 from docling.datamodel.service.tasks import TaskType
 from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
@@ -657,6 +657,11 @@ class DoclingProcessorCoordinatorDeployment:
         materialized_start_time = time.monotonic()
 
         if self._should_materialize_pdf(task):
+            # "Passthrough" keeps the original task sources intact and lets the
+            # converter expand or fetch them when it executes the task. We only
+            # materialize for the single-PDF fanout path, where the coordinator
+            # must read one PDF up front to enforce preflight limits, determine
+            # page count, and share the same bytes across slice requests.
             source = task.sources[0]
             if not isinstance(source, (FileSource, HttpSource)):
                 raise TypeError(
@@ -732,14 +737,11 @@ class DoclingProcessorCoordinatorDeployment:
         return converter_result.task_result
 
     def _should_materialize_pdf(self, task: Task) -> bool:
-        has_s3_source = any(
-            isinstance(source, S3Coordinates) for source in task.sources
-        )
         return (
-            not has_s3_source
-            and self.config.enable_pdf_page_slice_fanout
+            self.config.enable_pdf_page_slice_fanout
             and task.task_type == TaskType.CONVERT
             and len(task.sources) == 1
+            and isinstance(task.sources[0], (FileSource, HttpSource))
             and _is_pdf_source(task.sources[0])
         )
 

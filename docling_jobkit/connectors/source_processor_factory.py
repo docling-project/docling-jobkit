@@ -6,16 +6,20 @@ from docling_jobkit.connectors.local_path_source_processor import (
 )
 from docling_jobkit.connectors.s3_source_processor import S3SourceProcessor
 from docling_jobkit.connectors.source_processor import BaseSourceProcessor
-from docling_jobkit.datamodel.task import TaskSource as RuntimeTaskSource
 from docling_jobkit.datamodel.task_sources import (
     TaskGoogleDriveSource,
     TaskLocalPathSource,
-    TaskSource as CliTaskSource,
 )
 
 
 def get_source_processor(
-    source: RuntimeTaskSource | CliTaskSource,
+    source: (
+        FileSource
+        | HttpSource
+        | S3Coordinates
+        | TaskGoogleDriveSource
+        | TaskLocalPathSource
+    ),
 ) -> BaseSourceProcessor:
     if isinstance(source, (FileSource, HttpSource)):
         return HttpSourceProcessor(source)

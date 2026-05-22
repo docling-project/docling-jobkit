@@ -24,6 +24,10 @@ def expand_task_sources(
             if headers is None and source.headers:
                 headers = source.headers
         elif isinstance(source, S3Coordinates):
+            # Orchestrators need converter-ready inputs for mixed runtime sources in a
+            # single task. Connector chunking is a CLI batching primitive and would
+            # change task/result semantics for DocumentStream/FileSource/HttpSource
+            # inputs, so the runtime path expands sources directly here instead.
             with get_source_processor(source) as source_processor:
                 for document_stream in source_processor.iterate_documents():
                     convert_sources.append(document_stream)

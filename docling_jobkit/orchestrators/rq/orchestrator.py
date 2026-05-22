@@ -87,24 +87,6 @@ _RQ_JOB_GONE = _RQJobGone()
 _TASK_METADATA_PREFIX = "docling:tasks:"
 
 
-def _normalize_runtime_source(
-    source: HttpSource | FileSource | S3Coordinates,
-) -> HttpSource | FileSource | S3Coordinates:
-    if isinstance(source, FileSource):
-        if type(source) is FileSource:
-            return source
-        return FileSource.model_validate(source.model_dump())
-    if isinstance(source, HttpSource):
-        if type(source) is HttpSource:
-            return source
-        return HttpSource.model_validate(source.model_dump())
-    if isinstance(source, S3Coordinates):
-        if type(source) is S3Coordinates:
-            return source
-        return S3Coordinates.model_validate(source.model_dump())
-    raise RuntimeError(f"Unsupported runtime source: {type(source)!r}")
-
-
 class RQOrchestrator(BaseOrchestrator):
     @staticmethod
     def make_rq_queue(config: RQOrchestratorConfig) -> tuple[redis.Redis, Queue]:
@@ -191,7 +173,7 @@ class RQOrchestrator(BaseOrchestrator):
                         FileSource(filename=source.name, base64_string=encoded_doc)
                     )
                 elif isinstance(source, (HttpSource, FileSource, S3Coordinates)):
-                    rq_sources.append(_normalize_runtime_source(source))
+                    rq_sources.append(source)
             chunking_export_options = chunking_export_options or ChunkingExportOptions()
             task = Task(
                 task_id=task_id,

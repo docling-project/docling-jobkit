@@ -23,7 +23,6 @@ from docling_jobkit.datamodel.task_targets import InBodyTarget
 from docling_jobkit.orchestrators.rq.orchestrator import (
     RQOrchestrator,
     RQOrchestratorConfig,
-    _normalize_runtime_source,
 )
 
 
@@ -77,17 +76,34 @@ def test_get_source_processor_accepts_s3coordinates():
     assert isinstance(processor, S3SourceProcessor)
 
 
-def test_normalize_runtime_source_keeps_base_instances():
-    file_source = FileSource(
-        filename="doc.pdf",
-        base64_string=base64.b64encode(b"pdf-bytes").decode(),
+def test_task_roundtrip_accepts_request_subclasses_without_normalization():
+    task = Task(
+        task_id="task-1",
+        task_type=TaskType.CONVERT,
+        sources=[
+            FileSourceRequest(
+                filename="doc.pdf",
+                base64_string=base64.b64encode(b"pdf-bytes").decode(),
+            ),
+            HttpSourceRequest(url="https://example.com/doc.pdf"),
+            S3SourceRequest(
+                endpoint="127.0.0.1:9000",
+                verify_ssl=False,
+                access_key=SecretStr("minioadmin"),
+                secret_key=SecretStr("minioadmin"),
+                bucket="test-bucket",
+                key_prefix="incoming/",
+            ),
+        ],
+        target=InBodyTarget(),
     )
-    http_source = HttpSource(url="https://example.com/doc.pdf")
-    s3_source = _make_s3_source()
 
-    assert _normalize_runtime_source(file_source) is file_source
-    assert _normalize_runtime_source(http_source) is http_source
-    assert _normalize_runtime_source(s3_source) is s3_source
+    task_data = task.model_dump(mode="json", serialize_as_any=True)
+    rebuilt_task = Task.model_validate(task_data)
+
+    assert isinstance(rebuilt_task.sources[0], FileSource)
+    assert isinstance(rebuilt_task.sources[1], HttpSource)
+    assert isinstance(rebuilt_task.sources[2], S3Coordinates)
 
 
 @pytest.mark.asyncio

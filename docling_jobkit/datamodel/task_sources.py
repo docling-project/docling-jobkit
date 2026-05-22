@@ -11,12 +11,6 @@ from docling.datamodel.service.requests import (
 
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
 
-# Compatibility aliases for historical jobkit imports. The shared request
-# models in `docling` are the source-kind boundary types for file/http/s3.
-TaskFileSource = FileSourceRequest
-TaskHttpSource = HttpSourceRequest
-TaskS3Source = S3SourceRequest
-
 
 class TaskGoogleDriveSource(GoogleDriveCoordinates):
     kind: Literal["google_drive"] = "google_drive"
@@ -73,19 +67,16 @@ class TaskLocalPathSource(BaseModel):
 
 
 TaskSource = Annotated[
-    TaskFileSource
-    | TaskHttpSource
-    | TaskS3Source
+    FileSourceRequest
+    | HttpSourceRequest
+    | S3SourceRequest
     | TaskGoogleDriveSource
     | TaskLocalPathSource,
     Field(discriminator="kind"),
 ]
 
 __all__ = [
-    "TaskFileSource",
     "TaskGoogleDriveSource",
-    "TaskHttpSource",
     "TaskLocalPathSource",
-    "TaskS3Source",
     "TaskSource",
 ]
