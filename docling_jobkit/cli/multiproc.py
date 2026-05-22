@@ -18,7 +18,7 @@ from rich.progress import (
 )
 
 from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.targets import PresignedUrlTarget, S3Target, ZipTarget
+from docling.datamodel.service.targets import S3Target, ZipTarget
 
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
@@ -60,7 +60,7 @@ JobTaskSource = Annotated[
 ]
 
 JobTaskTarget = Annotated[
-    ZipTarget | LocalPathTarget | S3Target | GoogleDriveTarget | PresignedUrlTarget,
+    ZipTarget | LocalPathTarget | S3Target | GoogleDriveTarget,
     Field(discriminator="kind"),
 ]
 
@@ -468,11 +468,6 @@ def convert(
 
     # Load and validate config file
     config = _load_config(config_file)
-    if isinstance(config.target, PresignedUrlTarget):
-        raise typer.BadParameter(
-            "The multiproc CLI does not support `presigned_url` targets. "
-            "Use an orchestrator/server path."
-        )
 
     # Create a queue for progress updates from worker processes
     manager = mp.Manager()

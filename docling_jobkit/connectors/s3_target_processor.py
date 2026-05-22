@@ -1,10 +1,13 @@
-from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO
 
 from docling.datamodel.service.sources import S3Coordinates
 
 from docling_jobkit.connectors.s3_helper import get_s3_connection
+from docling_jobkit.connectors.s3_upload_support import (
+    upload_s3_file,
+    upload_s3_object,
+)
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 
 
@@ -33,11 +36,12 @@ class S3TargetProcessor(BaseTargetProcessor):
             if self._coords.key_prefix
             else target_filename
         )
-        self._client.upload_file(
-            Filename=filename,
-            Bucket=self._coords.bucket,
-            Key=full_key,
-            ExtraArgs={"ContentType": content_type},
+        upload_s3_file(
+            self._client,
+            bucket=self._coords.bucket,
+            key=full_key,
+            filename=filename,
+            content_type=content_type,
         )
 
     def upload_object(
@@ -54,16 +58,10 @@ class S3TargetProcessor(BaseTargetProcessor):
             if self._coords.key_prefix
             else target_filename
         )
-        if isinstance(obj, (bytes, bytearray)):
-            body: BinaryIO = BytesIO(obj)
-        elif isinstance(obj, str):
-            body = BytesIO(obj.encode())
-        else:
-            body = obj  # assume it's a file-like object
-
-        self._client.upload_fileobj(
-            Fileobj=body,
-            Bucket=self._coords.bucket,
-            Key=full_key,
-            ExtraArgs={"ContentType": content_type},
+        upload_s3_object(
+            self._client,
+            bucket=self._coords.bucket,
+            key=full_key,
+            obj=obj,
+            content_type=content_type,
         )

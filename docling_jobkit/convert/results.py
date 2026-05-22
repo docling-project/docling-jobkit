@@ -5,7 +5,7 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Optional
 
 import httpx
 
@@ -31,7 +31,6 @@ from docling_jobkit.config.target_config import S3PresignedConfig
 from docling_jobkit.connectors.s3_presigned_target_processor import (
     S3PresignedTargetProcessor,
 )
-from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import (
     DoclingTaskResult,
@@ -547,19 +546,17 @@ def process_exportable_results(
         output_dir = work_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        with get_target_processor(
-            task.target,
-            task=task,
-            s3_presigned_config=s3_presigned_config,
-        ) as target_processor:
+        if s3_presigned_config is None:
+            raise ValueError(
+                "PresignedUrlTarget requires s3_presigned_config in orchestrator config"
+            )
+
+        with S3PresignedTargetProcessor(s3_presigned_config, task) as target_processor:
             documents = _upload_documents_as_presigned_artifacts(
                 task=task,
                 exportable_documents=exportable_documents,
                 output_dir=output_dir,
-                target_processor=cast(
-                    S3PresignedTargetProcessor,
-                    target_processor,
-                ),
+                target_processor=target_processor,
                 export_json=export_json,
                 export_html=export_html,
                 export_md=export_md,

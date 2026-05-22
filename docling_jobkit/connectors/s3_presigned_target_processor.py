@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import BinaryIO, Literal
@@ -14,6 +13,11 @@ from docling.utils.profiling import ProfilingItem
 
 from docling_jobkit.config.target_config import S3PresignedConfig
 from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
+from docling_jobkit.connectors.s3_upload_support import (
+    build_task_scoped_s3_key,
+    upload_s3_file,
+    upload_s3_object,
+)
 from docling_jobkit.datamodel.task import Task
 
 _METADATA_FIELDS = ("tenant_id", "user_id", "project_id")
@@ -40,22 +44,22 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
             raise ValueError(
                 "S3PresignedTargetProcessor.upload_file requires source_index and source_uri"
             )
-        object_key = self._build_object_key(
+        object_key = build_task_scoped_s3_key(
+            self._config,
+            self._task,
             source_index=source_index,
             source_uri=source_uri,
             artifact_filename=target_filename,
         )
-        extra_args: dict[str, object] = {"ContentType": content_type}
         metadata = self._build_object_metadata()
-        if metadata:
-            extra_args["Metadata"] = metadata
-        with Path(filename).open("rb") as handle:
-            self._client.upload_fileobj(
-                Fileobj=handle,
-                Bucket=self._coords.bucket,
-                Key=object_key,
-                ExtraArgs=extra_args,
-            )
+        upload_s3_file(
+            self._client,
+            bucket=self._coords.bucket,
+            key=object_key,
+            filename=filename,
+            content_type=content_type,
+            metadata=metadata,
+        )
         self._uploaded_artifacts.setdefault(source_index, []).append(
             (target_filename, content_type, object_key)
         )
@@ -69,34 +73,25 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
         source_index: int | None = None,
         source_uri: str | None = None,
     ) -> None:
-        from io import BytesIO
-
         if source_index is None or source_uri is None:
             raise ValueError(
                 "S3PresignedTargetProcessor.upload_object requires source_index and source_uri"
             )
-        object_key = self._build_object_key(
+        object_key = build_task_scoped_s3_key(
+            self._config,
+            self._task,
             source_index=source_index,
             source_uri=source_uri,
             artifact_filename=target_filename,
         )
-        if isinstance(obj, (bytes, bytearray)):
-            body: BinaryIO = BytesIO(obj)
-        elif isinstance(obj, str):
-            body = BytesIO(obj.encode())
-        else:
-            body = obj
-
-        extra_args: dict[str, object] = {"ContentType": content_type}
         metadata = self._build_object_metadata()
-        if metadata:
-            extra_args["Metadata"] = metadata
-
-        self._client.upload_fileobj(
-            Fileobj=body,
-            Bucket=self._coords.bucket,
-            Key=object_key,
-            ExtraArgs=extra_args,
+        upload_s3_object(
+            self._client,
+            bucket=self._coords.bucket,
+            key=object_key,
+            obj=obj,
+            content_type=content_type,
+            metadata=metadata,
         )
         self._uploaded_artifacts.setdefault(source_index, []).append(
             (target_filename, content_type, object_key)
@@ -139,35 +134,6 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
             artifacts=artifacts,
         )
 
-    def _build_object_key(
-        self,
-        *,
-        source_index: int,
-        source_uri: str,
-        artifact_filename: str,
-    ) -> str:
-        source_key = (
-            f"{source_index:06d}-{hashlib.sha256(source_uri.encode()).hexdigest()[:12]}"
-        )
-        date_partition = datetime.now(timezone.utc).strftime(
-            self._config.date_partition_format
-        )
-
-        path_parts: list[str] = []
-        key_prefix = self._config.key_prefix.strip("/")
-        if key_prefix:
-            path_parts.append(key_prefix)
-        if date_partition:
-            path_parts.append(date_partition)
-
-        tenant_id = self._task.metadata.get("tenant_id")
-        if tenant_id:
-            path_parts.append(self._sanitize(str(tenant_id)))
-
-        path_parts.append(self._sanitize(self._task.task_id))
-        path_parts.extend([source_key, self._sanitize(artifact_filename)])
-        return "/".join(path_parts)
-
     def _build_object_metadata(self) -> dict[str, str]:
         metadata: dict[str, str] = {}
         for field_name in _METADATA_FIELDS:
@@ -175,10 +141,6 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
             if value is not None:
                 metadata[field_name] = str(value)
         return metadata
-
-    @staticmethod
-    def _sanitize(value: str) -> str:
-        return value.replace("\\", "_").replace("/", "_")
 
     @staticmethod
     def _infer_artifact_type(artifact_filename: str) -> ArtifactType:
