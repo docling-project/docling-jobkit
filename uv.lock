@@ -1266,7 +1266,7 @@ wheels = [
 [[package]]
 name = "docling-slim"
 version = "2.95.0"
-source = { git = "https://github.com/docling-project/docling/?rev=cau%2Fservice-models-presigned-batch-prep#4cfab0c5cc759ac33b55901fa0abb344801d83f2" }
+source = { git = "https://github.com/docling-project/docling/?rev=cau%2Fservice-models-presigned-batch-prep#951b0d24a3e331e1c147038a0ee7baa1592638c8" }
 dependencies = [
     { name = "certifi" },
     { name = "docling-core" },

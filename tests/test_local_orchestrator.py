@@ -418,7 +418,7 @@ async def test_chunk_file(
 
     assert len(task_result.result.documents) == 1
     assert (
-        task_result.result.documents[0].content.json_content is None
+        task_result.result.documents[0].document.json_content is None
     )  # by default no document
     assert len(task_result.result.chunks) > 1
 

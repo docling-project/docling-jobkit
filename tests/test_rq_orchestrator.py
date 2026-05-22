@@ -171,10 +171,10 @@ async def test_chunk_file(orchestrator: RQOrchestrator, include_converted_doc: b
 
     if include_converted_doc:
         DoclingDocument.model_validate(
-            task_result.result.documents[0].content.json_content
+            task_result.result.documents[0].document.json_content
         )
     else:
-        task_result.result.documents[0].content.json_content is None
+        task_result.result.documents[0].document.json_content is None
 
 
 @pytest.mark.asyncio
@@ -208,7 +208,7 @@ async def test_delete_task_cleans_up_job(orchestrator: RQOrchestrator):
     # (normally this would be done by the worker)
     result_key = f"{orchestrator.config.results_prefix}:{task.task_id}"
     mock_result = ExportResult(
-        content=ExportDocumentResponse(filename="test.pdf"),
+        document=ExportDocumentResponse(filename="test.pdf"),
         status=ConversionStatus.SUCCESS,
     )
     packed = msgpack.packb(mock_result.model_dump(), use_bin_type=True)

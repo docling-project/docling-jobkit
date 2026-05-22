@@ -42,7 +42,6 @@ from docling_jobkit.datamodel.result import (
     RemoteTargetResult,
     ResultType,
     ZipArchiveResult,
-    _to_export_result,
 )
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.public_errors import render_public_error_list
@@ -484,6 +483,7 @@ def process_exportable_results(
             )
 
     exportable_documents = documents_list
+    # Task-level wall clock elapsed time across the whole request.
     processing_time = time.monotonic() - start_time
 
     _log.info(
@@ -533,13 +533,11 @@ def process_exportable_results(
             image_mode=conversion_options.image_export_mode,
             md_page_break_placeholder=conversion_options.md_page_break_placeholder,
         )
-        task_result = _to_export_result(
-            DocumentResultItem(
-                document=content,
-                status=exportable_document.status,
-                errors=exportable_document.errors,
-                timings=exportable_document.timings,
-            )
+        task_result = DocumentResultItem(
+            document=content,
+            status=exportable_document.status,
+            errors=exportable_document.errors,
+            timings=exportable_document.timings,
         )
 
         num_succeeded = 1 if _is_exportable_status(exportable_document.status) else 0

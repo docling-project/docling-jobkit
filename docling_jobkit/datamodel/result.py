@@ -8,11 +8,11 @@ from docling.datamodel.service.responses import (
     ExportDocumentResponse,
     ExportResult,
     PresignedArtifactResult,
+    PresignedUrlConvertDocumentResponse,
     PresignedUrlConvertResponse,
     RemoteTargetResult,
     ResultType,
     ZipArchiveResult,
-    _to_export_result,
 )
 
 __all__ = [
@@ -25,9 +25,9 @@ __all__ = [
     "ExportDocumentResponse",
     "ExportResult",
     "PresignedArtifactResult",
+    "PresignedUrlConvertDocumentResponse",
     "PresignedUrlConvertResponse",
     "RemoteTargetResult",
     "ResultType",
     "ZipArchiveResult",
-    "_to_export_result",
 ]

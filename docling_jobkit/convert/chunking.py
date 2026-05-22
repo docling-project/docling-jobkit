@@ -56,11 +56,9 @@ from docling_jobkit.datamodel.result import (
     DoclingTaskResult,
     DocumentResultItem,
     ExportDocumentResponse,
-    ExportResult,
     RemoteTargetResult,
     ResultType,
     ZipArchiveResult,
-    _to_export_result,
 )
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.public_errors import render_public_error_list
@@ -355,7 +353,7 @@ def process_chunkable_results(
     # We have some results, let's prepare the response
     task_result: ResultType
     chunks: list[ChunkedDocumentResultItem] = []
-    documents: list[ExportResult] = []
+    documents: list[DocumentResultItem] = []
     num_succeeded = 0
     num_failed = 0
     docs_succeeded: list[SucceededDocsItem] = []
@@ -477,17 +475,16 @@ def process_chunkable_results(
         else:
             doc_content = ExportDocumentResponse(filename=filename)
 
-        doc_result = _to_export_result(
-            DocumentResultItem(
-                document=doc_content,
-                status=exportable_document.status,
-                timings=exportable_document.timings,
-                errors=errors,
-            )
+        doc_result = DocumentResultItem(
+            document=doc_content,
+            status=exportable_document.status,
+            timings=exportable_document.timings,
+            errors=errors,
         )
 
         documents.append(doc_result)
     num_total = num_succeeded + num_failed
+    # Task-level wall clock elapsed time across the whole request.
     processing_time = time.monotonic() - start_time
     _log.info(
         f"Processed {num_total} docs generating {len(chunks)} chunks in {processing_time:.2f} seconds."

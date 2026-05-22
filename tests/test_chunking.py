@@ -22,8 +22,8 @@ from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import (
     ChunkedDocumentResult,
     ChunkedDocumentResultItem,
+    DocumentResultItem,
     ExportDocumentResponse,
-    ExportResult,
     ZipArchiveResult,
 )
 from docling_jobkit.datamodel.task import Task
@@ -110,8 +110,8 @@ class TestChunkedDocumentResponse:
         response = ChunkedDocumentResult(
             chunks=[],
             documents=[
-                ExportResult(
-                    content=ExportDocumentResponse(filename="file.pdf"),
+                DocumentResultItem(
+                    document=ExportDocumentResponse(filename="file.pdf"),
                     status=ConversionStatus.SUCCESS,
                 )
             ],
@@ -138,8 +138,8 @@ class TestChunkedDocumentResponse:
         response = ChunkedDocumentResult(
             chunks=[chunk],
             documents=[
-                ExportResult(
-                    content=ExportDocumentResponse(filename="file.pdf"),
+                DocumentResultItem(
+                    document=ExportDocumentResponse(filename="file.pdf"),
                     status=ConversionStatus.SUCCESS,
                 )
             ],
@@ -206,8 +206,8 @@ class TestChunkedDocumentResponse:
             ),
         ]
         documents = [
-            ExportResult(
-                content=ExportDocumentResponse(filename="doc1.pdf"),
+            DocumentResultItem(
+                document=ExportDocumentResponse(filename="doc1.pdf"),
                 status=ConversionStatus.SUCCESS,
             ),
         ]
