@@ -20,7 +20,6 @@ from rich.progress import (
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.targets import PresignedUrlTarget, S3Target, ZipTarget
 
-from docling_jobkit.cli.validation import ensure_legacy_target_supported
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.convert.manager import (
@@ -469,7 +468,11 @@ def convert(
 
     # Load and validate config file
     config = _load_config(config_file)
-    ensure_legacy_target_supported(config.target)
+    if isinstance(config.target, PresignedUrlTarget):
+        raise typer.BadParameter(
+            "The multiproc CLI does not support `presigned_url` targets. "
+            "Use an orchestrator/server path."
+        )
 
     # Create a queue for progress updates from worker processes
     manager = mp.Manager()

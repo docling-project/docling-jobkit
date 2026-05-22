@@ -9,7 +9,7 @@ from docling.datamodel.service.sources import FileSource
 from docling.datamodel.service.targets import PresignedUrlTarget
 from docling_core.types.doc.document import DoclingDocument
 
-from docling_jobkit.config.target_config import S3PresignedConfig, TargetConfig
+from docling_jobkit.config.target_config import S3PresignedConfig
 from docling_jobkit.convert.results import process_exportable_results
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
@@ -72,17 +72,15 @@ def _make_task() -> Task:
     )
 
 
-def _make_target_config() -> TargetConfig:
-    return TargetConfig(
-        s3_presigned=S3PresignedConfig(
-            s3_coords=S3Coordinates(
-                endpoint="s3.example.com",
-                access_key="key",
-                secret_key="secret",
-                bucket="converted-docs",
-            ),
-            url_expiration=600,
-        )
+def _make_s3_presigned_config() -> S3PresignedConfig:
+    return S3PresignedConfig(
+        s3_coords=S3Coordinates(
+            endpoint="s3.example.com",
+            access_key="key",
+            secret_key="secret",
+            bucket="converted-docs",
+        ),
+        url_expiration=600,
     )
 
 
@@ -91,7 +89,7 @@ def test_process_exportable_results_requires_presigned_target_config(tmp_path: P
 
     with pytest.raises(
         ValueError,
-        match=r"requires TargetConfig\.s3_presigned",
+        match=r"requires s3_presigned_config",
     ):
         process_exportable_results(
             task=task,
@@ -106,7 +104,7 @@ def test_process_exportable_results_returns_presigned_artifact_result(
 ):
     fake_client = _FakeS3Client()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_presigned_target_processor.get_s3_connection",
+        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
         lambda _coords: (fake_client, object()),
     )
 
@@ -114,7 +112,7 @@ def test_process_exportable_results_returns_presigned_artifact_result(
         task=_make_task(),
         exportable_documents=[_make_exportable_document()],
         work_dir=tmp_path,
-        target_config=_make_target_config(),
+        s3_presigned_config=_make_s3_presigned_config(),
     )
 
     assert isinstance(task_result.result, PresignedArtifactResult)

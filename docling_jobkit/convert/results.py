@@ -27,7 +27,7 @@ from docling.datamodel.service.targets import (
 )
 from docling_core.types.doc import ImageRefMode
 
-from docling_jobkit.config.target_config import TargetConfig
+from docling_jobkit.config.target_config import S3PresignedConfig
 from docling_jobkit.connectors.s3_presigned_target_processor import (
     S3PresignedTargetProcessor,
 )
@@ -407,7 +407,7 @@ def process_exportable_results(
     task: Task,
     exportable_documents: Iterable[ExportableDocument],
     work_dir: Path,
-    target_config: TargetConfig | None = None,
+    s3_presigned_config: S3PresignedConfig | None = None,
     callback_invoker: Optional["CallbackInvoker"] = None,
     debug_error_details: bool = False,
     expected_doc_count: Optional[int] = None,
@@ -550,7 +550,7 @@ def process_exportable_results(
         with get_target_processor(
             task.target,
             task=task,
-            target_config=target_config,
+            s3_presigned_config=s3_presigned_config,
         ) as target_processor:
             documents = _upload_documents_as_presigned_artifacts(
                 task=task,

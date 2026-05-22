@@ -368,7 +368,7 @@ class DoclingProcessorConverterDeployment:
                     task=task,
                     exportable_documents=exportable_documents,
                     work_dir=workdir,
-                    target_config=self.config.target_config,
+                    s3_presigned_config=self.config.s3_presigned_config,
                     callback_invoker=callback_invoker,
                     debug_error_details=self.config.debug_error_details,
                     expected_doc_count=expected_doc_count,
@@ -718,7 +718,7 @@ class DoclingProcessorCoordinatorDeployment:
                         task=task,
                         exportable_documents=[_assemble_slice_results(slice_results)],
                         work_dir=workdir,
-                        target_config=self.config.target_config,
+                        s3_presigned_config=self.config.s3_presigned_config,
                         callback_invoker=callback_invoker,
                         start_time=materialized_start_time,
                     )
