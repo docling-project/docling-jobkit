@@ -1,6 +1,9 @@
 """Tests for RQ failure_ttl configuration."""
 
-from docling_jobkit.orchestrators.rq.orchestrator import RQOrchestratorConfig
+from docling_jobkit.orchestrators.rq.orchestrator import (
+    RQOrchestrator,
+    RQOrchestratorConfig,
+)
 
 
 class TestFailureTTLConfig:
@@ -23,3 +26,18 @@ class TestFailureTTLConfig:
         except Exception:
             pass
         assert config.failure_ttl == 1800
+
+
+class TestQueueNameConfig:
+    def test_default_queue_name_preserves_existing_behavior(self):
+        config = RQOrchestratorConfig()
+        _, rq_queue = RQOrchestrator.make_rq_queue(config)
+
+        assert config.queue_name == "convert"
+        assert rq_queue.name == "convert"
+
+    def test_custom_queue_name_is_used_for_rq_queue(self):
+        config = RQOrchestratorConfig(queue_name="staging-convert")
+        _, rq_queue = RQOrchestrator.make_rq_queue(config)
+
+        assert rq_queue.name == "staging-convert"

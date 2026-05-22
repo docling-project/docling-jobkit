@@ -39,6 +39,7 @@ _log = logging.getLogger(__name__)
 
 class RQOrchestratorConfig(BaseModel):
     redis_url: str = "redis://localhost:6379/"
+    queue_name: str = "convert"
     results_ttl: int = 3_600 * 4
     failure_ttl: int = 3_600 * 4
     results_prefix: str = "docling:results"
@@ -99,7 +100,7 @@ class RQOrchestrator(BaseOrchestrator):
         )
         conn = redis.Redis(connection_pool=pool)
         rq_queue = Queue(
-            "convert",
+            config.queue_name,
             connection=conn,
             default_timeout=14400,
             result_ttl=config.results_ttl,
