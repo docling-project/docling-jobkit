@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 import ray
 from ray import serve
+from ray.serve.schema import ApplicationStatus
 
 from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.callbacks import CallbackSpec
@@ -259,12 +260,45 @@ class RayOrchestrator(BaseOrchestrator):
             **dispatcher_kwargs
         ).remote(self.config, self.deployment_handle)
 
+    async def _get_existing_serve_app_state(
+        self, app_name: str
+    ) -> tuple[bool, ApplicationStatus | None]:
+        """Query the Serve control plane to determine app presence and lifecycle state.
+
+        Returns (False, None) if the app is absent.
+        Returns (True, status) if the app exists.
+        Raises DispatcherUnavailableError if the Serve control plane is unreachable.
+        """
+        try:
+            serve_status = await asyncio.to_thread(serve.status)
+        except Exception as exc:
+            _log.warning("serve_control_plane_unavailable: %s", exc)
+            raise DispatcherUnavailableError(
+                f"Ray Serve control plane unavailable: {exc}"
+            ) from exc
+
+        app_overview = serve_status.applications.get(app_name)
+        if app_overview is None:
+            return (False, None)
+        return (True, app_overview.status)
+
     async def _initialize_ray_runtime(self) -> None:
-        """Initialize Ray client, Serve deployment, and dispatcher binding lazily."""
+        """Initialize Ray client then attach to an existing Serve app or deploy if absent.
+
+        Uses serve.status() to disambiguate control-plane failure from app absence so
+        that a pod restart never triggers serve.run() when Serve is merely unavailable.
+        Decision table:
+          - control plane unreachable  → DispatcherUnavailableError
+          - app absent                 → deploy once
+          - app DEPLOYING/RUNNING/DEPLOY_FAILED/UNHEALTHY → attach only
+          - app DELETING               → DispatcherUnavailableError (retry later)
+          - app present, attach fails  → DispatcherUnavailableError (no deploy fallback)
+        """
         if self.dispatcher is not None and self.deployment_handle is not None:
             return
 
         config = self.config
+        app_name = "docling_processor"
 
         try:
             if not ray.is_initialized():
@@ -298,17 +332,47 @@ class RayOrchestrator(BaseOrchestrator):
             except RuntimeError:
                 _log.info("Ray Serve already running")
 
-            _log.info("Deploying document processor with Ray Serve")
-            self.deployment_handle = await asyncio.to_thread(
-                deploy_processor,
-                converter_manager_config=self.cm.config,
-                config=config,
-                redis_url=config.redis_url,
-                app_name="docling_processor",
-            )
+            app_present, app_status = await self._get_existing_serve_app_state(app_name)
+
+            if not app_present:
+                _log.info("serve_app_absent_deploying: app=%s", app_name)
+                self.deployment_handle = await asyncio.to_thread(
+                    deploy_processor,
+                    converter_manager_config=self.cm.config,
+                    config=config,
+                    redis_url=config.redis_url,
+                    app_name=app_name,
+                )
+            elif app_status == ApplicationStatus.DELETING:
+                _log.warning("serve_app_deleting_retry_later: app=%s", app_name)
+                raise DispatcherUnavailableError(
+                    f"Serve app '{app_name}' is being deleted; will retry"
+                )
+            else:
+                _log.info(
+                    "serve_app_present_attaching: app=%s status=%s",
+                    app_name,
+                    app_status,
+                )
+                try:
+                    self.deployment_handle = await asyncio.to_thread(
+                        serve.get_app_handle, app_name
+                    )
+                except Exception as exc:
+                    _log.warning(
+                        "serve_app_attach_failed: app=%s error=%s", app_name, exc
+                    )
+                    raise DispatcherUnavailableError(
+                        f"Serve app '{app_name}' exists but attach failed: {exc}"
+                    ) from exc
+
             self.dispatcher = self._bind_dispatcher()
             _log.info("Ray runtime initialized")
         except asyncio.CancelledError:
+            raise
+        except DispatcherUnavailableError:
+            self.dispatcher = None
+            self.deployment_handle = None
             raise
         except BaseException as exc:
             self.dispatcher = None
