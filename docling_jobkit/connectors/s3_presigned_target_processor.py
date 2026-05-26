@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import BinaryIO, Literal
+from typing import BinaryIO
 
 from docling.datamodel.base_models import ConversionStatus, ErrorItem
 from docling.datamodel.service.responses import (
@@ -12,6 +12,7 @@ from docling.datamodel.service.responses import (
 from docling.utils.profiling import ProfilingItem
 
 from docling_jobkit.config.target_config import S3PresignedConfig
+from docling_jobkit.connectors.artifact_paths import infer_artifact_type
 from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
 from docling_jobkit.connectors.s3_upload_support import (
     build_task_scoped_s3_key,
@@ -21,7 +22,6 @@ from docling_jobkit.connectors.s3_upload_support import (
 from docling_jobkit.datamodel.task import Task
 
 _METADATA_FIELDS = ("tenant_id", "user_id", "project_id")
-ArtifactType = Literal["json", "html", "markdown", "text", "doctags", "resource_bundle"]
 
 
 class S3PresignedTargetProcessor(S3TargetProcessor):
@@ -113,7 +113,7 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
         )
         artifacts = [
             ArtifactRef(
-                artifact_type=self._infer_artifact_type(artifact_filename),
+                artifact_type=infer_artifact_type(artifact_filename),
                 mime_type=mime_type,
                 uri=self._client.generate_presigned_url(
                     ClientMethod="get_object",
@@ -141,20 +141,3 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
             if value is not None:
                 metadata[field_name] = str(value)
         return metadata
-
-    @staticmethod
-    def _infer_artifact_type(artifact_filename: str) -> ArtifactType:
-        suffix = Path(artifact_filename).suffix.lower()
-        if artifact_filename.endswith("_bundle.zip"):
-            return "resource_bundle"
-        if suffix == ".json":
-            return "json"
-        if suffix == ".html":
-            return "html"
-        if suffix == ".md":
-            return "markdown"
-        if suffix == ".txt":
-            return "text"
-        if suffix == ".doctags":
-            return "doctags"
-        raise ValueError(f"Unsupported artifact filename: {artifact_filename}")

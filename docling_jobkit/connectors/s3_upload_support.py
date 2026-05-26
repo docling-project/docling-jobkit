@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO
 
 from docling_jobkit.config.target_config import S3PresignedConfig
+from docling_jobkit.connectors.artifact_paths import build_source_key
 from docling_jobkit.datamodel.task import Task
 
 
@@ -23,22 +23,12 @@ def upload_s3_file(
         content_type=content_type,
         metadata=metadata,
     )
-    if hasattr(client, "upload_file"):
-        client.upload_file(
-            Filename=filename,
-            Bucket=bucket,
-            Key=key,
-            ExtraArgs=extra_args,
-        )
-        return
-
-    with Path(filename).open("rb") as handle:
-        client.upload_fileobj(
-            Fileobj=handle,
-            Bucket=bucket,
-            Key=key,
-            ExtraArgs=extra_args,
-        )
+    client.upload_file(
+        Filename=filename,
+        Bucket=bucket,
+        Key=key,
+        ExtraArgs=extra_args,
+    )
 
 
 def upload_s3_object(
@@ -76,9 +66,7 @@ def build_task_scoped_s3_key(
     source_uri: str,
     artifact_filename: str,
 ) -> str:
-    source_key = (
-        f"{source_index:06d}-{hashlib.sha256(source_uri.encode()).hexdigest()[:12]}"
-    )
+    source_key = build_source_key(source_index, source_uri)
     date_partition = datetime.now(timezone.utc).strftime(config.date_partition_format)
 
     path_parts: list[str] = []

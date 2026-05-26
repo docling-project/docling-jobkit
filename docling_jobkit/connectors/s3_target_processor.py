@@ -22,6 +22,16 @@ class S3TargetProcessor(BaseTargetProcessor):
     def _finalize(self):
         self._client.close()
 
+    def _build_full_key(self, target_filename: str) -> str:
+        return (
+            f"{self._coords.key_prefix}{target_filename}"
+            if self._coords.key_prefix
+            else target_filename
+        )
+
+    def build_artifact_uri(self, target_filename: str) -> str:
+        return f"s3://{self._coords.bucket}/{self._build_full_key(target_filename)}"
+
     def upload_file(
         self,
         filename: str | Path,
@@ -31,11 +41,7 @@ class S3TargetProcessor(BaseTargetProcessor):
         """
         Upload a local file from disk into the S3 bucket.
         """
-        full_key = (
-            f"{self._coords.key_prefix}{target_filename}"
-            if self._coords.key_prefix
-            else target_filename
-        )
+        full_key = self._build_full_key(target_filename)
         upload_s3_file(
             self._client,
             bucket=self._coords.bucket,
@@ -53,11 +59,7 @@ class S3TargetProcessor(BaseTargetProcessor):
         """
         Upload an in-memory object (bytes or file-like) into the S3 bucket.
         """
-        full_key = (
-            f"{self._coords.key_prefix}{target_filename}"
-            if self._coords.key_prefix
-            else target_filename
-        )
+        full_key = self._build_full_key(target_filename)
         upload_s3_object(
             self._client,
             bucket=self._coords.bucket,

@@ -498,6 +498,7 @@ def process_chunkable_results(
             progress=ProgressUpdateProcessed(
                 num_processed=len(docs_succeeded) + len(docs_failed),
                 num_succeeded=len(docs_succeeded),
+                num_partial_success=0,
                 num_failed=len(docs_failed),
                 docs_succeeded=docs_succeeded,
                 docs_failed=docs_failed,

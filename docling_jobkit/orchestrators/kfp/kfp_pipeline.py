@@ -1,5 +1,3 @@
-# ruff: noqa: E402, UP006, UP035
-
 from typing import Any, Dict, List
 
 from kfp import dsl
@@ -103,6 +101,7 @@ def convert_batch(
             num_failed=len(docs_failed),
             num_processed=len(docs_succeeded) + len(docs_failed),
             num_succeeded=len(docs_succeeded),
+            num_partial_success=0,
             docs_succeeded=docs_succeeded,
             docs_failed=docs_failed,
         ),
