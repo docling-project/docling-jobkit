@@ -118,6 +118,7 @@ class RayOrchestrator(BaseOrchestrator):
         )
 
         self._unhealthy_since: Optional[float] = None
+        self._ray_session_needs_restart: bool = False
         _log.info("RayOrchestrator initialized without connecting to Ray")
 
     def _build_ray_init_kwargs(self) -> dict[str, Any]:
@@ -301,6 +302,21 @@ class RayOrchestrator(BaseOrchestrator):
         app_name = "docling_processor"
 
         try:
+            if ray.is_initialized() and self._ray_session_needs_restart:
+                # The supervisor confirmed the Serve control plane was unreachable, meaning
+                # the Ray client session is pointing at a dead cluster. Shut it down so
+                # ray.init() below reconnects to the (possibly new) cluster.
+                _log.info(
+                    "Stale Ray session confirmed by supervisor; restarting for fresh reconnect"
+                )
+                self._ray_session_needs_restart = False
+                try:
+                    await asyncio.to_thread(ray.shutdown)
+                except Exception as exc:
+                    _log.warning(
+                        "ray.shutdown() during recovery failed (continuing): %s", exc
+                    )
+
             if not ray.is_initialized():
                 init_kwargs = await asyncio.to_thread(self._build_ray_init_kwargs)
 
@@ -475,6 +491,22 @@ class RayOrchestrator(BaseOrchestrator):
                 else:
                     _log.warning("Dispatcher supervisor retrying after error: %s", exc)
                 self.dispatcher = None
+                try:
+                    app_present, _ = await asyncio.wait_for(
+                        self._get_existing_serve_app_state("docling_processor"),
+                        timeout=self.config.dispatcher_rpc_timeout,
+                    )
+                    if not app_present:
+                        _log.warning(
+                            "Serve app absent on reachable cluster; clearing handle to re-deploy"
+                        )
+                        self.deployment_handle = None
+                except (DispatcherUnavailableError, asyncio.TimeoutError):
+                    _log.warning(
+                        "Serve control plane unreachable; will restart Ray session for re-init"
+                    )
+                    self.deployment_handle = None
+                    self._ray_session_needs_restart = True
                 await asyncio.sleep(1.0)
 
     def is_liveness_healthy(self) -> bool:
