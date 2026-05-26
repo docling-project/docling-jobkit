@@ -13,11 +13,10 @@ from docling.datamodel.base_models import DocumentStream, InputFormat, OutputFor
 from docling.datamodel.document import ConversionStatus
 from docling.datamodel.service.callbacks import (
     DocumentCompletedItem,
-    FailedDocsItem,
+    ProcessedDocsItem,
     ProgressDocumentCompleted,
     ProgressSetNumDocs,
     ProgressUpdateProcessed,
-    SucceededDocsItem,
 )
 from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
 from docling.datamodel.service.targets import (
@@ -29,7 +28,11 @@ from docling.datamodel.service.targets import (
 from docling_core.types.doc import ImageRefMode
 
 from docling_jobkit.config.target_config import S3PresignedConfig
-from docling_jobkit.connectors.artifact_paths import build_task_scoped_artifact_path
+from docling_jobkit.connectors.artifact_paths import (
+    build_s3_source_key,
+    build_source_key,
+    build_task_scoped_artifact_path,
+)
 from docling_jobkit.connectors.s3_presigned_target_processor import (
     S3PresignedTargetProcessor,
 )
@@ -243,6 +246,16 @@ def _task_source_to_uri(task: Task, source_index: int, fallback_filename: str) -
     return fallback_filename
 
 
+def _build_s3_target_source_key(task: Task, source_index: int, source_uri: str) -> str:
+    if source_index >= len(task.sources):
+        return build_source_key(source_uri)
+
+    source = task.sources[source_index]
+    if isinstance(source, S3Coordinates):
+        return build_s3_source_key(source)
+    return build_source_key(source_uri)
+
+
 def _materialize_document_exports(
     exportable_document: ExportableDocument,
     output_dir: Path,
@@ -453,10 +466,9 @@ def _upload_documents_to_s3_target(
             md_page_break_placeholder=md_page_break_placeholder,
             bundle_resources=True,
         ):
+            source_key = _build_s3_target_source_key(task, source_index, source_uri)
             target_filename = build_task_scoped_artifact_path(
-                task.task_id,
-                source_index,
-                source_uri,
+                source_key,
                 artifact.target_filename,
             )
             target_processor.upload_file(
@@ -500,30 +512,27 @@ def process_exportable_results(
     # IMPORTANT: conv_results is a lazy iterator from convert_documents()
     # The actual conversion happens as we iterate through it
     documents_list = []
-    docs_succeeded: list[SucceededDocsItem] = []
-    docs_failed: list[FailedDocsItem] = []
+    docs: list[ProcessedDocsItem] = []
 
     for idx, exportable_document in enumerate(exportable_documents):
         documents_list.append(exportable_document)
 
-        # Track for final summary
-        if _is_exportable_status(exportable_document.status):
-            docs_succeeded.append(
-                SucceededDocsItem(source=str(exportable_document.file))
+        summary_error = render_public_error_list(
+            exportable_document.errors,
+            debug_enabled=debug_error_details,
+        )
+        docs.append(
+            ProcessedDocsItem(
+                source=str(exportable_document.file),
+                status=exportable_document.status,
+                error=summary_error
+                or (
+                    "Unknown error"
+                    if not _is_exportable_status(exportable_document.status)
+                    else None
+                ),
             )
-        else:
-            docs_failed.append(
-                FailedDocsItem(
-                    source=str(exportable_document.file),
-                    error=(
-                        render_public_error_list(
-                            exportable_document.errors,
-                            debug_enabled=debug_error_details,
-                        )
-                        or "Unknown error"
-                    ),
-                )
-            )
+        )
 
         # Send per-document callback (non-blocking)
         if callback_invoker and task.callbacks:
@@ -566,12 +575,11 @@ def process_exportable_results(
             callbacks=task.callbacks,
             task_id=task.task_id,
             progress=ProgressUpdateProcessed(
-                num_processed=len(docs_succeeded) + len(docs_failed),
+                num_processed=len(docs),
                 num_succeeded=num_succeeded,
                 num_partial_success=num_partial_success,
                 num_failed=num_failed,
-                docs_succeeded=docs_succeeded,
-                docs_failed=docs_failed,
+                docs=docs,
             ),
         )
 
@@ -636,6 +644,9 @@ def process_exportable_results(
         output_dir = work_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        # S3Target writes into a user-owned bucket. We only add a per-source hash
+        # below; the user's configured target key_prefix is prepended by
+        # S3TargetProcessor._build_full_key.
         with S3TargetProcessor(task.target) as target_processor:
             _upload_documents_to_s3_target(
                 task=task,

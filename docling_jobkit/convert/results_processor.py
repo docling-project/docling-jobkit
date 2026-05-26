@@ -40,6 +40,7 @@ class ResultsProcessor:
         generate_picture_images: bool = False,
         export_parquet_file: bool = False,
         scratch_dir: Path | None = None,
+        artifact_root_prefix: str = "",
     ):
         self._target_processor = target_processor
 
@@ -51,10 +52,17 @@ class ResultsProcessor:
 
         self.scratch_dir = scratch_dir or Path(tempfile.mkdtemp(prefix="docling_"))
         self.scratch_dir.mkdir(exist_ok=True, parents=True)
+        self._artifact_root_prefix = artifact_root_prefix.strip("/")
 
     def __del__(self):
         if self.scratch_dir is not None:
             shutil.rmtree(self.scratch_dir, ignore_errors=True)
+
+    def _target_key(self, relative_key: str) -> str:
+        relative_key = relative_key.lstrip("/")
+        if not self._artifact_root_prefix:
+            return relative_key
+        return f"{self._artifact_root_prefix}/{relative_key}"
 
     def process_documents(self, results: Iterable[ConversionResult]):
         pd_d = DataFrame()  # DataFrame to append parquet info
@@ -70,7 +78,9 @@ class ResultsProcessor:
                         if os.path.exists(conv_res.input.file):
                             self._target_processor.upload_file(
                                 filename=Path(conv_res.input.file),
-                                target_filename=f"pdf/{name_without_ext}.pdf",
+                                target_filename=self._target_key(
+                                    f"pdf/{name_without_ext}.pdf"
+                                ),
                                 content_type="application/pdf",
                             )
 
@@ -101,7 +111,7 @@ class ResultsProcessor:
                             )
                             self._target_processor.upload_file(
                                 filename=temp_json_file,
-                                target_filename=target_key,
+                                target_filename=self._target_key(target_key),
                                 content_type="application/json",
                             )
                         if self.to_formats is None or (
@@ -113,7 +123,7 @@ class ResultsProcessor:
                             data = conv_res.document.export_to_doctags()
                             self._target_processor.upload_object(
                                 obj=data,
-                                target_filename=target_key,
+                                target_filename=self._target_key(target_key),
                                 content_type="text/plain",
                             )
                         if self.to_formats is None or (
@@ -125,7 +135,7 @@ class ResultsProcessor:
                             data = conv_res.document.export_to_markdown()
                             self._target_processor.upload_object(
                                 obj=data,
-                                target_filename=target_key,
+                                target_filename=self._target_key(target_key),
                                 content_type="text/markdown",
                             )
                         if self.to_formats is None or (
@@ -138,7 +148,7 @@ class ResultsProcessor:
                             conv_res.document.save_as_html(temp_html_file)
                             self._target_processor.upload_file(
                                 filename=temp_html_file,
-                                target_filename=target_key,
+                                target_filename=self._target_key(target_key),
                                 content_type="text/html",
                             )
 
@@ -151,7 +161,7 @@ class ResultsProcessor:
                             data = conv_res.document.export_to_text()
                             self._target_processor.upload_object(
                                 obj=data,
-                                target_filename=target_key,
+                                target_filename=self._target_key(target_key),
                                 content_type="text/plain",
                             )
                         if self.export_parquet_file:
@@ -190,7 +200,7 @@ class ResultsProcessor:
                     buf.seek(0)
                     self._target_processor.upload_object(
                         obj=buf,
-                        target_filename=page_path_suffix,
+                        target_filename=self._target_key(page_path_suffix),
                         content_type="application/png",
                     )
                     page.image.uri = Path(".." + page_path_suffix)
@@ -220,7 +230,7 @@ class ResultsProcessor:
                         buf.seek(0)
                         self._target_processor.upload_object(
                             obj=buf,
-                            target_filename=element_path_suffix,
+                            target_filename=self._target_key(element_path_suffix),
                             content_type="application/png",
                         )
                         element.image.uri = Path(".." + element_path_suffix)
@@ -345,7 +355,7 @@ class ResultsProcessor:
                     target_key = f"parquet/{parquet_file_name}"
                     self._target_processor.upload_file(
                         filename=temp_file.name,
-                        target_filename=target_key,
+                        target_filename=self._target_key(target_key),
                         content_type="application/vnd.apache.parquet",
                     )
 
@@ -373,7 +383,7 @@ class ResultsProcessor:
                     target_key = f"parquet/{parquet_file_name}"
                     self._target_processor.upload_file(
                         filename=temp_file.name,
-                        target_filename=target_key,
+                        target_filename=self._target_key(target_key),
                         content_type="application/vnd.apache.parquet",
                     )
 
@@ -394,6 +404,6 @@ class ResultsProcessor:
                 json.dump(manifest, file, indent=4)
             self._target_processor.upload_file(
                 filename=temp_file_json.name,
-                target_filename=f"manifest/{timestamp}.json",
+                target_filename=self._target_key(f"manifest/{timestamp}.json"),
                 content_type="application/json",
             )

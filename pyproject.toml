@@ -98,7 +98,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-docling-slim = { git = "https://github.com/docling-project/docling/", rev = "cau/service-models-presigned-batch-prep" }
+docling-slim = { git = "https://github.com/docling-project/docling/", rev = "cau/batch-endpoint-support" }
 # docling-slim = { path = "../docling", editable = true }
 
 

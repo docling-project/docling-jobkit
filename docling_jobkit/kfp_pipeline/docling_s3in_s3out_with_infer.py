@@ -40,6 +40,7 @@ def convert_payload(
     from docling.pipeline.vlm_pipeline import VlmPipeline
     from docling_core.types.doc.base import ImageRefMode
 
+    from docling_jobkit.connectors.artifact_paths import build_s3_source_key
     from docling_jobkit.connectors.s3_helper import (
         generate_presign_url,
         get_s3_connection,
@@ -83,6 +84,11 @@ def convert_payload(
     target_s3_coords = S3Coordinates.model_validate(target)
     s3_source_client, s3_source_resource = get_s3_connection(s3_coords_source)
     s3_target_client, s3_target_resource = get_s3_connection(target_s3_coords)
+    source_root_prefix = build_s3_source_key(s3_coords_source)
+    target_prefix = target_s3_coords.key_prefix.strip("/")
+    target_root_prefix = (
+        f"{target_prefix}/{source_root_prefix}" if target_prefix else source_root_prefix
+    )
 
     with open(dataset.path) as f:
         batches = json.load(f)
@@ -133,7 +139,7 @@ def convert_payload(
                 s3_target_client.upload_file(
                     Filename=temp_json_file,
                     Bucket=target_s3_coords.bucket,
-                    Key=f"{target_s3_coords.key_prefix}/{filename}.json",
+                    Key=f"{target_root_prefix}/json/{filename}.json",
                     ExtraArgs={**kwargs},
                 )
                 # s3_target_client.put_object(
@@ -160,7 +166,7 @@ def convert_payload(
                 s3_target_client.put_object(
                     Body=json.dumps(timings),
                     Bucket=target_s3_coords.bucket,
-                    Key=f"{target_s3_coords.key_prefix}/{filename}.timings.json",
+                    Key=f"{target_root_prefix}/timings/{filename}.timings.json",
                     ContentType="application/json",
                 )
             except Exception as e:
@@ -207,7 +213,7 @@ def compute_batches(
         s3_source_client, s3_source_resource, s3_coords_source
     )
     filtered_source_keys = check_target_has_source_converted(
-        s3_target_coords, source_objects_list, s3_coords_source.key_prefix
+        s3_target_coords, source_objects_list, s3_coords_source
     )
     batch_keys = generate_batch_keys(
         filtered_source_keys,

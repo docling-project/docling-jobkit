@@ -29,6 +29,7 @@ def convert_payload(
     from docling.datamodel.service.options import ConvertDocumentsOptions
     from docling.datamodel.service.sources import S3Coordinates
 
+    from docling_jobkit.connectors.artifact_paths import build_s3_source_key
     from docling_jobkit.connectors.s3_helper import (
         generate_presign_url,
         get_s3_connection,
@@ -69,12 +70,14 @@ def convert_payload(
     ]
 
     results = []
+    source_root_prefix = build_s3_source_key(s3_coords_source)
     with S3TargetProcessor(target_s3_coords) as target_processor:
         result_processor = ResultsProcessor(
             target_processor=target_processor,
             to_formats=[v.value for v in convert_options.to_formats],
             generate_page_images=convert_options.include_images,
             generate_picture_images=convert_options.include_images,
+            artifact_root_prefix=source_root_prefix,
         )
         for item in result_processor.process_documents(
             converter.convert_documents(
@@ -125,7 +128,7 @@ def compute_batches(
         s3_source_client, s3_source_resource, s3_coords_source
     )
     filtered_source_keys = check_target_has_source_converted(
-        s3_target_coords, source_objects_list, s3_coords_source.key_prefix
+        s3_target_coords, source_objects_list, s3_coords_source
     )
     batch_keys = generate_batch_keys(
         filtered_source_keys,

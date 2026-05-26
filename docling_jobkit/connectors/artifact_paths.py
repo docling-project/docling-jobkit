@@ -2,17 +2,35 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 
+from docling.datamodel.service.sources import S3Coordinates
+
 ArtifactType = Literal["json", "html", "markdown", "text", "doctags", "resource_bundle"]
 
 
-def build_source_key(source_index: int, source_uri: str) -> str:
-    return f"{source_index:06d}-{sha256(source_uri.encode()).hexdigest()[:12]}"
+def _hash_component(value: str) -> str:
+    return sha256(value.encode("utf-8")).hexdigest()[:12]
 
 
-def build_task_scoped_artifact_path(
-    task_id: str, source_index: int, source_uri: str, artifact_filename: str
-) -> str:
-    return f"{task_id}/{build_source_key(source_index, source_uri)}/{artifact_filename}"
+def build_source_key(source_uri: str) -> str:
+    return _hash_component(source_uri)
+
+
+def build_s3_source_key(source: S3Coordinates) -> str:
+    public_identity = "|".join(
+        [
+            source.endpoint.strip(),
+            source.bucket.strip(),
+            source.key_prefix.strip("/"),
+        ]
+    )
+    return _hash_component(public_identity)
+
+
+def build_task_scoped_artifact_path(source_key: str, artifact_filename: str) -> str:
+    # S3Target writes into a user-owned bucket, so this helper only adds the
+    # per-source hash segment. The user-provided target key_prefix is prepended
+    # later by S3TargetProcessor._build_full_key.
+    return f"{source_key}/{artifact_filename}"
 
 
 def infer_artifact_type(artifact_filename: str) -> ArtifactType:

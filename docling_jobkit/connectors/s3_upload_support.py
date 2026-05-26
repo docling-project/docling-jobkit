@@ -66,19 +66,21 @@ def build_task_scoped_s3_key(
     source_uri: str,
     artifact_filename: str,
 ) -> str:
-    source_key = build_source_key(source_index, source_uri)
+    # PresignedUrlTarget writes into operator-managed storage, so the full key
+    # includes the managed prefix/tenant/date/task structure before the per-source hash.
+    source_key = build_source_key(source_uri)
     date_partition = datetime.now(timezone.utc).strftime(config.date_partition_format)
 
     path_parts: list[str] = []
     key_prefix = config.key_prefix.strip("/")
     if key_prefix:
         path_parts.append(key_prefix)
+
+    tenant_id = task.metadata.get("tenant_id") or "default"
+    path_parts.append(_sanitize_path_component(str(tenant_id)))
+
     if date_partition:
         path_parts.append(date_partition)
-
-    tenant_id = task.metadata.get("tenant_id")
-    if tenant_id:
-        path_parts.append(_sanitize_path_component(str(tenant_id)))
 
     path_parts.append(_sanitize_path_component(task.task_id))
     path_parts.extend(

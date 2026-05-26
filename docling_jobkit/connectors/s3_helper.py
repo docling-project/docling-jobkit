@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 
 from docling.datamodel.service.sources import S3Coordinates
 
+from docling_jobkit.connectors.artifact_paths import build_s3_source_key
+
 logging.basicConfig(level=logging.INFO)
 
 # Set the maximum file size of parquet to 500MB
@@ -161,15 +163,15 @@ def get_source_files(
 def check_target_has_source_converted(
     coords: S3Coordinates,
     source_objects_list: list[str],
-    s3_source_prefix: str,
+    source_coords: S3Coordinates,
 ):
     s3_target_client, s3_target_resource = get_s3_connection(coords)
     target_paginator = s3_target_client.get_paginator("list_objects_v2")
 
+    source_key = build_s3_source_key(source_coords)
+    key_prefix = coords.key_prefix.strip("/")
     converted_prefix = (
-        coords.key_prefix + "json/"
-        if coords.key_prefix.endswith("/")
-        else coords.key_prefix + "/json/"
+        f"{key_prefix}/{source_key}/json/" if key_prefix else f"{source_key}/json/"
     )
 
     target_count = count_s3_objects(target_paginator, coords.bucket, converted_prefix)

@@ -741,3 +741,6 @@ async def test_convert_with_callbacks(orchestrator: LocalOrchestrator, callback_
     assert final_callback["num_processed"] == 1
     assert final_callback["num_succeeded"] == 1
     assert final_callback["num_failed"] == 0
+    assert len(final_callback["docs"]) == 1
+    assert final_callback["docs"][0]["source"] == doc_filename.name
+    assert final_callback["docs"][0]["status"] == ConversionStatus.SUCCESS

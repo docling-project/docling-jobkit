@@ -137,7 +137,10 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
     def _build_object_metadata(self) -> dict[str, str]:
         metadata: dict[str, str] = {}
         for field_name in _METADATA_FIELDS:
-            value = self._task.metadata.get(field_name)
+            if field_name == "tenant_id":
+                value = self._task.metadata.get(field_name) or "default"
+            else:
+                value = self._task.metadata.get(field_name)
             if value is not None:
                 metadata[field_name] = str(value)
         return metadata
