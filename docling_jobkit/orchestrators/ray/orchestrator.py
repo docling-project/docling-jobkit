@@ -313,6 +313,18 @@ class RayOrchestrator(BaseOrchestrator):
         except BaseException as exc:
             self.dispatcher = None
             self.deployment_handle = None
+            # Best-effort cleanup of the half-initialized Ray client. If
+            # ray.init() succeeded but a later step (serve.start,
+            # deploy_processor, _bind_dispatcher) raised, the underlying
+            # Ray client connection stays registered. Without shutdown,
+            # the supervisor's next iteration calls ray.init() again and
+            # fails permanently with "client has already connected to
+            # the cluster with allow_multiple=True". The shutdown is
+            # wrapped so it cannot mask the original failure.
+            try:
+                ray.shutdown()
+            except Exception:
+                pass
             raise DispatcherUnavailableError(
                 f"Ray runtime initialization failed: {exc}"
             ) from exc
