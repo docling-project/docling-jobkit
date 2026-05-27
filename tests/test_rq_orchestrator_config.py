@@ -1,4 +1,6 @@
-"""Tests for RQ failure_ttl configuration."""
+"""Tests for RQ orchestrator configuration."""
+
+from unittest.mock import patch
 
 from docling_jobkit.orchestrators.rq.orchestrator import (
     RQOrchestrator,
@@ -31,13 +33,17 @@ class TestFailureTTLConfig:
 class TestQueueNameConfig:
     def test_default_queue_name_preserves_existing_behavior(self):
         config = RQOrchestratorConfig()
-        _, rq_queue = RQOrchestrator.make_rq_queue(config)
+
+        with patch("docling_jobkit.orchestrators.rq.orchestrator.Queue") as queue_cls:
+            RQOrchestrator.make_rq_queue(config)
 
         assert config.queue_name == "convert"
-        assert rq_queue.name == "convert"
+        assert queue_cls.call_args.args[0] == "convert"
 
     def test_custom_queue_name_is_used_for_rq_queue(self):
         config = RQOrchestratorConfig(queue_name="staging-convert")
-        _, rq_queue = RQOrchestrator.make_rq_queue(config)
 
-        assert rq_queue.name == "staging-convert"
+        with patch("docling_jobkit.orchestrators.rq.orchestrator.Queue") as queue_cls:
+            RQOrchestrator.make_rq_queue(config)
+
+        assert queue_cls.call_args.args[0] == "staging-convert"
