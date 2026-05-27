@@ -367,6 +367,7 @@ class RQOrchestrator(BaseOrchestrator):
             meta.setdefault("num_docs", 0)
             meta.setdefault("num_processed", 0)
             meta.setdefault("num_succeeded", 0)
+            meta.setdefault("num_partially_succeeded", 0)
             meta.setdefault("num_failed", 0)
 
             task_kwargs: dict[str, Any] = {
@@ -410,6 +411,7 @@ class RQOrchestrator(BaseOrchestrator):
                     "num_docs": 0,
                     "num_processed": 0,
                     "num_succeeded": 0,
+                    "num_partially_succeeded": 0,
                     "num_failed": 0,
                 },
             )
@@ -453,6 +455,7 @@ class RQOrchestrator(BaseOrchestrator):
                     "num_docs": 0,
                     "num_processed": 0,
                     "num_succeeded": 0,
+                    "num_partially_succeeded": 0,
                     "num_failed": 0,
                 }
 

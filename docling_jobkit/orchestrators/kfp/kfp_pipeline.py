@@ -105,7 +105,7 @@ def convert_batch(
             num_failed=0,
             num_processed=len(docs),
             num_succeeded=len(docs),
-            num_partial_success=0,
+            num_partially_succeeded=0,
             docs=docs,
         ),
     )

@@ -12,7 +12,7 @@ from docling.datamodel.service.responses import (
 from docling.utils.profiling import ProfilingItem
 
 from docling_jobkit.config.target_config import S3PresignedConfig
-from docling_jobkit.connectors.artifact_paths import infer_artifact_type
+from docling_jobkit.connectors.artifact_paths import ArtifactType
 from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
 from docling_jobkit.connectors.s3_upload_support import (
     build_task_scoped_s3_key,
@@ -29,7 +29,9 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
         super().__init__(config.s3_coords)
         self._config = config
         self._task = task
-        self._uploaded_artifacts: dict[int, list[tuple[str, str, str]]] = {}
+        self._uploaded_artifacts: dict[
+            int, list[tuple[ArtifactType, str, str, str]]
+        ] = {}
 
     def upload_file(
         self,
@@ -37,12 +39,13 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
         target_filename: str,
         content_type: str,
         *,
+        artifact_type: ArtifactType | None = None,
         source_index: int | None = None,
         source_uri: str | None = None,
     ) -> None:
-        if source_index is None or source_uri is None:
+        if artifact_type is None or source_index is None or source_uri is None:
             raise ValueError(
-                "S3PresignedTargetProcessor.upload_file requires source_index and source_uri"
+                "S3PresignedTargetProcessor.upload_file requires artifact_type, source_index, and source_uri"
             )
         object_key = build_task_scoped_s3_key(
             self._config,
@@ -61,7 +64,7 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
             metadata=metadata,
         )
         self._uploaded_artifacts.setdefault(source_index, []).append(
-            (target_filename, content_type, object_key)
+            (artifact_type, target_filename, content_type, object_key)
         )
 
     def upload_object(
@@ -70,12 +73,13 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
         target_filename: str,
         content_type: str,
         *,
+        artifact_type: ArtifactType | None = None,
         source_index: int | None = None,
         source_uri: str | None = None,
     ) -> None:
-        if source_index is None or source_uri is None:
+        if artifact_type is None or source_index is None or source_uri is None:
             raise ValueError(
-                "S3PresignedTargetProcessor.upload_object requires source_index and source_uri"
+                "S3PresignedTargetProcessor.upload_object requires artifact_type, source_index, and source_uri"
             )
         object_key = build_task_scoped_s3_key(
             self._config,
@@ -94,7 +98,7 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
             metadata=metadata,
         )
         self._uploaded_artifacts.setdefault(source_index, []).append(
-            (target_filename, content_type, object_key)
+            (artifact_type, target_filename, content_type, object_key)
         )
 
     def build_document_artifact_item(
@@ -113,7 +117,7 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
         )
         artifacts = [
             ArtifactRef(
-                artifact_type=infer_artifact_type(artifact_filename),
+                artifact_type=artifact_type,
                 mime_type=mime_type,
                 uri=self._client.generate_presigned_url(
                     ClientMethod="get_object",
@@ -122,7 +126,7 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
                 ),
                 url_expires_at=expires_at,
             )
-            for artifact_filename, mime_type, object_key in uploaded
+            for artifact_type, artifact_filename, mime_type, object_key in uploaded
         ]
         return DocumentArtifactItem(
             source_index=source_index,
@@ -137,10 +141,7 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
     def _build_object_metadata(self) -> dict[str, str]:
         metadata: dict[str, str] = {}
         for field_name in _METADATA_FIELDS:
-            if field_name == "tenant_id":
-                value = self._task.metadata.get(field_name) or "default"
-            else:
-                value = self._task.metadata.get(field_name)
+            value = self._task.metadata.get(field_name)
             if value is not None:
                 metadata[field_name] = str(value)
         return metadata

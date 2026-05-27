@@ -3,6 +3,7 @@ from typing import BinaryIO
 
 from docling.datamodel.service.sources import S3Coordinates
 
+from docling_jobkit.connectors.artifact_paths import ArtifactType
 from docling_jobkit.connectors.s3_helper import get_s3_connection
 from docling_jobkit.connectors.s3_upload_support import (
     upload_s3_file,
@@ -37,6 +38,10 @@ class S3TargetProcessor(BaseTargetProcessor):
         filename: str | Path,
         target_filename: str,
         content_type: str,
+        *,
+        artifact_type: ArtifactType | None = None,
+        source_index: int | None = None,
+        source_uri: str | None = None,
     ) -> None:
         """
         Upload a local file from disk into the S3 bucket.
@@ -55,6 +60,10 @@ class S3TargetProcessor(BaseTargetProcessor):
         obj: str | bytes | BinaryIO,
         target_filename: str,
         content_type: str,
+        *,
+        artifact_type: ArtifactType | None = None,
+        source_index: int | None = None,
+        source_uri: str | None = None,
     ) -> None:
         """
         Upload an in-memory object (bytes or file-like) into the S3 bucket.

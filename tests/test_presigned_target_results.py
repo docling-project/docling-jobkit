@@ -168,7 +168,7 @@ def test_process_exportable_results_returns_presigned_artifact_result(
     assert all(artifact.url_expires_at is not None for artifact in document.artifacts)
 
 
-def test_process_exportable_results_defaults_tenant_id_for_presigned_storage(
+def test_process_exportable_results_omits_default_tenant_id_from_object_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -193,7 +193,7 @@ def test_process_exportable_results_defaults_tenant_id_for_presigned_storage(
         key.startswith(f"converted/default/{today}/task-123/") for key in uploaded_keys
     )
     metadata = fake_client.uploads[0]["extra_args"]["Metadata"]
-    assert metadata == {"tenant_id": "default", "user_id": "user-1"}
+    assert metadata == {"user_id": "user-1"}
 
 
 def test_process_exportable_results_reuses_presigned_artifact_result_for_multi_doc_presigned(
@@ -341,9 +341,7 @@ def test_s3_target_uses_s3_source_coordinates_hash_for_s3_inputs(
         work_dir=tmp_path,
     )
 
-    expected_source_hash = _short_hash(
-        "s3.source.example.com|source-bucket|incoming/documents"
-    )
+    expected_source_hash = _short_hash("s3://source-bucket/incoming/documents")
     uploaded_keys = [str(item["key"]) for item in fake_client.uploads]
     assert len(uploaded_keys) == 2
     assert all(
@@ -430,5 +428,5 @@ def test_process_exportable_results_tracks_partial_success_counts(
     )
 
     assert task_result.num_succeeded == 1
-    assert task_result.num_partial_success == 1
+    assert task_result.num_partially_succeeded == 1
     assert task_result.num_failed == 0

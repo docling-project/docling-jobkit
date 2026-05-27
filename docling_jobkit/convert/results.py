@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Optional
 
 import httpx
 
-from docling.datamodel.base_models import DocumentStream, InputFormat, OutputFormat
+from docling.datamodel.base_models import InputFormat, OutputFormat
 from docling.datamodel.document import ConversionStatus
 from docling.datamodel.service.callbacks import (
     DocumentCompletedItem,
@@ -18,7 +18,6 @@ from docling.datamodel.service.callbacks import (
     ProgressSetNumDocs,
     ProgressUpdateProcessed,
 )
-from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
 from docling.datamodel.service.targets import (
     InBodyTarget,
     PresignedUrlTarget,
@@ -29,15 +28,17 @@ from docling_core.types.doc import ImageRefMode
 
 from docling_jobkit.config.target_config import S3PresignedConfig
 from docling_jobkit.connectors.artifact_paths import (
-    build_s3_source_key,
-    build_source_key,
-    build_task_scoped_artifact_path,
+    ArtifactType,
+    hash_path_component,
 )
 from docling_jobkit.connectors.s3_presigned_target_processor import (
     S3PresignedTargetProcessor,
 )
 from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
-from docling_jobkit.datamodel.exportable_document import ExportableDocument
+from docling_jobkit.datamodel.exportable_document import (
+    ExportableDocument,
+    source_to_public_uri,
+)
 from docling_jobkit.datamodel.result import (
     DoclingTaskResult,
     DocumentArtifactItem,
@@ -59,6 +60,7 @@ _log = logging.getLogger(__name__)
 
 @dataclass
 class _ExportedArtifactFile:
+    artifact_type: ArtifactType
     path: Path
     target_filename: str
     mime_type: str
@@ -74,13 +76,13 @@ def _count_document_statuses(
     num_succeeded = sum(
         1 for doc in exportable_documents if doc.status == ConversionStatus.SUCCESS
     )
-    num_partial_success = sum(
+    num_partially_succeeded = sum(
         1
         for doc in exportable_documents
         if doc.status == ConversionStatus.PARTIAL_SUCCESS
     )
-    num_failed = len(exportable_documents) - num_succeeded - num_partial_success
-    return num_succeeded, num_partial_success, num_failed
+    num_failed = len(exportable_documents) - num_succeeded - num_partially_succeeded
+    return num_succeeded, num_partially_succeeded, num_failed
 
 
 def _export_document_as_content(
@@ -227,33 +229,31 @@ def _upload_to_put_target(
     ) from last_exc
 
 
-def _task_source_to_uri(task: Task, source_index: int, fallback_filename: str) -> str:
-    if source_index >= len(task.sources):
-        return fallback_filename
+def _resolve_source_identity(
+    task: Task,
+    exportable_document: ExportableDocument,
+    fallback_index: int,
+) -> tuple[int, str, str]:
+    source_index = (
+        exportable_document.source_index
+        if exportable_document.source_index is not None
+        else fallback_index
+    )
+    if exportable_document.source_uri is not None:
+        return (
+            source_index,
+            exportable_document.source_uri,
+            hash_path_component(exportable_document.source_uri),
+        )
 
-    source = task.sources[source_index]
-    if isinstance(source, HttpSource):
-        return str(source.url)
-    if isinstance(source, FileSource):
-        return source.filename
-    if isinstance(source, S3Coordinates):
-        key_prefix = source.key_prefix.lstrip("/")
-        if key_prefix:
-            return f"s3://{source.bucket}/{key_prefix}"
-        return f"s3://{source.bucket}"
-    if isinstance(source, DocumentStream):
-        return source.name
-    return fallback_filename
+    if fallback_index < len(task.sources):
+        source = task.sources[fallback_index]
+        source_uri = source_to_public_uri(source) or str(exportable_document.file)
+        source_key = hash_path_component(source_uri)
+        return source_index, source_uri, source_key
 
-
-def _build_s3_target_source_key(task: Task, source_index: int, source_uri: str) -> str:
-    if source_index >= len(task.sources):
-        return build_source_key(source_uri)
-
-    source = task.sources[source_index]
-    if isinstance(source, S3Coordinates):
-        return build_s3_source_key(source)
-    return build_source_key(source_uri)
+    source_uri = str(exportable_document.file)
+    return source_index, source_uri, hash_path_component(source_uri)
 
 
 def _materialize_document_exports(
@@ -290,6 +290,7 @@ def _materialize_document_exports(
         )
         generated.append(
             _ExportedArtifactFile(
+                artifact_type="json",
                 path=fname,
                 target_filename=fname.name,
                 mime_type="application/json",
@@ -306,6 +307,7 @@ def _materialize_document_exports(
         )
         generated.append(
             _ExportedArtifactFile(
+                artifact_type="html",
                 path=fname,
                 target_filename=fname.name,
                 mime_type="text/html",
@@ -322,6 +324,7 @@ def _materialize_document_exports(
         )
         generated.append(
             _ExportedArtifactFile(
+                artifact_type="text",
                 path=fname,
                 target_filename=fname.name,
                 mime_type="text/plain",
@@ -339,6 +342,7 @@ def _materialize_document_exports(
         )
         generated.append(
             _ExportedArtifactFile(
+                artifact_type="markdown",
                 path=fname,
                 target_filename=fname.name,
                 mime_type="text/markdown",
@@ -351,6 +355,7 @@ def _materialize_document_exports(
         exportable_document.document.save_as_doctags(filename=fname)
         generated.append(
             _ExportedArtifactFile(
+                artifact_type="doctags",
                 path=fname,
                 target_filename=fname.name,
                 mime_type="text/plain",
@@ -367,6 +372,7 @@ def _materialize_document_exports(
         )
         generated.append(
             _ExportedArtifactFile(
+                artifact_type="resource_bundle",
                 path=bundle_path,
                 target_filename=bundle_path.name,
                 mime_type="application/zip",
@@ -392,11 +398,11 @@ def _upload_documents_as_presigned_artifacts(
 ) -> list[DocumentArtifactItem]:
     documents: list[DocumentArtifactItem] = []
 
-    for source_index, exportable_document in enumerate(exportable_documents):
-        source_uri = _task_source_to_uri(
+    for response_index, exportable_document in enumerate(exportable_documents):
+        source_index, source_uri, _source_key = _resolve_source_identity(
             task,
-            source_index,
-            fallback_filename=exportable_document.file.name,
+            exportable_document,
+            response_index,
         )
         document_dir = output_dir / f"{source_index:06d}"
         for artifact in _materialize_document_exports(
@@ -415,6 +421,7 @@ def _upload_documents_as_presigned_artifacts(
                 filename=artifact.path,
                 target_filename=artifact.target_filename,
                 content_type=artifact.mime_type,
+                artifact_type=artifact.artifact_type,
                 source_index=source_index,
                 source_uri=source_uri,
             )
@@ -447,11 +454,11 @@ def _upload_documents_to_s3_target(
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
 ) -> None:
-    for source_index, exportable_document in enumerate(exportable_documents):
-        source_uri = _task_source_to_uri(
+    for response_index, exportable_document in enumerate(exportable_documents):
+        source_index, source_uri, source_key = _resolve_source_identity(
             task,
-            source_index,
-            fallback_filename=exportable_document.file.name,
+            exportable_document,
+            response_index,
         )
         document_dir = output_dir / f"{source_index:06d}"
         for artifact in _materialize_document_exports(
@@ -466,11 +473,7 @@ def _upload_documents_to_s3_target(
             md_page_break_placeholder=md_page_break_placeholder,
             bundle_resources=True,
         ):
-            source_key = _build_s3_target_source_key(task, source_index, source_uri)
-            target_filename = build_task_scoped_artifact_path(
-                source_key,
-                artifact.target_filename,
-            )
+            target_filename = f"{source_key}/{artifact.target_filename}"
             target_processor.upload_file(
                 filename=artifact.path,
                 target_filename=target_filename,
@@ -565,7 +568,7 @@ def process_exportable_results(
     if len(exportable_documents) == 0:
         raise RuntimeError("No documents were generated by Docling.")
 
-    num_succeeded, num_partial_success, num_failed = _count_document_statuses(
+    num_succeeded, num_partially_succeeded, num_failed = _count_document_statuses(
         exportable_documents
     )
 
@@ -577,7 +580,7 @@ def process_exportable_results(
             progress=ProgressUpdateProcessed(
                 num_processed=len(docs),
                 num_succeeded=num_succeeded,
-                num_partial_success=num_partial_success,
+                num_partially_succeeded=num_partially_succeeded,
                 num_failed=num_failed,
                 docs=docs,
             ),
@@ -704,7 +707,7 @@ def process_exportable_results(
         result=task_result,
         processing_time=processing_time,
         num_succeeded=num_succeeded,
-        num_partial_success=num_partial_success,
+        num_partially_succeeded=num_partially_succeeded,
         num_failed=num_failed,
         num_converted=len(exportable_documents),
     )

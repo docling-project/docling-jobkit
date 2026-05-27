@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from docling_jobkit.config.target_config import S3PresignedConfig
-from docling_jobkit.connectors.artifact_paths import build_source_key
+from docling_jobkit.connectors.artifact_paths import hash_path_component
 from docling_jobkit.datamodel.task import Task
 
 
@@ -68,7 +68,7 @@ def build_task_scoped_s3_key(
 ) -> str:
     # PresignedUrlTarget writes into operator-managed storage, so the full key
     # includes the managed prefix/tenant/date/task structure before the per-source hash.
-    source_key = build_source_key(source_uri)
+    source_key = hash_path_component(source_uri)
     date_partition = datetime.now(timezone.utc).strftime(config.date_partition_format)
 
     path_parts: list[str] = []

@@ -2,6 +2,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO
 
+from docling_jobkit.connectors.artifact_paths import ArtifactType
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
 
@@ -24,6 +25,10 @@ class GoogleDriveTargetProcessor(BaseTargetProcessor):
         filename: str | Path,
         target_filename: str,
         content_type: str,
+        *,
+        artifact_type: ArtifactType | None = None,
+        source_index: int | None = None,
+        source_uri: str | None = None,
     ) -> None:
         """
         Upload a local file from disk to Google Drive.
@@ -43,6 +48,10 @@ class GoogleDriveTargetProcessor(BaseTargetProcessor):
         obj: str | bytes | BinaryIO,
         target_filename: str,
         content_type: str,
+        *,
+        artifact_type: ArtifactType | None = None,
+        source_index: int | None = None,
+        source_uri: str | None = None,
     ) -> None:
         """
         Upload an in-memory object (bytes or file-like) to Google Drive.

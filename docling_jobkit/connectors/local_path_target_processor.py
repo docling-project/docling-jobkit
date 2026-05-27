@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import BinaryIO
 
+from docling_jobkit.connectors.artifact_paths import ArtifactType
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.datamodel.task_targets import LocalPathTarget
 
@@ -34,6 +35,10 @@ class LocalPathTargetProcessor(BaseTargetProcessor):
         filename: str | Path,
         target_filename: str,
         content_type: str,
+        *,
+        artifact_type: ArtifactType | None = None,
+        source_index: int | None = None,
+        source_uri: str | None = None,
     ) -> None:
         """
         Copy a file from local filesystem to the target location.
@@ -54,6 +59,10 @@ class LocalPathTargetProcessor(BaseTargetProcessor):
         obj: str | bytes | BinaryIO,
         target_filename: str,
         content_type: str,
+        *,
+        artifact_type: ArtifactType | None = None,
+        source_index: int | None = None,
+        source_uri: str | None = None,
     ) -> None:
         """
         Write an in-memory object (bytes or file-like) to the target location.

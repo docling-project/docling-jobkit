@@ -3,6 +3,8 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import BinaryIO
 
+from docling_jobkit.connectors.artifact_paths import ArtifactType
+
 
 class BaseTargetProcessor(AbstractContextManager, ABC):
     """
@@ -42,6 +44,10 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         filename: str | Path,
         target_filename: str,
         content_type: str,
+        *,
+        artifact_type: ArtifactType | None = None,
+        source_index: int | None = None,
+        source_uri: str | None = None,
     ) -> None:
         """
         Upload a file from local filesystem.
@@ -54,6 +60,10 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         obj: str | bytes | BinaryIO,
         target_filename: str,
         content_type: str,
+        *,
+        artifact_type: ArtifactType | None = None,
+        source_index: int | None = None,
+        source_uri: str | None = None,
     ) -> None:
         """
         Upload an in-memory object (bytes or file-like) to the target.

@@ -22,7 +22,10 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManagerConfig,
 )
 from docling_jobkit.convert.results import process_exportable_results
-from docling_jobkit.datamodel.exportable_document import ExportableDocument
+from docling_jobkit.datamodel.exportable_document import (
+    ExportableDocument,
+    source_to_public_uri,
+)
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
@@ -147,8 +150,16 @@ def _run_docling_task(
             )
 
         exportable_documents = (
-            ExportableDocument.from_conversion_result(conv_res)
-            for conv_res in conv_results
+            ExportableDocument.from_conversion_result(
+                conv_res,
+                source_index=idx,
+                source_uri=(
+                    source_to_public_uri(task.sources[idx])
+                    if idx < len(task.sources)
+                    else str(conv_res.input.file)
+                ),
+            )
+            for idx, conv_res in enumerate(conv_results)
         )
 
         processed_results: DoclingTaskResult

@@ -44,7 +44,10 @@ from docling_jobkit.convert.results import (
     _is_exportable_status,
     process_exportable_results,
 )
-from docling_jobkit.datamodel.exportable_document import ExportableDocument
+from docling_jobkit.datamodel.exportable_document import (
+    ExportableDocument,
+    source_to_public_uri,
+)
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
@@ -110,6 +113,24 @@ def _build_convert_sources(
     return convert_sources, headers
 
 
+def _to_exportable_documents(
+    task: Task,
+    conv_results: list[ConversionResult],
+) -> list[ExportableDocument]:
+    return [
+        ExportableDocument.from_conversion_result(
+            conv_res,
+            source_index=idx,
+            source_uri=(
+                source_to_public_uri(task.sources[idx])
+                if idx < len(task.sources)
+                else str(conv_res.input.file)
+            ),
+        )
+        for idx, conv_res in enumerate(conv_results)
+    ]
+
+
 def _build_slice_plan(
     total_pages: int,
     requested_page_range: tuple[int, int],
@@ -170,6 +191,8 @@ def _build_failed_slice_result(
         file=Path(filename),
         status=ConversionStatus.FAILURE,
         errors=[build_public_error_item(exc, debug_enabled=debug_error_details)],
+        source_index=0,
+        source_uri=filename,
         page_range=page_range,
         slice_index=slice_index,
     )
@@ -218,6 +241,8 @@ def _assemble_slice_results(
         errors=errors,
         timings=_merge_timings(ordered_results),
         document=assembled_doc,
+        source_index=successful_results[0].source_index,
+        source_uri=successful_results[0].source_uri,
     )
 
 
@@ -270,10 +295,7 @@ class DoclingProcessorConverterDeployment:
             )
             result = self._build_task_result(
                 request.task,
-                [
-                    ExportableDocument.from_conversion_result(conv_res)
-                    for conv_res in conv_results
-                ],
+                _to_exportable_documents(request.task, conv_results),
                 start_time=request_start,
             )
             self.documents_processed += result.task_result.num_converted
@@ -285,10 +307,7 @@ class DoclingProcessorConverterDeployment:
             )
             result = self._build_task_result(
                 request.task,
-                [
-                    ExportableDocument.from_conversion_result(conv_res)
-                    for conv_res in conv_results
-                ],
+                _to_exportable_documents(request.task, conv_results),
                 expected_doc_count=request.source_count,
                 start_time=request_start,
             )
@@ -430,6 +449,8 @@ class DoclingProcessorConverterDeployment:
 
         return ExportableDocument.from_conversion_result(
             conv_results[0],
+            source_index=0,
+            source_uri=request.filename,
             page_range=request.page_range,
             slice_index=request.slice_index,
         )

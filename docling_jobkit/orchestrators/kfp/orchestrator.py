@@ -300,6 +300,9 @@ class KfpOrchestrator(BaseOrchestrator):
                 )
             task.processing_meta.num_processed += progress.num_processed
             task.processing_meta.num_succeeded += progress.num_succeeded
+            task.processing_meta.num_partially_succeeded += (
+                progress.num_partially_succeeded
+            )
             task.processing_meta.num_failed += progress.num_failed
             task.task_status = TaskStatus.STARTED
 
