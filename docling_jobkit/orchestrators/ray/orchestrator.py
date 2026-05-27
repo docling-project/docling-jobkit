@@ -37,7 +37,10 @@ from docling_jobkit.orchestrators.ray.config import (
 )
 from docling_jobkit.orchestrators.ray.dispatcher import RayTaskDispatcher
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
-from docling_jobkit.orchestrators.ray.serve_deployment import deploy_processor
+from docling_jobkit.orchestrators.ray.serve_deployment import (
+    DEFAULT_SERVE_APP_NAME,
+    deploy_processor,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -110,6 +113,7 @@ class RayOrchestrator(BaseOrchestrator):
         self.deployment_handle: Optional[Any] = None
         self.dispatcher: Optional[Any] = None
         self.dispatcher_name = "docling_task_dispatcher"
+        self.serve_app_name = DEFAULT_SERVE_APP_NAME
 
         # Configure logging level
         _log.setLevel(config.log_level.upper())
@@ -299,7 +303,7 @@ class RayOrchestrator(BaseOrchestrator):
             return
 
         config = self.config
-        app_name = "docling_processor"
+        app_name = self.serve_app_name
 
         try:
             if ray.is_initialized() and self._ray_session_needs_restart:
@@ -493,7 +497,7 @@ class RayOrchestrator(BaseOrchestrator):
                 self.dispatcher = None
                 try:
                     app_present, _ = await asyncio.wait_for(
-                        self._get_existing_serve_app_state("docling_processor"),
+                        self._get_existing_serve_app_state(self.serve_app_name),
                         timeout=self.config.dispatcher_rpc_timeout,
                     )
                     if not app_present:
@@ -886,7 +890,7 @@ class RayOrchestrator(BaseOrchestrator):
             self.dispatcher = None
 
         try:
-            serve.delete("docling_processor")
+            serve.delete(self.serve_app_name)
         except Exception as exc:
             _log.warning("Error deleting Ray Serve deployment in test cleanup: %s", exc)
 
