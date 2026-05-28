@@ -418,6 +418,13 @@ class RayOrchestrator(BaseOrchestrator):
         except BaseException as exc:
             self.dispatcher = None
             self.deployment_handle = None
+            try:
+                await self._run_ray_admin(ray.shutdown)
+            except Exception as shutdown_exc:
+                _log.warning(
+                    "ray.shutdown() in init cleanup failed (continuing): %s",
+                    shutdown_exc,
+                )
             raise DispatcherUnavailableError(
                 f"Ray runtime initialization failed: {exc}"
             ) from exc
