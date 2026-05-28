@@ -6,6 +6,8 @@ import logging
 import time
 import uuid
 import warnings
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import Any, Optional
 
 import ray
@@ -114,6 +116,7 @@ class RayOrchestrator(BaseOrchestrator):
         self.dispatcher: Optional[Any] = None
         self.dispatcher_name = "docling_task_dispatcher"
         self.serve_app_name = DEFAULT_SERVE_APP_NAME
+        self._ray_admin_executor: Optional[ThreadPoolExecutor] = None
 
         # Configure logging level
         _log.setLevel(config.log_level.upper())
@@ -124,6 +127,21 @@ class RayOrchestrator(BaseOrchestrator):
         self._unhealthy_since: Optional[float] = None
         self._ray_session_needs_restart: bool = False
         _log.info("RayOrchestrator initialized without connecting to Ray")
+
+    def _get_ray_admin_executor(self) -> ThreadPoolExecutor:
+        executor = self._ray_admin_executor
+        if executor is None:
+            executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="docling-ray-admin",
+            )
+            self._ray_admin_executor = executor
+        return executor
+
+    async def _run_ray_admin(self, func: Any, *args: Any, **kwargs: Any) -> Any:
+        loop = asyncio.get_running_loop()
+        bound = partial(func, *args, **kwargs)
+        return await loop.run_in_executor(self._get_ray_admin_executor(), bound)
 
     def _build_ray_init_kwargs(self) -> dict[str, Any]:
         """Build Ray init kwargs and perform mTLS setup when enabled."""
@@ -275,7 +293,7 @@ class RayOrchestrator(BaseOrchestrator):
         Raises DispatcherUnavailableError if the Serve control plane is unreachable.
         """
         try:
-            serve_status = await asyncio.to_thread(serve.status)
+            serve_status = await self._run_ray_admin(serve.status)
         except Exception as exc:
             _log.warning("serve_control_plane_unavailable: %s", exc)
             raise DispatcherUnavailableError(
@@ -306,7 +324,10 @@ class RayOrchestrator(BaseOrchestrator):
         app_name = self.serve_app_name
 
         try:
-            if ray.is_initialized() and self._ray_session_needs_restart:
+            if (
+                await self._run_ray_admin(ray.is_initialized)
+                and self._ray_session_needs_restart
+            ):
                 # The supervisor confirmed the Serve control plane was unreachable, meaning
                 # the Ray client session is pointing at a dead cluster. Shut it down so
                 # ray.init() below reconnects to the (possibly new) cluster.
@@ -314,14 +335,16 @@ class RayOrchestrator(BaseOrchestrator):
                     "Stale Ray session confirmed by supervisor; restarting for fresh reconnect"
                 )
                 self._ray_session_needs_restart = False
+                self.dispatcher = None
+                self.deployment_handle = None
                 try:
-                    await asyncio.to_thread(ray.shutdown)
+                    await self._run_ray_admin(ray.shutdown)
                 except Exception as exc:
                     _log.warning(
                         "ray.shutdown() during recovery failed (continuing): %s", exc
                     )
 
-            if not ray.is_initialized():
+            if not await self._run_ray_admin(ray.is_initialized):
                 init_kwargs = await asyncio.to_thread(self._build_ray_init_kwargs)
 
                 _log.info("=== Ray Initialization Starting ===")
@@ -334,11 +357,12 @@ class RayOrchestrator(BaseOrchestrator):
                     _log.info(f"Object Store Memory: {config.ray_object_store_memory}")
 
                 _log.info("Calling ray.init()...")
-                await asyncio.to_thread(ray.init, **init_kwargs)
+                await self._run_ray_admin(ray.init, **init_kwargs)
                 _log.info("✓ Ray initialized successfully")
                 _log.info(f"Ray Version: {ray.__version__}")
                 try:
-                    dashboard_url = ray.get_dashboard_url()  # type: ignore
+                    get_dashboard_url = ray.get_dashboard_url  # type: ignore[attr-defined]
+                    dashboard_url = await self._run_ray_admin(get_dashboard_url)
                     if dashboard_url:
                         _log.info(f"Ray Dashboard: {dashboard_url}")
                 except Exception:
@@ -347,7 +371,7 @@ class RayOrchestrator(BaseOrchestrator):
                 _log.info("Ray already initialized")
 
             try:
-                await asyncio.to_thread(serve.start, detached=True)
+                await self._run_ray_admin(serve.start, detached=True)
                 _log.info("Ray Serve started")
             except RuntimeError:
                 _log.info("Ray Serve already running")
@@ -356,7 +380,7 @@ class RayOrchestrator(BaseOrchestrator):
 
             if not app_present:
                 _log.info("serve_app_absent_deploying: app=%s", app_name)
-                self.deployment_handle = await asyncio.to_thread(
+                self.deployment_handle = await self._run_ray_admin(
                     deploy_processor,
                     converter_manager_config=self.cm.config,
                     config=config,
@@ -375,7 +399,7 @@ class RayOrchestrator(BaseOrchestrator):
                     app_status,
                 )
                 try:
-                    self.deployment_handle = await asyncio.to_thread(
+                    self.deployment_handle = await self._run_ray_admin(
                         serve.get_app_handle, app_name
                     )
                 except Exception as exc:
@@ -386,7 +410,7 @@ class RayOrchestrator(BaseOrchestrator):
                         f"Serve app '{app_name}' exists but attach failed: {exc}"
                     ) from exc
 
-            self.dispatcher = self._bind_dispatcher()
+            self.dispatcher = await self._run_ray_admin(self._bind_dispatcher)
             _log.info("Ray runtime initialized")
         except asyncio.CancelledError:
             raise
@@ -836,7 +860,7 @@ class RayOrchestrator(BaseOrchestrator):
             raise OrchestratorError("Redis connection failed")
 
         # Check Ray
-        if not ray.is_initialized():
+        if not await self._run_ray_admin(ray.is_initialized):
             raise OrchestratorError("Ray is not initialized")
 
         try:
@@ -869,6 +893,10 @@ class RayOrchestrator(BaseOrchestrator):
                 pass
 
         await self.redis_manager.disconnect()
+        executor = self._ray_admin_executor
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+            self._ray_admin_executor = None
         _log.info("RayOrchestrator shutdown complete")
 
     async def cleanup_shared_runtime_for_tests(self) -> None:
