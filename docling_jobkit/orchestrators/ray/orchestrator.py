@@ -171,9 +171,17 @@ class RayOrchestrator(BaseOrchestrator):
                 _log.info(f"Namespace: {config.ray_namespace}")
 
                 _log.info("Calling generate_tls_cert()...")
+                # WARNING: force_regenerate=True is intentional. The default (False) skips
+                # regeneration if cert files already exist on disk, which causes a permanent
+                # TLS handshake failure (CERTIFICATE_VERIFY_FAILED) when the RayCluster is
+                # recreated: the operator rotates the CA secret while docling-serve may have
+                # cached certs from the previous CA. Force-regenerating on every reconnect
+                # ensures we always read the current CA from Kubernetes. If the secret does
+                # not exist yet (mid-rotation), the call raises and the supervisor retries.
                 generate_cert.generate_tls_cert(
                     config.ray_cluster_name,
                     config.ray_namespace,
+                    force_regenerate=True,
                 )
                 _log.info("✓ TLS certificates generated successfully")
 
