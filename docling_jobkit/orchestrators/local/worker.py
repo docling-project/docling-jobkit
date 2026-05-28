@@ -2,15 +2,14 @@ import asyncio
 import logging
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING
 
-from docling.datamodel.base_models import DocumentStream
-from docling.datamodel.service.sources import FileSource, HttpSource
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.convert.chunking import process_chunkable_results
 from docling_jobkit.convert.manager import DoclingConverterManager
 from docling_jobkit.convert.results import process_exportable_results
+from docling_jobkit.convert.source_expansion import expand_task_sources
 from docling_jobkit.datamodel.exportable_document import (
     ExportableDocument,
     source_to_public_uri,
@@ -69,18 +68,7 @@ class AsyncLocalWorker:
 
                 # Define a callback function to send progress updates to the client.
                 def run_task() -> DoclingTaskResult:
-                    convert_sources: list[Union[str, DocumentStream]] = []
-                    headers: Optional[dict[str, Any]] = None
-                    for source in task.sources:
-                        if isinstance(source, DocumentStream):
-                            convert_sources.append(source)
-                        elif isinstance(source, FileSource):
-                            convert_sources.append(source.to_document_stream())
-                        elif isinstance(source, HttpSource):
-                            convert_sources.append(str(source.url))
-                            if headers is None and source.headers:
-                                headers = source.headers
-
+                    convert_sources, headers = expand_task_sources(task)
                     # Note: results are only an iterator->lazy evaluation
                     conv_results = cm.convert_documents(
                         sources=convert_sources,
@@ -118,6 +106,8 @@ class AsyncLocalWorker:
                             chunker_manager=self.orchestrator.chunker_manager,
                             callback_invoker=callback_invoker,
                         )
+                    else:
+                        raise RuntimeError(f"Unsupported task type: {task.task_type}")
 
                     return processed_results
 
