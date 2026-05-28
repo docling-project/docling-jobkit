@@ -324,10 +324,7 @@ class RayOrchestrator(BaseOrchestrator):
         app_name = self.serve_app_name
 
         try:
-            if (
-                await self._run_ray_admin(ray.is_initialized)
-                and self._ray_session_needs_restart
-            ):
+            if self._ray_session_needs_restart:
                 # The supervisor confirmed the Serve control plane was unreachable, meaning
                 # the Ray client session is pointing at a dead cluster. Shut it down so
                 # ray.init() below reconnects to the (possibly new) cluster.
