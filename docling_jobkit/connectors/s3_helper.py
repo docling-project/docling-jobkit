@@ -56,8 +56,8 @@ def get_s3_connection(coords: S3Coordinates):
         "s3",
         endpoint_url=endpoint,
         verify=coords.verify_ssl,
-        aws_access_key_id=coords.access_key.get_secret_value(),
-        aws_secret_access_key=coords.secret_key.get_secret_value(),
+        aws_access_key_id=coords.access_key,
+        aws_secret_access_key=coords.secret_key,
         config=config,
     )
 
@@ -65,8 +65,8 @@ def get_s3_connection(coords: S3Coordinates):
         "s3",
         endpoint_url=endpoint,
         verify=coords.verify_ssl,
-        aws_access_key_id=coords.access_key.get_secret_value(),
-        aws_secret_access_key=coords.secret_key.get_secret_value(),
+        aws_access_key_id=coords.access_key,
+        aws_secret_access_key=coords.secret_key,
         config=config,
     )
 

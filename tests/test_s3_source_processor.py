@@ -1,7 +1,6 @@
 import socket
 
 import pytest
-from pydantic import SecretStr
 
 from docling_core.types.io import DocumentStream
 
@@ -36,8 +35,8 @@ def minio_coords() -> S3Coordinates:
     return S3Coordinates(
         endpoint="127.0.0.1:9000",
         verify_ssl=False,
-        access_key=SecretStr("minioadmin"),
-        secret_key=SecretStr("minioadmin"),
+        access_key="minioadmin",
+        secret_key="minioadmin",
         bucket="test",
         key_prefix="",
     )

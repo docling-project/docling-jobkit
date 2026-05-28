@@ -2,7 +2,6 @@ import base64
 from io import BytesIO
 
 import pytest
-from pydantic import SecretStr
 
 from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.requests import (
@@ -11,6 +10,7 @@ from docling.datamodel.service.requests import (
     S3SourceRequest,
 )
 from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.targets import S3Target
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.cli.local import JobConfig as LocalJobConfig
@@ -30,8 +30,8 @@ def _make_s3_source() -> S3Coordinates:
     return S3Coordinates(
         endpoint="127.0.0.1:9000",
         verify_ssl=False,
-        access_key=SecretStr("minioadmin"),
-        secret_key=SecretStr("minioadmin"),
+        access_key="minioadmin",
+        secret_key="minioadmin",
         bucket="test-bucket",
         key_prefix="incoming/",
     )
@@ -89,8 +89,8 @@ def test_task_roundtrip_accepts_request_subclasses_without_normalization():
             S3SourceRequest(
                 endpoint="127.0.0.1:9000",
                 verify_ssl=False,
-                access_key=SecretStr("minioadmin"),
-                secret_key=SecretStr("minioadmin"),
+                access_key="minioadmin",
+                secret_key="minioadmin",
                 bucket="test-bucket",
                 key_prefix="incoming/",
             ),
@@ -104,6 +104,38 @@ def test_task_roundtrip_accepts_request_subclasses_without_normalization():
     assert isinstance(rebuilt_task.sources[0], FileSource)
     assert isinstance(rebuilt_task.sources[1], HttpSource)
     assert isinstance(rebuilt_task.sources[2], S3Coordinates)
+    assert rebuilt_task.sources[2].access_key == "minioadmin"
+    assert rebuilt_task.sources[2].secret_key == "minioadmin"
+
+
+def test_task_json_roundtrip_preserves_s3_secrets_for_source_and_target():
+    task = Task(
+        task_id="task-1",
+        task_type=TaskType.CONVERT,
+        sources=[_make_s3_source()],
+        target=S3Target(
+            endpoint="127.0.0.1:9000",
+            verify_ssl=False,
+            access_key="minioadmin",
+            secret_key="minioadmin",
+            bucket="target-bucket",
+            key_prefix="out/",
+        ),
+    )
+
+    task_json = task.model_dump_json()
+    assert "**********" not in task_json
+
+    rebuilt_task = Task.model_validate_json(task_json)
+    rebuilt_source = rebuilt_task.sources[0]
+    rebuilt_target = rebuilt_task.target
+
+    assert isinstance(rebuilt_source, S3Coordinates)
+    assert rebuilt_source.access_key == "minioadmin"
+    assert rebuilt_source.secret_key == "minioadmin"
+    assert isinstance(rebuilt_target, S3Target)
+    assert rebuilt_target.access_key == "minioadmin"
+    assert rebuilt_target.secret_key == "minioadmin"
 
 
 @pytest.mark.asyncio
@@ -137,6 +169,8 @@ async def test_rq_enqueue_preserves_s3coordinates(monkeypatch: pytest.MonkeyPatc
     assert len(task_data["sources"]) == 1
     assert task_data["sources"][0]["bucket"] == s3_source.bucket
     assert task_data["sources"][0]["key_prefix"] == s3_source.key_prefix
+    assert task_data["sources"][0]["access_key"] == "minioadmin"
+    assert task_data["sources"][0]["secret_key"] == "minioadmin"
 
 
 @pytest.mark.parametrize("job_config_cls", [LocalJobConfig, MultiprocJobConfig])
