@@ -74,18 +74,21 @@ class HttpPutTargetProcessor(BaseTargetProcessor):
         source_index: int | None = None,
         source_uri: str | None = None,
     ) -> None:
-        """PUT *obj* bytes/file-like to the target URL."""
+        """PUT *obj* bytes/file-like to the target URL as multipart form data."""
+        if isinstance(obj, str):
+            data: bytes = obj.encode()
+        elif isinstance(obj, (bytes, bytearray)):
+            data = bytes(obj)
+        else:
+            data = obj.read()
+
         url = str(self._target.url)
         last_exc: Optional[Exception] = None
         for attempt in range(self._max_retries):
             try:
-                if isinstance(obj, str):
-                    data = obj.encode()
-                elif isinstance(obj, (bytes, bytearray)):
-                    data = bytes(obj)
-                else:
-                    data = obj.read()
-                r = httpx.put(url, content=data)
+                r = httpx.put(
+                    url, files={"file": (target_filename, data, content_type)}
+                )
                 r.raise_for_status()
                 return
             except Exception as exc:
