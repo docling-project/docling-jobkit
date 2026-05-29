@@ -6,10 +6,13 @@ import logging
 import time
 import uuid
 import warnings
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import Any, Optional
 
 import ray
 from ray import serve
+from ray.serve.schema import ApplicationStatus
 
 from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.callbacks import CallbackSpec
@@ -36,7 +39,10 @@ from docling_jobkit.orchestrators.ray.config import (
 )
 from docling_jobkit.orchestrators.ray.dispatcher import RayTaskDispatcher
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
-from docling_jobkit.orchestrators.ray.serve_deployment import deploy_processor
+from docling_jobkit.orchestrators.ray.serve_deployment import (
+    DEFAULT_SERVE_APP_NAME,
+    deploy_processor,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -109,6 +115,8 @@ class RayOrchestrator(BaseOrchestrator):
         self.deployment_handle: Optional[Any] = None
         self.dispatcher: Optional[Any] = None
         self.dispatcher_name = "docling_task_dispatcher"
+        self.serve_app_name = DEFAULT_SERVE_APP_NAME
+        self._ray_admin_executor: Optional[ThreadPoolExecutor] = None
 
         # Configure logging level
         _log.setLevel(config.log_level.upper())
@@ -117,7 +125,23 @@ class RayOrchestrator(BaseOrchestrator):
         )
 
         self._unhealthy_since: Optional[float] = None
+        self._ray_session_needs_restart: bool = False
         _log.info("RayOrchestrator initialized without connecting to Ray")
+
+    def _get_ray_admin_executor(self) -> ThreadPoolExecutor:
+        executor = self._ray_admin_executor
+        if executor is None:
+            executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="docling-ray-admin",
+            )
+            self._ray_admin_executor = executor
+        return executor
+
+    async def _run_ray_admin(self, func: Any, *args: Any, **kwargs: Any) -> Any:
+        loop = asyncio.get_running_loop()
+        bound = partial(func, *args, **kwargs)
+        return await loop.run_in_executor(self._get_ray_admin_executor(), bound)
 
     def _build_ray_init_kwargs(self) -> dict[str, Any]:
         """Build Ray init kwargs and perform mTLS setup when enabled."""
@@ -147,9 +171,17 @@ class RayOrchestrator(BaseOrchestrator):
                 _log.info(f"Namespace: {config.ray_namespace}")
 
                 _log.info("Calling generate_tls_cert()...")
+                # WARNING: force_regenerate=True is intentional. The default (False) skips
+                # regeneration if cert files already exist on disk, which causes a permanent
+                # TLS handshake failure (CERTIFICATE_VERIFY_FAILED) when the RayCluster is
+                # recreated: the operator rotates the CA secret while docling-serve may have
+                # cached certs from the previous CA. Force-regenerating on every reconnect
+                # ensures we always read the current CA from Kubernetes. If the secret does
+                # not exist yet (mid-rotation), the call raises and the supervisor retries.
                 generate_cert.generate_tls_cert(
                     config.ray_cluster_name,
                     config.ray_namespace,
+                    force_regenerate=True,
                 )
                 _log.info("✓ TLS certificates generated successfully")
 
@@ -259,15 +291,65 @@ class RayOrchestrator(BaseOrchestrator):
             **dispatcher_kwargs
         ).remote(self.config, self.deployment_handle)
 
+    async def _get_existing_serve_app_state(
+        self, app_name: str
+    ) -> tuple[bool, ApplicationStatus | None]:
+        """Query the Serve control plane to determine app presence and lifecycle state.
+
+        Returns (False, None) if the app is absent.
+        Returns (True, status) if the app exists.
+        Raises DispatcherUnavailableError if the Serve control plane is unreachable.
+        """
+        try:
+            serve_status = await self._run_ray_admin(serve.status)
+        except Exception as exc:
+            _log.warning("serve_control_plane_unavailable: %s", exc)
+            raise DispatcherUnavailableError(
+                f"Ray Serve control plane unavailable: {exc}"
+            ) from exc
+
+        app_overview = serve_status.applications.get(app_name)
+        if app_overview is None:
+            return (False, None)
+        return (True, app_overview.status)
+
     async def _initialize_ray_runtime(self) -> None:
-        """Initialize Ray client, Serve deployment, and dispatcher binding lazily."""
+        """Initialize Ray client then attach to an existing Serve app or deploy if absent.
+
+        Uses serve.status() to disambiguate control-plane failure from app absence so
+        that a pod restart never triggers serve.run() when Serve is merely unavailable.
+        Decision table:
+          - control plane unreachable  → DispatcherUnavailableError
+          - app absent                 → deploy once
+          - app DEPLOYING/RUNNING/DEPLOY_FAILED/UNHEALTHY → attach only
+          - app DELETING               → DispatcherUnavailableError (retry later)
+          - app present, attach fails  → DispatcherUnavailableError (no deploy fallback)
+        """
         if self.dispatcher is not None and self.deployment_handle is not None:
             return
 
         config = self.config
+        app_name = self.serve_app_name
 
         try:
-            if not ray.is_initialized():
+            if self._ray_session_needs_restart:
+                # The supervisor confirmed the Serve control plane was unreachable, meaning
+                # the Ray client session is pointing at a dead cluster. Shut it down so
+                # ray.init() below reconnects to the (possibly new) cluster.
+                _log.info(
+                    "Stale Ray session confirmed by supervisor; restarting for fresh reconnect"
+                )
+                self._ray_session_needs_restart = False
+                self.dispatcher = None
+                self.deployment_handle = None
+                try:
+                    await self._run_ray_admin(ray.shutdown)
+                except Exception as exc:
+                    _log.warning(
+                        "ray.shutdown() during recovery failed (continuing): %s", exc
+                    )
+
+            if not await self._run_ray_admin(ray.is_initialized):
                 init_kwargs = await asyncio.to_thread(self._build_ray_init_kwargs)
 
                 _log.info("=== Ray Initialization Starting ===")
@@ -280,11 +362,12 @@ class RayOrchestrator(BaseOrchestrator):
                     _log.info(f"Object Store Memory: {config.ray_object_store_memory}")
 
                 _log.info("Calling ray.init()...")
-                await asyncio.to_thread(ray.init, **init_kwargs)
+                await self._run_ray_admin(ray.init, **init_kwargs)
                 _log.info("✓ Ray initialized successfully")
                 _log.info(f"Ray Version: {ray.__version__}")
                 try:
-                    dashboard_url = ray.get_dashboard_url()  # type: ignore
+                    get_dashboard_url = ray.get_dashboard_url  # type: ignore[attr-defined]
+                    dashboard_url = await self._run_ray_admin(get_dashboard_url)
                     if dashboard_url:
                         _log.info(f"Ray Dashboard: {dashboard_url}")
                 except Exception:
@@ -293,26 +376,63 @@ class RayOrchestrator(BaseOrchestrator):
                 _log.info("Ray already initialized")
 
             try:
-                await asyncio.to_thread(serve.start, detached=True)
+                await self._run_ray_admin(serve.start, detached=True)
                 _log.info("Ray Serve started")
             except RuntimeError:
                 _log.info("Ray Serve already running")
 
-            _log.info("Deploying document processor with Ray Serve")
-            self.deployment_handle = await asyncio.to_thread(
-                deploy_processor,
-                converter_manager_config=self.cm.config,
-                config=config,
-                redis_url=config.redis_url,
-                app_name="docling_processor",
-            )
-            self.dispatcher = self._bind_dispatcher()
+            app_present, app_status = await self._get_existing_serve_app_state(app_name)
+
+            if not app_present:
+                _log.info("serve_app_absent_deploying: app=%s", app_name)
+                self.deployment_handle = await self._run_ray_admin(
+                    deploy_processor,
+                    converter_manager_config=self.cm.config,
+                    config=config,
+                    redis_url=config.redis_url,
+                    app_name=app_name,
+                )
+            elif app_status == ApplicationStatus.DELETING:
+                _log.warning("serve_app_deleting_retry_later: app=%s", app_name)
+                raise DispatcherUnavailableError(
+                    f"Serve app '{app_name}' is being deleted; will retry"
+                )
+            else:
+                _log.info(
+                    "serve_app_present_attaching: app=%s status=%s",
+                    app_name,
+                    app_status,
+                )
+                try:
+                    self.deployment_handle = await self._run_ray_admin(
+                        serve.get_app_handle, app_name
+                    )
+                except Exception as exc:
+                    _log.warning(
+                        "serve_app_attach_failed: app=%s error=%s", app_name, exc
+                    )
+                    raise DispatcherUnavailableError(
+                        f"Serve app '{app_name}' exists but attach failed: {exc}"
+                    ) from exc
+
+            self.dispatcher = await self._run_ray_admin(self._bind_dispatcher)
             _log.info("Ray runtime initialized")
         except asyncio.CancelledError:
+            raise
+        except DispatcherUnavailableError:
+            self.dispatcher = None
+            self.deployment_handle = None
             raise
         except BaseException as exc:
             self.dispatcher = None
             self.deployment_handle = None
+            try:
+                await self._run_ray_admin(ray.shutdown)
+            except Exception as shutdown_exc:
+                _log.warning(
+                    "ray.shutdown() in init cleanup failed (continuing): %s",
+                    shutdown_exc,
+                )
             raise DispatcherUnavailableError(
                 f"Ray runtime initialization failed: {exc}"
             ) from exc
@@ -353,8 +473,7 @@ class RayOrchestrator(BaseOrchestrator):
         try:
             dispatcher = self.dispatcher
             if dispatcher is None:
-                dispatcher = self._bind_dispatcher()
-                self.dispatcher = dispatcher
+                raise DispatcherUnavailableError("Ray dispatcher not yet initialized")
             loop_running = await asyncio.wait_for(
                 dispatcher.get_health.remote(), timeout=rpc_timeout
             )
@@ -411,6 +530,22 @@ class RayOrchestrator(BaseOrchestrator):
                 else:
                     _log.warning("Dispatcher supervisor retrying after error: %s", exc)
                 self.dispatcher = None
+                try:
+                    app_present, _ = await asyncio.wait_for(
+                        self._get_existing_serve_app_state(self.serve_app_name),
+                        timeout=self.config.dispatcher_rpc_timeout,
+                    )
+                    if not app_present:
+                        _log.warning(
+                            "Serve app absent on reachable cluster; clearing handle to re-deploy"
+                        )
+                        self.deployment_handle = None
+                except (DispatcherUnavailableError, asyncio.TimeoutError):
+                    _log.warning(
+                        "Serve control plane unreachable; will restart Ray session for re-init"
+                    )
+                    self.deployment_handle = None
+                    self._ray_session_needs_restart = True
                 await asyncio.sleep(1.0)
 
     def is_liveness_healthy(self) -> bool:
@@ -736,7 +871,7 @@ class RayOrchestrator(BaseOrchestrator):
             raise OrchestratorError("Redis connection failed")
 
         # Check Ray
-        if not ray.is_initialized():
+        if not await self._run_ray_admin(ray.is_initialized):
             raise OrchestratorError("Ray is not initialized")
 
         try:
@@ -769,6 +904,10 @@ class RayOrchestrator(BaseOrchestrator):
                 pass
 
         await self.redis_manager.disconnect()
+        executor = self._ray_admin_executor
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+            self._ray_admin_executor = None
         _log.info("RayOrchestrator shutdown complete")
 
     async def cleanup_shared_runtime_for_tests(self) -> None:
@@ -790,7 +929,7 @@ class RayOrchestrator(BaseOrchestrator):
             self.dispatcher = None
 
         try:
-            serve.delete("docling_processor")
+            serve.delete(self.serve_app_name)
         except Exception as exc:
             _log.warning("Error deleting Ray Serve deployment in test cleanup: %s", exc)
 
