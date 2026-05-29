@@ -426,13 +426,6 @@ class RayOrchestrator(BaseOrchestrator):
         except BaseException as exc:
             self.dispatcher = None
             self.deployment_handle = None
-            try:
-                await self._run_ray_admin(ray.shutdown)
-            except Exception as shutdown_exc:
-                _log.warning(
-                    "ray.shutdown() in init cleanup failed (continuing): %s",
-                    shutdown_exc,
-                )
             raise DispatcherUnavailableError(
                 f"Ray runtime initialization failed: {exc}"
             ) from exc
@@ -541,11 +534,17 @@ class RayOrchestrator(BaseOrchestrator):
                         )
                         self.deployment_handle = None
                 except (DispatcherUnavailableError, asyncio.TimeoutError):
-                    _log.warning(
-                        "Serve control plane unreachable; will restart Ray session for re-init"
-                    )
                     self.deployment_handle = None
-                    self._ray_session_needs_restart = True
+                    ray_alive = await self._run_ray_admin(ray.is_initialized)
+                    if ray_alive:
+                        _log.warning(
+                            "Serve control plane unreachable but Ray session alive; will retry"
+                        )
+                    else:
+                        _log.warning(
+                            "Serve control plane unreachable and Ray session dead; restarting"
+                        )
+                        self._ray_session_needs_restart = True
                 await asyncio.sleep(1.0)
 
     def is_liveness_healthy(self) -> bool:
