@@ -473,8 +473,7 @@ class RayOrchestrator(BaseOrchestrator):
         try:
             dispatcher = self.dispatcher
             if dispatcher is None:
-                dispatcher = self._bind_dispatcher()
-                self.dispatcher = dispatcher
+                raise DispatcherUnavailableError("Ray dispatcher not yet initialized")
             loop_running = await asyncio.wait_for(
                 dispatcher.get_health.remote(), timeout=rpc_timeout
             )
