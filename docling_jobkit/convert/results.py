@@ -2,7 +2,7 @@ import logging
 import os
 import shutil
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -35,6 +35,7 @@ from docling_jobkit.connectors.s3_presigned_target_processor import (
     S3PresignedTargetProcessor,
 )
 from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
+from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.datamodel.exportable_document import (
     ExportableDocument,
     source_to_public_uri,
@@ -440,12 +441,12 @@ def _upload_documents_as_presigned_artifacts(
     return documents
 
 
-def _upload_documents_to_s3_target(
+def _upload_documents_via_processor(
     *,
     task: Task,
     exportable_documents: list[ExportableDocument],
     output_dir: Path,
-    target_processor: S3TargetProcessor,
+    target_processor: BaseTargetProcessor,
     export_json: bool,
     export_html: bool,
     export_md: bool,
@@ -453,7 +454,14 @@ def _upload_documents_to_s3_target(
     export_doctags: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
+    target_filename_fn: Callable[[str, str], str] | None = None,
 ) -> None:
+    """Shared upload loop used by all non-presigned remote target processors.
+
+    *target_filename_fn* is an optional callback ``(source_key, artifact_filename)
+    -> target_filename`` that lets callers control the final target path.  When
+    omitted the raw ``artifact.target_filename`` is used as-is.
+    """
     for response_index, exportable_document in enumerate(exportable_documents):
         source_index, source_uri, source_key = _resolve_source_identity(
             task,
@@ -473,12 +481,50 @@ def _upload_documents_to_s3_target(
             md_page_break_placeholder=md_page_break_placeholder,
             bundle_resources=True,
         ):
-            target_filename = f"{source_key}/{artifact.target_filename}"
+            target_filename = (
+                target_filename_fn(source_key, artifact.target_filename)
+                if target_filename_fn is not None
+                else artifact.target_filename
+            )
             target_processor.upload_file(
                 filename=artifact.path,
                 target_filename=target_filename,
                 content_type=artifact.mime_type,
+                artifact_type=artifact.artifact_type,
+                source_index=source_index,
+                source_uri=source_uri,
             )
+
+
+def _upload_documents_to_s3_target(
+    *,
+    task: Task,
+    exportable_documents: list[ExportableDocument],
+    output_dir: Path,
+    target_processor: S3TargetProcessor,
+    export_json: bool,
+    export_html: bool,
+    export_md: bool,
+    export_txt: bool,
+    export_doctags: bool,
+    image_export_mode: ImageRefMode,
+    md_page_break_placeholder: str,
+) -> None:
+    _upload_documents_via_processor(
+        task=task,
+        exportable_documents=exportable_documents,
+        output_dir=output_dir,
+        target_processor=target_processor,
+        export_json=export_json,
+        export_html=export_html,
+        export_md=export_md,
+        export_txt=export_txt,
+        export_doctags=export_doctags,
+        image_export_mode=image_export_mode,
+        md_page_break_placeholder=md_page_break_placeholder,
+        target_filename_fn=lambda source_key,
+        artifact_filename: f"{source_key}/{artifact_filename}",
+    )
 
 
 def process_exportable_results(

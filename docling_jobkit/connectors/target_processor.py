@@ -1,9 +1,12 @@
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import BinaryIO
+from typing import TYPE_CHECKING, Any, BinaryIO
 
 from docling_jobkit.connectors.artifact_paths import ArtifactType
+
+if TYPE_CHECKING:
+    from docling.datamodel.service.responses import DocumentArtifactItem
 
 
 class BaseTargetProcessor(AbstractContextManager, ABC):
@@ -69,3 +72,20 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         Upload an in-memory object (bytes or file-like) to the target.
         """
         ...
+
+    def build_document_artifact_item(
+        self,
+        *,
+        source_index: int,
+        source_uri: str,
+        filename: str,
+        status: Any,
+        errors: list,
+        timings: dict,
+    ) -> "DocumentArtifactItem | None":
+        """
+        Optionally build a DocumentArtifactItem after all artifacts for a
+        document have been uploaded.  Returns None by default; processors that
+        generate presigned URLs (or similar) override this to return the item.
+        """
+        return None

@@ -275,10 +275,13 @@ class DoclingProcessorConverterDeployment:
                 request.task.task_id,
                 lambda: self._convert_passthrough_task(request.task),
             )
-            result = self._build_task_result(
-                request.task,
-                _to_exportable_documents(request.task, conv_results),
-                start_time=request_start,
+            exportable = _to_exportable_documents(request.task, conv_results)
+            result = await asyncio.to_thread(
+                lambda: self._build_task_result(
+                    request.task,
+                    exportable,
+                    start_time=request_start,
+                )
             )
             self.documents_processed += result.task_result.num_converted
         elif isinstance(request, MaterializedConvertRequest):
@@ -287,11 +290,14 @@ class DoclingProcessorConverterDeployment:
                 request.filename,
                 lambda: self._convert_materialized_request(request),
             )
-            result = self._build_task_result(
-                request.task,
-                _to_exportable_documents(request.task, conv_results),
-                expected_doc_count=request.source_count,
-                start_time=request_start,
+            exportable = _to_exportable_documents(request.task, conv_results)
+            result = await asyncio.to_thread(
+                lambda: self._build_task_result(
+                    request.task,
+                    exportable,
+                    expected_doc_count=request.source_count,
+                    start_time=request_start,
+                )
             )
             self.documents_processed += result.task_result.num_converted
         elif isinstance(request, SliceConvertRequest):
