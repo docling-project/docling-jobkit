@@ -78,6 +78,8 @@ from docling_jobkit.public_errors import (
 
 _log = logging.getLogger(__name__)
 
+DEFAULT_SERVE_APP_NAME = "docling_processor"
+
 try:
     import psutil
 
@@ -904,7 +906,7 @@ def create_deployment(
     converter_manager_config: DoclingConverterManagerConfig,
     config: RayOrchestratorConfig,
     redis_url: str,
-    app_name: str = "docling_processor",
+    app_name: str = DEFAULT_SERVE_APP_NAME,
 ) -> Any:
     coordinator_target_requests_per_replica = (
         config.coordinator_target_requests_per_replica
@@ -979,7 +981,7 @@ def deploy_processor(
     converter_manager_config: DoclingConverterManagerConfig,
     config: RayOrchestratorConfig,
     redis_url: str,
-    app_name: str = "docling_processor",
+    app_name: str = DEFAULT_SERVE_APP_NAME,
 ) -> Any:
     deployment = create_deployment(
         converter_manager_config=converter_manager_config,

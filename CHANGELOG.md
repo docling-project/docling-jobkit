@@ -1,3 +1,9 @@
+## [v1.20.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.20.1) - 2026-06-01
+
+### Fix
+
+* **ray:** Attach to existing serve app before deploy for readiness recovery ([#158](https://github.com/docling-project/docling-jobkit/issues/158)) ([`2a84758`](https://github.com/docling-project/docling-jobkit/commit/2a847585440743b691d6a588f67ee53e51f0d35c))
+
 ## [v1.20.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.20.0) - 2026-05-21
 
 ### Feature
