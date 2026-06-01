@@ -1191,9 +1191,9 @@ dev = [
 requires-dist = [
     { name = "boto3", specifier = "~=1.35" },
     { name = "codeflare-sdk", marker = "python_full_version >= '3.11' and python_full_version < '3.14' and extra == 'ray'", specifier = ">=0.20.0" },
-    { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", git = "https://github.com/docling-project/docling/?rev=cau%2Fbatch-endpoint-support" },
-    { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", git = "https://github.com/docling-project/docling/?rev=cau%2Fbatch-endpoint-support" },
-    { name = "docling-slim", extras = ["standard"], git = "https://github.com/docling-project/docling/?rev=cau%2Fbatch-endpoint-support" },
+    { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", git = "https://github.com/docling-project/docling/?rev=cau%2Fbatch-endpoint-client-sdk-updates" },
+    { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", git = "https://github.com/docling-project/docling/?rev=cau%2Fbatch-endpoint-client-sdk-updates" },
+    { name = "docling-slim", extras = ["standard"], git = "https://github.com/docling-project/docling/?rev=cau%2Fbatch-endpoint-client-sdk-updates" },
     { name = "google-api-python-client", marker = "extra == 'gdrive'", specifier = ">=2.183.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'gdrive'", specifier = ">=1.2.2" },
     { name = "httpx", specifier = ">=0.28,<1" },
@@ -1266,7 +1266,7 @@ wheels = [
 [[package]]
 name = "docling-slim"
 version = "2.95.0"
-source = { git = "https://github.com/docling-project/docling/?rev=cau%2Fbatch-endpoint-support#b671cac1772cccf69ac46adea4b8fee36cf7ad01" }
+source = { git = "https://github.com/docling-project/docling/?rev=cau%2Fbatch-endpoint-client-sdk-updates#a2e88787817ed1751fc07cf7ee3712b004517c2b" }
 dependencies = [
     { name = "certifi" },
     { name = "docling-core" },
