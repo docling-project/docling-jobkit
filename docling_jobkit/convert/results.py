@@ -49,6 +49,7 @@ from docling_jobkit.datamodel.result import (
     ResultType,
     ZipArchiveResult,
 )
+from docling_jobkit.datamodel.source_identity import SourceIdentity
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.public_errors import render_public_error_list
 
@@ -233,27 +234,34 @@ def _resolve_source_identity(
     task: Task,
     exportable_document: ExportableDocument,
     fallback_index: int,
-) -> tuple[int, str, str]:
+) -> SourceIdentity:
     source_index = (
         exportable_document.source_index
         if exportable_document.source_index is not None
         else fallback_index
     )
     if exportable_document.source_uri is not None:
-        return (
-            source_index,
-            exportable_document.source_uri,
-            hash_path_component(exportable_document.source_uri),
+        return SourceIdentity(
+            source_index=source_index,
+            source_uri=exportable_document.source_uri,
+            source_key=hash_path_component(exportable_document.source_uri),
         )
 
     if fallback_index < len(task.sources):
         source = task.sources[fallback_index]
         source_uri = source_to_public_uri(source) or str(exportable_document.file)
-        source_key = hash_path_component(source_uri)
-        return source_index, source_uri, source_key
+        return SourceIdentity(
+            source_index=source_index,
+            source_uri=source_uri,
+            source_key=hash_path_component(source_uri),
+        )
 
     source_uri = str(exportable_document.file)
-    return source_index, source_uri, hash_path_component(source_uri)
+    return SourceIdentity(
+        source_index=source_index,
+        source_uri=source_uri,
+        source_key=hash_path_component(source_uri),
+    )
 
 
 def _materialize_document_exports(
@@ -399,12 +407,8 @@ def _upload_documents_as_presigned_artifacts(
     documents: list[DocumentArtifactItem] = []
 
     for response_index, exportable_document in enumerate(exportable_documents):
-        source_index, source_uri, _source_key = _resolve_source_identity(
-            task,
-            exportable_document,
-            response_index,
-        )
-        document_dir = output_dir / f"{source_index:06d}"
+        source = _resolve_source_identity(task, exportable_document, response_index)
+        document_dir = output_dir / f"{source.source_index:06d}"
         for artifact in _materialize_document_exports(
             exportable_document,
             document_dir,
@@ -417,19 +421,17 @@ def _upload_documents_as_presigned_artifacts(
             md_page_break_placeholder=md_page_break_placeholder,
             bundle_resources=True,
         ):
-            target_processor.upload_file(
-                filename=artifact.path,
-                target_filename=artifact.target_filename,
-                content_type=artifact.mime_type,
+            target_processor.upload_artifact_file(
+                source=source,
                 artifact_type=artifact.artifact_type,
-                source_index=source_index,
-                source_uri=source_uri,
+                path=artifact.path,
+                target_filename=artifact.target_filename,
+                mime_type=artifact.mime_type,
             )
 
         documents.append(
             target_processor.build_document_artifact_item(
-                source_index=source_index,
-                source_uri=source_uri,
+                source=source,
                 filename=exportable_document.file.name,
                 status=exportable_document.status,
                 errors=exportable_document.errors,
@@ -453,21 +455,18 @@ def _upload_documents_via_processor(
     export_doctags: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
-    target_filename_fn: Callable[[str, str], str] | None = None,
+    target_filename_fn: Callable[[SourceIdentity, str], str] | None = None,
 ) -> None:
     """Shared upload loop used by all non-presigned remote target processors.
 
-    *target_filename_fn* is an optional callback ``(source_key, artifact_filename)
-    -> target_filename`` that lets callers control the final target path.  When
-    omitted the raw ``artifact.target_filename`` is used as-is.
+    *target_filename_fn* is an optional callback
+    ``(source, artifact_filename) -> target_filename`` that lets callers control
+    the final target path.  When omitted the raw ``artifact.target_filename`` is
+    used as-is.
     """
     for response_index, exportable_document in enumerate(exportable_documents):
-        source_index, source_uri, source_key = _resolve_source_identity(
-            task,
-            exportable_document,
-            response_index,
-        )
-        document_dir = output_dir / f"{source_index:06d}"
+        source = _resolve_source_identity(task, exportable_document, response_index)
+        document_dir = output_dir / f"{source.source_index:06d}"
         for artifact in _materialize_document_exports(
             exportable_document,
             document_dir,
@@ -481,7 +480,7 @@ def _upload_documents_via_processor(
             bundle_resources=True,
         ):
             target_filename = (
-                target_filename_fn(source_key, artifact.target_filename)
+                target_filename_fn(source, artifact.target_filename)
                 if target_filename_fn is not None
                 else artifact.target_filename
             )
@@ -489,9 +488,6 @@ def _upload_documents_via_processor(
                 filename=artifact.path,
                 target_filename=target_filename,
                 content_type=artifact.mime_type,
-                artifact_type=artifact.artifact_type,
-                source_index=source_index,
-                source_uri=source_uri,
             )
 
 
@@ -521,8 +517,8 @@ def _upload_documents_to_s3_target(
         export_doctags=export_doctags,
         image_export_mode=image_export_mode,
         md_page_break_placeholder=md_page_break_placeholder,
-        target_filename_fn=lambda source_key,
-        artifact_filename: f"{source_key}/{artifact_filename}",
+        target_filename_fn=lambda source,
+        artifact_filename: f"{source.source_key}/{artifact_filename}",
     )
 
 

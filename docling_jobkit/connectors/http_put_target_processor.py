@@ -7,7 +7,6 @@ import httpx
 
 from docling.datamodel.service.targets import PutTarget
 
-from docling_jobkit.connectors.artifact_paths import ArtifactType
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 
 _log = logging.getLogger(__name__)
@@ -35,10 +34,6 @@ class HttpPutTargetProcessor(BaseTargetProcessor):
         filename: str | Path,
         target_filename: str,
         content_type: str,
-        *,
-        artifact_type: ArtifactType | None = None,
-        source_index: int | None = None,
-        source_uri: str | None = None,
     ) -> None:
         """Read *filename* from disk and PUT its contents to the target URL."""
         url = str(self._target.url)
@@ -69,10 +64,6 @@ class HttpPutTargetProcessor(BaseTargetProcessor):
         obj: str | bytes | BinaryIO,
         target_filename: str,
         content_type: str,
-        *,
-        artifact_type: ArtifactType | None = None,
-        source_index: int | None = None,
-        source_uri: str | None = None,
     ) -> None:
         """PUT *obj* bytes/file-like to the target URL as multipart form data."""
         if isinstance(obj, str):

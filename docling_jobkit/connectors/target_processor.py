@@ -1,12 +1,7 @@
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, BinaryIO
-
-from docling_jobkit.connectors.artifact_paths import ArtifactType
-
-if TYPE_CHECKING:
-    from docling.datamodel.service.responses import DocumentArtifactItem
+from typing import BinaryIO
 
 
 class BaseTargetProcessor(AbstractContextManager, ABC):
@@ -47,10 +42,6 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         filename: str | Path,
         target_filename: str,
         content_type: str,
-        *,
-        artifact_type: ArtifactType | None = None,
-        source_index: int | None = None,
-        source_uri: str | None = None,
     ) -> None:
         """
         Upload a file from local filesystem.
@@ -63,29 +54,8 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         obj: str | bytes | BinaryIO,
         target_filename: str,
         content_type: str,
-        *,
-        artifact_type: ArtifactType | None = None,
-        source_index: int | None = None,
-        source_uri: str | None = None,
     ) -> None:
         """
         Upload an in-memory object (bytes or file-like) to the target.
         """
         ...
-
-    def build_document_artifact_item(
-        self,
-        *,
-        source_index: int,
-        source_uri: str,
-        filename: str,
-        status: Any,
-        errors: list,
-        timings: dict,
-    ) -> "DocumentArtifactItem | None":
-        """
-        Optionally build a DocumentArtifactItem after all artifacts for a
-        document have been uploaded.  Returns None by default; processors that
-        generate presigned URLs (or similar) override this to return the item.
-        """
-        return None

@@ -63,12 +63,18 @@ class _FakeDoc(DoclingDocument):
 
 
 def _make_exportable_document(
-    *, filename: str = "paper.pdf", status: ConversionStatus = ConversionStatus.SUCCESS
+    *,
+    filename: str = "paper.pdf",
+    status: ConversionStatus = ConversionStatus.SUCCESS,
+    source_index: int | None = None,
+    source_uri: str | None = None,
 ) -> ExportableDocument:
     return ExportableDocument(
         file=Path(filename),
         status=status,
         document=_FakeDoc.model_construct(),
+        source_index=source_index,
+        source_uri=source_uri,
     )
 
 
@@ -220,6 +226,63 @@ def test_process_exportable_results_reuses_presigned_artifact_result_for_multi_d
         0,
         1,
     ]
+
+
+def test_presigned_target_duplicate_source_uris_share_storage_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_client = _FakeS3Client()
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        lambda _coords: (fake_client, object()),
+    )
+
+    task_result = process_exportable_results(
+        task=_make_task().model_copy(
+            update={
+                "sources": [
+                    FileSource(
+                        base64_string=base64.b64encode(b"fake-pdf-1").decode(),
+                        filename="paper.pdf",
+                    ),
+                    FileSource(
+                        base64_string=base64.b64encode(b"fake-pdf-2").decode(),
+                        filename="paper.pdf",
+                    ),
+                ]
+            }
+        ),
+        exportable_documents=[
+            _make_exportable_document(source_uri="paper.pdf", source_index=0),
+            _make_exportable_document(source_uri="paper.pdf", source_index=1),
+        ],
+        work_dir=tmp_path,
+        s3_presigned_config=_make_s3_presigned_config(),
+    )
+
+    assert isinstance(task_result.result, PresignedArtifactResult)
+    assert [document.source_index for document in task_result.result.documents] == [
+        0,
+        1,
+    ]
+    json_uris = [
+        next(
+            str(artifact.uri)
+            for artifact in document.artifacts
+            if artifact.artifact_type == "json"
+        )
+        for document in task_result.result.documents
+    ]
+    assert json_uris[0] == json_uris[1]
+
+    uploaded_keys = [
+        str(item["key"])
+        for item in fake_client.uploads
+        if str(item["key"]).endswith(".json")
+    ]
+    assert len(uploaded_keys) == 2
+    assert uploaded_keys[0] == uploaded_keys[1]
 
 
 def test_process_exportable_results_returns_remote_target_result_for_s3_target(
