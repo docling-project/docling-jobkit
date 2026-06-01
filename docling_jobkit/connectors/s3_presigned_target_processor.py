@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, NamedTuple
 
 from docling.datamodel.base_models import ConversionStatus, ErrorItem
 from docling.datamodel.service.responses import (
@@ -24,14 +24,30 @@ from docling_jobkit.datamodel.task import Task
 _METADATA_FIELDS = ("tenant_id", "user_id", "project_id")
 
 
+class _UploadRecord(NamedTuple):
+    artifact_type: ArtifactType
+    mime_type: str
+    object_key: str
+
+
 class S3PresignedTargetProcessor(S3TargetProcessor):
     def __init__(self, config: S3PresignedConfig, task: Task):
         super().__init__(config.s3_coords)
         self._config = config
         self._task = task
-        self._uploaded_artifacts: dict[
-            int, list[tuple[ArtifactType, str, str, str]]
-        ] = {}
+        self._uploaded_artifacts: dict[int, list[_UploadRecord]] = {}
+
+    def _require_upload_context(
+        self,
+        artifact_type: ArtifactType | None,
+        source_index: int | None,
+        source_uri: str | None,
+    ) -> tuple[ArtifactType, int, str]:
+        if artifact_type is None or source_index is None or source_uri is None:
+            raise ValueError(
+                "S3PresignedTargetProcessor upload methods require artifact_type, source_index, and source_uri"
+            )
+        return artifact_type, source_index, source_uri
 
     def upload_file(
         self,
@@ -43,14 +59,12 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
         source_index: int | None = None,
         source_uri: str | None = None,
     ) -> None:
-        if artifact_type is None or source_index is None or source_uri is None:
-            raise ValueError(
-                "S3PresignedTargetProcessor.upload_file requires artifact_type, source_index, and source_uri"
-            )
+        artifact_type, source_index, source_uri = self._require_upload_context(
+            artifact_type, source_index, source_uri
+        )
         object_key = build_task_scoped_s3_key(
             self._config,
             self._task,
-            source_index=source_index,
             source_uri=source_uri,
             artifact_filename=target_filename,
         )
@@ -64,7 +78,11 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
             metadata=metadata,
         )
         self._uploaded_artifacts.setdefault(source_index, []).append(
-            (artifact_type, target_filename, content_type, object_key)
+            _UploadRecord(
+                artifact_type=artifact_type,
+                mime_type=content_type,
+                object_key=object_key,
+            )
         )
 
     def upload_object(
@@ -77,14 +95,12 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
         source_index: int | None = None,
         source_uri: str | None = None,
     ) -> None:
-        if artifact_type is None or source_index is None or source_uri is None:
-            raise ValueError(
-                "S3PresignedTargetProcessor.upload_object requires artifact_type, source_index, and source_uri"
-            )
+        artifact_type, source_index, source_uri = self._require_upload_context(
+            artifact_type, source_index, source_uri
+        )
         object_key = build_task_scoped_s3_key(
             self._config,
             self._task,
-            source_index=source_index,
             source_uri=source_uri,
             artifact_filename=target_filename,
         )
@@ -98,7 +114,11 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
             metadata=metadata,
         )
         self._uploaded_artifacts.setdefault(source_index, []).append(
-            (artifact_type, target_filename, content_type, object_key)
+            _UploadRecord(
+                artifact_type=artifact_type,
+                mime_type=content_type,
+                object_key=object_key,
+            )
         )
 
     def build_document_artifact_item(
@@ -126,7 +146,7 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
                 ),
                 url_expires_at=expires_at,
             )
-            for artifact_type, artifact_filename, mime_type, object_key in uploaded
+            for artifact_type, mime_type, object_key in uploaded
         ]
         return DocumentArtifactItem(
             source_index=source_index,

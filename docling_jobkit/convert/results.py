@@ -1,5 +1,4 @@
 import logging
-import os
 import shutil
 import time
 from collections.abc import Callable, Iterable
@@ -587,10 +586,7 @@ def process_exportable_results(
         if callback_invoker and task.callbacks:
             document_info = _build_document_completed_item(
                 exportable_document,
-                error=render_public_error_list(
-                    exportable_document.errors,
-                    debug_enabled=debug_error_details,
-                ),
+                error=summary_error,
             )
 
             callback_invoker.invoke_callbacks_async(
@@ -731,7 +727,7 @@ def process_exportable_results(
             md_page_break_placeholder=conversion_options.md_page_break_placeholder,
         )
 
-        files = os.listdir(output_dir)
+        files = list(output_dir.iterdir())
         if len(files) == 0:
             raise RuntimeError("No documents were exported.")
 

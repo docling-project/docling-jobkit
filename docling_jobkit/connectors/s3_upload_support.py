@@ -62,7 +62,6 @@ def build_task_scoped_s3_key(
     config: S3PresignedConfig,
     task: Task,
     *,
-    source_index: int,
     source_uri: str,
     artifact_filename: str,
 ) -> str:
