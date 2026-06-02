@@ -237,6 +237,32 @@ class RayOrchestratorConfig(BaseSettings):
             "Defaults to max_concurrent_tasks when unset."
         ),
     )
+    max_s3_doc_parallelism: int = Field(
+        default=8,
+        ge=1,
+        description="Max concurrent source-chunk converter dispatches for S3 fan-out.",
+    )
+    s3_dispatch_batch_size: int = Field(
+        default=1,
+        ge=1,
+        description="Documents per source-chunk converter request for S3 fan-out.",
+    )
+    max_concurrent_coordinator_slice_finalizations: int = Field(
+        default=2,
+        ge=1,
+        description=(
+            "Concurrent slice-path assembly/export/upload finalizations per "
+            "coordinator replica."
+        ),
+    )
+    max_concurrent_sliced_parent_tasks: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional fallback cap for full multi-slice parent processing. "
+            "Unused by the primary finalization-only gate."
+        ),
+    )
     coordinator_min_actors: Optional[int] = Field(
         default=None,
         ge=1,

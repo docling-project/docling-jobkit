@@ -81,6 +81,26 @@ def test_s3_connection_and_list_files(minio_coords):
             print(f"  - {doc_id['key']} ({doc_id['size']} bytes)")
 
 
+def test_s3_document_ref_preserves_canonical_source_uri(minio_coords):
+    processor = S3SourceProcessor(minio_coords)
+    ref = processor._make_document_ref(
+        {
+            "key": "incoming/doc.pdf",
+            "size": 123,
+            "last_modified": "2026-06-02T10:00:00",
+        },
+        source_index=5,
+    )
+
+    assert ref.source_index == 5
+    assert ref.source_uri == "s3://test/incoming/doc.pdf"
+    assert ref.filename == "incoming/doc.pdf"
+    assert ref.metadata == {
+        "size": 123,
+        "last_modified": "2026-06-02T10:00:00",
+    }
+
+
 @pytest.mark.skipif(
     not is_minio_available(),
     reason="MinIO is not running at 127.0.0.1:9000",

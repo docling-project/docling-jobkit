@@ -3,7 +3,10 @@ from typing import Iterator, TypedDict
 
 from docling_core.types.io import DocumentStream
 
-from docling_jobkit.connectors.source_processor import BaseSourceProcessor
+from docling_jobkit.connectors.source_processor import (
+    BaseSourceProcessor,
+    SourceDocumentRef,
+)
 from docling_jobkit.datamodel.task_sources import TaskLocalPathSource
 
 
@@ -49,7 +52,9 @@ class LocalPathFileIdentifier(TypedDict):
     last_modified: float
 
 
-class LocalPathSourceProcessor(BaseSourceProcessor[LocalPathFileIdentifier]):
+class LocalPathSourceProcessor(
+    BaseSourceProcessor[TaskLocalPathSource, LocalPathFileIdentifier]
+):
     def __init__(self, source: TaskLocalPathSource):
         super().__init__()
         self._source = source
@@ -119,6 +124,21 @@ class LocalPathSourceProcessor(BaseSourceProcessor[LocalPathFileIdentifier]):
         buffer = BytesIO(content)
 
         return DocumentStream(name=str(file_path), stream=buffer)
+
+    def _make_document_ref(
+        self, identifier: LocalPathFileIdentifier, source_index: int
+    ) -> SourceDocumentRef[LocalPathFileIdentifier]:
+        file_path = identifier["path"]
+        return SourceDocumentRef(
+            id=identifier,
+            source_index=source_index,
+            source_uri=str(file_path),
+            filename=str(file_path),
+            metadata={
+                "size": identifier["size"],
+                "last_modified": identifier["last_modified"],
+            },
+        )
 
     def _fetch_documents(self) -> Iterator[DocumentStream]:
         """Iterate through all documents."""

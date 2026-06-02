@@ -5,7 +5,10 @@ from docling.datamodel.service.sources import S3Coordinates
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.s3_helper import get_s3_connection
-from docling_jobkit.connectors.source_processor import BaseSourceProcessor
+from docling_jobkit.connectors.source_processor import (
+    BaseSourceProcessor,
+    SourceDocumentRef,
+)
 
 
 class S3FileIdentifier(TypedDict):
@@ -14,7 +17,7 @@ class S3FileIdentifier(TypedDict):
     last_modified: str | None  # ISO timestamp, optional
 
 
-class S3SourceProcessor(BaseSourceProcessor[S3FileIdentifier]):
+class S3SourceProcessor(BaseSourceProcessor[S3Coordinates, S3FileIdentifier]):
     def __init__(self, coords: S3Coordinates):
         super().__init__()
         self._coords = coords
@@ -48,6 +51,21 @@ class S3SourceProcessor(BaseSourceProcessor[S3FileIdentifier]):
         ):
             total += len(page.get("Contents", []))
         return total
+
+    def _make_document_ref(
+        self, identifier: S3FileIdentifier, source_index: int
+    ) -> SourceDocumentRef[S3FileIdentifier]:
+        key = identifier["key"]
+        return SourceDocumentRef(
+            id=identifier,
+            source_index=source_index,
+            source_uri=f"s3://{self._coords.bucket}/{key}",
+            filename=key,
+            metadata={
+                "size": identifier["size"],
+                "last_modified": identifier["last_modified"],
+            },
+        )
 
     # ----------------- Document fetch -----------------
 

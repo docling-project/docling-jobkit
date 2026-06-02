@@ -8,11 +8,16 @@ from docling.datamodel.base_models import DocumentStream
 if TYPE_CHECKING:
     from docling_jobkit.connectors.google_drive_helper import GoogleDriveFileIdentifier
 
-from docling_jobkit.connectors.source_processor import BaseSourceProcessor
+from docling_jobkit.connectors.source_processor import (
+    BaseSourceProcessor,
+    SourceDocumentRef,
+)
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
 
 
-class GoogleDriveSourceProcessor(BaseSourceProcessor[GoogleDriveFileIdentifier]):
+class GoogleDriveSourceProcessor(
+    BaseSourceProcessor[GoogleDriveCoordinates, GoogleDriveFileIdentifier]
+):
     def __init__(self, coords: GoogleDriveCoordinates):
         super().__init__()
         self._coords = coords
@@ -77,4 +82,16 @@ class GoogleDriveSourceProcessor(BaseSourceProcessor[GoogleDriveFileIdentifier])
         return DocumentStream(
             name=info["name"],
             stream=buffer,
+        )
+
+    def _make_document_ref(
+        self, info: GoogleDriveFileIdentifier, source_index: int
+    ) -> SourceDocumentRef[GoogleDriveFileIdentifier]:
+        source_uri = info.get("path") or info["name"]
+        return SourceDocumentRef(
+            id=info,
+            source_index=source_index,
+            source_uri=source_uri,
+            filename=info["name"],
+            metadata={"mimeType": info["mimeType"]},
         )

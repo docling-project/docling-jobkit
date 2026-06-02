@@ -3,7 +3,11 @@ from typing import Iterator, TypedDict
 from docling.datamodel.service.sources import FileSource, HttpSource
 from docling_core.types.io import DocumentStream
 
-from docling_jobkit.connectors.source_processor import BaseSourceProcessor
+from docling_jobkit.connectors.source_processor import (
+    BaseSourceProcessor,
+    ConverterSource,
+    SourceDocumentRef,
+)
 
 
 class HttpFileIdentifier(TypedDict):
@@ -11,7 +15,9 @@ class HttpFileIdentifier(TypedDict):
     index: int
 
 
-class HttpSourceProcessor(BaseSourceProcessor[HttpFileIdentifier]):
+class HttpSourceProcessor(
+    BaseSourceProcessor[HttpSource | FileSource, HttpFileIdentifier]
+):
     def __init__(self, source: HttpSource | FileSource):
         super().__init__()
         self._source = source
@@ -36,6 +42,39 @@ class HttpSourceProcessor(BaseSourceProcessor[HttpFileIdentifier]):
             raise NotImplementedError("HttpSource fetching is not yet implemented")
         else:
             raise ValueError(f"Unsupported source type: {type(source)}")
+
+    def _make_document_ref(
+        self, identifier: HttpFileIdentifier, source_index: int
+    ) -> SourceDocumentRef[HttpFileIdentifier]:
+        source = identifier["source"]
+        if isinstance(source, FileSource):
+            filename = source.filename
+            source_uri = source.filename
+        else:
+            filename = str(source.url).rsplit("/", 1)[-1] or str(source.url)
+            source_uri = str(source.url)
+        return SourceDocumentRef(
+            id=identifier,
+            source_index=source_index,
+            source_uri=source_uri,
+            filename=filename,
+        )
+
+    def fetch_converter_source_by_ref(
+        self, ref: SourceDocumentRef[HttpFileIdentifier]
+    ) -> ConverterSource:
+        source = ref.id["source"]
+        if isinstance(source, HttpSource):
+            return str(source.url)
+        return self.fetch_document_by_ref(ref)
+
+    def headers_for_ref(
+        self, ref: SourceDocumentRef[HttpFileIdentifier]
+    ) -> dict[str, object] | None:
+        source = ref.id["source"]
+        if isinstance(source, HttpSource) and source.headers:
+            return source.headers
+        return None
 
     def _fetch_documents(self) -> Iterator[DocumentStream]:
         if isinstance(self._source, FileSource):

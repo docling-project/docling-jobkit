@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
+from docling_jobkit.connectors.source_processor import DocumentChunk
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
@@ -211,6 +212,14 @@ class MaterializedConvertRequest(BaseModel):
     source_count: int = Field(description="Original source count for callbacks")
 
 
+class SourceChunkConvertRequest(BaseModel):
+    kind: str = Field(default="source_chunk_convert")
+    task: Task = Field(description="Parent task metadata")
+    chunk: DocumentChunk[Any, Any] = Field(
+        description="Data-only source chunk to fetch and convert"
+    )
+
+
 class SliceConvertRequest(BaseModel):
     kind: str = Field(default="slice_convert")
     artifact_ref: Any = Field(description="Ray ObjectRef with shared PDF bytes")
@@ -221,7 +230,10 @@ class SliceConvertRequest(BaseModel):
 
 
 ConverterRequest = (
-    PassthroughTaskRequest | MaterializedConvertRequest | SliceConvertRequest
+    PassthroughTaskRequest
+    | MaterializedConvertRequest
+    | SourceChunkConvertRequest
+    | SliceConvertRequest
 )
 
 

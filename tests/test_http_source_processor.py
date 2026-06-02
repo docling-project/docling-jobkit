@@ -1,3 +1,4 @@
+from docling.datamodel.service.sources import HttpSource
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.http_source_processor import HttpSourceProcessor
@@ -54,6 +55,23 @@ def test_http_file_source_list_and_fetch():
         assert isinstance(doc, DocumentStream)
         assert doc.name == "document.pdf"
         assert doc.stream.read() == content
+
+
+def test_http_source_ref_returns_converter_url_and_headers():
+    http_source = HttpSource(
+        url="https://example.com/document.pdf",
+        headers={"Authorization": "Bearer token"},
+    )
+
+    with HttpSourceProcessor(http_source) as processor:
+        chunk = next(processor.iterate_document_chunks(chunk_size=1))
+        ref = chunk.refs[0]
+
+        assert processor.fetch_converter_source_by_ref(ref) == (
+            "https://example.com/document.pdf"
+        )
+        assert processor.headers_for_ref(ref) == {"Authorization": "Bearer token"}
+        assert ref.source_uri == "https://example.com/document.pdf"
 
 
 def test_http_file_source_iterate_documents():
