@@ -1266,7 +1266,7 @@ wheels = [
 [[package]]
 name = "docling-slim"
 version = "2.96.1"
-source = { git = "https://github.com/docling-project/docling/?rev=cau%2Fbatch-endpoint-client-sdk-updates#603ffc3f5e4d4e4c17d9ca0db793e770dacdb90e" }
+source = { git = "https://github.com/docling-project/docling/?rev=cau%2Fbatch-endpoint-client-sdk-updates#6f52472e1a0d684d16917fa870135a8be2067a1a" }
 dependencies = [
     { name = "certifi" },
     { name = "docling-core" },
