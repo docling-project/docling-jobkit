@@ -1324,6 +1324,11 @@ class DoclingConverterManager:
 
     def _parse_ocr_options(self, request: ConvertDocumentsOptions) -> OcrOptions:
         """Parse OCR options - preset OR custom config."""
+        shared_ocr_options = {
+            "force_full_page_ocr": request.force_ocr,
+        }
+        if getattr(request, "ocr_skip_text_layer_pages", False):
+            shared_ocr_options["skip_text_layer_pages"] = True
 
         # Option 1: Preset (recommended, includes deprecated ocr_engine via validator)
         # "auto" is the default sentinel — if ocr_custom_config is also set, defer to Option 2.
@@ -1355,7 +1360,7 @@ class DoclingConverterManager:
                 try:
                     ocr_options = self.ocr_factory.create_options(  # type: ignore[assignment]
                         kind=kind,
-                        force_full_page_ocr=request.force_ocr,
+                        **shared_ocr_options,
                         **{k: v for k, v in config_dict.items() if k != "kind"},
                     )
                 except ImportError as err:
@@ -1381,7 +1386,7 @@ class DoclingConverterManager:
                 try:
                     ocr_options = self.ocr_factory.create_options(  # type: ignore[assignment]
                         kind=kind,
-                        force_full_page_ocr=request.force_ocr,
+                        **shared_ocr_options,
                     )
                 except ImportError as err:
                     raise ImportError(
@@ -1422,7 +1427,7 @@ class DoclingConverterManager:
             try:
                 return self.ocr_factory.create_options(  # type: ignore[return-value]
                     kind=kind_value,
-                    force_full_page_ocr=request.force_ocr,
+                    **shared_ocr_options,
                     **{k: v for k, v in config_dict.items() if k != "kind"},
                 )
             except ImportError as err:
@@ -1436,7 +1441,7 @@ class DoclingConverterManager:
         # Option 3: Use default (should not reach here due to default="auto")
         return self.ocr_factory.create_options(  # type: ignore[return-value]
             kind=self.config.default_ocr_kind,
-            force_full_page_ocr=request.force_ocr,
+            **shared_ocr_options,
         )
 
     def get_converter(self, pdf_format_option: PdfFormatOption) -> DocumentConverter:
