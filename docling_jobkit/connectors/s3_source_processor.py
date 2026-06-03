@@ -1,11 +1,16 @@
+import logging
 from io import BytesIO
 from typing import Iterator, TypedDict
+
+from botocore.exceptions import ClientError
 
 from docling.datamodel.service.sources import S3Coordinates
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.s3_helper import get_s3_connection
 from docling_jobkit.connectors.source_processor import BaseSourceProcessor
+
+_log = logging.getLogger(__name__)
 
 
 class S3FileIdentifier(TypedDict):
@@ -51,14 +56,24 @@ class S3SourceProcessor(BaseSourceProcessor[S3FileIdentifier]):
 
     # ----------------- Document fetch -----------------
 
-    def _fetch_document_by_id(self, identifier: S3FileIdentifier) -> DocumentStream:
+    def _fetch_document_by_id(
+        self, identifier: S3FileIdentifier
+    ) -> DocumentStream | None:
         buffer = BytesIO()
-        self._client.download_fileobj(
-            Bucket=self._coords.bucket, Key=identifier["key"], Fileobj=buffer
-        )
+        try:
+            self._client.download_fileobj(
+                Bucket=self._coords.bucket, Key=identifier["key"], Fileobj=buffer
+            )
+        except ClientError as e:
+            _log.warning(f"Failed to download {identifier['key']}: {e}")
+            return None
+
         buffer.seek(0)
         return DocumentStream(name=identifier["key"], stream=buffer)
 
     def _fetch_documents(self):
         for key in self._list_document_ids():
-            yield self._fetch_document_by_id(key)
+            doc = self._fetch_document_by_id(key)
+            if doc is None:
+                continue
+            yield doc
