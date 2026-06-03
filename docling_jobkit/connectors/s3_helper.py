@@ -46,7 +46,10 @@ def get_s3_connection(coords: S3Coordinates):
     session = Session()
 
     config = Config(
-        connect_timeout=30, retries={"max_attempts": 1}, signature_version="s3v4"
+        connect_timeout=30,
+        read_timeout=60,  # cap stalled-read hangs; applies to list, get, and put responses
+        retries={"max_attempts": 1},
+        signature_version="s3v4",
     )
     scheme = "https" if coords.verify_ssl else "http"
     path = "/"

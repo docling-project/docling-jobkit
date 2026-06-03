@@ -242,6 +242,18 @@ class RayOrchestratorConfig(BaseSettings):
         ge=1,
         description="Max concurrent source-chunk converter dispatches for S3 fan-out.",
     )
+    s3_source_listing_timeout_s: float = Field(
+        default=300.0,
+        gt=0,
+        description=(
+            "Hard time limit (seconds) for the blocking S3 source listing phase. "
+            "If listing all objects across the source prefix(es) takes longer than "
+            "this — due to an unreachable endpoint, slow network, or a very large "
+            "bucket — the task fails with a clear timeout error. The underlying "
+            "boto3 per-socket timeouts (connect_timeout / read_timeout in "
+            "get_s3_connection) still apply per operation; this is the outer bound."
+        ),
+    )
     s3_dispatch_batch_size: int = Field(
         default=1,
         ge=1,

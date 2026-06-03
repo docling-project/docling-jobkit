@@ -924,8 +924,47 @@ class DoclingProcessorCoordinatorDeployment:
     async def _process_s3_fanout_task(
         self, task: Task, task_start: float
     ) -> DoclingTaskResult:
+        # Pre-collect all source chunk metadata in a thread pool worker so that
+        # S3 list_objects_v2 pagination — synchronous network I/O in boto3 — never
+        # blocks the coordinator's event loop. The coordinator handles up to
+        # max_ongoing_requests tasks concurrently; a blocked event loop would stall
+        # heartbeats, dispatch calls, and all other in-flight tasks on this replica.
+        #
+        # Using asyncio.to_thread moves the entire listing into a worker thread.
+        # asyncio.wait_for adds a hard outer time limit that catches:
+        #   - unreachable S3 endpoints (connect_timeout in boto3 caps per-attempt,
+        #     but listing a large bucket requires many paginator calls)
+        #   - misconfigured credentials that cause silent retries or hangs
+        #   - pathological S3 responses that are individually within boto3's
+        #     read_timeout but collectively stall progress
+        # If the timeout fires, asyncio.wait_for cancels the asyncio.to_thread
+        # future, but the underlying OS thread will continue running until boto3's
+        # own socket timeout triggers and the thread returns. The thread cannot be
+        # forcibly killed — it exits naturally when boto3 raises. The coordinator
+        # task is already marked failed at that point so the thread result is
+        # discarded.
+        #
+        # Memory: chunk refs hold only key strings and metadata (not file bytes),
+        # so pre-collecting the full listing is bounded — ~200 bytes per key.
+        timeout = self.config.s3_source_listing_timeout_s
+        try:
+            all_chunks: list[DocumentChunk[Any, Any]] = await asyncio.wait_for(
+                asyncio.to_thread(
+                    lambda: list(self._iter_source_chunks_for_s3_fanout(task))
+                ),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                f"S3 source listing timed out after {timeout}s — verify that the "
+                "S3 endpoint is reachable and the supplied credentials are valid."
+            )
+
+        if not all_chunks:
+            raise RuntimeError("No S3 source documents were found for fan-out task.")
+
         parallelism = self.config.max_s3_doc_parallelism
-        pending_chunks = iter(self._iter_source_chunks_for_s3_fanout(task))
+        pending_chunks = iter(all_chunks)
         in_flight: set[asyncio.Task[ConverterTaskResult]] = set()
         child_results: list[DoclingTaskResult] = []
 
@@ -956,9 +995,6 @@ class DoclingProcessorCoordinatorDeployment:
                     child_task.cancel()
                 await asyncio.gather(*in_flight, return_exceptions=True)
 
-        if not child_results:
-            raise RuntimeError("No S3 source documents were found for fan-out task.")
-
         return _aggregate_remote_target_results(
             child_results=child_results,
             processing_time=time.monotonic() - task_start,
@@ -968,8 +1004,18 @@ class DoclingProcessorCoordinatorDeployment:
         self, chunk: DocumentChunk[Any, Any], task: Task
     ) -> ConverterTaskResult:
         child_task = task.model_copy(update={"sources": [chunk.source]})
+        # Strip the fetcher before cross-process dispatch. The fetcher is a bound
+        # method of the coordinator's initialized S3SourceProcessor, which holds a
+        # boto3 client containing thread locks. Pydantic v2 serializes
+        # __pydantic_private__ via __getstate__, so the fetcher would be included
+        # when Ray cloudpickle serializes the chunk — causing a TypeError on thread
+        # locks. The converter never calls iter_documents(); it reconstructs its own
+        # source processor from chunk.source and uses fetch_converter_source_by_ref().
+        serializable_chunk = DocumentChunk(
+            source=chunk.source, refs=chunk.refs, chunk_index=chunk.chunk_index
+        )
         return await self.converter_handle.process_converter_request.remote(
-            SourceChunkConvertRequest(task=child_task, chunk=chunk)
+            SourceChunkConvertRequest(task=child_task, chunk=serializable_chunk)
         )
 
     def _should_materialize_pdf(self, task: Task) -> bool:
