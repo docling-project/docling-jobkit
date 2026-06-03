@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 import ray
-from ray import serve
+from ray import ObjectRef, serve
 
 from docling.datamodel.base_models import (
     ConversionStatus,
@@ -292,13 +292,29 @@ def _assemble_slice_results(
 def _finalize_slice_results(
     *,
     task: Task,
-    slice_results: list[ExportableDocument],
+    slice_refs: list[ObjectRef | ExportableDocument],
     work_dir: Path,
     s3_presigned_config: Any,
     callback_invoker: Optional[CallbackInvoker],
     start_time: float,
     debug_error_details: bool,
 ) -> DoclingTaskResult:
+    # Resolve plasma ObjectRefs to ExportableDocument objects. This is the only
+    # place where full slice documents enter the coordinator's heap, and it runs
+    # inside the slice_finalization_semaphore guard — so at most
+    # max_concurrent_coordinator_slice_finalizations x sum(slice_sizes) of
+    # document data is live on the coordinator heap at any one time.
+    # Inline ExportableDocuments (error shells with no DoclingDocument) pass
+    # through unchanged.
+    object_refs: list[ObjectRef[Any]] = [
+        r for r in slice_refs if isinstance(r, ObjectRef)
+    ]
+    resolved: list[ExportableDocument] = ray.get(object_refs) if object_refs else []
+    resolved_iter = iter(resolved)
+    slice_results: list[ExportableDocument] = [
+        next(resolved_iter) if isinstance(r, ObjectRef) else r for r in slice_refs
+    ]
+
     return process_exportable_results(
         task=task,
         exportable_documents=[_assemble_slice_results(slice_results)],
@@ -347,7 +363,7 @@ class DoclingProcessorConverterDeployment:
 
     async def process_converter_request(
         self, request: ConverterRequest
-    ) -> ConverterTaskResult | ExportableDocument:
+    ) -> ConverterTaskResult | ExportableDocument | ObjectRef:
         if self.config.enable_oom_protection and PSUTIL_AVAILABLE:
             await self._check_memory()
 
@@ -401,12 +417,13 @@ class DoclingProcessorConverterDeployment:
             )
             self.documents_processed += result.task_result.num_converted
         elif isinstance(request, SliceConvertRequest):
-            result = await self._run_with_retry(
+            slice_ref, slice_status = await self._run_with_retry(
                 f"{request.filename}:{request.page_range}",
                 lambda: self._process_slice_convert(request),
             )
-            if _is_exportable_status(result.status):
+            if _is_exportable_status(slice_status):
                 self.documents_processed += 1
+            result = slice_ref
         else:
             raise ValueError(f"Unsupported converter request: {type(request)!r}")
 
@@ -543,7 +560,7 @@ class DoclingProcessorConverterDeployment:
 
     def _process_slice_convert(
         self, request: SliceConvertRequest
-    ) -> ExportableDocument:
+    ) -> tuple[ObjectRef, ConversionStatus]:
         payload = ray.get(request.artifact_ref)
         options = request.options.model_copy(update={"page_range": request.page_range})
         conv_results = list(
@@ -557,13 +574,18 @@ class DoclingProcessorConverterDeployment:
         if not conv_results:
             raise RuntimeError("Slice conversion returned no results")
 
-        return ExportableDocument.from_conversion_result(
+        exportable = ExportableDocument.from_conversion_result(
             conv_results[0],
             source_index=0,
             source_uri=request.filename,
             page_range=request.page_range,
             slice_index=request.slice_index,
         )
+        # Move the ExportableDocument (which holds a full DoclingDocument) to the
+        # Ray plasma store. The coordinator receives only an ObjectRef handle so
+        # the large document object never lands on the coordinator's heap until it
+        # is explicitly loaded inside the semaphore-guarded finalization step.
+        return ray.put(exportable), exportable.status
 
     async def _check_memory(self) -> None:
         if not PSUTIL_AVAILABLE:
@@ -848,7 +870,11 @@ class DoclingProcessorCoordinatorDeployment:
                     + 1
                 )
                 if effective_pages > self.config.max_page_slice_size:
-                    slice_results = await self._run_slice_plan(
+                    # _run_slice_plan returns ObjectRefs pointing to ExportableDocuments
+                    # in the plasma store. The coordinator holds only handles here —
+                    # the actual document data stays in plasma until _finalize_slice_results
+                    # loads it inside the semaphore guard below.
+                    slice_refs = await self._run_slice_plan(
                         artifact_ref=artifact_ref,
                         filename=filename,
                         slice_plan=slice_plan,
@@ -860,7 +886,7 @@ class DoclingProcessorCoordinatorDeployment:
                             return await asyncio.to_thread(
                                 _finalize_slice_results,
                                 task=task,
-                                slice_results=slice_results,
+                                slice_refs=slice_refs,
                                 work_dir=workdir,
                                 s3_presigned_config=self.config.s3_presigned_config,
                                 callback_invoker=callback_invoker,
@@ -868,7 +894,10 @@ class DoclingProcessorCoordinatorDeployment:
                                 debug_error_details=self.config.debug_error_details,
                             )
                     finally:
-                        del slice_results
+                        # Release ObjectRefs so plasma can free the slice documents
+                        # once finalization is done. Error shells (inline
+                        # ExportableDocuments) are also released here.
+                        del slice_refs
                 else:
                     converter_result = (
                         await self.converter_handle.process_converter_request.remote(
@@ -1033,7 +1062,7 @@ class DoclingProcessorCoordinatorDeployment:
         filename: str,
         slice_plan: SlicePlan,
         options: ConvertDocumentsOptions,
-    ) -> list[ExportableDocument]:
+    ) -> list[ObjectRef | ExportableDocument]:
         requests = [
             SliceConvertRequest(
                 artifact_ref=artifact_ref,
@@ -1047,9 +1076,9 @@ class DoclingProcessorCoordinatorDeployment:
 
         parallelism = self.config.max_page_slice_parallelism
         assert parallelism is not None
-        in_flight: set[asyncio.Task[ExportableDocument]] = set()
+        in_flight: set[asyncio.Task[ObjectRef | ExportableDocument]] = set()
         pending_requests = iter(requests)
-        collected_results: list[ExportableDocument] = []
+        collected_results: list[ObjectRef | ExportableDocument] = []
 
         for _ in range(min(parallelism, len(requests))):
             request = next(pending_requests, None)
@@ -1073,8 +1102,11 @@ class DoclingProcessorCoordinatorDeployment:
 
     async def _execute_slice_request(
         self, request: SliceConvertRequest
-    ) -> ExportableDocument:
+    ) -> ObjectRef | ExportableDocument:
         try:
+            # On success the converter returns an ObjectRef pointing to the
+            # ExportableDocument in the plasma store — the coordinator never
+            # holds the document object itself while waiting for other slices.
             return await self.converter_handle.process_converter_request.remote(request)
         except Exception as exc:
             _log.warning(
@@ -1084,6 +1116,8 @@ class DoclingProcessorCoordinatorDeployment:
                 request.filename,
                 exc,
             )
+            # Error shells carry no DoclingDocument content so they are small
+            # enough to hold inline without plasma.
             return _build_failed_slice_result(
                 filename=request.filename,
                 page_range=request.page_range,
