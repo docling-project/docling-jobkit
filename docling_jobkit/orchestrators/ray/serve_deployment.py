@@ -149,6 +149,14 @@ def _is_s3_fanout_task(task: Task) -> bool:
     )
 
 
+def _validate_no_s3_source_in_passthrough(task: Task) -> None:
+    if any(isinstance(source, S3Coordinates) for source in task.sources):
+        raise RuntimeError(
+            "S3Coordinates sources must not reach the passthrough path; "
+            "routing should have directed this task to the S3 fan-out handler."
+        )
+
+
 def _offset_chunk_refs(
     chunk: DocumentChunk[Any, Any], source_index_offset: int, chunk_index: int
 ) -> DocumentChunk[Any, Any]:
@@ -159,7 +167,7 @@ def _offset_chunk_refs(
     return DocumentChunk(source=chunk.source, refs=refs, chunk_index=chunk_index)
 
 
-def _aggregate_remote_target_results(
+def _aggregate_s3_fanout_results(
     child_results: list[DoclingTaskResult], processing_time: float
 ) -> DoclingTaskResult:
     return DoclingTaskResult(
@@ -503,6 +511,7 @@ class DoclingProcessorConverterDeployment:
         return ConverterTaskResult(task_result=task_result)
 
     def _convert_passthrough_task(self, task: Task) -> list[ConversionResult]:
+        _validate_no_s3_source_in_passthrough(task)
         convert_sources, headers = expand_task_sources(task)
         convert_opts = task.convert_options or ConvertDocumentsOptions()
         return list(
@@ -1012,7 +1021,7 @@ class DoclingProcessorCoordinatorDeployment:
                     child_task.cancel()
                 await asyncio.gather(*in_flight, return_exceptions=True)
 
-        return _aggregate_remote_target_results(
+        return _aggregate_s3_fanout_results(
             child_results=child_results,
             processing_time=time.monotonic() - task_start,
         )

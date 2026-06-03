@@ -17,6 +17,8 @@ if os.getenv("CI"):
 
 import redis.asyncio as redis_async
 
+from docling.datamodel.service.sources import S3Coordinates
+from docling.datamodel.service.targets import PresignedUrlTarget, S3Target
 from docling.utils.model_downloader import download_models
 
 from docling_jobkit.convert.manager import (
@@ -399,6 +401,76 @@ async def test_on_result_fetched_ray():
     expected_key = f"{config.results_prefix}:task:{task_id}:result"
     orch.redis_manager.expire_result.assert_called_once_with(expected_key, 99)
     assert task_id not in orch.tasks
+
+
+@pytest.mark.asyncio
+async def test_enqueue_rejects_s3_source_without_remote_target():
+    from unittest.mock import AsyncMock, patch
+
+    config = RayOrchestratorConfig(redis_url="redis://localhost:6379/")
+
+    with patch(
+        "docling_jobkit.orchestrators.ray.orchestrator.RayOrchestrator.__init__",
+        return_value=None,
+    ):
+        orch = RayOrchestrator.__new__(RayOrchestrator)
+        orch.config = config
+        orch.tasks = {}
+        orch.notifier = None
+
+        class _NullAsyncContextManager:
+            async def __aenter__(self):
+                return None
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class _FakeGate:
+            def acquire(self, _timeout):
+                return _NullAsyncContextManager()
+
+        orch._redis_gate = _FakeGate()
+        orch.redis_manager = AsyncMock()
+        orch.redis_manager.check_tenant_can_enqueue.return_value = (True, "")
+        orch.ensure_dispatcher_ready = AsyncMock()
+        orch.init_task_tracking = AsyncMock()
+        orch.dispatcher = None
+
+        s3_source = S3Coordinates(
+            endpoint="127.0.0.1:9000",
+            verify_ssl=False,
+            access_key="minioadmin",
+            secret_key="minioadmin",
+            bucket="source-bucket",
+            key_prefix="incoming/",
+        )
+
+        for bad_target in (InBodyTarget(), PresignedUrlTarget()):
+            with pytest.raises(ValueError, match="require an S3Target"):
+                await orch.enqueue(
+                    sources=[s3_source],
+                    target=bad_target,
+                    task_type=TaskType.CONVERT,
+                    convert_options=ConvertDocumentsOptions(),
+                )
+
+        remote_task = await orch.enqueue(
+            sources=[s3_source],
+            target=S3Target(
+                endpoint="127.0.0.1:9000",
+                verify_ssl=False,
+                access_key="minioadmin",
+                secret_key="minioadmin",
+                bucket="dest-bucket",
+                key_prefix="output/",
+            ),
+            task_type=TaskType.CONVERT,
+            convert_options=ConvertDocumentsOptions(),
+        )
+
+    assert isinstance(remote_task.target, S3Target)
+    orch.redis_manager.connect.assert_awaited()
+    orch.redis_manager.enqueue_task.assert_awaited_once()
 
 
 def test_create_deployment_sets_hard_replica_concurrency_limit():
