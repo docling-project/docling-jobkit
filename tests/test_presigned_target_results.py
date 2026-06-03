@@ -2,6 +2,7 @@ import base64
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,6 +11,7 @@ from docling.datamodel.base_models import ConversionStatus, OutputFormat
 from docling.datamodel.service.callbacks import CallbackSpec, ProgressKind
 from docling.datamodel.service.sources import FileSource, HttpSource
 from docling.datamodel.service.targets import PresignedUrlTarget, S3Target
+from docling_core.types.doc import ImageRefMode
 from docling_core.types.doc.document import DoclingDocument
 
 from docling_jobkit.config.target_config import S3PresignedConfig
@@ -56,12 +58,18 @@ class _FakeS3Client:
 
 
 class _FakeDoc(DoclingDocument):
+    markdown_image_modes: ClassVar[list[ImageRefMode]] = []
+
     def save_as_json(self, filename, image_mode, artifacts_dir):
         del image_mode
         Path(filename).write_text('{"ok": true}', encoding="utf-8")
         artifact_path = Path(filename).parent / artifacts_dir
         artifact_path.mkdir(parents=True, exist_ok=True)
         (artifact_path / "figure.png").write_bytes(b"png")
+
+    def export_to_markdown(self, image_mode=ImageRefMode.PLACEHOLDER, **_kwargs):
+        self.__class__.markdown_image_modes.append(image_mode)
+        return "converted markdown"
 
 
 def _make_exportable_document(
@@ -74,7 +82,7 @@ def _make_exportable_document(
     return ExportableDocument(
         file=Path(filename),
         status=status,
-        document=_FakeDoc.model_construct(),
+        document=_FakeDoc.model_construct(pages={}, tables=[], pictures=[]),
         source_index=source_index,
         source_uri=source_uri,
     )
@@ -373,6 +381,63 @@ def test_presigned_callbacks_emit_document_completed_after_uploads(
         "upload",
         "callback",
     ]
+
+
+def test_document_completed_num_characters_uses_placeholder_image_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_client = _FakeS3Client()
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        lambda _coords: (fake_client, object()),
+    )
+    _FakeDoc.markdown_image_modes = []
+
+    callback_invoker = MagicMock()
+    process_exportable_results(
+        task=_make_task().model_copy(
+            update={"callbacks": [CallbackSpec(url="http://callback.example")]}
+        ),
+        exportable_documents=[_make_exportable_document()],
+        work_dir=tmp_path,
+        s3_presigned_config=_make_s3_presigned_config(),
+        callback_invoker=callback_invoker,
+    )
+
+    document_completed = next(
+        call.kwargs["progress"]
+        for call in callback_invoker.invoke_callbacks_async.call_args_list
+        if call.kwargs["progress"].kind == ProgressKind.DOCUMENT_COMPLETED
+    )
+    assert document_completed.document.num_characters == len("converted markdown")
+    assert _FakeDoc.markdown_image_modes == [ImageRefMode.PLACEHOLDER]
+
+
+def test_presigned_remote_exports_release_document_references_and_cleanup_temp_dirs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_client = _FakeS3Client()
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        lambda _coords: (fake_client, object()),
+    )
+    exportable_documents = [
+        _make_exportable_document(source_index=0),
+        _make_exportable_document(source_index=1),
+    ]
+
+    process_exportable_results(
+        task=_make_task(),
+        exportable_documents=exportable_documents,
+        work_dir=tmp_path,
+        s3_presigned_config=_make_s3_presigned_config(),
+    )
+
+    assert all(document.document is None for document in exportable_documents)
+    assert (tmp_path / "output").exists()
+    assert list((tmp_path / "output").iterdir()) == []
 
 
 def test_presigned_upload_failure_becomes_failed_document_callback(

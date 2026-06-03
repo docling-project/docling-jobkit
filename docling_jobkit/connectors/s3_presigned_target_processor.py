@@ -58,9 +58,6 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
             (artifact_type, mime_type, object_key)
         )
 
-    def discard_uploaded_artifacts(self, source_index: int) -> None:
-        self._uploaded_artifacts.pop(source_index, None)
-
     def build_document_artifact_item(
         self,
         *,
