@@ -19,7 +19,7 @@ class S3FileIdentifier(TypedDict):
 
 class S3SourceProcessor(BaseSourceProcessor[S3Coordinates, S3FileIdentifier]):
     def __init__(self, coords: S3Coordinates):
-        super().__init__()
+        super().__init__(coords)
         self._coords = coords
 
     def _initialize(self):

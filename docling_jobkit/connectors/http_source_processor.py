@@ -19,7 +19,7 @@ class HttpSourceProcessor(
     BaseSourceProcessor[HttpSource | FileSource, HttpFileIdentifier]
 ):
     def __init__(self, source: HttpSource | FileSource):
-        super().__init__()
+        super().__init__(source)
         self._source = source
 
     def _initialize(self):

@@ -56,7 +56,7 @@ class LocalPathSourceProcessor(
     BaseSourceProcessor[TaskLocalPathSource, LocalPathFileIdentifier]
 ):
     def __init__(self, source: TaskLocalPathSource):
-        super().__init__()
+        super().__init__(source)
         self._source = source
 
     def _initialize(self):

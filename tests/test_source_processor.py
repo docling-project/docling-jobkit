@@ -14,7 +14,7 @@ from docling_jobkit.connectors.source_processor import (
 
 class MockSourceProcessor(BaseSourceProcessor):
     def __init__(self, ids: List[str]):
-        super().__init__()
+        super().__init__(ids)
         self._all_ids = ids
         self._list_called = 0
 
@@ -53,6 +53,7 @@ def test_streaming_chunks_consumes_one_generator():
     chunk_size = 3
 
     with MockSourceProcessor(ids) as p:
+        assert p.source == ids
         chunks = list(p.iterate_document_chunks(chunk_size))
 
         # Ensure chunk size correctness

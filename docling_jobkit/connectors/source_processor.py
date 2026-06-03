@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from itertools import islice
-from typing import Any, Callable, Generic, Iterator, Sequence, TypeVar, cast
+from typing import Any, Callable, Generic, Iterator, Sequence, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -67,7 +67,8 @@ class BaseSourceProcessor(
     Handles initialization state and context management.
     """
 
-    def __init__(self):
+    def __init__(self, source: SourceT):
+        self._processor_source = source
         self._initialized = False  # Track whether the processor is ready
 
     def __enter__(self):
@@ -112,7 +113,7 @@ class BaseSourceProcessor(
     @property
     def source(self) -> SourceT:
         """Return the root source needed to reconstruct this processor."""
-        return cast(SourceT, getattr(self, "_source", getattr(self, "_coords", None)))
+        return self._processor_source
 
     def _count_documents(self) -> int | None:
         return None

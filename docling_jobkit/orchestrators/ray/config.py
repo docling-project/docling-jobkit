@@ -267,14 +267,6 @@ class RayOrchestratorConfig(BaseSettings):
             "coordinator replica."
         ),
     )
-    max_concurrent_sliced_parent_tasks: Optional[int] = Field(
-        default=None,
-        ge=1,
-        description=(
-            "Optional fallback cap for full multi-slice parent processing. "
-            "Unused by the primary finalization-only gate."
-        ),
-    )
     coordinator_min_actors: Optional[int] = Field(
         default=None,
         ge=1,

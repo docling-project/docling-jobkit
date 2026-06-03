@@ -19,7 +19,7 @@ class GoogleDriveSourceProcessor(
     BaseSourceProcessor[GoogleDriveCoordinates, GoogleDriveFileIdentifier]
 ):
     def __init__(self, coords: GoogleDriveCoordinates):
-        super().__init__()
+        super().__init__(coords)
         self._coords = coords
 
     def _initialize(self):

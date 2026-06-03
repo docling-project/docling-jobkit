@@ -292,28 +292,16 @@ def _assemble_slice_results(
 def _finalize_slice_results(
     *,
     task: Task,
-    slice_refs: list[ObjectRef | ExportableDocument],
+    slice_refs: list[ObjectRef],
     work_dir: Path,
     s3_presigned_config: Any,
     callback_invoker: Optional[CallbackInvoker],
     start_time: float,
     debug_error_details: bool,
 ) -> DoclingTaskResult:
-    # Resolve plasma ObjectRefs to ExportableDocument objects. This is the only
-    # place where full slice documents enter the coordinator's heap, and it runs
-    # inside the slice_finalization_semaphore guard — so at most
-    # max_concurrent_coordinator_slice_finalizations x sum(slice_sizes) of
-    # document data is live on the coordinator heap at any one time.
-    # Inline ExportableDocuments (error shells with no DoclingDocument) pass
-    # through unchanged.
-    object_refs: list[ObjectRef[Any]] = [
-        r for r in slice_refs if isinstance(r, ObjectRef)
-    ]
-    resolved: list[ExportableDocument] = ray.get(object_refs) if object_refs else []
-    resolved_iter = iter(resolved)
-    slice_results: list[ExportableDocument] = [
-        next(resolved_iter) if isinstance(r, ObjectRef) else r for r in slice_refs
-    ]
+    # This is the only place where full slice documents enter the coordinator's
+    # heap, and it runs inside the slice_finalization_semaphore guard.
+    slice_results: list[ExportableDocument] = ray.get(slice_refs)
 
     return process_exportable_results(
         task=task,
@@ -363,7 +351,7 @@ class DoclingProcessorConverterDeployment:
 
     async def process_converter_request(
         self, request: ConverterRequest
-    ) -> ConverterTaskResult | ExportableDocument | ObjectRef:
+    ) -> ConverterTaskResult | ObjectRef:
         if self.config.enable_oom_protection and PSUTIL_AVAILABLE:
             await self._check_memory()
 
@@ -1062,7 +1050,7 @@ class DoclingProcessorCoordinatorDeployment:
         filename: str,
         slice_plan: SlicePlan,
         options: ConvertDocumentsOptions,
-    ) -> list[ObjectRef | ExportableDocument]:
+    ) -> list[ObjectRef]:
         requests = [
             SliceConvertRequest(
                 artifact_ref=artifact_ref,
@@ -1076,9 +1064,9 @@ class DoclingProcessorCoordinatorDeployment:
 
         parallelism = self.config.max_page_slice_parallelism
         assert parallelism is not None
-        in_flight: set[asyncio.Task[ObjectRef | ExportableDocument]] = set()
+        in_flight: set[asyncio.Task[ObjectRef]] = set()
         pending_requests = iter(requests)
-        collected_results: list[ObjectRef | ExportableDocument] = []
+        collected_results: list[ObjectRef] = []
 
         for _ in range(min(parallelism, len(requests))):
             request = next(pending_requests, None)
@@ -1100,9 +1088,7 @@ class DoclingProcessorCoordinatorDeployment:
 
         return collected_results
 
-    async def _execute_slice_request(
-        self, request: SliceConvertRequest
-    ) -> ObjectRef | ExportableDocument:
+    async def _execute_slice_request(self, request: SliceConvertRequest) -> ObjectRef:
         try:
             # On success the converter returns an ObjectRef pointing to the
             # ExportableDocument in the plasma store — the coordinator never
@@ -1116,14 +1102,14 @@ class DoclingProcessorCoordinatorDeployment:
                 request.filename,
                 exc,
             )
-            # Error shells carry no DoclingDocument content so they are small
-            # enough to hold inline without plasma.
-            return _build_failed_slice_result(
-                filename=request.filename,
-                page_range=request.page_range,
-                slice_index=request.slice_index,
-                exc=exc,
-                debug_error_details=self.config.debug_error_details,
+            return ray.put(
+                _build_failed_slice_result(
+                    filename=request.filename,
+                    page_range=request.page_range,
+                    slice_index=request.slice_index,
+                    exc=exc,
+                    debug_error_details=self.config.debug_error_details,
+                )
             )
 
     async def _maintain_execution_heartbeat(self, task_id: str) -> None:
