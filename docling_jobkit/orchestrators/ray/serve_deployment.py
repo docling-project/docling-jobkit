@@ -12,7 +12,7 @@ import time
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator, Optional, cast
 
 import ray
 from ray import ObjectRef, serve
@@ -22,15 +22,20 @@ from docling.datamodel.base_models import (
     DocumentStream,
 )
 from docling.datamodel.document import ConversionResult
+from docling.datamodel.service.callbacks import (
+    ProgressSetNumDocs,
+    ProgressUpdateProcessed,
+)
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
-from docling.datamodel.service.targets import S3Target
+from docling.datamodel.service.targets import PresignedUrlTarget, S3Target
 from docling.datamodel.service.tasks import TaskType
 from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
 
 from docling_jobkit.connectors.source_processor import (
     DocumentChunk,
+    SourceDocumentRef,
 )
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.convert.chunking import (
@@ -46,15 +51,24 @@ from docling_jobkit.convert.materialization import (
     materialize_and_preflight,
 )
 from docling_jobkit.convert.results import (
+    _build_processed_docs_item,
     _is_exportable_status,
+    _maybe_emit_document_completed,
+    _process_exportable_results_internal,
     process_exportable_results,
 )
 from docling_jobkit.convert.source_expansion import expand_task_sources
+from docling_jobkit.datamodel.callback_policy import CallbackEmissionPolicy
 from docling_jobkit.datamodel.exportable_document import (
     ExportableDocument,
     source_to_public_uri,
 )
-from docling_jobkit.datamodel.result import DoclingTaskResult, RemoteTargetResult
+from docling_jobkit.datamodel.result import (
+    DoclingTaskResult,
+    DocumentArtifactItem,
+    PresignedArtifactResult,
+    RemoteTargetResult,
+)
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
@@ -143,7 +157,7 @@ def _to_exportable_documents_from_chunk(
 def _is_s3_fanout_task(task: Task) -> bool:
     return (
         task.task_type == TaskType.CONVERT
-        and isinstance(task.target, S3Target)
+        and isinstance(task.target, (PresignedUrlTarget, S3Target))
         and len(task.sources) > 0
         and any(isinstance(source, S3Coordinates) for source in task.sources)
     )
@@ -168,17 +182,120 @@ def _offset_chunk_refs(
 
 
 def _aggregate_s3_fanout_results(
-    child_results: list[DoclingTaskResult], processing_time: float
+    task: Task,
+    child_results: list[ConverterTaskResult],
+    processing_time: float,
 ) -> DoclingTaskResult:
+    result: PresignedArtifactResult | RemoteTargetResult
+    if all(
+        isinstance(child_result.task_result.result, PresignedArtifactResult)
+        for child_result in child_results
+    ):
+        presigned_results = [
+            cast(PresignedArtifactResult, child_result.task_result.result)
+            for child_result in child_results
+        ]
+        documents = sorted(
+            (
+                document
+                for presigned_result in presigned_results
+                for document in presigned_result.documents
+            ),
+            key=lambda document: document.source_index,
+        )
+        result = PresignedArtifactResult(documents=documents)
+    else:
+        result = RemoteTargetResult()
+
     return DoclingTaskResult(
-        result=RemoteTargetResult(),
+        result=result,
         processing_time=processing_time,
-        num_succeeded=sum(result.num_succeeded for result in child_results),
-        num_partially_succeeded=sum(
-            result.num_partially_succeeded for result in child_results
+        num_succeeded=sum(
+            child_result.task_result.num_succeeded for child_result in child_results
         ),
-        num_failed=sum(result.num_failed for result in child_results),
-        num_converted=sum(result.num_converted for result in child_results),
+        num_partially_succeeded=sum(
+            child_result.task_result.num_partially_succeeded
+            for child_result in child_results
+        ),
+        num_failed=sum(
+            child_result.task_result.num_failed for child_result in child_results
+        ),
+        num_converted=sum(
+            child_result.task_result.num_converted for child_result in child_results
+        ),
+    )
+
+
+def _build_failed_source_chunk_exportable_document(
+    ref: SourceDocumentRef[Any],
+    exc: Exception,
+    *,
+    debug_error_details: bool,
+) -> ExportableDocument:
+    return ExportableDocument(
+        file=Path(ref.filename),
+        status=ConversionStatus.FAILURE,
+        errors=[build_public_error_item(exc, debug_enabled=debug_error_details)],
+        source_index=ref.source_index,
+        source_uri=ref.source_uri,
+    )
+
+
+def _build_failed_source_chunk_result(
+    chunk: DocumentChunk[Any, Any],
+    exc: Exception,
+    *,
+    target: Any,
+    debug_error_details: bool,
+) -> ConverterTaskResult:
+    failed_documents = [
+        _build_failed_source_chunk_exportable_document(
+            ref,
+            exc,
+            debug_error_details=debug_error_details,
+        )
+        for ref in chunk.refs
+    ]
+    processed_docs = [
+        _build_processed_docs_item(
+            exportable_document,
+            debug_error_details=debug_error_details,
+        )
+        for exportable_document in failed_documents
+    ]
+    if isinstance(target, PresignedUrlTarget):
+        presigned_result = PresignedArtifactResult(documents=[])
+        for exportable_document in failed_documents:
+            source_index = exportable_document.source_index
+            if source_index is None:
+                raise RuntimeError(
+                    "Failed source chunk document is missing source_index"
+                )
+            presigned_result.documents.append(
+                DocumentArtifactItem(
+                    source_index=source_index,
+                    source_uri=exportable_document.source_uri
+                    or str(exportable_document.file),
+                    filename=exportable_document.file.name,
+                    status=exportable_document.status,
+                    errors=exportable_document.errors,
+                    timings=exportable_document.timings,
+                    artifacts=[],
+                )
+            )
+        result: RemoteTargetResult | PresignedArtifactResult = presigned_result
+    else:
+        result = RemoteTargetResult()
+    return ConverterTaskResult(
+        task_result=DoclingTaskResult(
+            result=result,
+            processing_time=0.0,
+            num_succeeded=0,
+            num_partially_succeeded=0,
+            num_failed=len(failed_documents),
+            num_converted=len(failed_documents),
+        ),
+        processed_docs=processed_docs,
     )
 
 
@@ -356,6 +473,7 @@ class DoclingProcessorConverterDeployment:
         self.documents_processed = 0
         self.last_task_time: Optional[datetime.datetime] = None
         self.memory_warnings = 0
+        self._chunker_manager: DocumentChunkerManager | None = None
 
     async def process_converter_request(
         self, request: ConverterRequest
@@ -407,8 +525,9 @@ class DoclingProcessorConverterDeployment:
                 lambda: self._build_task_result(
                     request.task,
                     exportable,
-                    expected_doc_count=len(request.chunk.refs),
+                    expected_doc_count=request.expected_doc_count,
                     start_time=request_start,
+                    callback_policy=request.callback_policy,
                 )
             )
             self.documents_processed += result.task_result.num_converted
@@ -459,7 +578,7 @@ class DoclingProcessorConverterDeployment:
         raise last_exception or RuntimeError("Converter request failed")
 
     def _get_chunker_manager(self) -> DocumentChunkerManager:
-        chunker_manager = getattr(self, "_chunker_manager", None)
+        chunker_manager = self._chunker_manager
         if chunker_manager is None:
             chunker_manager = DocumentChunkerManager()
             self._chunker_manager = chunker_manager
@@ -472,6 +591,7 @@ class DoclingProcessorConverterDeployment:
         *,
         expected_doc_count: Optional[int] = None,
         start_time: Optional[float] = None,
+        callback_policy: CallbackEmissionPolicy | None = None,
     ) -> ConverterTaskResult:
         callback_invoker = CallbackInvoker() if task.callbacks else None
         temp_dir_kwargs: dict[str, Any] = {
@@ -484,7 +604,7 @@ class DoclingProcessorConverterDeployment:
         with tempfile.TemporaryDirectory(**temp_dir_kwargs) as temp_dir:
             workdir = Path(temp_dir)
             if task.task_type == TaskType.CONVERT:
-                task_result = process_exportable_results(
+                processed = _process_exportable_results_internal(
                     task=task,
                     exportable_documents=exportable_documents,
                     work_dir=workdir,
@@ -493,7 +613,10 @@ class DoclingProcessorConverterDeployment:
                     debug_error_details=self.config.debug_error_details,
                     expected_doc_count=expected_doc_count,
                     start_time=start_time,
+                    callback_policy=callback_policy,
                 )
+                task_result = processed.task_result
+                processed_docs = processed.processed_docs
             elif task.task_type == TaskType.CHUNK:
                 task_result = process_chunkable_results(
                     task=task,
@@ -505,10 +628,14 @@ class DoclingProcessorConverterDeployment:
                     expected_doc_count=expected_doc_count,
                     start_time=start_time,
                 )
+                processed_docs = []
             else:
                 raise ValueError(f"Unsupported task type: {task.task_type}")
 
-        return ConverterTaskResult(task_result=task_result)
+        return ConverterTaskResult(
+            task_result=task_result,
+            processed_docs=processed_docs,
+        )
 
     def _convert_passthrough_task(self, task: Task) -> list[ConversionResult]:
         _validate_no_s3_source_in_passthrough(task)
@@ -989,45 +1116,139 @@ class DoclingProcessorCoordinatorDeployment:
         if not all_chunks:
             raise RuntimeError("No S3 source documents were found for fan-out task.")
 
+        total_docs = sum(len(chunk.refs) for chunk in all_chunks)
+        callback_invoker = CallbackInvoker() if task.callbacks else None
+        child_callback_policy = CallbackEmissionPolicy(
+            emit_set_num_docs=False,
+            emit_document_completed=True,
+            emit_update_processed=False,
+        )
+        if callback_invoker and task.callbacks and total_docs:
+            callback_invoker.invoke_callbacks_async(
+                callbacks=task.callbacks,
+                task_id=task.task_id,
+                progress=ProgressSetNumDocs(num_docs=total_docs),
+            )
+
         parallelism = self.config.max_s3_doc_parallelism
         pending_chunks = iter(all_chunks)
-        in_flight: set[asyncio.Task[ConverterTaskResult]] = set()
-        child_results: list[DoclingTaskResult] = []
+        in_flight: dict[asyncio.Task[ConverterTaskResult], DocumentChunk[Any, Any]] = {}
+        child_results: list[tuple[DocumentChunk[Any, Any], ConverterTaskResult]] = []
 
         for _ in range(parallelism):
             chunk = next(pending_chunks, None)
             if chunk is None:
                 break
-            in_flight.add(asyncio.create_task(self._execute_source_chunk(chunk, task)))
+            child_task = asyncio.create_task(
+                self._execute_source_chunk(
+                    chunk,
+                    task,
+                    total_docs,
+                    child_callback_policy,
+                )
+            )
+            in_flight[child_task] = chunk
 
         try:
             while in_flight:
-                done, in_flight = await asyncio.wait(
-                    in_flight, return_when=asyncio.FIRST_COMPLETED
+                done, _ = await asyncio.wait(
+                    set(in_flight), return_when=asyncio.FIRST_COMPLETED
                 )
                 for completed in done:
-                    converter_result = await completed
-                    child_results.append(converter_result.task_result)
+                    chunk = in_flight.pop(completed)
+                    try:
+                        converter_result = await completed
+                    except Exception as exc:
+                        _log.warning(
+                            "Coordinator replica %s: source chunk %s for task %s failed: %s",
+                            self.replica_id,
+                            chunk.chunk_index,
+                            task.task_id,
+                            exc,
+                        )
+                        converter_result = _build_failed_source_chunk_result(
+                            chunk,
+                            exc,
+                            target=task.target,
+                            debug_error_details=self.config.debug_error_details,
+                        )
+                        if callback_invoker and task.callbacks:
+                            failed_documents = [
+                                _build_failed_source_chunk_exportable_document(
+                                    ref,
+                                    exc,
+                                    debug_error_details=self.config.debug_error_details,
+                                )
+                                for ref in chunk.refs
+                            ]
+                            for exportable_document in failed_documents:
+                                _maybe_emit_document_completed(
+                                    callback_invoker=callback_invoker,
+                                    callbacks=task.callbacks,
+                                    task_id=task.task_id,
+                                    exportable_document=exportable_document,
+                                    total_processed=1,
+                                    total_docs=total_docs,
+                                    callback_policy=child_callback_policy,
+                                    debug_error_details=self.config.debug_error_details,
+                                )
+                    child_results.append((chunk, converter_result))
                     next_chunk = next(pending_chunks, None)
                     if next_chunk is not None:
-                        in_flight.add(
-                            asyncio.create_task(
-                                self._execute_source_chunk(next_chunk, task)
+                        child_task = asyncio.create_task(
+                            self._execute_source_chunk(
+                                next_chunk,
+                                task,
+                                total_docs,
+                                child_callback_policy,
                             )
                         )
+                        in_flight[child_task] = next_chunk
         finally:
             if in_flight:
                 for child_task in in_flight:
                     child_task.cancel()
                 await asyncio.gather(*in_flight, return_exceptions=True)
 
-        return _aggregate_s3_fanout_results(
-            child_results=child_results,
+        ordered_results = [
+            converter_result
+            for _, converter_result in sorted(
+                child_results, key=lambda item: item[0].chunk_index
+            )
+        ]
+        aggregated = _aggregate_s3_fanout_results(
+            task=task,
+            child_results=ordered_results,
             processing_time=time.monotonic() - task_start,
         )
+        if callback_invoker and task.callbacks:
+            callback_invoker.invoke_callbacks_async(
+                callbacks=task.callbacks,
+                task_id=task.task_id,
+                progress=ProgressUpdateProcessed(
+                    num_processed=sum(
+                        len(converter_result.processed_docs)
+                        for converter_result in ordered_results
+                    ),
+                    num_succeeded=aggregated.num_succeeded,
+                    num_partially_succeeded=aggregated.num_partially_succeeded,
+                    num_failed=aggregated.num_failed,
+                    docs=[
+                        processed_doc
+                        for converter_result in ordered_results
+                        for processed_doc in converter_result.processed_docs
+                    ],
+                ),
+            )
+
+        return aggregated
 
     async def _execute_source_chunk(
-        self, chunk: DocumentChunk[Any, Any], task: Task
+        self,
+        chunk: DocumentChunk[Any, Any],
+        task: Task,
+        expected_doc_count: int,
+        callback_policy: CallbackEmissionPolicy,
     ) -> ConverterTaskResult:
         child_task = task.model_copy(update={"sources": [chunk.source]})
         # Strip the fetcher before cross-process dispatch. The fetcher is a bound
@@ -1041,7 +1262,12 @@ class DoclingProcessorCoordinatorDeployment:
             source=chunk.source, refs=chunk.refs, chunk_index=chunk.chunk_index
         )
         return await self.converter_handle.process_converter_request.remote(
-            SourceChunkConvertRequest(task=child_task, chunk=serializable_chunk)
+            SourceChunkConvertRequest(
+                task=child_task,
+                chunk=serializable_chunk,
+                expected_doc_count=expected_doc_count,
+                callback_policy=callback_policy,
+            )
         )
 
     def _should_materialize_pdf(self, task: Task) -> bool:

@@ -35,6 +35,7 @@ from docling_jobkit.connectors.s3_presigned_target_processor import (
 )
 from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
+from docling_jobkit.datamodel.callback_policy import CallbackEmissionPolicy
 from docling_jobkit.datamodel.exportable_document import (
     ExportableDocument,
     source_to_public_uri,
@@ -51,7 +52,10 @@ from docling_jobkit.datamodel.result import (
 )
 from docling_jobkit.datamodel.source_identity import SourceIdentity
 from docling_jobkit.datamodel.task import Task
-from docling_jobkit.public_errors import render_public_error_list
+from docling_jobkit.public_errors import (
+    build_public_error_item,
+    render_public_error_list,
+)
 
 if TYPE_CHECKING:
     from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
@@ -65,6 +69,12 @@ class _ExportedArtifactFile:
     path: Path
     target_filename: str
     mime_type: str
+
+
+@dataclass
+class _ProcessedExportResults:
+    task_result: DoclingTaskResult
+    processed_docs: list[ProcessedDocsItem]
 
 
 def _is_exportable_status(status: ConversionStatus) -> bool:
@@ -84,6 +94,133 @@ def _count_document_statuses(
     )
     num_failed = len(exportable_documents) - num_succeeded - num_partially_succeeded
     return num_succeeded, num_partially_succeeded, num_failed
+
+
+def _build_processed_docs_item(
+    exportable_document: ExportableDocument,
+    *,
+    debug_error_details: bool,
+) -> ProcessedDocsItem:
+    summary_error = render_public_error_list(
+        exportable_document.errors,
+        debug_enabled=debug_error_details,
+    )
+    return ProcessedDocsItem(
+        source=str(exportable_document.file),
+        status=exportable_document.status,
+        error=summary_error
+        or (
+            "Unknown error"
+            if not _is_exportable_status(exportable_document.status)
+            else None
+        ),
+    )
+
+
+def _build_failed_exportable_document(
+    exportable_document: ExportableDocument,
+    exc: Exception,
+    *,
+    debug_error_details: bool,
+) -> ExportableDocument:
+    return exportable_document.model_copy(
+        update={
+            "status": ConversionStatus.FAILURE,
+            "errors": [
+                *exportable_document.errors,
+                build_public_error_item(exc, debug_enabled=debug_error_details),
+            ],
+            "document": None,
+        }
+    )
+
+
+def _maybe_emit_set_num_docs(
+    *,
+    callback_invoker: Optional["CallbackInvoker"],
+    callbacks: list,
+    task_id: str,
+    total_docs: int,
+    callback_policy: CallbackEmissionPolicy,
+) -> None:
+    if (
+        callback_invoker
+        and callbacks
+        and total_docs
+        and callback_policy.emit_set_num_docs
+    ):
+        callback_invoker.invoke_callbacks_async(
+            callbacks=callbacks,
+            task_id=task_id,
+            progress=ProgressSetNumDocs(num_docs=total_docs),
+        )
+
+
+def _maybe_emit_document_completed(
+    *,
+    callback_invoker: Optional["CallbackInvoker"],
+    callbacks: list,
+    task_id: str,
+    exportable_document: ExportableDocument,
+    total_processed: int,
+    total_docs: int,
+    callback_policy: CallbackEmissionPolicy,
+    debug_error_details: bool,
+) -> None:
+    if (
+        not callback_invoker
+        or not callbacks
+        or not callback_policy.emit_document_completed
+    ):
+        return
+
+    processed_doc = _build_processed_docs_item(
+        exportable_document,
+        debug_error_details=debug_error_details,
+    )
+    callback_invoker.invoke_callbacks_async(
+        callbacks=callbacks,
+        task_id=task_id,
+        progress=ProgressDocumentCompleted(
+            document=_build_document_completed_item(
+                exportable_document,
+                error=processed_doc.error,
+            ),
+            total_processed=total_processed,
+            total_docs=total_docs,
+        ),
+    )
+
+
+def _maybe_emit_update_processed(
+    *,
+    callback_invoker: Optional["CallbackInvoker"],
+    callbacks: list,
+    task_id: str,
+    processed_docs: list[ProcessedDocsItem],
+    num_succeeded: int,
+    num_partially_succeeded: int,
+    num_failed: int,
+    callback_policy: CallbackEmissionPolicy,
+) -> None:
+    if (
+        not callback_invoker
+        or not callbacks
+        or not callback_policy.emit_update_processed
+    ):
+        return
+
+    callback_invoker.invoke_callbacks_async(
+        callbacks=callbacks,
+        task_id=task_id,
+        progress=ProgressUpdateProcessed(
+            num_processed=len(processed_docs),
+            num_succeeded=num_succeeded,
+            num_partially_succeeded=num_partially_succeeded,
+            num_failed=num_failed,
+            docs=processed_docs,
+        ),
+    )
 
 
 def _export_document_as_content(
@@ -390,10 +527,11 @@ def _materialize_document_exports(
     return generated
 
 
-def _upload_documents_as_presigned_artifacts(
+def _upload_document_as_presigned_artifact(
     *,
     task: Task,
-    exportable_documents: list[ExportableDocument],
+    exportable_document: ExportableDocument,
+    response_index: int,
     output_dir: Path,
     target_processor: S3PresignedTargetProcessor,
     export_json: bool,
@@ -403,49 +541,43 @@ def _upload_documents_as_presigned_artifacts(
     export_doctags: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
-) -> list[DocumentArtifactItem]:
-    documents: list[DocumentArtifactItem] = []
-
-    for response_index, exportable_document in enumerate(exportable_documents):
-        source = _resolve_source_identity(task, exportable_document, response_index)
-        document_dir = output_dir / f"{source.source_index:06d}"
-        for artifact in _materialize_document_exports(
-            exportable_document,
-            document_dir,
-            export_json=export_json,
-            export_html=export_html,
-            export_md=export_md,
-            export_txt=export_txt,
-            export_doctags=export_doctags,
-            image_export_mode=image_export_mode,
-            md_page_break_placeholder=md_page_break_placeholder,
-            bundle_resources=True,
-        ):
-            target_processor.upload_artifact_file(
-                source=source,
-                artifact_type=artifact.artifact_type,
-                path=artifact.path,
-                target_filename=artifact.target_filename,
-                mime_type=artifact.mime_type,
-            )
-
-        documents.append(
-            target_processor.build_document_artifact_item(
-                source=source,
-                filename=exportable_document.file.name,
-                status=exportable_document.status,
-                errors=exportable_document.errors,
-                timings=exportable_document.timings,
-            )
+) -> DocumentArtifactItem:
+    source = _resolve_source_identity(task, exportable_document, response_index)
+    document_dir = output_dir / f"{source.source_index:06d}"
+    for artifact in _materialize_document_exports(
+        exportable_document,
+        document_dir,
+        export_json=export_json,
+        export_html=export_html,
+        export_md=export_md,
+        export_txt=export_txt,
+        export_doctags=export_doctags,
+        image_export_mode=image_export_mode,
+        md_page_break_placeholder=md_page_break_placeholder,
+        bundle_resources=True,
+    ):
+        target_processor.upload_artifact_file(
+            source=source,
+            artifact_type=artifact.artifact_type,
+            path=artifact.path,
+            target_filename=artifact.target_filename,
+            mime_type=artifact.mime_type,
         )
 
-    return documents
+    return target_processor.build_document_artifact_item(
+        source=source,
+        filename=exportable_document.file.name,
+        status=exportable_document.status,
+        errors=exportable_document.errors,
+        timings=exportable_document.timings,
+    )
 
 
-def _upload_documents_via_processor(
+def _upload_document_via_processor(
     *,
     task: Task,
-    exportable_documents: list[ExportableDocument],
+    exportable_document: ExportableDocument,
+    response_index: int,
     output_dir: Path,
     target_processor: BaseTargetProcessor,
     export_json: bool,
@@ -464,37 +596,37 @@ def _upload_documents_via_processor(
     the final target path.  When omitted the raw ``artifact.target_filename`` is
     used as-is.
     """
-    for response_index, exportable_document in enumerate(exportable_documents):
-        source = _resolve_source_identity(task, exportable_document, response_index)
-        document_dir = output_dir / f"{source.source_index:06d}"
-        for artifact in _materialize_document_exports(
-            exportable_document,
-            document_dir,
-            export_json=export_json,
-            export_html=export_html,
-            export_md=export_md,
-            export_txt=export_txt,
-            export_doctags=export_doctags,
-            image_export_mode=image_export_mode,
-            md_page_break_placeholder=md_page_break_placeholder,
-            bundle_resources=True,
-        ):
-            target_filename = (
-                target_filename_fn(source, artifact.target_filename)
-                if target_filename_fn is not None
-                else artifact.target_filename
-            )
-            target_processor.upload_file(
-                filename=artifact.path,
-                target_filename=target_filename,
-                content_type=artifact.mime_type,
-            )
+    source = _resolve_source_identity(task, exportable_document, response_index)
+    document_dir = output_dir / f"{source.source_index:06d}"
+    for artifact in _materialize_document_exports(
+        exportable_document,
+        document_dir,
+        export_json=export_json,
+        export_html=export_html,
+        export_md=export_md,
+        export_txt=export_txt,
+        export_doctags=export_doctags,
+        image_export_mode=image_export_mode,
+        md_page_break_placeholder=md_page_break_placeholder,
+        bundle_resources=True,
+    ):
+        target_filename = (
+            target_filename_fn(source, artifact.target_filename)
+            if target_filename_fn is not None
+            else artifact.target_filename
+        )
+        target_processor.upload_file(
+            filename=artifact.path,
+            target_filename=target_filename,
+            content_type=artifact.mime_type,
+        )
 
 
-def _upload_documents_to_s3_target(
+def _upload_document_to_s3_target(
     *,
     task: Task,
-    exportable_documents: list[ExportableDocument],
+    exportable_document: ExportableDocument,
+    response_index: int,
     output_dir: Path,
     target_processor: S3TargetProcessor,
     export_json: bool,
@@ -505,9 +637,10 @@ def _upload_documents_to_s3_target(
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
 ) -> None:
-    _upload_documents_via_processor(
+    _upload_document_via_processor(
         task=task,
-        exportable_documents=exportable_documents,
+        exportable_document=exportable_document,
+        response_index=response_index,
         output_dir=output_dir,
         target_processor=target_processor,
         export_json=export_json,
@@ -522,6 +655,268 @@ def _upload_documents_to_s3_target(
     )
 
 
+def _process_exportable_results_internal(
+    task: Task,
+    exportable_documents: Iterable[ExportableDocument],
+    work_dir: Path,
+    s3_presigned_config: S3PresignedConfig | None = None,
+    callback_invoker: Optional["CallbackInvoker"] = None,
+    debug_error_details: bool = False,
+    expected_doc_count: Optional[int] = None,
+    start_time: Optional[float] = None,
+    callback_policy: CallbackEmissionPolicy | None = None,
+) -> _ProcessedExportResults:
+    conversion_options = task.convert_options
+    if conversion_options is None:
+        raise RuntimeError(
+            "process_exportable_results called without task.convert_options"
+        )
+
+    callback_policy = callback_policy or CallbackEmissionPolicy()
+    start_time = start_time if start_time is not None else time.monotonic()
+    total_docs = (
+        expected_doc_count if expected_doc_count is not None else len(task.sources)
+    )
+    _maybe_emit_set_num_docs(
+        callback_invoker=callback_invoker,
+        callbacks=task.callbacks,
+        task_id=task.task_id,
+        total_docs=total_docs,
+        callback_policy=callback_policy,
+    )
+
+    finalized_documents = list(exportable_documents)
+    if len(finalized_documents) == 0:
+        raise RuntimeError("No documents were generated by Docling.")
+
+    task_result: ResultType
+    processed_docs: list[ProcessedDocsItem] = []
+    export_json = OutputFormat.JSON in conversion_options.to_formats
+    export_html = OutputFormat.HTML in conversion_options.to_formats
+    export_md = OutputFormat.MARKDOWN in conversion_options.to_formats
+    export_txt = OutputFormat.TEXT in conversion_options.to_formats
+    export_doctags = OutputFormat.DOCTAGS in conversion_options.to_formats
+
+    if isinstance(task.target, PresignedUrlTarget):
+        output_dir = work_dir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if s3_presigned_config is None:
+            raise ValueError(
+                "PresignedUrlTarget requires s3_presigned_config in orchestrator config"
+            )
+
+        presigned_documents: list[DocumentArtifactItem] = []
+        remote_documents: list[ExportableDocument] = []
+        with S3PresignedTargetProcessor(s3_presigned_config, task) as target_processor:
+            for idx, exportable_document in enumerate(finalized_documents):
+                final_document = exportable_document
+                try:
+                    artifact_item = _upload_document_as_presigned_artifact(
+                        task=task,
+                        exportable_document=exportable_document,
+                        response_index=idx,
+                        output_dir=output_dir,
+                        target_processor=target_processor,
+                        export_json=export_json,
+                        export_html=export_html,
+                        export_md=export_md,
+                        export_txt=export_txt,
+                        export_doctags=export_doctags,
+                        image_export_mode=conversion_options.image_export_mode,
+                        md_page_break_placeholder=conversion_options.md_page_break_placeholder,
+                    )
+                except Exception as exc:
+                    final_document = _build_failed_exportable_document(
+                        exportable_document,
+                        exc,
+                        debug_error_details=debug_error_details,
+                    )
+                    source = _resolve_source_identity(task, exportable_document, idx)
+                    target_processor.discard_uploaded_artifacts(source.source_index)
+                    artifact_item = target_processor.build_document_artifact_item(
+                        source=source,
+                        filename=final_document.file.name,
+                        status=final_document.status,
+                        errors=final_document.errors,
+                        timings=final_document.timings,
+                    )
+
+                remote_documents.append(final_document)
+                processed_doc = _build_processed_docs_item(
+                    final_document,
+                    debug_error_details=debug_error_details,
+                )
+                processed_docs.append(processed_doc)
+                presigned_documents.append(artifact_item)
+                _maybe_emit_document_completed(
+                    callback_invoker=callback_invoker,
+                    callbacks=task.callbacks,
+                    task_id=task.task_id,
+                    exportable_document=final_document,
+                    total_processed=idx + 1,
+                    total_docs=total_docs,
+                    callback_policy=callback_policy,
+                    debug_error_details=debug_error_details,
+                )
+
+        finalized_documents = remote_documents
+        task_result = PresignedArtifactResult(documents=presigned_documents)
+
+    elif isinstance(task.target, S3Target):
+        output_dir = work_dir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        s3_remote_documents: list[ExportableDocument] = []
+        with S3TargetProcessor(task.target) as target_processor:
+            for idx, exportable_document in enumerate(finalized_documents):
+                final_document = exportable_document
+                try:
+                    _upload_document_to_s3_target(
+                        task=task,
+                        exportable_document=exportable_document,
+                        response_index=idx,
+                        output_dir=output_dir,
+                        target_processor=target_processor,
+                        export_json=export_json,
+                        export_html=export_html,
+                        export_md=export_md,
+                        export_txt=export_txt,
+                        export_doctags=export_doctags,
+                        image_export_mode=conversion_options.image_export_mode,
+                        md_page_break_placeholder=conversion_options.md_page_break_placeholder,
+                    )
+                except Exception as exc:
+                    final_document = _build_failed_exportable_document(
+                        exportable_document,
+                        exc,
+                        debug_error_details=debug_error_details,
+                    )
+
+                s3_remote_documents.append(final_document)
+                processed_docs.append(
+                    _build_processed_docs_item(
+                        final_document,
+                        debug_error_details=debug_error_details,
+                    )
+                )
+                _maybe_emit_document_completed(
+                    callback_invoker=callback_invoker,
+                    callbacks=task.callbacks,
+                    task_id=task.task_id,
+                    exportable_document=final_document,
+                    total_processed=idx + 1,
+                    total_docs=total_docs,
+                    callback_policy=callback_policy,
+                    debug_error_details=debug_error_details,
+                )
+
+        finalized_documents = s3_remote_documents
+        task_result = RemoteTargetResult()
+
+    else:
+        for idx, exportable_document in enumerate(finalized_documents):
+            processed_docs.append(
+                _build_processed_docs_item(
+                    exportable_document,
+                    debug_error_details=debug_error_details,
+                )
+            )
+            _maybe_emit_document_completed(
+                callback_invoker=callback_invoker,
+                callbacks=task.callbacks,
+                task_id=task.task_id,
+                exportable_document=exportable_document,
+                total_processed=idx + 1,
+                total_docs=total_docs,
+                callback_policy=callback_policy,
+                debug_error_details=debug_error_details,
+            )
+
+        if len(finalized_documents) == 1 and isinstance(task.target, InBodyTarget):
+            exportable_document = finalized_documents[0]
+
+            content = _export_document_as_content(
+                exportable_document,
+                export_json=export_json,
+                export_html=export_html,
+                export_md=export_md,
+                export_txt=export_txt,
+                export_doctags=export_doctags,
+                image_mode=conversion_options.image_export_mode,
+                md_page_break_placeholder=conversion_options.md_page_break_placeholder,
+            )
+            task_result = DocumentResultItem(
+                document=content,
+                status=exportable_document.status,
+                errors=exportable_document.errors,
+                timings=exportable_document.timings,
+            )
+
+        else:
+            output_dir = work_dir / "output"
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            _export_documents_as_files(
+                exportable_documents=finalized_documents,
+                output_dir=output_dir,
+                export_json=export_json,
+                export_html=export_html,
+                export_md=export_md,
+                export_txt=export_txt,
+                export_doctags=export_doctags,
+                image_export_mode=conversion_options.image_export_mode,
+                md_page_break_placeholder=conversion_options.md_page_break_placeholder,
+            )
+
+            files = list(output_dir.iterdir())
+            if len(files) == 0:
+                raise RuntimeError("No documents were exported.")
+
+            file_path = work_dir / "converted_docs.zip"
+            shutil.make_archive(
+                base_name=str(file_path.with_suffix("")),
+                format="zip",
+                root_dir=output_dir,
+            )
+
+            if isinstance(task.target, PutTarget):
+                _upload_to_put_target(str(task.target.url), file_path)
+                task_result = RemoteTargetResult()
+            else:
+                task_result = ZipArchiveResult(content=file_path.read_bytes())
+
+    processing_time = time.monotonic() - start_time
+    _log.info(
+        f"Processed {len(finalized_documents)} docs in {processing_time:.2f} seconds."
+    )
+    num_succeeded, num_partially_succeeded, num_failed = _count_document_statuses(
+        finalized_documents
+    )
+    _maybe_emit_update_processed(
+        callback_invoker=callback_invoker,
+        callbacks=task.callbacks,
+        task_id=task.task_id,
+        processed_docs=processed_docs,
+        num_succeeded=num_succeeded,
+        num_partially_succeeded=num_partially_succeeded,
+        num_failed=num_failed,
+        callback_policy=callback_policy,
+    )
+
+    return _ProcessedExportResults(
+        task_result=DoclingTaskResult(
+            result=task_result,
+            processing_time=processing_time,
+            num_succeeded=num_succeeded,
+            num_partially_succeeded=num_partially_succeeded,
+            num_failed=num_failed,
+            num_converted=len(finalized_documents),
+        ),
+        processed_docs=processed_docs,
+    )
+
+
 def process_exportable_results(
     task: Task,
     exportable_documents: Iterable[ExportableDocument],
@@ -531,221 +926,18 @@ def process_exportable_results(
     debug_error_details: bool = False,
     expected_doc_count: Optional[int] = None,
     start_time: Optional[float] = None,
+    callback_policy: CallbackEmissionPolicy | None = None,
 ) -> DoclingTaskResult:
-    conversion_options = task.convert_options
-    if conversion_options is None:
-        raise RuntimeError(
-            "process_exportable_results called without task.convert_options"
-        )
-
-    # Let's start by processing the documents
-    start_time = start_time if start_time is not None else time.monotonic()
-
-    # 1. Send ProgressSetNumDocs at start
-    total_docs = (
-        expected_doc_count if expected_doc_count is not None else len(task.sources)
-    )
-    if callback_invoker and task.callbacks and total_docs:
-        callback_invoker.invoke_callbacks_async(
-            callbacks=task.callbacks,
-            task_id=task.task_id,
-            progress=ProgressSetNumDocs(num_docs=total_docs),
-        )
-
-    # 2. Process documents and send ProgressDocumentCompleted for each
-    # IMPORTANT: conv_results is a lazy iterator from convert_documents()
-    # The actual conversion happens as we iterate through it
-    documents_list = []
-    docs: list[ProcessedDocsItem] = []
-
-    for idx, exportable_document in enumerate(exportable_documents):
-        documents_list.append(exportable_document)
-
-        summary_error = render_public_error_list(
-            exportable_document.errors,
-            debug_enabled=debug_error_details,
-        )
-        docs.append(
-            ProcessedDocsItem(
-                source=str(exportable_document.file),
-                status=exportable_document.status,
-                error=summary_error
-                or (
-                    "Unknown error"
-                    if not _is_exportable_status(exportable_document.status)
-                    else None
-                ),
-            )
-        )
-
-        # Send per-document callback (non-blocking)
-        if callback_invoker and task.callbacks:
-            document_info = _build_document_completed_item(
-                exportable_document,
-                error=summary_error,
-            )
-
-            callback_invoker.invoke_callbacks_async(
-                callbacks=task.callbacks,
-                task_id=task.task_id,
-                progress=ProgressDocumentCompleted(
-                    document=document_info,
-                    total_processed=idx + 1,
-                    total_docs=total_docs,
-                ),
-            )
-
-    exportable_documents = documents_list
-    # Task-level wall clock elapsed time across the whole request.
-    processing_time = time.monotonic() - start_time
-
-    _log.info(
-        f"Processed {len(exportable_documents)} docs in {processing_time:.2f} seconds."
+    processed = _process_exportable_results_internal(
+        task=task,
+        exportable_documents=exportable_documents,
+        work_dir=work_dir,
+        s3_presigned_config=s3_presigned_config,
+        callback_invoker=callback_invoker,
+        debug_error_details=debug_error_details,
+        expected_doc_count=expected_doc_count,
+        start_time=start_time,
+        callback_policy=callback_policy,
     )
 
-    if len(exportable_documents) == 0:
-        raise RuntimeError("No documents were generated by Docling.")
-
-    num_succeeded, num_partially_succeeded, num_failed = _count_document_statuses(
-        exportable_documents
-    )
-
-    # 3. Send ProgressUpdateProcessed at end with final summary
-    if callback_invoker and task.callbacks:
-        callback_invoker.invoke_callbacks_async(
-            callbacks=task.callbacks,
-            task_id=task.task_id,
-            progress=ProgressUpdateProcessed(
-                num_processed=len(docs),
-                num_succeeded=num_succeeded,
-                num_partially_succeeded=num_partially_succeeded,
-                num_failed=num_failed,
-                docs=docs,
-            ),
-        )
-
-    # We have some results, let's prepare the response
-    task_result: ResultType
-
-    # Booleans to know what to export
-    export_json = OutputFormat.JSON in conversion_options.to_formats
-    export_html = OutputFormat.HTML in conversion_options.to_formats
-    export_md = OutputFormat.MARKDOWN in conversion_options.to_formats
-    export_txt = OutputFormat.TEXT in conversion_options.to_formats
-    export_doctags = OutputFormat.DOCTAGS in conversion_options.to_formats
-
-    # Only 1 document was processed, and we are not returning it as a file
-    if len(exportable_documents) == 1 and isinstance(task.target, InBodyTarget):
-        exportable_document = exportable_documents[0]
-
-        content = _export_document_as_content(
-            exportable_document,
-            export_json=export_json,
-            export_html=export_html,
-            export_md=export_md,
-            export_txt=export_txt,
-            export_doctags=export_doctags,
-            image_mode=conversion_options.image_export_mode,
-            md_page_break_placeholder=conversion_options.md_page_break_placeholder,
-        )
-        task_result = DocumentResultItem(
-            document=content,
-            status=exportable_document.status,
-            errors=exportable_document.errors,
-            timings=exportable_document.timings,
-        )
-
-    elif isinstance(task.target, PresignedUrlTarget):
-        output_dir = work_dir / "output"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        if s3_presigned_config is None:
-            raise ValueError(
-                "PresignedUrlTarget requires s3_presigned_config in orchestrator config"
-            )
-
-        with S3PresignedTargetProcessor(s3_presigned_config, task) as target_processor:
-            documents = _upload_documents_as_presigned_artifacts(
-                task=task,
-                exportable_documents=exportable_documents,
-                output_dir=output_dir,
-                target_processor=target_processor,
-                export_json=export_json,
-                export_html=export_html,
-                export_md=export_md,
-                export_txt=export_txt,
-                export_doctags=export_doctags,
-                image_export_mode=conversion_options.image_export_mode,
-                md_page_break_placeholder=conversion_options.md_page_break_placeholder,
-            )
-
-        task_result = PresignedArtifactResult(documents=documents)
-
-    elif isinstance(task.target, S3Target):
-        output_dir = work_dir / "output"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # S3Target writes into a user-owned bucket. We only add a per-source hash
-        # below; the user's configured target key_prefix is prepended by
-        # S3TargetProcessor._build_full_key.
-        with S3TargetProcessor(task.target) as target_processor:
-            _upload_documents_to_s3_target(
-                task=task,
-                exportable_documents=exportable_documents,
-                output_dir=output_dir,
-                target_processor=target_processor,
-                export_json=export_json,
-                export_html=export_html,
-                export_md=export_md,
-                export_txt=export_txt,
-                export_doctags=export_doctags,
-                image_export_mode=conversion_options.image_export_mode,
-                md_page_break_placeholder=conversion_options.md_page_break_placeholder,
-            )
-        task_result = RemoteTargetResult()
-
-    # Multiple documents were processed, or we are forced returning as a file
-    else:
-        # Temporary directory to store the outputs
-        output_dir = work_dir / "output"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Export the documents
-        _export_documents_as_files(
-            exportable_documents=exportable_documents,
-            output_dir=output_dir,
-            export_json=export_json,
-            export_html=export_html,
-            export_md=export_md,
-            export_txt=export_txt,
-            export_doctags=export_doctags,
-            image_export_mode=conversion_options.image_export_mode,
-            md_page_break_placeholder=conversion_options.md_page_break_placeholder,
-        )
-
-        files = list(output_dir.iterdir())
-        if len(files) == 0:
-            raise RuntimeError("No documents were exported.")
-
-        file_path = work_dir / "converted_docs.zip"
-        shutil.make_archive(
-            base_name=str(file_path.with_suffix("")),
-            format="zip",
-            root_dir=output_dir,
-        )
-
-        if isinstance(task.target, PutTarget):
-            _upload_to_put_target(str(task.target.url), file_path)
-            task_result = RemoteTargetResult()
-
-        else:
-            task_result = ZipArchiveResult(content=file_path.read_bytes())
-
-    return DoclingTaskResult(
-        result=task_result,
-        processing_time=processing_time,
-        num_succeeded=num_succeeded,
-        num_partially_succeeded=num_partially_succeeded,
-        num_failed=num_failed,
-        num_converted=len(exportable_documents),
-    )
+    return processed.task_result

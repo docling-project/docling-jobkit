@@ -6,10 +6,12 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from docling.datamodel.service.callbacks import ProcessedDocsItem
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
 from docling_jobkit.connectors.source_processor import DocumentChunk
+from docling_jobkit.datamodel.callback_policy import CallbackEmissionPolicy
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
@@ -218,6 +220,13 @@ class SourceChunkConvertRequest(BaseModel):
     chunk: DocumentChunk[Any, Any] = Field(
         description="Data-only source chunk to fetch and convert"
     )
+    expected_doc_count: int = Field(
+        description="Parent task document count used for callback context"
+    )
+    callback_policy: CallbackEmissionPolicy = Field(
+        default_factory=CallbackEmissionPolicy,
+        description="Controls which callbacks the child worker may emit",
+    )
 
 
 class SliceConvertRequest(BaseModel):
@@ -239,3 +248,7 @@ ConverterRequest = (
 
 class ConverterTaskResult(BaseModel):
     task_result: DoclingTaskResult = Field(description="Final task result")
+    processed_docs: list[ProcessedDocsItem] = Field(
+        default_factory=list,
+        description="Per-document processed summary for coordinator aggregation",
+    )

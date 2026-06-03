@@ -2,10 +2,12 @@ import base64
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from docling.datamodel.base_models import ConversionStatus, OutputFormat
+from docling.datamodel.service.callbacks import CallbackSpec, ProgressKind
 from docling.datamodel.service.sources import FileSource, HttpSource
 from docling.datamodel.service.targets import PresignedUrlTarget, S3Target
 from docling_core.types.doc.document import DoclingDocument
@@ -320,6 +322,107 @@ def test_process_exportable_results_returns_remote_target_result_for_s3_target(
     assert all(f"{_short_hash('paper.pdf')}/" in str(key) for key in uploaded_keys)
     assert any(str(key).endswith("/paper.json") for key in uploaded_keys)
     assert any(str(key).endswith("/paper_bundle.zip") for key in uploaded_keys)
+
+
+def test_presigned_callbacks_emit_document_completed_after_uploads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    events: list[tuple[str, object]] = []
+
+    class _RecordingS3Client(_FakeS3Client):
+        def upload_file(self, Filename, Bucket, Key, ExtraArgs):
+            super().upload_file(Filename, Bucket, Key, ExtraArgs)
+            events.append(("upload", Key))
+
+    fake_client = _RecordingS3Client()
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        lambda _coords: (fake_client, object()),
+    )
+
+    callback_invoker = MagicMock()
+    callback_invoker.invoke_callbacks_async.side_effect = (
+        lambda **kwargs: events.append(("callback", kwargs["progress"]))
+    )
+
+    process_exportable_results(
+        task=_make_task().model_copy(
+            update={"callbacks": [CallbackSpec(url="http://callback.example")]}
+        ),
+        exportable_documents=[_make_exportable_document()],
+        work_dir=tmp_path,
+        s3_presigned_config=_make_s3_presigned_config(),
+        callback_invoker=callback_invoker,
+    )
+
+    kinds = [event[1].kind for event in events if event[0] == "callback"]
+    assert kinds == [
+        ProgressKind.SET_NUM_DOCS,
+        ProgressKind.DOCUMENT_COMPLETED,
+        ProgressKind.UPDATE_PROCESSED,
+    ]
+    doc_completed_index = next(
+        index
+        for index, event in enumerate(events)
+        if event[0] == "callback" and event[1].kind == ProgressKind.DOCUMENT_COMPLETED
+    )
+    assert [event[0] for event in events[: doc_completed_index + 1]] == [
+        "callback",
+        "upload",
+        "upload",
+        "callback",
+    ]
+
+
+def test_presigned_upload_failure_becomes_failed_document_callback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class _FailingS3Client(_FakeS3Client):
+        def upload_file(self, Filename, Bucket, Key, ExtraArgs):
+            del Filename, Bucket, Key, ExtraArgs
+            raise RuntimeError("upload failed")
+
+    fake_client = _FailingS3Client()
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        lambda _coords: (fake_client, object()),
+    )
+
+    callback_invoker = MagicMock()
+    task_result = process_exportable_results(
+        task=_make_task().model_copy(
+            update={"callbacks": [CallbackSpec(url="http://callback.example")]}
+        ),
+        exportable_documents=[_make_exportable_document()],
+        work_dir=tmp_path,
+        s3_presigned_config=_make_s3_presigned_config(),
+        callback_invoker=callback_invoker,
+        debug_error_details=True,
+    )
+
+    assert isinstance(task_result.result, PresignedArtifactResult)
+    assert task_result.num_succeeded == 0
+    assert task_result.num_failed == 1
+    assert task_result.result.documents[0].status == ConversionStatus.FAILURE
+    assert task_result.result.documents[0].artifacts == []
+
+    document_completed = next(
+        call.kwargs["progress"]
+        for call in callback_invoker.invoke_callbacks_async.call_args_list
+        if call.kwargs["progress"].kind == ProgressKind.DOCUMENT_COMPLETED
+    )
+    assert document_completed.document.status == ConversionStatus.FAILURE
+    assert document_completed.document.error == "RuntimeError: upload failed"
+
+    final_update = next(
+        call.kwargs["progress"]
+        for call in callback_invoker.invoke_callbacks_async.call_args_list
+        if call.kwargs["progress"].kind == ProgressKind.UPDATE_PROCESSED
+    )
+    assert final_update.num_failed == 1
+    assert final_update.docs[0].status == ConversionStatus.FAILURE
 
 
 def test_s3_target_uses_distinct_task_scoped_keys_for_same_basename_sources(
