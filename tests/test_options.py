@@ -99,6 +99,23 @@ def test_options_validator():
         )
 
 
+@pytest.mark.parametrize(
+    "image_export_mode",
+    [ImageRefMode.EMBEDDED, ImageRefMode.REFERENCED],
+)
+def test_include_images_false_disables_image_generation(image_export_mode):
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+
+    opts = ConvertDocumentsOptions(
+        include_images=False,
+        image_export_mode=image_export_mode,
+    )
+    pipeline_opts = m.get_pdf_pipeline_opts(opts)
+
+    assert pipeline_opts.pipeline_options.generate_page_images is False
+    assert pipeline_opts.pipeline_options.generate_picture_images is False
+
+
 def test_options_cache_key():
     """Test cache key generation with deprecated picture_description_api field.
 
