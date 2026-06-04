@@ -1,5 +1,6 @@
-from typing import Iterator, TypedDict
+from typing import Iterator
 
+from pydantic import BaseModel, ConfigDict
 from typing_extensions import override
 
 from docling.datamodel.service.sources import FileSource, HttpSource
@@ -12,9 +13,12 @@ from docling_jobkit.connectors.source_processor import (
 )
 
 
-class HttpFileIdentifier(TypedDict):
+class HttpFileIdentifier(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     source: HttpSource | FileSource
-    index: int
+    size: int | None = None
+    etag: str | None = None
 
 
 class HttpSourceProcessor(
@@ -32,11 +36,16 @@ class HttpSourceProcessor(
 
     def _list_document_ids(self) -> Iterator[HttpFileIdentifier]:
         """Yield a single identifier for the HTTP/File source."""
-        yield HttpFileIdentifier(source=self._source, index=0)
+        yield HttpFileIdentifier(source=self._source)
+
+    def _try_head_request(self, source: HttpSource) -> tuple[int | None, str | None]:
+        # TODO: Populate size/etag when cache comparison and conditional fetch are designed.
+        del source
+        return None, None
 
     def _fetch_document_by_id(self, identifier: HttpFileIdentifier) -> DocumentStream:
         """Fetch document from the identifier."""
-        source = identifier["source"]
+        source = identifier.source
         if isinstance(source, FileSource):
             return source.to_document_stream()
         elif isinstance(source, HttpSource):
@@ -49,7 +58,7 @@ class HttpSourceProcessor(
     def _make_document_ref(
         self, identifier: HttpFileIdentifier, source_index: int
     ) -> SourceDocumentRef[HttpFileIdentifier]:
-        source = identifier["source"]
+        source = identifier.source
         if isinstance(source, FileSource):
             filename = source.filename
             source_uri = source.filename
@@ -67,7 +76,7 @@ class HttpSourceProcessor(
     def fetch_converter_source_by_ref(
         self, ref: SourceDocumentRef[HttpFileIdentifier]
     ) -> ConverterSource:
-        source = ref.id["source"]
+        source = ref.id.source
         if isinstance(source, HttpSource):
             return str(source.url)
         return self._fetch_document_by_id(ref.id)
@@ -76,7 +85,7 @@ class HttpSourceProcessor(
     def headers_for_ref(
         self, ref: SourceDocumentRef[HttpFileIdentifier]
     ) -> dict[str, object] | None:
-        source = ref.id["source"]
+        source = ref.id.source
         if isinstance(source, HttpSource) and source.headers:
             return source.headers
         return None

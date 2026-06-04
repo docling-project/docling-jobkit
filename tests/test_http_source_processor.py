@@ -47,8 +47,9 @@ def test_http_file_source_list_and_fetch():
         # Test listing document IDs
         doc_ids = list(processor._list_document_ids())
         assert len(doc_ids) == 1
-        assert doc_ids[0]["index"] == 0
-        assert doc_ids[0]["source"] == file_source
+        assert doc_ids[0].source == file_source
+        assert doc_ids[0].size is None
+        assert doc_ids[0].etag is None
 
         # Test fetching by ID
         doc = processor._fetch_document_by_id(doc_ids[0])

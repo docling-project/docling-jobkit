@@ -54,7 +54,7 @@ class GoogleDriveSourceProcessor(
             buffer.seek(0)
 
             yield DocumentStream(
-                name=file_info["name"],
+                name=file_info.name,
                 stream=buffer,
             )
 
@@ -62,12 +62,7 @@ class GoogleDriveSourceProcessor(
         from docling_jobkit.connectors.google_drive_helper import get_source_files_infos
 
         for info in get_source_files_infos(self._service, self._coords):
-            yield GoogleDriveFileIdentifier(
-                id=info["id"],
-                name=info["name"],
-                mimeType=info["mimeType"],
-                path=info["path"],
-            )
+            yield info
 
     def _fetch_document_by_id(self, info: GoogleDriveFileIdentifier) -> DocumentStream:
         from docling_jobkit.connectors.google_drive_helper import download_file
@@ -82,7 +77,7 @@ class GoogleDriveSourceProcessor(
         buffer.seek(0)
 
         return DocumentStream(
-            name=info["name"],
+            name=info.name,
             stream=buffer,
         )
 
@@ -90,10 +85,10 @@ class GoogleDriveSourceProcessor(
     def _make_document_ref(
         self, info: GoogleDriveFileIdentifier, source_index: int
     ) -> SourceDocumentRef[GoogleDriveFileIdentifier]:
-        source_uri = info.get("path") or info["name"]
+        source_uri = info.path or info.name
         return SourceDocumentRef(
             id=info,
             source_index=source_index,
             source_uri=source_uri,
-            filename=info["name"],
+            filename=info.name,
         )

@@ -15,8 +15,6 @@ ConverterSource = str | DocumentStream
 class SourceDocumentRef(BaseModel, Generic[FileIdentifierT]):
     """Connector-native document reference safe to pass between processes."""
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
     id: FileIdentifierT
     source_index: int
     source_uri: str
