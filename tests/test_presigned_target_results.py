@@ -110,6 +110,7 @@ def _make_s3_presigned_config() -> S3PresignedConfig:
             access_key="key",
             secret_key="secret",
             bucket="converted-docs",
+            key_prefix="converted/",
         ),
         url_expiration=600,
     )

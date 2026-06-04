@@ -1,9 +1,9 @@
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from itertools import islice
-from typing import Any, Callable, Generic, Iterator, Sequence, TypeVar
+from typing import Callable, Generic, Iterator, Sequence, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from docling.datamodel.base_models import DocumentStream
 
@@ -21,11 +21,16 @@ class SourceDocumentRef(BaseModel, Generic[FileIdentifierT]):
     source_index: int
     source_uri: str
     filename: str
-    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class DocumentChunk(BaseModel, Generic[SourceT, FileIdentifierT]):
-    """A data-only source chunk plus a local fetcher convenience."""
+    """A serializable source chunk plus an optional local fetcher convenience.
+
+    Local/CLI callers may attach a fetcher so ``iter_documents()`` can materialize
+    streams lazily from the refs. Cross-process callers such as Ray must strip that
+    fetcher because it may capture initialized connector state that is not safe to
+    serialize.
+    """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -53,6 +58,7 @@ class DocumentChunk(BaseModel, Generic[SourceT, FileIdentifierT]):
         return self.chunk_index
 
     def iter_documents(self) -> Iterator[DocumentStream]:
+        """Materialize documents for local callers when a fetcher is attached."""
         if self._fetcher is None:
             raise RuntimeError("DocumentChunk does not have an attached fetcher.")
         for ref in self.refs:
@@ -118,19 +124,21 @@ class BaseSourceProcessor(
     def _count_documents(self) -> int | None:
         return None
 
-    def fetch_document_by_ref(
-        self, ref: SourceDocumentRef[FileIdentifierT]
-    ) -> DocumentStream:
-        return self._fetch_document_by_id(ref.id)
-
     def fetch_converter_source_by_ref(
         self, ref: SourceDocumentRef[FileIdentifierT]
     ) -> ConverterSource:
-        return self.fetch_document_by_ref(ref)
+        """Resolve a ref into the converter input expected by the backend.
+
+        Most connectors materialize a ``DocumentStream`` from the ref's identifier.
+        Connectors with remote-fetch semantics may override this to return a lighter
+        representation such as a source URL.
+        """
+        return self._fetch_document_by_id(ref.id)
 
     def headers_for_ref(
         self, ref: SourceDocumentRef[FileIdentifierT]
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
+        """Return per-ref request headers when the converter should fetch remotely."""
         del ref
         return None
 

@@ -1,5 +1,7 @@
 from typing import Iterator, TypedDict
 
+from typing_extensions import override
+
 from docling.datamodel.service.sources import FileSource, HttpSource
 from docling_core.types.io import DocumentStream
 
@@ -43,6 +45,7 @@ class HttpSourceProcessor(
         else:
             raise ValueError(f"Unsupported source type: {type(source)}")
 
+    @override
     def _make_document_ref(
         self, identifier: HttpFileIdentifier, source_index: int
     ) -> SourceDocumentRef[HttpFileIdentifier]:
@@ -60,14 +63,16 @@ class HttpSourceProcessor(
             filename=filename,
         )
 
+    @override
     def fetch_converter_source_by_ref(
         self, ref: SourceDocumentRef[HttpFileIdentifier]
     ) -> ConverterSource:
         source = ref.id["source"]
         if isinstance(source, HttpSource):
             return str(source.url)
-        return self.fetch_document_by_ref(ref)
+        return self._fetch_document_by_id(ref.id)
 
+    @override
     def headers_for_ref(
         self, ref: SourceDocumentRef[HttpFileIdentifier]
     ) -> dict[str, object] | None:

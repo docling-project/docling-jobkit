@@ -51,6 +51,7 @@ from docling_jobkit.convert.materialization import (
     materialize_and_preflight,
 )
 from docling_jobkit.convert.results import (
+    CallbackMode,
     _build_processed_docs_item,
     _is_exportable_status,
     _maybe_emit_document_completed,
@@ -58,7 +59,6 @@ from docling_jobkit.convert.results import (
     process_exportable_results,
 )
 from docling_jobkit.convert.source_expansion import expand_task_sources
-from docling_jobkit.datamodel.callback_policy import CallbackEmissionPolicy
 from docling_jobkit.datamodel.exportable_document import (
     ExportableDocument,
     source_to_public_uri,
@@ -97,6 +97,8 @@ from docling_jobkit.public_errors import (
 )
 
 _log = logging.getLogger(__name__)
+
+_SOURCE_CHUNK_CALLBACK_MODE = CallbackMode.CHILD_ONLY
 
 DEFAULT_SERVE_APP_NAME = "docling_processor"
 
@@ -527,7 +529,7 @@ class DoclingProcessorConverterDeployment:
                     exportable,
                     expected_doc_count=request.expected_doc_count,
                     start_time=request_start,
-                    callback_policy=request.callback_policy,
+                    callback_mode=_SOURCE_CHUNK_CALLBACK_MODE,
                 )
             )
             self.documents_processed += result.task_result.num_converted
@@ -591,7 +593,7 @@ class DoclingProcessorConverterDeployment:
         *,
         expected_doc_count: Optional[int] = None,
         start_time: Optional[float] = None,
-        callback_policy: CallbackEmissionPolicy | None = None,
+        callback_mode: CallbackMode = CallbackMode.FULL,
     ) -> ConverterTaskResult:
         callback_invoker = CallbackInvoker() if task.callbacks else None
         temp_dir_kwargs: dict[str, Any] = {
@@ -613,7 +615,7 @@ class DoclingProcessorConverterDeployment:
                     debug_error_details=self.config.debug_error_details,
                     expected_doc_count=expected_doc_count,
                     start_time=start_time,
-                    callback_policy=callback_policy,
+                    callback_mode=callback_mode,
                 )
                 task_result = processed.task_result
                 processed_docs = processed.processed_docs
@@ -1118,11 +1120,6 @@ class DoclingProcessorCoordinatorDeployment:
 
         total_docs = sum(len(chunk.refs) for chunk in all_chunks)
         callback_invoker = CallbackInvoker() if task.callbacks else None
-        child_callback_policy = CallbackEmissionPolicy(
-            emit_set_num_docs=False,
-            emit_document_completed=True,
-            emit_update_processed=False,
-        )
         if callback_invoker and task.callbacks and total_docs:
             callback_invoker.invoke_callbacks_async(
                 callbacks=task.callbacks,
@@ -1144,7 +1141,6 @@ class DoclingProcessorCoordinatorDeployment:
                     chunk,
                     task,
                     total_docs,
-                    child_callback_policy,
                 )
             )
             in_flight[child_task] = chunk
@@ -1189,7 +1185,7 @@ class DoclingProcessorCoordinatorDeployment:
                                     exportable_document=exportable_document,
                                     total_processed=1,
                                     total_docs=total_docs,
-                                    callback_policy=child_callback_policy,
+                                    callback_mode=_SOURCE_CHUNK_CALLBACK_MODE,
                                     debug_error_details=self.config.debug_error_details,
                                 )
                     child_results.append((chunk, converter_result))
@@ -1200,7 +1196,6 @@ class DoclingProcessorCoordinatorDeployment:
                                 next_chunk,
                                 task,
                                 total_docs,
-                                child_callback_policy,
                             )
                         )
                         in_flight[child_task] = next_chunk
@@ -1248,7 +1243,6 @@ class DoclingProcessorCoordinatorDeployment:
         chunk: DocumentChunk[Any, Any],
         task: Task,
         expected_doc_count: int,
-        callback_policy: CallbackEmissionPolicy,
     ) -> ConverterTaskResult:
         child_task = task.model_copy(update={"sources": [chunk.source]})
         # Strip the fetcher before cross-process dispatch. The fetcher is a bound
@@ -1266,7 +1260,6 @@ class DoclingProcessorCoordinatorDeployment:
                 task=child_task,
                 chunk=serializable_chunk,
                 expected_doc_count=expected_doc_count,
-                callback_policy=callback_policy,
             )
         )
 

@@ -95,10 +95,6 @@ def test_s3_document_ref_preserves_canonical_source_uri(minio_coords):
     assert ref.source_index == 5
     assert ref.source_uri == "s3://test/incoming/doc.pdf"
     assert ref.filename == "incoming/doc.pdf"
-    assert ref.metadata == {
-        "size": 123,
-        "last_modified": "2026-06-02T10:00:00",
-    }
 
 
 @pytest.mark.skipif(

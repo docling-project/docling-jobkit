@@ -11,7 +11,6 @@ from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
 from docling_jobkit.connectors.source_processor import DocumentChunk
-from docling_jobkit.datamodel.callback_policy import CallbackEmissionPolicy
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
@@ -222,10 +221,6 @@ class SourceChunkConvertRequest(BaseModel):
     )
     expected_doc_count: int = Field(
         description="Parent task document count used for callback context"
-    )
-    callback_policy: CallbackEmissionPolicy = Field(
-        default_factory=CallbackEmissionPolicy,
-        description="Controls which callbacks the child worker may emit",
     )
 
 

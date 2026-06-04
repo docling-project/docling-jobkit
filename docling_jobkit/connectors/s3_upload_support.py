@@ -66,12 +66,14 @@ def build_task_scoped_s3_key(
     artifact_filename: str,
 ) -> str:
     # PresignedUrlTarget writes into operator-managed storage, so the full key
-    # includes the managed prefix/tenant/date/task structure before the per-source hash.
+    # includes the managed prefix/tenant/date/task structure before the per-source
+    # hash. The storage prefix is injected by docling-serve onto
+    # config.s3_coords.key_prefix when the orchestrator is constructed.
     source_key = hash_path_component(source_uri)
     date_partition = datetime.now(timezone.utc).strftime(config.date_partition_format)
 
     path_parts: list[str] = []
-    key_prefix = config.key_prefix.strip("/")
+    key_prefix = config.s3_coords.key_prefix.strip("/")
     if key_prefix:
         path_parts.append(key_prefix)
 

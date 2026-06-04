@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import Iterator, TypedDict
 
+from typing_extensions import override
+
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.source_processor import (
@@ -125,6 +127,7 @@ class LocalPathSourceProcessor(
 
         return DocumentStream(name=str(file_path), stream=buffer)
 
+    @override
     def _make_document_ref(
         self, identifier: LocalPathFileIdentifier, source_index: int
     ) -> SourceDocumentRef[LocalPathFileIdentifier]:
@@ -134,10 +137,6 @@ class LocalPathSourceProcessor(
             source_index=source_index,
             source_uri=str(file_path),
             filename=str(file_path),
-            metadata={
-                "size": identifier["size"],
-                "last_modified": identifier["last_modified"],
-            },
         )
 
     def _fetch_documents(self) -> Iterator[DocumentStream]:

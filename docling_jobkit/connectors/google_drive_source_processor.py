@@ -3,6 +3,8 @@ from __future__ import annotations
 from io import BytesIO
 from typing import TYPE_CHECKING, Iterator
 
+from typing_extensions import override
+
 from docling.datamodel.base_models import DocumentStream
 
 if TYPE_CHECKING:
@@ -84,6 +86,7 @@ class GoogleDriveSourceProcessor(
             stream=buffer,
         )
 
+    @override
     def _make_document_ref(
         self, info: GoogleDriveFileIdentifier, source_index: int
     ) -> SourceDocumentRef[GoogleDriveFileIdentifier]:
@@ -93,5 +96,4 @@ class GoogleDriveSourceProcessor(
             source_index=source_index,
             source_uri=source_uri,
             filename=info["name"],
-            metadata={"mimeType": info["mimeType"]},
         )

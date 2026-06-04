@@ -86,6 +86,8 @@ def convert_payload(
     s3_target_client, s3_target_resource = get_s3_connection(target_s3_coords)
     source_root_prefix = build_s3_source_key(s3_coords_source)
     target_prefix = target_s3_coords.key_prefix.strip("/")
+    # Keep the KFP artifact layout aligned with orchestrator-managed S3 output
+    # paths so batch outputs land under the same source-scoped prefix shape.
     target_root_prefix = (
         f"{target_prefix}/{source_root_prefix}" if target_prefix else source_root_prefix
     )

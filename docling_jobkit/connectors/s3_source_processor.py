@@ -1,6 +1,8 @@
 from io import BytesIO
 from typing import Iterator, TypedDict
 
+from typing_extensions import override
+
 from docling.datamodel.service.sources import S3Coordinates
 from docling_core.types.io import DocumentStream
 
@@ -52,6 +54,7 @@ class S3SourceProcessor(BaseSourceProcessor[S3Coordinates, S3FileIdentifier]):
             total += len(page.get("Contents", []))
         return total
 
+    @override
     def _make_document_ref(
         self, identifier: S3FileIdentifier, source_index: int
     ) -> SourceDocumentRef[S3FileIdentifier]:
@@ -61,10 +64,6 @@ class S3SourceProcessor(BaseSourceProcessor[S3Coordinates, S3FileIdentifier]):
             source_index=source_index,
             source_uri=f"s3://{self._coords.bucket}/{key}",
             filename=key,
-            metadata={
-                "size": identifier["size"],
-                "last_modified": identifier["last_modified"],
-            },
         )
 
     # ----------------- Document fetch -----------------

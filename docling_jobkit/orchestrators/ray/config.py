@@ -240,7 +240,12 @@ class RayOrchestratorConfig(BaseSettings):
     max_s3_doc_parallelism: int = Field(
         default=8,
         ge=1,
-        description="Max concurrent source-chunk converter dispatches for S3 fan-out.",
+        description=(
+            "Concurrent source-chunk converter dispatches per parent S3 fan-out task. "
+            "This mirrors max_page_slice_parallelism for source expansion, but it is "
+            "not a tenant-capacity limit and does not enforce any cross-task fairness "
+            "on its own."
+        ),
     )
     s3_source_listing_timeout_s: float = Field(
         default=300.0,

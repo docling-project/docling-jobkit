@@ -3,6 +3,7 @@ import shutil
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -35,7 +36,6 @@ from docling_jobkit.connectors.s3_presigned_target_processor import (
 )
 from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
-from docling_jobkit.datamodel.callback_policy import CallbackEmissionPolicy
 from docling_jobkit.datamodel.exportable_document import (
     ExportableDocument,
     source_to_public_uri,
@@ -75,6 +75,13 @@ class _ExportedArtifactFile:
 class _ProcessedExportResults:
     task_result: DoclingTaskResult
     processed_docs: list[ProcessedDocsItem]
+
+
+class CallbackMode(str, Enum):
+    """Internal callback emission mode for shared result processing."""
+
+    FULL = "full"
+    CHILD_ONLY = "child_only"
 
 
 def _is_exportable_status(status: ConversionStatus) -> bool:
@@ -141,13 +148,13 @@ def _maybe_emit_set_num_docs(
     callbacks: list,
     task_id: str,
     total_docs: int,
-    callback_policy: CallbackEmissionPolicy,
+    callback_mode: CallbackMode,
 ) -> None:
     if (
         callback_invoker
         and callbacks
         and total_docs
-        and callback_policy.emit_set_num_docs
+        and callback_mode == CallbackMode.FULL
     ):
         callback_invoker.invoke_callbacks_async(
             callbacks=callbacks,
@@ -164,14 +171,10 @@ def _maybe_emit_document_completed(
     exportable_document: ExportableDocument,
     total_processed: int,
     total_docs: int,
-    callback_policy: CallbackEmissionPolicy,
+    callback_mode: CallbackMode,
     debug_error_details: bool,
 ) -> None:
-    if (
-        not callback_invoker
-        or not callbacks
-        or not callback_policy.emit_document_completed
-    ):
+    if not callback_invoker or not callbacks:
         return
 
     processed_doc = _build_processed_docs_item(
@@ -201,13 +204,9 @@ def _maybe_emit_update_processed(
     num_succeeded: int,
     num_partially_succeeded: int,
     num_failed: int,
-    callback_policy: CallbackEmissionPolicy,
+    callback_mode: CallbackMode,
 ) -> None:
-    if (
-        not callback_invoker
-        or not callbacks
-        or not callback_policy.emit_update_processed
-    ):
+    if not callback_invoker or not callbacks or callback_mode != CallbackMode.FULL:
         return
 
     callback_invoker.invoke_callbacks_async(
@@ -677,7 +676,7 @@ def _process_remote_document(
     output_dir: Path,
     callback_invoker: Optional["CallbackInvoker"],
     debug_error_details: bool,
-    callback_policy: CallbackEmissionPolicy,
+    callback_mode: CallbackMode,
     upload_document: Callable[[SourceIdentity], Any],
     build_failure_result: Callable[[ExportableDocument, SourceIdentity], Any],
 ) -> tuple[ExportableDocument, ProcessedDocsItem, Any]:
@@ -706,7 +705,7 @@ def _process_remote_document(
             exportable_document=final_document,
             total_processed=response_index + 1,
             total_docs=total_docs,
-            callback_policy=callback_policy,
+            callback_mode=callback_mode,
             debug_error_details=debug_error_details,
         )
         return final_document, processed_doc, upload_result
@@ -724,7 +723,7 @@ def _process_remote_exportable_results(
     callback_invoker: Optional["CallbackInvoker"],
     debug_error_details: bool,
     total_docs: int,
-    callback_policy: CallbackEmissionPolicy,
+    callback_mode: CallbackMode,
     export_json: bool,
     export_html: bool,
     export_md: bool,
@@ -767,7 +766,7 @@ def _process_remote_exportable_results(
                     output_dir=output_dir,
                     callback_invoker=callback_invoker,
                     debug_error_details=debug_error_details,
-                    callback_policy=callback_policy,
+                    callback_mode=callback_mode,
                     upload_document=lambda _source: _upload_document_as_presigned_artifact(
                         task=task,
                         exportable_document=exportable_document,
@@ -800,6 +799,9 @@ def _process_remote_exportable_results(
 
         task_result: ResultType = PresignedArtifactResult(documents=presigned_documents)
     elif isinstance(task.target, S3Target):
+        # User-owned S3 targets preserve the caller's bucket layout. The shorter
+        # per-source artifact path is computed here, and S3TargetProcessor prepends
+        # the user-provided target.key_prefix when uploading.
         with S3TargetProcessor(task.target) as target_processor:
             for idx, exportable_document in enumerate(exportable_documents):
                 final_document, processed_doc, _ = _process_remote_document(
@@ -810,7 +812,7 @@ def _process_remote_exportable_results(
                     output_dir=output_dir,
                     callback_invoker=callback_invoker,
                     debug_error_details=debug_error_details,
-                    callback_policy=callback_policy,
+                    callback_mode=callback_mode,
                     upload_document=lambda _source: _upload_document_to_s3_target(
                         task=task,
                         exportable_document=exportable_document,
@@ -847,7 +849,7 @@ def _process_remote_exportable_results(
         num_succeeded=num_succeeded,
         num_partially_succeeded=num_partially_succeeded,
         num_failed=num_failed,
-        callback_policy=callback_policy,
+        callback_mode=callback_mode,
     )
 
     return _ProcessedExportResults(
@@ -872,7 +874,7 @@ def _process_exportable_results_internal(
     debug_error_details: bool = False,
     expected_doc_count: Optional[int] = None,
     start_time: Optional[float] = None,
-    callback_policy: CallbackEmissionPolicy | None = None,
+    callback_mode: CallbackMode = CallbackMode.FULL,
 ) -> _ProcessedExportResults:
     conversion_options = task.convert_options
     if conversion_options is None:
@@ -880,7 +882,6 @@ def _process_exportable_results_internal(
             "process_exportable_results called without task.convert_options"
         )
 
-    callback_policy = callback_policy or CallbackEmissionPolicy()
     start_time = start_time if start_time is not None else time.monotonic()
     total_docs = (
         expected_doc_count if expected_doc_count is not None else len(task.sources)
@@ -890,7 +891,7 @@ def _process_exportable_results_internal(
         callbacks=task.callbacks,
         task_id=task.task_id,
         total_docs=total_docs,
-        callback_policy=callback_policy,
+        callback_mode=callback_mode,
     )
 
     export_json = OutputFormat.JSON in conversion_options.to_formats
@@ -908,7 +909,7 @@ def _process_exportable_results_internal(
             callback_invoker=callback_invoker,
             debug_error_details=debug_error_details,
             total_docs=total_docs,
-            callback_policy=callback_policy,
+            callback_mode=callback_mode,
             export_json=export_json,
             export_html=export_html,
             export_md=export_md,
@@ -939,7 +940,7 @@ def _process_exportable_results_internal(
             exportable_document=exportable_document,
             total_processed=idx + 1,
             total_docs=total_docs,
-            callback_policy=callback_policy,
+            callback_mode=callback_mode,
             debug_error_details=debug_error_details,
         )
 
@@ -1010,7 +1011,7 @@ def _process_exportable_results_internal(
         num_succeeded=num_succeeded,
         num_partially_succeeded=num_partially_succeeded,
         num_failed=num_failed,
-        callback_policy=callback_policy,
+        callback_mode=callback_mode,
     )
 
     return _ProcessedExportResults(
@@ -1035,7 +1036,7 @@ def process_exportable_results(
     debug_error_details: bool = False,
     expected_doc_count: Optional[int] = None,
     start_time: Optional[float] = None,
-    callback_policy: CallbackEmissionPolicy | None = None,
+    callback_mode: CallbackMode = CallbackMode.FULL,
 ) -> DoclingTaskResult:
     processed = _process_exportable_results_internal(
         task=task,
@@ -1046,7 +1047,7 @@ def process_exportable_results(
         debug_error_details=debug_error_details,
         expected_doc_count=expected_doc_count,
         start_time=start_time,
-        callback_policy=callback_policy,
+        callback_mode=callback_mode,
     )
 
     return processed.task_result
