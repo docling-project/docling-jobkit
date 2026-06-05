@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING, TypeAlias
+
 from docling.datamodel.service.responses import (
     ArtifactRef,
     ChunkedDocumentResult,
@@ -19,6 +21,11 @@ from docling.datamodel.service.responses import (
     ZipArchiveResult,
 )
 
+if TYPE_CHECKING:
+    from docling_jobkit.datamodel.stored_outcome import StoredTaskOutcome
+
+TaskOutcome: TypeAlias = "StoredTaskOutcome | DoclingTaskResult"
+
 __all__ = [
     "ArtifactRef",
     "ChunkedDocumentResult",
@@ -37,5 +44,6 @@ __all__ = [
     "RemoteTargetResult",
     "ResultType",
     "TaskFailureResult",
+    "TaskOutcome",
     "ZipArchiveResult",
 ]

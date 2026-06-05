@@ -9,7 +9,7 @@ from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
-from docling_jobkit.datamodel.result import DoclingTaskResult
+from docling_jobkit.datamodel.result import DoclingTaskResult, TaskOutcome
 from docling_jobkit.datamodel.task import Task, TaskSource
 from docling_jobkit.datamodel.task_targets import TaskTarget
 
@@ -103,7 +103,7 @@ class BaseOrchestrator(ABC):
     ) -> Optional[DoclingTaskResult]:
         pass
 
-    async def task_outcome(self, task_id: str) -> Optional[Any]:
+    async def task_outcome(self, task_id: str) -> Optional[TaskOutcome]:
         return await self.task_result(task_id)
 
     async def delete_task(self, task_id: str):

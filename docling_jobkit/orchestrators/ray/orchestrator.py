@@ -24,7 +24,10 @@ from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.convert.manager import DoclingConverterManager
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
-from docling_jobkit.datamodel.result import DoclingTaskResult
+from docling_jobkit.datamodel.result import DoclingTaskResult, TaskOutcome
+from docling_jobkit.datamodel.stored_outcome import (
+    StoredSuccessOutcome,
+)
 from docling_jobkit.datamodel.task import Task, TaskSource
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.datamodel.task_targets import TaskTarget
@@ -782,24 +785,17 @@ class RayOrchestrator(BaseOrchestrator):
             # turning task_status() into a hot loop.
             await asyncio.sleep(min(0.25, remaining))
 
-    async def task_result(
-        self,
-        task_id: str,
-    ) -> Optional[DoclingTaskResult]:
-        """Retrieve task result from Redis.
-
-        Args:
-            task_id: Task identifier
-
-        Returns:
-            Task result or None if not found
-        """
-        async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
-            return await self.redis_manager.get_task_result(task_id)
-
-    async def task_outcome(self, task_id: str) -> Optional[Any]:
+    async def task_outcome(self, task_id: str) -> Optional[TaskOutcome]:
         async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
             return await self.redis_manager.get_task_outcome(task_id)
+
+    async def task_result(self, task_id: str) -> Optional[DoclingTaskResult]:
+        outcome = await self.task_outcome(task_id)
+        if isinstance(outcome, StoredSuccessOutcome):
+            return outcome.result
+        if isinstance(outcome, DoclingTaskResult):
+            return outcome
+        return None
 
     async def process_queue(self):
         """Start local supervision and pub/sub handling for the shared dispatcher.

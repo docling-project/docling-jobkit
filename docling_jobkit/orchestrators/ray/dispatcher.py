@@ -425,22 +425,21 @@ class RayTaskDispatcher:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            classified_failure = classify_public_task_failure(
+            failure = classify_public_task_failure(
                 exc,
                 task_id=task_id,
-                debug_enabled=self.config.debug_error_details,
                 phase=FailurePhase.ORCHESTRATION,
                 details={
                     "task_size": str(task_size),
                     "target_kind": getattr(task.target, "kind", "unknown"),
                 },
             )
-            error_message = classified_failure.error_message
+            error_message = failure.message
             _log.error(
                 "[TASK-FAILURE] %s: %s",
                 task_id,
                 error_message,
-                exc_info=not is_expected_public_failure(classified_failure.failure),
+                exc_info=not is_expected_public_failure(failure),
             )
 
             terminalization = await self.redis_manager.finalize_task_failure_atomic(
@@ -448,7 +447,7 @@ class RayTaskDispatcher:
                 task_id=task_id,
                 task_size=task_size,
                 error_message=error_message,
-                failure=classified_failure.failure,
+                failure=failure,
             )
             if (
                 terminalization.status_changed
@@ -459,7 +458,7 @@ class RayTaskDispatcher:
                         task_id=task_id,
                         task_status=TaskStatus.FAILURE,
                         error_message=error_message,
-                        failure=classified_failure.failure,
+                        failure=failure,
                     )
                 )
                 await self.redis_manager.update_tenant_stats(
@@ -573,10 +572,9 @@ class RayTaskDispatcher:
             )
 
         _log.warning("[RECONCILE] %s: %s", task_id, error_message)
-        classified_failure = classify_public_task_failure(
+        failure = classify_public_task_failure(
             RuntimeError(error_message),
             task_id=task_id,
-            debug_enabled=self.config.debug_error_details,
             phase=FailurePhase.ORCHESTRATION,
             details={"task_size": str(task_size)},
         )
@@ -585,8 +583,8 @@ class RayTaskDispatcher:
             tenant_id=tenant_id,
             task_id=task_id,
             task_size=task_size,
-            error_message=classified_failure.error_message,
-            failure=classified_failure.failure,
+            error_message=failure.message,
+            failure=failure,
         )
         if (
             terminalization.status_changed
@@ -596,8 +594,8 @@ class RayTaskDispatcher:
                 TaskUpdate(
                     task_id=task_id,
                     task_status=TaskStatus.FAILURE,
-                    error_message=classified_failure.error_message,
-                    failure=classified_failure.failure,
+                    error_message=failure.message,
+                    failure=failure,
                 )
             )
 

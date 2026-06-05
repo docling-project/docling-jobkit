@@ -27,7 +27,7 @@ from docling.datamodel.service.callbacks import (
     ProgressUpdateProcessed,
 )
 from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.responses import FailurePhase
+from docling.datamodel.service.responses import FailurePhase, PublicFailureInfo
 from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
 from docling.datamodel.service.targets import PresignedUrlTarget, S3Target
 from docling.datamodel.service.tasks import TaskType
@@ -623,32 +623,26 @@ class DoclingProcessorConverterDeployment:
                 return await asyncio.to_thread(func)
             except Exception as exc:  # pragma: no cover - exercised in tests via mocks
                 last_exception = exc
-                classified_failure = None
+                failure = None
                 if task is not None:
-                    classified_failure = classify_public_task_failure(
+                    failure = classify_public_task_failure(
                         exc,
                         task_id=task.task_id,
-                        debug_enabled=self.config.debug_error_details,
                         phase=FailurePhase.EXECUTION,
                         details={
                             "task_size": str(len(task.sources)),
                             "target_kind": getattr(task.target, "kind", "unknown"),
                         },
                     )
-                    if is_expected_public_failure(classified_failure.failure):
-                        if (
-                            not classified_failure.failure.retryable
-                            or attempt >= max_retries
-                        ):
+                    if is_expected_public_failure(failure):
+                        if not failure.retryable or attempt >= max_retries:
                             _log.info(
                                 "Converter replica %s: %s failed with expected source error: %s",
                                 self.replica_id,
                                 task_label,
-                                classified_failure.error_message,
+                                failure.message,
                             )
-                            return ConverterFailureResult(
-                                failure=classified_failure.failure
-                            )
+                            return ConverterFailureResult(failure=failure)
 
                 if attempt < max_retries:
                     _log.warning(
@@ -657,11 +651,7 @@ class DoclingProcessorConverterDeployment:
                         task_label,
                         attempt + 1,
                         max_retries + 1,
-                        (
-                            classified_failure.error_message
-                            if classified_failure is not None
-                            else exc
-                        ),
+                        failure.message if failure is not None else exc,
                     )
                     await asyncio.sleep(retry_delay)
                 else:
@@ -670,11 +660,7 @@ class DoclingProcessorConverterDeployment:
                         self.replica_id,
                         task_label,
                         max_retries + 1,
-                        (
-                            classified_failure.error_message
-                            if classified_failure is not None
-                            else exc
-                        ),
+                        failure.message if failure is not None else exc,
                     )
 
         raise last_exception or RuntimeError("Converter request failed")
@@ -1020,23 +1006,22 @@ class DoclingProcessorCoordinatorDeployment:
             )
             return result
         except Exception as exc:
-            classified_failure = classify_public_task_failure(
+            failure = classify_public_task_failure(
                 exc,
                 task_id=task.task_id,
-                debug_enabled=self.config.debug_error_details,
                 phase=FailurePhase.EXECUTION,
                 details={
                     "task_size": str(task_size),
                     "target_kind": getattr(task.target, "kind", "unknown"),
                 },
             )
-            error_message = classified_failure.error_message
+            error_message = failure.message
             terminalization = await self.redis_manager.finalize_task_failure_atomic(
                 tenant_id=tenant_id,
                 task_id=task.task_id,
                 task_size=task_size,
                 error_message=error_message,
-                failure=classified_failure.failure,
+                failure=failure,
             )
             if (
                 terminalization.status_changed
@@ -1048,7 +1033,7 @@ class DoclingProcessorCoordinatorDeployment:
                             task_id=task.task_id,
                             task_status=TaskStatus.FAILURE,
                             error_message=error_message,
-                            failure=classified_failure.failure,
+                            failure=failure,
                         )
                     )
                     await self.redis_manager.update_tenant_stats(
@@ -1083,7 +1068,7 @@ class DoclingProcessorCoordinatorDeployment:
         task: Task,
         tenant_id: str,
         task_size: int,
-        failure: Any,
+        failure: PublicFailureInfo,
     ) -> None:
         error_message = failure.message
         terminalization = await self.redis_manager.finalize_task_failure_atomic(
