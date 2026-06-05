@@ -190,9 +190,9 @@ class ResultsProcessor:
         doc_hash: str,
     ):
         for page_no, page in pages.items():
+            page_hash = create_hash(f"{doc_hash}_page_no_{page_no}")
             try:
                 if page.image and page.image.pil_image:
-                    page_hash = create_hash(f"{doc_hash}_page_no_{page_no}")
                     page_dpi = page.image.dpi
                     page_path_suffix = f"pages/{page_hash}_{page_dpi}.png"
                     buf = BytesIO()
