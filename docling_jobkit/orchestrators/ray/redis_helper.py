@@ -12,9 +12,16 @@ from redis.asyncio import Redis
 from redis.asyncio.connection import ConnectionPool
 from redis.exceptions import NoScriptError, WatchError
 
+from docling.datamodel.service.responses import PublicFailureInfo
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.datamodel.result import DoclingTaskResult
+from docling_jobkit.datamodel.stored_outcome import (
+    StoredFailureOutcome,
+    StoredSuccessOutcome,
+    StoredTaskOutcome,
+    stored_task_outcome_adapter,
+)
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.ray.models import (
@@ -278,6 +285,7 @@ class RedisStateManager:
         task_id: str,
         status: TaskStatus,
         error_message: Optional[str] = None,
+        failure: Optional[PublicFailureInfo] = None,
         progress: Optional[dict] = None,
     ) -> None:
         """Update task status and metadata.
@@ -301,6 +309,8 @@ class RedisStateManager:
 
         if error_message:
             updates["error_message"] = error_message
+        if failure is not None:
+            updates["failure"] = failure.model_dump_json()
 
         if progress:
             updates["progress"] = json.dumps(progress)
@@ -395,7 +405,9 @@ class RedisStateManager:
             await self.connect()
 
         result_key = f"{self.results_prefix}:task:{task_id}:result"
-        result_data = self._serialize_task_result(result)
+        result_data = self._serialize_stored_outcome(
+            StoredSuccessOutcome(result=result)
+        )
 
         # Store with TTL
         redis = self._ensure_redis()
@@ -406,20 +418,20 @@ class RedisStateManager:
         return result_key
 
     @staticmethod
-    def _serialize_task_result(result: DoclingTaskResult) -> bytes:
-        """Serialize a task result for Redis storage."""
-        safe_data = make_msgpack_safe(result.model_dump())
+    def _serialize_stored_outcome(outcome: StoredTaskOutcome) -> bytes:
+        safe_data = make_msgpack_safe(stored_task_outcome_adapter.dump_python(outcome))
         return msgpack.packb(safe_data, use_bin_type=True)
 
-    async def get_task_result(self, task_id: str) -> Optional[DoclingTaskResult]:
-        """Retrieve task result from Redis.
+    @staticmethod
+    def decode_stored_outcome(raw: bytes) -> StoredTaskOutcome | DoclingTaskResult:
+        payload = msgpack.unpackb(raw, raw=False, strict_map_key=False)
+        if isinstance(payload, dict) and payload.get("kind") in {"success", "failure"}:
+            return stored_task_outcome_adapter.validate_python(payload)
+        return DoclingTaskResult.model_validate(payload)
 
-        Args:
-            task_id: Task identifier
-
-        Returns:
-            Task result or None if not found
-        """
+    async def get_task_outcome(
+        self, task_id: str
+    ) -> Optional[StoredTaskOutcome | DoclingTaskResult]:
         if not self.redis:
             await self.connect()
 
@@ -428,10 +440,19 @@ class RedisStateManager:
         result_data = await redis.get(result_key)  # type: ignore[union-attr]
 
         if result_data:
-            # Use strict_map_key=False to allow integer keys in dicts
-            result_dict = msgpack.unpackb(result_data, raw=False, strict_map_key=False)
-            return DoclingTaskResult.model_validate(result_dict)
+            return self.decode_stored_outcome(result_data)
 
+        return None
+
+    async def get_task_result(self, task_id: str) -> Optional[DoclingTaskResult]:
+        """Retrieve the successful task result from Redis."""
+        outcome = await self.get_task_outcome(task_id)
+        if outcome is None:
+            return None
+        if isinstance(outcome, DoclingTaskResult):
+            return outcome
+        if isinstance(outcome, StoredSuccessOutcome):
+            return outcome.result
         return None
 
     async def expire_result(self, result_key: str, ttl: int) -> None:
@@ -749,7 +770,9 @@ class RedisStateManager:
     ) -> TaskTerminalizationResult:
         """Durably finalize a task to SUCCESS exactly once."""
         result_key = f"{self.results_prefix}:task:{task_id}:result"
-        result_data = self._serialize_task_result(result)
+        result_data = self._serialize_stored_outcome(
+            StoredSuccessOutcome(result=result)
+        )
         return await self._finalize_task_terminal_state_atomic(
             tenant_id=tenant_id,
             task_id=task_id,
@@ -765,14 +788,22 @@ class RedisStateManager:
         task_id: str,
         task_size: int,
         error_message: str,
+        failure: PublicFailureInfo,
     ) -> TaskTerminalizationResult:
         """Durably finalize a task to FAILURE exactly once."""
+        result_key = f"{self.results_prefix}:task:{task_id}:result"
+        result_data = self._serialize_stored_outcome(
+            StoredFailureOutcome(failure=failure)
+        )
         return await self._finalize_task_terminal_state_atomic(
             tenant_id=tenant_id,
             task_id=task_id,
             task_size=task_size,
             terminal_status=TaskStatus.FAILURE,
             error_message=error_message,
+            failure=failure,
+            result_key=result_key,
+            result_data=result_data,
         )
 
     async def _finalize_task_terminal_state_atomic(
@@ -782,6 +813,7 @@ class RedisStateManager:
         task_size: int,
         terminal_status: TaskStatus,
         error_message: Optional[str] = None,
+        failure: Optional[PublicFailureInfo] = None,
         result_key: Optional[str] = None,
         result_data: Optional[bytes] = None,
     ) -> TaskTerminalizationResult:
@@ -815,10 +847,10 @@ class RedisStateManager:
                     pipe.multi()
 
                     if (
-                        terminal_status == TaskStatus.SUCCESS
-                        and current_status != TaskStatus.FAILURE
-                        and result_key is not None
+                        result_key is not None
                         and result_data is not None
+                        and current_status
+                        not in (TaskStatus.SUCCESS, TaskStatus.FAILURE)
                     ):
                         pipe.setex(result_key, self.results_ttl, result_data)
 
@@ -839,10 +871,15 @@ class RedisStateManager:
                             and error_message is not None
                         ):
                             updates["error_message"] = error_message
+                        if (
+                            terminal_status == TaskStatus.FAILURE
+                            and failure is not None
+                        ):
+                            updates["failure"] = failure.model_dump_json()
                         pipe.hset(task_key, mapping=updates)
 
                     if terminal_status == TaskStatus.SUCCESS:
-                        pipe.hdel(task_key, "error_message")
+                        pipe.hdel(task_key, "error_message", "failure")
                     pipe.delete(dispatch_key, execution_key)
 
                     if was_active:

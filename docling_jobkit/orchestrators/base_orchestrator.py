@@ -103,6 +103,9 @@ class BaseOrchestrator(ABC):
     ) -> Optional[DoclingTaskResult]:
         pass
 
+    async def task_outcome(self, task_id: str) -> Optional[Any]:
+        return await self.task_result(task_id)
+
     async def delete_task(self, task_id: str):
         _log.info(f"Deleting {task_id=}")
         if self.notifier:

@@ -129,7 +129,7 @@ class TestListenForUpdatesErrorPropagation:
             _make_pubsub_message(
                 task.task_id,
                 TaskStatus.FAILURE,
-                error_message="RuntimeError: No converter",
+                error_message="Internal processing error.",
             )
         ]
         orch._async_redis_conn.pubsub.return_value = _make_pubsub(messages)
@@ -137,7 +137,7 @@ class TestListenForUpdatesErrorPropagation:
         await orch._listen_for_updates()
 
         assert task.task_status == TaskStatus.FAILURE
-        assert task.error_message == "RuntimeError: No converter"
+        assert task.error_message == "Internal processing error."
 
     @pytest.mark.asyncio
     async def test_failure_without_error_message_leaves_none(self):

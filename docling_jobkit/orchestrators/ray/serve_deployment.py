@@ -27,6 +27,7 @@ from docling.datamodel.service.callbacks import (
     ProgressUpdateProcessed,
 )
 from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.responses import FailurePhase
 from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
 from docling.datamodel.service.targets import PresignedUrlTarget, S3Target
 from docling.datamodel.service.tasks import TaskType
@@ -47,6 +48,7 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManagerConfig,
 )
 from docling_jobkit.convert.materialization import (
+    MaterializationLimitExceededError,
     MaterializationLimits,
     materialize_and_preflight,
 )
@@ -66,8 +68,11 @@ from docling_jobkit.datamodel.exportable_document import (
 from docling_jobkit.datamodel.result import (
     DoclingTaskResult,
     DocumentArtifactItem,
+    ExportDocumentResponse,
+    ExportResult,
     PresignedArtifactResult,
     RemoteTargetResult,
+    ResultType,
 )
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
@@ -80,6 +85,7 @@ from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
 )
 from docling_jobkit.orchestrators.ray.models import (
+    ConverterFailureResult,
     ConverterRequest,
     ConverterTaskResult,
     MaterializedConvertRequest,
@@ -93,7 +99,8 @@ from docling_jobkit.orchestrators.ray.models import (
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 from docling_jobkit.public_errors import (
     build_public_error_item,
-    build_public_task_error,
+    classify_public_task_failure,
+    is_expected_public_failure,
 )
 
 _log = logging.getLogger(__name__)
@@ -228,6 +235,17 @@ def _aggregate_s3_fanout_results(
     )
 
 
+def _failed_task_placeholder(task_size: int) -> DoclingTaskResult:
+    return DoclingTaskResult(
+        result=RemoteTargetResult(),
+        processing_time=0.0,
+        num_converted=0,
+        num_succeeded=0,
+        num_partially_succeeded=0,
+        num_failed=task_size,
+    )
+
+
 def _build_failed_source_chunk_exportable_document(
     ref: SourceDocumentRef[Any],
     exc: Exception,
@@ -237,7 +255,7 @@ def _build_failed_source_chunk_exportable_document(
     return ExportableDocument(
         file=Path(ref.filename),
         status=ConversionStatus.FAILURE,
-        errors=[build_public_error_item(exc, debug_enabled=debug_error_details)],
+        errors=[build_public_error_item(exc)],
         source_index=ref.source_index,
         source_uri=ref.source_uri,
     )
@@ -301,6 +319,48 @@ def _build_failed_source_chunk_result(
     )
 
 
+def _build_materialization_failure_result(
+    task: Task,
+    source: FileSource | HttpSource,
+    exc: MaterializationLimitExceededError,
+    start_time: float,
+) -> DoclingTaskResult:
+    source_uri = source_to_public_uri(source)
+    filename = source.filename if isinstance(source, FileSource) else "document.pdf"
+    error_item = build_public_error_item(exc)
+    elapsed = time.monotonic() - start_time
+
+    if isinstance(task.target, PresignedUrlTarget):
+        result: ResultType = PresignedArtifactResult(
+            documents=[
+                DocumentArtifactItem(
+                    source_index=0,
+                    source_uri=source_uri,
+                    filename=filename,
+                    status=ConversionStatus.FAILURE,
+                    errors=[error_item],
+                )
+            ]
+        )
+    elif isinstance(task.target, S3Target):
+        result = RemoteTargetResult()
+    else:
+        result = ExportResult(
+            document=ExportDocumentResponse(filename=filename),
+            status=ConversionStatus.FAILURE,
+            errors=[error_item],
+        )
+
+    return DoclingTaskResult(
+        result=result,
+        processing_time=elapsed,
+        num_converted=1,
+        num_succeeded=0,
+        num_partially_succeeded=0,
+        num_failed=1,
+    )
+
+
 def _build_slice_plan(
     total_pages: int,
     requested_page_range: tuple[int, int],
@@ -360,7 +420,7 @@ def _build_failed_slice_result(
     return ExportableDocument(
         file=Path(filename),
         status=ConversionStatus.FAILURE,
-        errors=[build_public_error_item(exc, debug_enabled=debug_error_details)],
+        errors=[build_public_error_item(exc)],
         source_index=0,
         source_uri=filename,
         page_range=page_range,
@@ -479,7 +539,7 @@ class DoclingProcessorConverterDeployment:
 
     async def process_converter_request(
         self, request: ConverterRequest
-    ) -> ConverterTaskResult | ObjectRef:
+    ) -> ConverterTaskResult | ConverterFailureResult | ObjectRef:
         if self.config.enable_oom_protection and PSUTIL_AVAILABLE:
             await self._check_memory()
 
@@ -488,7 +548,10 @@ class DoclingProcessorConverterDeployment:
             conv_results = await self._run_with_retry(
                 request.task.task_id,
                 lambda: self._convert_passthrough_task(request.task),
+                task=request.task,
             )
+            if isinstance(conv_results, ConverterFailureResult):
+                return conv_results
             exportable = _to_exportable_documents(request.task, conv_results)
             result = await asyncio.to_thread(
                 lambda: self._build_task_result(
@@ -548,7 +611,9 @@ class DoclingProcessorConverterDeployment:
         self.last_task_time = datetime.datetime.now(datetime.timezone.utc)
         return result
 
-    async def _run_with_retry(self, task_label: str, func: Any) -> Any:
+    async def _run_with_retry(
+        self, task_label: str, func: Any, *, task: Task | None = None
+    ) -> Any:
         max_retries = self.config.max_task_retries
         retry_delay = self.config.retry_delay
         last_exception: Optional[Exception] = None
@@ -558,6 +623,33 @@ class DoclingProcessorConverterDeployment:
                 return await asyncio.to_thread(func)
             except Exception as exc:  # pragma: no cover - exercised in tests via mocks
                 last_exception = exc
+                classified_failure = None
+                if task is not None:
+                    classified_failure = classify_public_task_failure(
+                        exc,
+                        task_id=task.task_id,
+                        debug_enabled=self.config.debug_error_details,
+                        phase=FailurePhase.EXECUTION,
+                        details={
+                            "task_size": str(len(task.sources)),
+                            "target_kind": getattr(task.target, "kind", "unknown"),
+                        },
+                    )
+                    if is_expected_public_failure(classified_failure.failure):
+                        if (
+                            not classified_failure.failure.retryable
+                            or attempt >= max_retries
+                        ):
+                            _log.info(
+                                "Converter replica %s: %s failed with expected source error: %s",
+                                self.replica_id,
+                                task_label,
+                                classified_failure.error_message,
+                            )
+                            return ConverterFailureResult(
+                                failure=classified_failure.failure
+                            )
+
                 if attempt < max_retries:
                     _log.warning(
                         "Converter replica %s: %s failed (attempt %s/%s): %s",
@@ -565,7 +657,11 @@ class DoclingProcessorConverterDeployment:
                         task_label,
                         attempt + 1,
                         max_retries + 1,
-                        exc,
+                        (
+                            classified_failure.error_message
+                            if classified_failure is not None
+                            else exc
+                        ),
                     )
                     await asyncio.sleep(retry_delay)
                 else:
@@ -574,7 +670,11 @@ class DoclingProcessorConverterDeployment:
                         self.replica_id,
                         task_label,
                         max_retries + 1,
-                        exc,
+                        (
+                            classified_failure.error_message
+                            if classified_failure is not None
+                            else exc
+                        ),
                     )
 
         raise last_exception or RuntimeError("Converter request failed")
@@ -842,6 +942,30 @@ class DoclingProcessorCoordinatorDeployment:
             workdir.mkdir(exist_ok=True, parents=True)
             result = await self._process_task(task, workdir)
 
+            if isinstance(result, ConverterFailureResult):
+                self.tasks_processed += 1
+                self.documents_processed += task_size
+                self.last_task_time = datetime.datetime.now(datetime.timezone.utc)
+                await self._finalize_expected_task_failure(
+                    task=task,
+                    tenant_id=tenant_id,
+                    task_size=task_size,
+                    failure=result.failure,
+                )
+                duration = (
+                    (self.last_task_time - task_start).total_seconds()
+                    if self.last_task_time
+                    else 0.0
+                )
+                _log.info(
+                    "Coordinator replica %s: task %s failed in %.2fs: %s",
+                    self.replica_id,
+                    task.task_id,
+                    duration,
+                    result.failure.message,
+                )
+                return _failed_task_placeholder(task_size)
+
             self.tasks_processed += 1
             self.documents_processed += task_size
             self.last_task_time = datetime.datetime.now(datetime.timezone.utc)
@@ -896,15 +1020,23 @@ class DoclingProcessorCoordinatorDeployment:
             )
             return result
         except Exception as exc:
-            error_message = build_public_task_error(
+            classified_failure = classify_public_task_failure(
                 exc,
+                task_id=task.task_id,
                 debug_enabled=self.config.debug_error_details,
+                phase=FailurePhase.EXECUTION,
+                details={
+                    "task_size": str(task_size),
+                    "target_kind": getattr(task.target, "kind", "unknown"),
+                },
             )
+            error_message = classified_failure.error_message
             terminalization = await self.redis_manager.finalize_task_failure_atomic(
                 tenant_id=tenant_id,
                 task_id=task.task_id,
                 task_size=task_size,
                 error_message=error_message,
+                failure=classified_failure.failure,
             )
             if (
                 terminalization.status_changed
@@ -916,6 +1048,7 @@ class DoclingProcessorCoordinatorDeployment:
                             task_id=task.task_id,
                             task_status=TaskStatus.FAILURE,
                             error_message=error_message,
+                            failure=classified_failure.failure,
                         )
                     )
                     await self.redis_manager.update_tenant_stats(
@@ -944,7 +1077,52 @@ class DoclingProcessorCoordinatorDeployment:
             if workdir.exists():
                 shutil.rmtree(workdir, ignore_errors=True)
 
-    async def _process_task(self, task: Task, workdir: Path) -> DoclingTaskResult:
+    async def _finalize_expected_task_failure(
+        self,
+        *,
+        task: Task,
+        tenant_id: str,
+        task_size: int,
+        failure: Any,
+    ) -> None:
+        error_message = failure.message
+        terminalization = await self.redis_manager.finalize_task_failure_atomic(
+            tenant_id=tenant_id,
+            task_id=task.task_id,
+            task_size=task_size,
+            error_message=error_message,
+            failure=failure,
+        )
+        if (
+            terminalization.status_changed
+            and terminalization.final_status == TaskStatus.FAILURE
+        ):
+            try:
+                await self.redis_manager.publish_update(
+                    TaskUpdate(
+                        task_id=task.task_id,
+                        task_status=TaskStatus.FAILURE,
+                        error_message=error_message,
+                        failure=failure,
+                    )
+                )
+                await self.redis_manager.update_tenant_stats(
+                    tenant_id,
+                    delta_total_tasks=1,
+                    delta_total_documents=task_size,
+                    delta_failed_documents=task_size,
+                )
+            except Exception as follow_up_exc:  # pragma: no cover - observability only
+                _log.warning(
+                    "Coordinator replica %s: durable failure follow-up failed for %s: %s",
+                    self.replica_id,
+                    task.task_id,
+                    follow_up_exc,
+                )
+
+    async def _process_task(
+        self, task: Task, workdir: Path
+    ) -> DoclingTaskResult | ConverterFailureResult:
         if task.task_type == TaskType.CONVERT:
             return await self._process_convert_task(task, workdir)
         if task.task_type == TaskType.CHUNK:
@@ -953,7 +1131,7 @@ class DoclingProcessorCoordinatorDeployment:
 
     async def _process_convert_task(
         self, task: Task, workdir: Path
-    ) -> DoclingTaskResult:
+    ) -> DoclingTaskResult | ConverterFailureResult:
         convert_options = task.convert_options or ConvertDocumentsOptions()
         materialized_start_time = time.monotonic()
 
@@ -971,13 +1149,18 @@ class DoclingProcessorCoordinatorDeployment:
                 raise TypeError(
                     "Materialized PDF path only supports FileSource and HttpSource"
                 )
-            materialized = await materialize_and_preflight(
-                source,
-                limits=MaterializationLimits(
-                    max_file_size=self.converter_manager_config.max_file_size,
-                    max_num_pages=self.converter_manager_config.max_num_pages,
-                ),
-            )
+            try:
+                materialized = await materialize_and_preflight(
+                    source,
+                    limits=MaterializationLimits(
+                        max_file_size=self.converter_manager_config.max_file_size,
+                        max_num_pages=self.converter_manager_config.max_num_pages,
+                    ),
+                )
+            except MaterializationLimitExceededError as exc:
+                return _build_materialization_failure_result(
+                    task, source, exc, materialized_start_time
+                )
             artifact_ref = ray.put(materialized.content_bytes)
             page_count = materialized.page_count
             filename = materialized.filename
@@ -1035,6 +1218,8 @@ class DoclingProcessorCoordinatorDeployment:
                             )
                         )
                     )
+                    if isinstance(converter_result, ConverterFailureResult):
+                        return converter_result
                     return converter_result.task_result
             finally:
                 del artifact_ref
@@ -1044,13 +1229,19 @@ class DoclingProcessorCoordinatorDeployment:
                     PassthroughTaskRequest(task=task)
                 )
             )
+            if isinstance(converter_result, ConverterFailureResult):
+                return converter_result
             return converter_result.task_result
 
-    async def _process_chunk_task(self, task: Task, workdir: Path) -> DoclingTaskResult:
+    async def _process_chunk_task(
+        self, task: Task, workdir: Path
+    ) -> DoclingTaskResult | ConverterFailureResult:
         del workdir
         converter_result = await self.converter_handle.process_converter_request.remote(
             PassthroughTaskRequest(task=task)
         )
+        if isinstance(converter_result, ConverterFailureResult):
+            return converter_result
         return converter_result.task_result
 
     def _iter_source_chunks_for_s3_fanout(

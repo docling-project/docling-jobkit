@@ -53,6 +53,7 @@ from docling_jobkit.datamodel.result import (
 from docling_jobkit.datamodel.source_identity import SourceIdentity
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.public_errors import (
+    TargetWriteError,
     build_public_error_item,
     render_public_error_list,
 )
@@ -135,7 +136,7 @@ def _build_failed_exportable_document(
             "status": ConversionStatus.FAILURE,
             "errors": [
                 *exportable_document.errors,
-                build_public_error_item(exc, debug_enabled=debug_error_details),
+                build_public_error_item(exc),
             ],
             "document": None,
         }
@@ -363,8 +364,8 @@ def _upload_to_put_target(
             )
             if attempt < max_retries - 1:
                 time.sleep(retry_delay * (attempt + 1))
-    raise RuntimeError(
-        f"Failed to upload zip to target url after {max_retries} attempts."
+    raise TargetWriteError(
+        f"Failed to upload to target URL after {max_retries} attempts."
     ) from last_exc
 
 

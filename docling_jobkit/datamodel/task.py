@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.responses import PublicFailureInfo
 from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
 from docling.datamodel.service.targets import InBodyTarget
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
@@ -49,6 +50,7 @@ class Task(BaseModel):
     processing_meta: Optional[TaskProcessingMeta] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     error_message: Optional[str] = None
+    failure: Optional[PublicFailureInfo] = None
     created_at: datetime.datetime = Field(
         default_factory=partial(datetime.datetime.now, datetime.timezone.utc)
     )

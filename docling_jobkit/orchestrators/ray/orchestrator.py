@@ -586,6 +586,7 @@ class RayOrchestrator(BaseOrchestrator):
         task.task_status = metadata.status
         task.metadata["tenant_id"] = metadata.tenant_id
         task.error_message = metadata.error_message
+        task.failure = metadata.failure
         task.created_at = metadata.created_at
         task.started_at = metadata.started_at
         task.finished_at = metadata.finished_at
@@ -796,6 +797,10 @@ class RayOrchestrator(BaseOrchestrator):
         async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
             return await self.redis_manager.get_task_result(task_id)
 
+    async def task_outcome(self, task_id: str) -> Optional[Any]:
+        async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
+            return await self.redis_manager.get_task_outcome(task_id)
+
     async def process_queue(self):
         """Start local supervision and pub/sub handling for the shared dispatcher.
 
@@ -837,6 +842,8 @@ class RayOrchestrator(BaseOrchestrator):
 
                 if update.error_message:
                     task.error_message = update.error_message
+                if update.failure is not None:
+                    task.failure = update.failure
 
                 if update.progress:
                     task.processing_meta = update.progress

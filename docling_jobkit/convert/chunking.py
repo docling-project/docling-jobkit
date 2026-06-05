@@ -60,7 +60,7 @@ from docling_jobkit.datamodel.result import (
     ZipArchiveResult,
 )
 from docling_jobkit.datamodel.task import Task
-from docling_jobkit.public_errors import render_public_error_list
+from docling_jobkit.public_errors import TargetWriteError, render_public_error_list
 
 if TYPE_CHECKING:
     from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
@@ -539,10 +539,8 @@ def process_chunkable_results(
                     r.raise_for_status()
                 task_result = RemoteTargetResult()
             except Exception as exc:
-                _log.error("An error occour while uploading zip to s3", exc_info=exc)
-                raise RuntimeError(
-                    "An error occour while uploading zip to the target url."
-                )
+                _log.error("Failed to upload zip to target URL", exc_info=exc)
+                raise TargetWriteError("Failed to upload to target URL") from exc
         else:
             task_result = ZipArchiveResult(content=file_path.read_bytes())
 
