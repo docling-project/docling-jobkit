@@ -3,34 +3,76 @@ from contextlib import AbstractContextManager
 from itertools import islice
 from typing import Callable, Generic, Iterator, Sequence, TypeVar
 
+from pydantic import BaseModel, ConfigDict
+
 from docling.datamodel.base_models import DocumentStream
 
 FileIdentifierT = TypeVar("FileIdentifierT")  # identifier type per connector
+SourceT = TypeVar("SourceT")  # root source type per connector
+ConverterSource = str | DocumentStream
 
 
-class DocumentChunk(Generic[FileIdentifierT]):
+class SourceDocumentRef(BaseModel, Generic[FileIdentifierT]):
+    """Connector-native document reference safe to pass between processes."""
+
+    id: FileIdentifierT
+    source_index: int
+    source_uri: str
+    filename: str
+
+
+class DocumentChunk(BaseModel, Generic[SourceT, FileIdentifierT]):
+    """A serializable source chunk plus an optional local fetcher convenience.
+
+    Local/CLI callers may attach a fetcher so ``iter_documents()`` can materialize
+    streams lazily from the refs. Cross-process callers such as Ray must strip that
+    fetcher because it may capture initialized connector state that is not safe to
+    serialize.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    source: SourceT
+    refs: Sequence[SourceDocumentRef[FileIdentifierT]]
+    chunk_index: int
+    _fetcher: Callable[[FileIdentifierT], DocumentStream] | None = None
+
     def __init__(
         self,
-        ids: Sequence[FileIdentifierT],
-        fetcher: Callable[[FileIdentifierT], DocumentStream],
+        source: SourceT,
+        refs: Sequence[SourceDocumentRef[FileIdentifierT]],
         chunk_index: int,
+        fetcher: Callable[[FileIdentifierT], DocumentStream] | None = None,
     ):
-        self.ids = ids
+        super().__init__(source=source, refs=refs, chunk_index=chunk_index)
         self._fetcher = fetcher
-        self.index = chunk_index
+
+    @property
+    def ids(self) -> list[FileIdentifierT]:
+        return [ref.id for ref in self.refs]
+
+    @property
+    def index(self) -> int:
+        return self.chunk_index
 
     def iter_documents(self) -> Iterator[DocumentStream]:
-        for doc_id in self.ids:
-            yield self._fetcher(doc_id)
+        """Materialize documents for local callers when a fetcher is attached."""
+        if self._fetcher is None:
+            raise RuntimeError("DocumentChunk does not have an attached fetcher.")
+        for ref in self.refs:
+            yield self._fetcher(ref.id)
 
 
-class BaseSourceProcessor(Generic[FileIdentifierT], AbstractContextManager, ABC):
+class BaseSourceProcessor(
+    Generic[SourceT, FileIdentifierT], AbstractContextManager, ABC
+):
     """
     Base class for source processors.
     Handles initialization state and context management.
     """
 
-    def __init__(self):
+    def __init__(self, source: SourceT):
+        self._processor_source = source
         self._initialized = False  # Track whether the processor is ready
 
     def __enter__(self):
@@ -60,7 +102,42 @@ class BaseSourceProcessor(Generic[FileIdentifierT], AbstractContextManager, ABC)
     def _fetch_document_by_id(self, identifier: FileIdentifierT) -> DocumentStream:
         raise NotImplementedError
 
+    def _make_document_ref(
+        self, identifier: FileIdentifierT, source_index: int
+    ) -> SourceDocumentRef[FileIdentifierT]:
+        """Build a process-safe reference for a connector document."""
+        filename = str(identifier)
+        return SourceDocumentRef(
+            id=identifier,
+            source_index=source_index,
+            source_uri=filename,
+            filename=filename,
+        )
+
+    @property
+    def source(self) -> SourceT:
+        """Return the root source needed to reconstruct this processor."""
+        return self._processor_source
+
     def _count_documents(self) -> int | None:
+        return None
+
+    def fetch_converter_source_by_ref(
+        self, ref: SourceDocumentRef[FileIdentifierT]
+    ) -> ConverterSource:
+        """Resolve a ref into the converter input expected by the backend.
+
+        Most connectors materialize a ``DocumentStream`` from the ref's identifier.
+        Connectors with remote-fetch semantics may override this to return a lighter
+        representation such as a source URL.
+        """
+        return self._fetch_document_by_id(ref.id)
+
+    def headers_for_ref(
+        self, ref: SourceDocumentRef[FileIdentifierT]
+    ) -> dict[str, object] | None:
+        """Return per-ref request headers when the converter should fetch remotely."""
+        del ref
         return None
 
     def iterate_documents(self) -> Iterator[DocumentStream]:
@@ -72,22 +149,29 @@ class BaseSourceProcessor(Generic[FileIdentifierT], AbstractContextManager, ABC)
 
     def iterate_document_chunks(
         self, chunk_size: int
-    ) -> Iterator[DocumentChunk[FileIdentifierT]]:
+    ) -> Iterator[DocumentChunk[SourceT, FileIdentifierT]]:
         ids_gen = self._list_document_ids()
         if ids_gen is None:
             raise RuntimeError("Connector does not support chunking.")
 
         chunk_index = 0
+        source_index = 0
 
         while True:
             ids = list(islice(ids_gen, chunk_size))
             if not ids:
                 break
+            refs = [
+                self._make_document_ref(identifier, source_index + offset)
+                for offset, identifier in enumerate(ids)
+            ]
 
             yield DocumentChunk(
-                ids=ids,
-                fetcher=self._fetch_document_by_id,
+                source=self.source,
+                refs=refs,
                 chunk_index=chunk_index,
+                fetcher=self._fetch_document_by_id,
             )
 
             chunk_index += 1
+            source_index += len(ids)

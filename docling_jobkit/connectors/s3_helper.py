@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 
 from docling.datamodel.service.sources import S3Coordinates
 
+from docling_jobkit.connectors.artifact_paths import build_s3_source_key
+
 logging.basicConfig(level=logging.INFO)
 
 # Set the maximum file size of parquet to 500MB
@@ -44,7 +46,10 @@ def get_s3_connection(coords: S3Coordinates):
     session = Session()
 
     config = Config(
-        connect_timeout=30, retries={"max_attempts": 1}, signature_version="s3v4"
+        connect_timeout=30,
+        read_timeout=60,  # cap stalled-read hangs; applies to list, get, and put responses
+        retries={"max_attempts": 1},
+        signature_version="s3v4",
     )
     scheme = "https" if coords.verify_ssl else "http"
     path = "/"
@@ -54,8 +59,8 @@ def get_s3_connection(coords: S3Coordinates):
         "s3",
         endpoint_url=endpoint,
         verify=coords.verify_ssl,
-        aws_access_key_id=coords.access_key.get_secret_value(),
-        aws_secret_access_key=coords.secret_key.get_secret_value(),
+        aws_access_key_id=coords.access_key,
+        aws_secret_access_key=coords.secret_key,
         config=config,
     )
 
@@ -63,8 +68,8 @@ def get_s3_connection(coords: S3Coordinates):
         "s3",
         endpoint_url=endpoint,
         verify=coords.verify_ssl,
-        aws_access_key_id=coords.access_key.get_secret_value(),
-        aws_secret_access_key=coords.secret_key.get_secret_value(),
+        aws_access_key_id=coords.access_key,
+        aws_secret_access_key=coords.secret_key,
         config=config,
     )
 
@@ -161,15 +166,15 @@ def get_source_files(
 def check_target_has_source_converted(
     coords: S3Coordinates,
     source_objects_list: list[str],
-    s3_source_prefix: str,
+    source_coords: S3Coordinates,
 ):
     s3_target_client, s3_target_resource = get_s3_connection(coords)
     target_paginator = s3_target_client.get_paginator("list_objects_v2")
 
+    source_key = build_s3_source_key(source_coords)
+    key_prefix = coords.key_prefix.strip("/")
     converted_prefix = (
-        coords.key_prefix + "json/"
-        if coords.key_prefix.endswith("/")
-        else coords.key_prefix + "/json/"
+        f"{key_prefix}/{source_key}/json/" if key_prefix else f"{source_key}/json/"
     )
 
     target_count = count_s3_objects(target_paginator, coords.bucket, converted_prefix)

@@ -1,5 +1,3 @@
-# ruff: noqa: E402, UP006, UP035
-
 from typing import Any, Dict, List
 
 from kfp import dsl
@@ -67,12 +65,12 @@ def convert_batch(
 
     from pydantic import AnyUrl, TypeAdapter
 
+    from docling.datamodel.base_models import ConversionStatus
     from docling.datamodel.service.callbacks import (
         CallbackSpec,
-        FailedDocsItem,
+        ProcessedDocsItem,
         ProgressCallbackRequest,
         ProgressUpdateProcessed,
-        SucceededDocsItem,
     )
     from docling.datamodel.service.options import ConvertDocumentsOptions
     from docling.datamodel.service.sources import HttpSource
@@ -86,8 +84,7 @@ def convert_batch(
 
     output_dir = Path(output_path)
     output_dir.mkdir(exist_ok=True, parents=True)
-    docs_succeeded: list[SucceededDocsItem] = []
-    docs_failed: list[FailedDocsItem] = []
+    docs: list[ProcessedDocsItem] = []
     for source_dict in data_splits:
         source = HttpSource.model_validate(source_dict)
         filename = Path(str(AnyUrl(source.url).path)).name
@@ -95,16 +92,21 @@ def convert_batch(
         print(f"Writing {output_filename}")
         with output_filename.open("w") as f:
             f.write(source.model_dump_json())
-        docs_succeeded.append(SucceededDocsItem(source=source.url))
+        docs.append(
+            ProcessedDocsItem(
+                source=source.url,
+                status=ConversionStatus.SUCCESS,
+            )
+        )
 
     payload = ProgressCallbackRequest(
         task_id=run_name,
         progress=ProgressUpdateProcessed(
-            num_failed=len(docs_failed),
-            num_processed=len(docs_succeeded) + len(docs_failed),
-            num_succeeded=len(docs_succeeded),
-            docs_succeeded=docs_succeeded,
-            docs_failed=docs_failed,
+            num_failed=0,
+            num_processed=len(docs),
+            num_succeeded=len(docs),
+            num_partially_succeeded=0,
+            docs=docs,
         ),
     )
 

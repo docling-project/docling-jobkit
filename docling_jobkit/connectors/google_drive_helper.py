@@ -1,23 +1,27 @@
 import json
 import logging
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path, PurePosixPath
-from typing import Iterable, List, TypedDict
+from typing import Iterable
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import Resource, build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
+from pydantic import BaseModel
 
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
 
 
-class GoogleDriveFileIdentifier(TypedDict):
+class GoogleDriveFileIdentifier(BaseModel):
     id: str
     name: str
-    mimeType: str
+    mime_type: str
     path: str
+    size: int | None = None
+    last_modified: datetime | None = None
 
 
 def _get_client_info(coords):
@@ -93,7 +97,10 @@ def _yield_children(service: Resource, folder_id: str):
     query = f"'{folder_id}' in parents and trashed = false"
     fields = (
         "nextPageToken, "
-        "files(id, name, mimeType, parents, shortcutDetails(targetId, targetMimeType))"
+        "files("
+        "id, name, mimeType, modifiedTime, size, parents, "
+        "shortcutDetails(targetId, targetMimeType)"
+        ")"
     )
     page_token = None
     while True:
@@ -130,21 +137,21 @@ def _yield_files_infos(
         service.files()
         .get(
             fileId=coords.path_id,
-            fields="id, name, mimeType",
+            fields="id, name, mimeType, modifiedTime, size",
             supportsAllDrives=True,
         )
         .execute()
     )
 
-    info: GoogleDriveFileIdentifier
     if not (root_meta.get("mimeType") == "application/vnd.google-apps.folder"):
-        info = {
-            "id": root_meta["id"],
-            "name": root_meta["name"],
-            "mimeType": root_meta["mimeType"],
-            "path": root_meta["name"],
-        }
-        yield info
+        yield GoogleDriveFileIdentifier(
+            id=root_meta["id"],
+            name=root_meta["name"],
+            mime_type=root_meta["mimeType"],
+            path=root_meta["name"],
+            size=root_meta.get("size"),
+            last_modified=root_meta.get("modifiedTime"),
+        )
         return
 
     stack = [(coords.path_id, root_meta["name"])]
@@ -155,19 +162,20 @@ def _yield_files_infos(
             if item["mimeType"] == "application/vnd.google-apps.folder":
                 stack.append((item["id"], path))
             else:
-                info = {
-                    "id": item["id"],
-                    "name": item["name"],
-                    "mimeType": item["mimeType"],
-                    "path": path,
-                }
-                yield info
+                yield GoogleDriveFileIdentifier(
+                    id=item["id"],
+                    name=item["name"],
+                    mime_type=item["mimeType"],
+                    path=path,
+                    size=item.get("size"),
+                    last_modified=item.get("modifiedTime"),
+                )
 
 
 def get_source_files_infos(
     service: Resource,
     coords: GoogleDriveCoordinates,
-) -> List[GoogleDriveFileIdentifier]:
+) -> list[GoogleDriveFileIdentifier]:
     return list(_yield_files_infos(service, coords))
 
 
@@ -192,15 +200,13 @@ def download_file(
             "application/vnd.openxmlformats-officedocument.presentationml.presentation"
         ),
     }
-    if file_info["mimeType"].startswith("application/vnd.google-apps."):
-        export_mime = EXPORT_MAP.get(file_info["mimeType"])
+    if file_info.mime_type.startswith("application/vnd.google-apps."):
+        export_mime = EXPORT_MAP.get(file_info.mime_type)
         request = service.files().export_media(
-            fileId=file_info["id"], mimeType=export_mime
+            fileId=file_info.id, mimeType=export_mime
         )
     else:
-        request = service.files().get_media(
-            fileId=file_info["id"], supportsAllDrives=True
-        )
+        request = service.files().get_media(fileId=file_info.id, supportsAllDrives=True)
 
     downloader = MediaIoBaseDownload(file_stream, request)
     done = False

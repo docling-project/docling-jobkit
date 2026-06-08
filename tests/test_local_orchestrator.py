@@ -418,7 +418,7 @@ async def test_chunk_file(
 
     assert len(task_result.result.documents) == 1
     assert (
-        task_result.result.documents[0].content.json_content is None
+        task_result.result.documents[0].document.json_content is None
     )  # by default no document
     assert len(task_result.result.chunks) > 1
 
@@ -741,3 +741,6 @@ async def test_convert_with_callbacks(orchestrator: LocalOrchestrator, callback_
     assert final_callback["num_processed"] == 1
     assert final_callback["num_succeeded"] == 1
     assert final_callback["num_failed"] == 0
+    assert len(final_callback["docs"]) == 1
+    assert final_callback["docs"][0]["source"] == doc_filename.name
+    assert final_callback["docs"][0]["status"] == ConversionStatus.SUCCESS

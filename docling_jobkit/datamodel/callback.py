@@ -4,26 +4,24 @@ from docling.datamodel.service.callbacks import (
     BaseProgress,
     CallbackSpec,
     DocumentCompletedItem,
-    FailedDocsItem,
+    ProcessedDocsItem,
     ProgressCallbackRequest,
     ProgressCallbackResponse,
     ProgressDocumentCompleted,
     ProgressKind,
     ProgressSetNumDocs,
     ProgressUpdateProcessed,
-    SucceededDocsItem,
 )
 
 __all__ = [
     "BaseProgress",
     "CallbackSpec",
     "DocumentCompletedItem",
-    "FailedDocsItem",
+    "ProcessedDocsItem",
     "ProgressCallbackRequest",
     "ProgressCallbackResponse",
     "ProgressDocumentCompleted",
     "ProgressKind",
     "ProgressSetNumDocs",
     "ProgressUpdateProcessed",
-    "SucceededDocsItem",
 ]

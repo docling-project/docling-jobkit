@@ -16,11 +16,10 @@ from pydantic import BaseModel, Field
 from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.callbacks import (
-    FailedDocsItem,
+    ProcessedDocsItem,
     ProgressDocumentCompleted,
     ProgressSetNumDocs,
     ProgressUpdateProcessed,
-    SucceededDocsItem,
 )
 from docling.datamodel.service.chunking import (
     BaseChunkerOptions,
@@ -54,8 +53,8 @@ from docling_jobkit.datamodel.result import (
     ChunkedDocumentResult,
     ChunkedDocumentResultItem,
     DoclingTaskResult,
+    DocumentResultItem,
     ExportDocumentResponse,
-    ExportResult,
     RemoteTargetResult,
     ResultType,
     ZipArchiveResult,
@@ -353,11 +352,10 @@ def process_chunkable_results(
     # We have some results, let's prepare the response
     task_result: ResultType
     chunks: list[ChunkedDocumentResultItem] = []
-    documents: list[ExportResult] = []
+    documents: list[DocumentResultItem] = []
     num_succeeded = 0
     num_failed = 0
-    docs_succeeded: list[SucceededDocsItem] = []
-    docs_failed: list[FailedDocsItem] = []
+    docs: list[ProcessedDocsItem] = []
 
     # TODO: DocumentChunkerManager should be initialized outside for really working as a cache
     chunker_manager = chunker_manager or DocumentChunkerManager()
@@ -409,24 +407,22 @@ def process_chunkable_results(
             _log.warning(f"Document {exportable_document.file} failed to convert.")
             num_failed += 1
 
-        # Track for final summary
-        if exportable_document.status == ConversionStatus.SUCCESS:
-            docs_succeeded.append(
-                SucceededDocsItem(source=str(exportable_document.file))
+        summary_error = render_public_error_list(
+            errors,
+            debug_enabled=debug_error_details,
+        )
+        docs.append(
+            ProcessedDocsItem(
+                source=str(exportable_document.file),
+                status=exportable_document.status,
+                error=summary_error
+                or (
+                    "Unknown error"
+                    if exportable_document.status != ConversionStatus.SUCCESS
+                    else None
+                ),
             )
-        else:
-            docs_failed.append(
-                FailedDocsItem(
-                    source=str(exportable_document.file),
-                    error=(
-                        render_public_error_list(
-                            errors,
-                            debug_enabled=debug_error_details,
-                        )
-                        or "Unknown error"
-                    ),
-                )
-            )
+        )
 
         # 2. Send per-document callback (non-blocking)
         if callback_invoker and task.callbacks:
@@ -475,8 +471,8 @@ def process_chunkable_results(
         else:
             doc_content = ExportDocumentResponse(filename=filename)
 
-        doc_result = ExportResult(
-            content=doc_content,
+        doc_result = DocumentResultItem(
+            document=doc_content,
             status=exportable_document.status,
             timings=exportable_document.timings,
             errors=errors,
@@ -484,6 +480,7 @@ def process_chunkable_results(
 
         documents.append(doc_result)
     num_total = num_succeeded + num_failed
+    # Task-level wall clock elapsed time across the whole request.
     processing_time = time.monotonic() - start_time
     _log.info(
         f"Processed {num_total} docs generating {len(chunks)} chunks in {processing_time:.2f} seconds."
@@ -495,11 +492,11 @@ def process_chunkable_results(
             callbacks=task.callbacks,
             task_id=task.task_id,
             progress=ProgressUpdateProcessed(
-                num_processed=len(docs_succeeded) + len(docs_failed),
-                num_succeeded=len(docs_succeeded),
-                num_failed=len(docs_failed),
-                docs_succeeded=docs_succeeded,
-                docs_failed=docs_failed,
+                num_processed=len(docs),
+                num_succeeded=num_succeeded,
+                num_partially_succeeded=0,
+                num_failed=num_failed,
+                docs=docs,
             ),
         )
 
@@ -553,6 +550,7 @@ def process_chunkable_results(
         result=task_result,
         processing_time=processing_time,
         num_succeeded=num_succeeded,
+        num_partially_succeeded=0,
         num_failed=num_failed,
         num_converted=num_total,
     )

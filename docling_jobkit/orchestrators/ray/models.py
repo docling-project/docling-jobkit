@@ -6,9 +6,11 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from docling.datamodel.service.callbacks import ProcessedDocsItem
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
+from docling_jobkit.connectors.source_processor import DocumentChunk
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
@@ -211,6 +213,17 @@ class MaterializedConvertRequest(BaseModel):
     source_count: int = Field(description="Original source count for callbacks")
 
 
+class SourceChunkConvertRequest(BaseModel):
+    kind: str = Field(default="source_chunk_convert")
+    task: Task = Field(description="Parent task metadata")
+    chunk: DocumentChunk[Any, Any] = Field(
+        description="Data-only source chunk to fetch and convert"
+    )
+    expected_doc_count: int = Field(
+        description="Parent task document count used for callback context"
+    )
+
+
 class SliceConvertRequest(BaseModel):
     kind: str = Field(default="slice_convert")
     artifact_ref: Any = Field(description="Ray ObjectRef with shared PDF bytes")
@@ -221,9 +234,16 @@ class SliceConvertRequest(BaseModel):
 
 
 ConverterRequest = (
-    PassthroughTaskRequest | MaterializedConvertRequest | SliceConvertRequest
+    PassthroughTaskRequest
+    | MaterializedConvertRequest
+    | SourceChunkConvertRequest
+    | SliceConvertRequest
 )
 
 
 class ConverterTaskResult(BaseModel):
     task_result: DoclingTaskResult = Field(description="Final task result")
+    processed_docs: list[ProcessedDocsItem] = Field(
+        default_factory=list,
+        description="Per-document processed summary for coordinator aggregation",
+    )

@@ -145,16 +145,16 @@ class KfpOrchestrator(BaseOrchestrator):
                     "convertion_options": convert_options.model_dump(),
                     "source": {
                         "endpoint": s3_source.endpoint,
-                        "access_key": s3_source.access_key.get_secret_value(),
-                        "secret_key": s3_source.secret_key.get_secret_value(),
+                        "access_key": s3_source.access_key,
+                        "secret_key": s3_source.secret_key,
                         "bucket": s3_source.bucket,
                         "key_prefix": s3_source.key_prefix,
                         "verify_ssl": s3_source.verify_ssl,
                     },
                     "target": {
                         "endpoint": target.endpoint,
-                        "access_key": target.access_key.get_secret_value(),
-                        "secret_key": target.secret_key.get_secret_value(),
+                        "access_key": target.access_key,
+                        "secret_key": target.secret_key,
                         "bucket": target.bucket,
                         "key_prefix": target.key_prefix,
                         "verify_ssl": target.verify_ssl,
@@ -300,6 +300,9 @@ class KfpOrchestrator(BaseOrchestrator):
                 )
             task.processing_meta.num_processed += progress.num_processed
             task.processing_meta.num_succeeded += progress.num_succeeded
+            task.processing_meta.num_partially_succeeded += (
+                progress.num_partially_succeeded
+            )
             task.processing_meta.num_failed += progress.num_failed
             task.task_status = TaskStatus.STARTED
 

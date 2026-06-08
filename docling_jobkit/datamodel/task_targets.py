@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from docling.datamodel.service.targets import (
     InBodyTarget,
+    PresignedUrlTarget,
     PutTarget,
     S3Target,
     ZipTarget,
@@ -42,6 +43,7 @@ TaskTarget = Annotated[
     InBodyTarget
     | ZipTarget
     | S3Target
+    | PresignedUrlTarget
     | GoogleDriveTarget
     | PutTarget
     | LocalPathTarget,
@@ -52,6 +54,7 @@ __all__ = [
     "GoogleDriveTarget",
     "InBodyTarget",
     "LocalPathTarget",
+    "PresignedUrlTarget",
     "PutTarget",
     "S3Target",
     "TaskTarget",

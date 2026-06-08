@@ -19,6 +19,7 @@ from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.targets import S3Target
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.convert.manager import DoclingConverterManager
@@ -45,6 +46,19 @@ from docling_jobkit.orchestrators.ray.serve_deployment import (
 )
 
 _log = logging.getLogger(__name__)
+
+
+def _validate_s3_source_targets(
+    sources: list[TaskSource], target: TaskTarget, task_type: TaskType
+) -> None:
+    has_s3_source = any(isinstance(source, S3Coordinates) for source in sources)
+    if not has_s3_source:
+        return
+
+    if task_type != TaskType.CONVERT or not isinstance(target, S3Target):
+        raise ValueError(
+            "Tasks containing an S3Coordinates source require an S3Target."
+        )
 
 
 class QueueLimitExceededError(OrchestratorError):
@@ -625,6 +639,8 @@ class RayOrchestrator(BaseOrchestrator):
             # Create task
             task_id = str(uuid.uuid4())
             chunking_export_options = chunking_export_options or ChunkingExportOptions()
+
+            _validate_s3_source_targets(sources, target, task_type)
 
             # Convert DocumentStream sources to FileSource for JSON serialization
             ray_sources: list[TaskSource] = []

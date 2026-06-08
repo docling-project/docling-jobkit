@@ -1,4 +1,5 @@
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -70,7 +71,8 @@ def test_local_path_single_file(temp_test_dir):
         # List document IDs
         doc_ids = list(processor._list_document_ids())
         assert len(doc_ids) == 1
-        assert doc_ids[0]["path"] == temp_test_dir / "file1.pdf"
+        assert doc_ids[0].path == temp_test_dir / "file1.pdf"
+        assert isinstance(doc_ids[0].last_modified, datetime)
 
         # Fetch document
         doc = processor._fetch_document_by_id(doc_ids[0])
@@ -99,7 +101,8 @@ def test_local_path_directory_recursive(temp_test_dir):
 
         # Verify all are PDF files
         for doc_id in doc_ids:
-            assert doc_id["path"].suffix == ".pdf"
+            assert doc_id.path.suffix == ".pdf"
+            assert isinstance(doc_id.last_modified, datetime)
 
         # Iterate documents
         docs = list(processor.iterate_documents())
@@ -131,7 +134,7 @@ def test_local_path_directory_non_recursive(temp_test_dir):
 
         # Verify they are from root directory
         for doc_id in doc_ids:
-            assert doc_id["path"].parent == temp_test_dir
+            assert doc_id.path.parent == temp_test_dir
 
 
 def test_local_path_all_files(temp_test_dir):

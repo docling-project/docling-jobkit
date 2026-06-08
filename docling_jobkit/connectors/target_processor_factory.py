@@ -1,5 +1,6 @@
-from docling.datamodel.service.targets import S3Target
+from docling.datamodel.service.targets import PutTarget, S3Target
 
+from docling_jobkit.connectors.http_put_target_processor import HttpPutTargetProcessor
 from docling_jobkit.connectors.local_path_target_processor import (
     LocalPathTargetProcessor,
 )
@@ -13,6 +14,8 @@ from docling_jobkit.datamodel.task_targets import (
 
 
 def get_target_processor(target: TaskTarget) -> BaseTargetProcessor:
+    if isinstance(target, PutTarget):
+        return HttpPutTargetProcessor(target)
     if isinstance(target, S3Target):
         return S3TargetProcessor(target)
     if isinstance(target, GoogleDriveTarget):

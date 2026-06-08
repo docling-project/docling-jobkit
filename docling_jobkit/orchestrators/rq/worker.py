@@ -4,7 +4,6 @@ import shutil
 import tempfile
 import threading
 from contextlib import nullcontext
-from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Optional, Union
 
@@ -13,7 +12,7 @@ import redis as sync_redis
 from rq import SimpleWorker, get_current_job
 
 from docling.datamodel.base_models import DocumentStream
-from docling.datamodel.service.sources import FileSource, HttpSource
+from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.convert.chunking import process_chunkable_results
@@ -22,7 +21,11 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManagerConfig,
 )
 from docling_jobkit.convert.results import process_exportable_results
-from docling_jobkit.datamodel.exportable_document import ExportableDocument
+from docling_jobkit.convert.source_expansion import expand_task_sources
+from docling_jobkit.datamodel.exportable_document import (
+    ExportableDocument,
+    source_to_public_uri,
+)
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
@@ -58,28 +61,26 @@ def _prepare_convert_sources(
     Optional[dict[str, Any]],
     list[dict[str, str]],
 ]:
-    convert_sources: list[Union[str, DocumentStream]] = []
-    headers: Optional[dict[str, Any]] = None
+    convert_sources, headers = expand_task_sources(task)
     source_info: list[dict[str, str]] = []
 
     for idx, source in enumerate(task.sources):
         raw_bytes: Optional[bytes] = None
         if isinstance(source, DocumentStream):
-            convert_sources.append(source)
             info = {"type": "DocumentStream", "name": source.name}
         elif isinstance(source, FileSource):
             raw_bytes = base64.b64decode(source.base64_string)
-            convert_sources.append(
-                DocumentStream(stream=BytesIO(raw_bytes), name=source.filename)
-            )
             info = {"type": "FileSource", "filename": source.filename}
         elif isinstance(source, HttpSource):
-            convert_sources.append(str(source.url))
             info = {"type": "HttpSource", "url": str(source.url)}
-            if headers is None and source.headers:
-                headers = source.headers
+        elif isinstance(source, S3Coordinates):
+            info = {
+                "type": "S3Coordinates",
+                "bucket": source.bucket,
+                "key_prefix": source.key_prefix,
+            }
         else:
-            continue
+            raise RuntimeError(f"Unsupported runtime task source: {type(source)!r}")
 
         source_info.append(info)
         if on_source_prepared:
@@ -147,8 +148,16 @@ def _run_docling_task(
             )
 
         exportable_documents = (
-            ExportableDocument.from_conversion_result(conv_res)
-            for conv_res in conv_results
+            ExportableDocument.from_conversion_result(
+                conv_res,
+                source_index=idx,
+                source_uri=(
+                    source_to_public_uri(task.sources[idx])
+                    if idx < len(task.sources)
+                    else str(conv_res.input.file)
+                ),
+            )
+            for idx, conv_res in enumerate(conv_results)
         )
 
         processed_results: DoclingTaskResult
@@ -159,6 +168,7 @@ def _run_docling_task(
                         task=task,
                         exportable_documents=exportable_documents,
                         work_dir=workdir,
+                        s3_presigned_config=orchestrator_config.s3_presigned_config,
                         callback_invoker=callback_invoker,
                         debug_error_details=orchestrator_config.debug_error_details,
                     )

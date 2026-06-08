@@ -2,16 +2,18 @@ import asyncio
 import logging
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING
 
-from docling.datamodel.base_models import DocumentStream
-from docling.datamodel.service.sources import FileSource, HttpSource
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.convert.chunking import process_chunkable_results
 from docling_jobkit.convert.manager import DoclingConverterManager
 from docling_jobkit.convert.results import process_exportable_results
-from docling_jobkit.datamodel.exportable_document import ExportableDocument
+from docling_jobkit.convert.source_expansion import expand_task_sources
+from docling_jobkit.datamodel.exportable_document import (
+    ExportableDocument,
+    source_to_public_uri,
+)
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
@@ -66,18 +68,7 @@ class AsyncLocalWorker:
 
                 # Define a callback function to send progress updates to the client.
                 def run_task() -> DoclingTaskResult:
-                    convert_sources: list[Union[str, DocumentStream]] = []
-                    headers: Optional[dict[str, Any]] = None
-                    for source in task.sources:
-                        if isinstance(source, DocumentStream):
-                            convert_sources.append(source)
-                        elif isinstance(source, FileSource):
-                            convert_sources.append(source.to_document_stream())
-                        elif isinstance(source, HttpSource):
-                            convert_sources.append(str(source.url))
-                            if headers is None and source.headers:
-                                headers = source.headers
-
+                    convert_sources, headers = expand_task_sources(task)
                     # Note: results are only an iterator->lazy evaluation
                     conv_results = cm.convert_documents(
                         sources=convert_sources,
@@ -85,8 +76,16 @@ class AsyncLocalWorker:
                         headers=headers,
                     )
                     exportable_documents = (
-                        ExportableDocument.from_conversion_result(conv_res)
-                        for conv_res in conv_results
+                        ExportableDocument.from_conversion_result(
+                            conv_res,
+                            source_index=idx,
+                            source_uri=(
+                                source_to_public_uri(task.sources[idx])
+                                if idx < len(task.sources)
+                                else str(conv_res.input.file)
+                            ),
+                        )
+                        for idx, conv_res in enumerate(conv_results)
                     )
 
                     # The real processing will happen here
@@ -96,6 +95,7 @@ class AsyncLocalWorker:
                             task=task,
                             exportable_documents=exportable_documents,
                             work_dir=workdir,
+                            s3_presigned_config=self.orchestrator.config.s3_presigned_config,
                             callback_invoker=callback_invoker,
                         )
                     elif task.task_type == TaskType.CHUNK:
@@ -106,6 +106,8 @@ class AsyncLocalWorker:
                             chunker_manager=self.orchestrator.chunker_manager,
                             callback_invoker=callback_invoker,
                         )
+                    else:
+                        raise RuntimeError(f"Unsupported task type: {task.task_type}")
 
                     return processed_results
 

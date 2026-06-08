@@ -1,9 +1,16 @@
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, TypedDict
+from typing import Iterator
+
+from pydantic import BaseModel
+from typing_extensions import override
 
 from docling_core.types.io import DocumentStream
 
-from docling_jobkit.connectors.source_processor import BaseSourceProcessor
+from docling_jobkit.connectors.source_processor import (
+    BaseSourceProcessor,
+    SourceDocumentRef,
+)
 from docling_jobkit.datamodel.task_sources import TaskLocalPathSource
 
 
@@ -43,15 +50,17 @@ def _should_ignore_file(file_path: Path) -> bool:
     return False
 
 
-class LocalPathFileIdentifier(TypedDict):
+class LocalPathFileIdentifier(BaseModel):
     path: Path
     size: int
-    last_modified: float
+    last_modified: datetime | None = None
 
 
-class LocalPathSourceProcessor(BaseSourceProcessor[LocalPathFileIdentifier]):
+class LocalPathSourceProcessor(
+    BaseSourceProcessor[TaskLocalPathSource, LocalPathFileIdentifier]
+):
     def __init__(self, source: TaskLocalPathSource):
-        super().__init__()
+        super().__init__(source)
         self._source = source
 
     def _initialize(self):
@@ -76,7 +85,7 @@ class LocalPathSourceProcessor(BaseSourceProcessor[LocalPathFileIdentifier]):
             yield LocalPathFileIdentifier(
                 path=path,
                 size=stat.st_size,
-                last_modified=stat.st_mtime,
+                last_modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
             )
         elif path.is_dir():
             # Directory case - use glob or rglob based on recursive setting
@@ -95,7 +104,9 @@ class LocalPathSourceProcessor(BaseSourceProcessor[LocalPathFileIdentifier]):
                     yield LocalPathFileIdentifier(
                         path=file_path,
                         size=stat.st_size,
-                        last_modified=stat.st_mtime,
+                        last_modified=datetime.fromtimestamp(
+                            stat.st_mtime, tz=timezone.utc
+                        ),
                     )
         else:
             raise ValueError(f"Path is neither a file nor a directory: {path}")
@@ -108,7 +119,7 @@ class LocalPathSourceProcessor(BaseSourceProcessor[LocalPathFileIdentifier]):
         self, identifier: LocalPathFileIdentifier
     ) -> DocumentStream:
         """Fetch a document by opening the file from the local filesystem."""
-        file_path = identifier["path"]
+        file_path = identifier.path
 
         # Open file in binary mode and return as DocumentStream
         with open(file_path, "rb") as f:
@@ -119,6 +130,18 @@ class LocalPathSourceProcessor(BaseSourceProcessor[LocalPathFileIdentifier]):
         buffer = BytesIO(content)
 
         return DocumentStream(name=str(file_path), stream=buffer)
+
+    @override
+    def _make_document_ref(
+        self, identifier: LocalPathFileIdentifier, source_index: int
+    ) -> SourceDocumentRef[LocalPathFileIdentifier]:
+        file_path = identifier.path
+        return SourceDocumentRef(
+            id=identifier,
+            source_index=source_index,
+            source_uri=str(file_path),
+            filename=str(file_path),
+        )
 
     def _fetch_documents(self) -> Iterator[DocumentStream]:
         """Iterate through all documents."""

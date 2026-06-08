@@ -3,21 +3,13 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
-from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.requests import (
+    FileSourceRequest,
+    HttpSourceRequest,
+    S3SourceRequest,
+)
 
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
-
-
-class TaskFileSource(FileSource):
-    kind: Literal["file"] = "file"
-
-
-class TaskHttpSource(HttpSource):
-    kind: Literal["http"] = "http"
-
-
-class TaskS3Source(S3Coordinates):
-    kind: Literal["s3"] = "s3"
 
 
 class TaskGoogleDriveSource(GoogleDriveCoordinates):
@@ -75,10 +67,16 @@ class TaskLocalPathSource(BaseModel):
 
 
 TaskSource = Annotated[
-    TaskFileSource
-    | TaskHttpSource
-    | TaskS3Source
+    FileSourceRequest
+    | HttpSourceRequest
+    | S3SourceRequest
     | TaskGoogleDriveSource
     | TaskLocalPathSource,
     Field(discriminator="kind"),
+]
+
+__all__ = [
+    "TaskGoogleDriveSource",
+    "TaskLocalPathSource",
+    "TaskSource",
 ]

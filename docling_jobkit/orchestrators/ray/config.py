@@ -8,6 +8,8 @@ from typing import Any, Optional
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from docling_jobkit.config.target_config import S3PresignedConfig
+
 _log = logging.getLogger(__name__)
 
 _IEC_MULTIPLIERS = {"gi": 1024**3, "mi": 1024**2, "ki": 1024}
@@ -235,6 +237,41 @@ class RayOrchestratorConfig(BaseSettings):
             "Defaults to max_concurrent_tasks when unset."
         ),
     )
+    max_s3_doc_parallelism: int = Field(
+        default=8,
+        ge=1,
+        description=(
+            "Concurrent source-chunk converter dispatches per parent S3 fan-out task. "
+            "This mirrors max_page_slice_parallelism for source expansion, but it is "
+            "not a tenant-capacity limit and does not enforce any cross-task fairness "
+            "on its own."
+        ),
+    )
+    s3_source_listing_timeout_s: float = Field(
+        default=300.0,
+        gt=0,
+        description=(
+            "Hard time limit (seconds) for the blocking S3 source listing phase. "
+            "If listing all objects across the source prefix(es) takes longer than "
+            "this — due to an unreachable endpoint, slow network, or a very large "
+            "bucket — the task fails with a clear timeout error. The underlying "
+            "boto3 per-socket timeouts (connect_timeout / read_timeout in "
+            "get_s3_connection) still apply per operation; this is the outer bound."
+        ),
+    )
+    s3_dispatch_batch_size: int = Field(
+        default=1,
+        ge=1,
+        description="Documents per source-chunk converter request for S3 fan-out.",
+    )
+    max_concurrent_coordinator_slice_finalizations: int = Field(
+        default=2,
+        ge=1,
+        description=(
+            "Concurrent slice-path assembly/export/upload finalizations per "
+            "coordinator replica."
+        ),
+    )
     coordinator_min_actors: Optional[int] = Field(
         default=None,
         ge=1,
@@ -368,6 +405,10 @@ class RayOrchestratorConfig(BaseSettings):
     debug_error_details: bool = Field(
         default=False,
         description="Return raw infrastructure exception detail in public task/document errors",
+    )
+    s3_presigned_config: S3PresignedConfig | None = Field(
+        default=None,
+        description="Optional server-managed presigned URL target configuration.",
     )
 
     def _validate_worker_request_concurrency(self) -> None:

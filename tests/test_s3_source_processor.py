@@ -1,11 +1,14 @@
 import socket
+from datetime import datetime, timezone
 
 import pytest
-from pydantic import SecretStr
 
 from docling_core.types.io import DocumentStream
 
-from docling_jobkit.connectors.s3_source_processor import S3SourceProcessor
+from docling_jobkit.connectors.s3_source_processor import (
+    S3FileIdentifier,
+    S3SourceProcessor,
+)
 from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
 # -------------------------------------------------------------------
@@ -36,8 +39,8 @@ def minio_coords() -> S3Coordinates:
     return S3Coordinates(
         endpoint="127.0.0.1:9000",
         verify_ssl=False,
-        access_key=SecretStr("minioadmin"),
-        secret_key=SecretStr("minioadmin"),
+        access_key="minioadmin",
+        secret_key="minioadmin",
         bucket="test",
         key_prefix="",
     )
@@ -65,21 +68,35 @@ def test_s3_connection_and_list_files(minio_coords):
 
         # Verify S3FileIdentifier structure
         for doc_id in doc_ids:
-            assert "key" in doc_id, "S3FileIdentifier missing 'key' field"
-            assert "size" in doc_id, "S3FileIdentifier missing 'size' field"
-            assert "last_modified" in doc_id, (
-                "S3FileIdentifier missing 'last_modified' field"
+            assert isinstance(doc_id.key, str)
+            assert isinstance(doc_id.size, int)
+            assert doc_id.last_modified is None or isinstance(
+                doc_id.last_modified, datetime
             )
-            assert isinstance(doc_id["key"], str)
-            assert isinstance(doc_id["size"], int)
 
         # Verify we have PDF files
-        pdf_files = [doc_id for doc_id in doc_ids if doc_id["key"].endswith(".pdf")]
+        pdf_files = [doc_id for doc_id in doc_ids if doc_id.key.endswith(".pdf")]
         assert len(pdf_files) > 0, "Expected PDF files in test bucket"
 
         print(f"\nFound {count} files in MinIO test bucket:")
         for doc_id in doc_ids:
-            print(f"  - {doc_id['key']} ({doc_id['size']} bytes)")
+            print(f"  - {doc_id.key} ({doc_id.size} bytes)")
+
+
+def test_s3_document_ref_preserves_canonical_source_uri(minio_coords):
+    processor = S3SourceProcessor(minio_coords)
+    ref = processor._make_document_ref(
+        S3FileIdentifier(
+            key="incoming/doc.pdf",
+            size=123,
+            last_modified=datetime(2026, 6, 2, 10, 0, 0, tzinfo=timezone.utc),
+        ),
+        source_index=5,
+    )
+
+    assert ref.source_index == 5
+    assert ref.source_uri == "s3://test/incoming/doc.pdf"
+    assert ref.filename == "incoming/doc.pdf"
 
 
 @pytest.mark.skipif(
@@ -100,18 +117,16 @@ def test_s3_fetch_specific_document(minio_coords):
 
         # Verify document structure
         assert isinstance(doc, DocumentStream)
-        assert doc.name == first_id["key"]
+        assert doc.name == first_id.key
         assert doc.stream is not None
 
         # Verify content can be read
         content = doc.stream.read()
         assert len(content) > 0, "Document content is empty"
-        assert len(content) == first_id["size"], (
-            "Content size doesn't match S3 metadata"
-        )
+        assert len(content) == first_id.size, "Content size doesn't match S3 metadata"
 
         # For PDF files, verify header
-        if first_id["key"].endswith(".pdf"):
+        if first_id.key.endswith(".pdf"):
             assert content[:4] == b"%PDF", "Invalid PDF header"
 
         print(f"\nFetched document: {doc.name} ({len(content)} bytes)")

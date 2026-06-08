@@ -21,9 +21,10 @@ from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.sources import FileSource, HttpSource
+from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
+from docling_jobkit.config.target_config import S3PresignedConfig
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
@@ -57,6 +58,7 @@ class RQOrchestratorConfig(BaseModel):
     zombie_reaper_max_age: float = 3600.0
     result_removal_delay: int = 300  # seconds until result key expires after fetch
     debug_error_details: bool = False
+    s3_presigned_config: S3PresignedConfig | None = None
 
     @model_validator(mode="after")
     def resolve_redis_gate_concurrency(self) -> "RQOrchestratorConfig":
@@ -166,14 +168,14 @@ class RQOrchestrator(BaseOrchestrator):
                     stacklevel=2,
                 )
             task_id = str(uuid.uuid4())
-            rq_sources: list[HttpSource | FileSource] = []
+            rq_sources: list[HttpSource | FileSource | S3Coordinates] = []
             for source in sources:
                 if isinstance(source, DocumentStream):
                     encoded_doc = base64.b64encode(source.stream.read()).decode()
                     rq_sources.append(
                         FileSource(filename=source.name, base64_string=encoded_doc)
                     )
-                elif isinstance(source, (HttpSource | FileSource)):
+                elif isinstance(source, (HttpSource, FileSource, S3Coordinates)):
                     rq_sources.append(source)
             chunking_export_options = chunking_export_options or ChunkingExportOptions()
             task = Task(
@@ -366,6 +368,7 @@ class RQOrchestrator(BaseOrchestrator):
             meta.setdefault("num_docs", 0)
             meta.setdefault("num_processed", 0)
             meta.setdefault("num_succeeded", 0)
+            meta.setdefault("num_partially_succeeded", 0)
             meta.setdefault("num_failed", 0)
 
             task_kwargs: dict[str, Any] = {
@@ -409,6 +412,7 @@ class RQOrchestrator(BaseOrchestrator):
                     "num_docs": 0,
                     "num_processed": 0,
                     "num_succeeded": 0,
+                    "num_partially_succeeded": 0,
                     "num_failed": 0,
                 },
             )
@@ -452,6 +456,7 @@ class RQOrchestrator(BaseOrchestrator):
                     "num_docs": 0,
                     "num_processed": 0,
                     "num_succeeded": 0,
+                    "num_partially_succeeded": 0,
                     "num_failed": 0,
                 }
 

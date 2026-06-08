@@ -7,6 +7,11 @@ from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
 from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.requests import (
+    FileSourceRequest,
+    HttpSourceRequest,
+    S3SourceRequest,
+)
 from docling.datamodel.service.targets import S3Target, ZipTarget
 
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
@@ -17,11 +22,8 @@ from docling_jobkit.convert.manager import (
 )
 from docling_jobkit.convert.results_processor import ResultsProcessor
 from docling_jobkit.datamodel.task_sources import (
-    TaskFileSource,
     TaskGoogleDriveSource,
-    TaskHttpSource,
     TaskLocalPathSource,
-    TaskS3Source,
 )
 from docling_jobkit.datamodel.task_targets import (
     GoogleDriveTarget,
@@ -40,10 +42,10 @@ app = typer.Typer(
 )
 
 JobTaskSource = Annotated[
-    TaskFileSource
-    | TaskHttpSource
+    FileSourceRequest
+    | HttpSourceRequest
     | TaskLocalPathSource
-    | TaskS3Source
+    | S3SourceRequest
     | TaskGoogleDriveSource,
     Field(discriminator="kind"),
 ]
@@ -90,11 +92,10 @@ def convert(
         with config_file.open("r") as f:
             raw_data = yaml.safe_load(f)
         config = JobConfig(**raw_data)
-    except FileNotFoundError:
-        typer.echo(f"❌ File not found: {config_file}")
     except ValidationError as e:
         typer.echo("❌ Validation failed:")
         typer.echo(e.json(indent=2))
+        raise typer.Exit(1)
 
     cm_config = DoclingConverterManagerConfig(
         artifacts_path=artifacts_path,
