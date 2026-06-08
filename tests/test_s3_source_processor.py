@@ -1,7 +1,9 @@
 import socket
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 import pytest
+from botocore.exceptions import ClientError
 
 from docling_core.types.io import DocumentStream
 
@@ -97,6 +99,36 @@ def test_s3_document_ref_preserves_canonical_source_uri(minio_coords):
     assert ref.source_index == 5
     assert ref.source_uri == "s3://test/incoming/doc.pdf"
     assert ref.filename == "incoming/doc.pdf"
+
+
+def test_s3_fetch_document_logs_and_reraises_client_error(minio_coords, caplog):
+    """A download failure is logged with the offending key and propagated.
+
+    Propagation is intentional: the Ray S3 fan-out path turns a per-document
+    fetch failure into a single failed-document result without failing the
+    whole task (see DoclingProcessorCoordinatorDeployment._iter_source_chunks_for_s3_fanout).
+    """
+    processor = S3SourceProcessor(minio_coords)
+    error = ClientError(
+        error_response={"Error": {"Code": "NoSuchKey", "Message": "Not Found"}},
+        operation_name="DownloadFileobj",
+    )
+    processor._client = MagicMock()
+    processor._client.download_fileobj.side_effect = error
+
+    identifier = S3FileIdentifier(
+        key="incoming/missing.pdf", size=0, last_modified=None
+    )
+
+    with caplog.at_level("WARNING"):
+        with pytest.raises(ClientError):
+            processor._fetch_document_by_id(identifier)
+
+    assert any(
+        "incoming/missing.pdf" in record.message
+        and minio_coords.bucket in record.message
+        for record in caplog.records
+    )
 
 
 @pytest.mark.skipif(
