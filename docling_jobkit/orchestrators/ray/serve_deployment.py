@@ -81,6 +81,9 @@ from docling_jobkit.orchestrators.ray.config import (
     RayOrchestratorConfig,
     parse_memory_bytes,
 )
+from docling_jobkit.orchestrators.ray.failure_classification import (
+    classify_ray_public_task_failure,
+)
 from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
 )
@@ -99,8 +102,7 @@ from docling_jobkit.orchestrators.ray.models import (
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 from docling_jobkit.public_errors import (
     build_public_error_item,
-    classify_public_task_failure,
-    is_expected_public_failure,
+    is_client_actionable_failure,
 )
 
 _log = logging.getLogger(__name__)
@@ -325,6 +327,7 @@ def _build_materialization_failure_result(
     exc: MaterializationLimitExceededError,
     start_time: float,
 ) -> DoclingTaskResult:
+    """Build the public per-document result for admission-time source rejection."""
     source_uri = source_to_public_uri(source)
     filename = source.filename if isinstance(source, FileSource) else "document.pdf"
     error_item = build_public_error_item(exc)
@@ -486,6 +489,7 @@ def _finalize_slice_results(
     start_time: float,
     debug_error_details: bool,
 ) -> DoclingTaskResult:
+    """Fetch child slice outputs, merge them, and build the parent task result."""
     # This is the only place where full slice documents enter the coordinator's
     # heap, and it runs inside the slice_finalization_semaphore guard.
     slice_results: list[ExportableDocument] = ray.get(slice_refs)
@@ -625,19 +629,19 @@ class DoclingProcessorConverterDeployment:
                 last_exception = exc
                 failure = None
                 if task is not None:
-                    failure = classify_public_task_failure(
+                    failure = classify_ray_public_task_failure(
                         exc,
                         task_id=task.task_id,
                         phase=FailurePhase.EXECUTION,
                         details={
                             "task_size": str(len(task.sources)),
-                            "target_kind": getattr(task.target, "kind", "unknown"),
+                            "target_kind": task.target.kind,
                         },
                     )
-                    if is_expected_public_failure(failure):
+                    if is_client_actionable_failure(failure):
                         if not failure.retryable or attempt >= max_retries:
                             _log.info(
-                                "Converter replica %s: %s failed with expected source error: %s",
+                                "Converter replica %s: %s failed with client-actionable source error: %s",
                                 self.replica_id,
                                 task_label,
                                 failure.message,
@@ -932,7 +936,7 @@ class DoclingProcessorCoordinatorDeployment:
                 self.tasks_processed += 1
                 self.documents_processed += task_size
                 self.last_task_time = datetime.datetime.now(datetime.timezone.utc)
-                await self._finalize_expected_task_failure(
+                await self._finalize_client_actionable_task_failure(
                     task=task,
                     tenant_id=tenant_id,
                     task_size=task_size,
@@ -1006,13 +1010,13 @@ class DoclingProcessorCoordinatorDeployment:
             )
             return result
         except Exception as exc:
-            failure = classify_public_task_failure(
+            failure = classify_ray_public_task_failure(
                 exc,
                 task_id=task.task_id,
                 phase=FailurePhase.EXECUTION,
                 details={
                     "task_size": str(task_size),
-                    "target_kind": getattr(task.target, "kind", "unknown"),
+                    "target_kind": task.target.kind,
                 },
             )
             error_message = failure.message
@@ -1062,7 +1066,7 @@ class DoclingProcessorCoordinatorDeployment:
             if workdir.exists():
                 shutil.rmtree(workdir, ignore_errors=True)
 
-    async def _finalize_expected_task_failure(
+    async def _finalize_client_actionable_task_failure(
         self,
         *,
         task: Task,
@@ -1070,6 +1074,7 @@ class DoclingProcessorCoordinatorDeployment:
         task_size: int,
         failure: PublicFailureInfo,
     ) -> None:
+        """Persist and publish a terminal failure produced before conversion starts."""
         error_message = failure.message
         terminalization = await self.redis_manager.finalize_task_failure_atomic(
             tenant_id=tenant_id,

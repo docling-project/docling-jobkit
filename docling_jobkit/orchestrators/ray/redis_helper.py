@@ -424,6 +424,7 @@ class RedisStateManager:
 
     @staticmethod
     def decode_stored_outcome(raw: bytes) -> StoredTaskOutcome | DoclingTaskResult:
+        """Decode Redis result payloads, including legacy raw task-result blobs."""
         payload = msgpack.unpackb(raw, raw=False, strict_map_key=False)
         if isinstance(payload, dict) and payload.get("kind") in {"success", "failure"}:
             return stored_task_outcome_adapter.validate_python(payload)
@@ -442,17 +443,6 @@ class RedisStateManager:
         if result_data:
             return self.decode_stored_outcome(result_data)
 
-        return None
-
-    async def get_task_result(self, task_id: str) -> Optional[DoclingTaskResult]:
-        """Retrieve the successful task result from Redis."""
-        outcome = await self.get_task_outcome(task_id)
-        if outcome is None:
-            return None
-        if isinstance(outcome, DoclingTaskResult):
-            return outcome
-        if isinstance(outcome, StoredSuccessOutcome):
-            return outcome.result
         return None
 
     async def expire_result(self, result_key: str, ttl: int) -> None:

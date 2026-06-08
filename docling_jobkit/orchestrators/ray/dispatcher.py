@@ -14,6 +14,9 @@ from docling.datamodel.service.responses import FailurePhase
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
+from docling_jobkit.orchestrators.ray.failure_classification import (
+    classify_ray_public_task_failure,
+)
 from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
 )
@@ -24,7 +27,7 @@ from docling_jobkit.orchestrators.ray.models import (
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 from docling_jobkit.public_errors import (
     classify_public_task_failure,
-    is_expected_public_failure,
+    is_client_actionable_failure,
 )
 
 _log = logging.getLogger(__name__)
@@ -425,13 +428,13 @@ class RayTaskDispatcher:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            failure = classify_public_task_failure(
+            failure = classify_ray_public_task_failure(
                 exc,
                 task_id=task_id,
                 phase=FailurePhase.ORCHESTRATION,
                 details={
                     "task_size": str(task_size),
-                    "target_kind": getattr(task.target, "kind", "unknown"),
+                    "target_kind": task.target.kind,
                 },
             )
             error_message = failure.message
@@ -439,7 +442,7 @@ class RayTaskDispatcher:
                 "[TASK-FAILURE] %s: %s",
                 task_id,
                 error_message,
-                exc_info=not is_expected_public_failure(failure),
+                exc_info=not is_client_actionable_failure(failure),
             )
 
             terminalization = await self.redis_manager.finalize_task_failure_atomic(

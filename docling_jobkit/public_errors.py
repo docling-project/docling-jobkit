@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-from typing import Any
 
 import httpx
+from botocore.exceptions import BotoCoreError
+from requests.exceptions import HTTPError as RequestsHTTPError, RequestException
 
 from docling.datamodel.base_models import DoclingComponentType, ErrorItem
 from docling.datamodel.service.responses import (
@@ -13,45 +14,7 @@ from docling.datamodel.service.responses import (
     PublicFailureInfo,
 )
 
-BotoCoreErrorType: type[BaseException] | None
-try:
-    from botocore.exceptions import (
-        BotoCoreError as _BotoCoreError,  # type: ignore[import-untyped]
-    )
-except ImportError:  # pragma: no cover - optional dependency
-    BotoCoreErrorType = None
-else:
-    BotoCoreErrorType = _BotoCoreError
-
-RequestsHTTPErrorType: type[BaseException] | None
-RequestsRequestExceptionType: type[BaseException] | None
-try:
-    from requests.exceptions import (
-        HTTPError as _RequestsHTTPError,
-        RequestException as _RequestsRequestException,
-    )
-except ImportError:  # pragma: no cover - optional dependency
-    RequestsHTTPErrorType = None
-    RequestsRequestExceptionType = None
-else:
-    RequestsHTTPErrorType = _RequestsHTTPError
-    RequestsRequestExceptionType = _RequestsRequestException
-
-ray_exceptions: Any | None
-try:
-    import ray.exceptions as ray_exceptions
-except ImportError:  # pragma: no cover - optional dependency
-    ray_exceptions = None
-
-MaterializationLimitExceededErrorType: type[BaseException] | None
-try:
-    from docling_jobkit.convert.materialization import (
-        MaterializationLimitExceededError as _MaterializationLimitExceededError,
-    )
-except ImportError:  # pragma: no cover - defensive only
-    MaterializationLimitExceededErrorType = None
-else:
-    MaterializationLimitExceededErrorType = _MaterializationLimitExceededError
+from docling_jobkit.convert.materialization import MaterializationLimitExceededError
 
 
 class TargetWriteError(RuntimeError):
@@ -90,15 +53,7 @@ def _unwrap_failure_exception(exc: BaseException) -> BaseException:
             return current
         seen.add(obj_id)
 
-        if ray_exceptions is not None and isinstance(
-            current, getattr(ray_exceptions, "RayTaskError", ())
-        ):
-            cause = getattr(current, "cause", None)
-            if isinstance(cause, BaseException):
-                current = cause
-                continue
-
-        cause = getattr(current, "__cause__", None)
+        cause = current.__cause__
         if isinstance(cause, BaseException):
             current = cause
             continue
@@ -137,6 +92,7 @@ def classify_public_task_failure(
     message = INTERNAL_TASK_ERROR_MESSAGE
 
     if isinstance(root_exc, TargetWriteError):
+        # The user-provided PutTarget accepted the request but could not persist output.
         category = FailureCategory.TARGET_UNAVAILABLE
         code = "target_write_error"
         retryable = False
@@ -144,6 +100,7 @@ def classify_public_task_failure(
     elif isinstance(
         root_exc, (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException)
     ):
+        # The task exceeded an execution or transport timeout and can be retried.
         category = FailureCategory.TIMEOUT
         code = "task_timeout"
         retryable = True
@@ -152,24 +109,23 @@ def classify_public_task_failure(
             **_safe_details(timeout_class=root_exc.__class__.__name__),
         }
         message = "Task exceeded the allowed execution time."
-    elif MaterializationLimitExceededErrorType is not None and isinstance(
-        root_exc, MaterializationLimitExceededErrorType
-    ):
+    elif isinstance(root_exc, MaterializationLimitExceededError):
+        # Local preflight rejected a document that exceeds configured service limits.
         category = FailureCategory.POLICY
         phase = FailurePhase.ADMISSION
         code = "document_limits_exceeded"
         retryable = False
         message = "Document exceeds service limits."
     elif isinstance(root_exc, httpx.HTTPStatusError):
+        # httpx fetched the source but the upstream HTTP status is not usable.
         merged_details = {**merged_details, **_safe_details(source_kind="http")}
         phase = FailurePhase.SOURCE_ENUMERATION
         category, code, retryable, message = _classify_http_status(
             root_exc.response.status_code, exception_text
         )
-    elif RequestsHTTPErrorType is not None and isinstance(
-        root_exc, RequestsHTTPErrorType
-    ):
-        response = getattr(root_exc, "response", None)
+    elif isinstance(root_exc, RequestsHTTPError):
+        # requests fetched the source but the upstream HTTP status is not usable.
+        response = root_exc.response
         status_code_value = response.status_code if response is not None else None
         status_code: int | None = (
             int(status_code_value) if isinstance(status_code_value, int) else None
@@ -179,16 +135,17 @@ def classify_public_task_failure(
         category, code, retryable, message = _classify_http_status(
             status_code, exception_text
         )
-    elif isinstance(root_exc, httpx.HTTPError) or (
-        RequestsRequestExceptionType is not None
-        and isinstance(root_exc, RequestsRequestExceptionType)
+    elif isinstance(root_exc, httpx.HTTPError) or isinstance(
+        root_exc, RequestException
     ):
+        # HTTP transport failed before a usable response body/status was available.
         category = FailureCategory.SOURCE_UNAVAILABLE
         phase = FailurePhase.SOURCE_ENUMERATION
         code = "http_transport_error"
         retryable = True
         message = "Source document could not be reached."
-    elif BotoCoreErrorType is not None and isinstance(root_exc, BotoCoreErrorType):
+    elif isinstance(root_exc, BotoCoreError):
+        # S3 source enumeration or object retrieval failed through botocore.
         category = FailureCategory.SOURCE_UNAVAILABLE
         phase = FailurePhase.SOURCE_ENUMERATION
         code = "s3_dependency_error"
@@ -196,33 +153,11 @@ def classify_public_task_failure(
         merged_details = {**merged_details, **_safe_details(source_kind="s3")}
         message = "Source object storage could not be reached."
     elif isinstance(root_exc, MemoryError) or "oom" in exception_text.lower():
+        # The local process or a nested exception reports memory exhaustion.
         category = FailureCategory.CAPACITY
         code = "capacity_exhausted"
         retryable = True
         message = "Service capacity was exhausted while processing the task."
-    elif ray_exceptions is not None and isinstance(
-        exc,
-        tuple(
-            cls
-            for cls in (
-                getattr(ray_exceptions, "RayTaskError", None),
-                getattr(ray_exceptions, "ActorDiedError", None),
-                getattr(ray_exceptions, "OutOfMemoryError", None),
-            )
-            if cls is not None
-        ),
-    ):
-        lowered = exception_text.lower()
-        if "outofmemory" in lowered or "oom" in lowered:
-            category = FailureCategory.CAPACITY
-            code = "ray_oom"
-            retryable = True
-            message = "Service capacity was exhausted while processing the task."
-        else:
-            category = FailureCategory.INTERNAL
-            code = "ray_runtime_error"
-            retryable = True
-
     return PublicFailureInfo(
         code=code,
         category=category,
@@ -236,15 +171,20 @@ def classify_public_task_failure(
 
 def build_public_task_error(exc: BaseException) -> str:
     root_exc = _unwrap_failure_exception(exc)
-    if isinstance(root_exc, httpx.HTTPStatusError) or (
-        RequestsHTTPErrorType is not None
-        and isinstance(root_exc, RequestsHTTPErrorType)
+    if isinstance(root_exc, httpx.HTTPStatusError) or isinstance(
+        root_exc, RequestsHTTPError
     ):
         return _exception_text(root_exc)
     return INTERNAL_TASK_ERROR_MESSAGE
 
 
-def is_expected_public_failure(failure: PublicFailureInfo) -> bool:
+def is_client_actionable_failure(failure: PublicFailureInfo) -> bool:
+    """Return true when retry/log policy should treat a failure as client-actionable.
+
+    These failures are not internal service defects: the source could not be
+    fetched, or request-adjacent source policy failed after admission-time
+    validation.
+    """
     return failure.phase == FailurePhase.SOURCE_ENUMERATION and failure.category in {
         FailureCategory.POLICY,
         FailureCategory.SOURCE_UNAVAILABLE,
