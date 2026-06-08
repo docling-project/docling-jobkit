@@ -64,15 +64,14 @@ def _unwrap_failure_exception(exc: BaseException) -> BaseException:
 def _classify_http_status(
     status_code: int | None,
     exception_text: str,
-) -> tuple[FailureCategory, str, bool, str]:
-    """Map an HTTP status code to (category, code, retryable, message)."""
-    code = "http_transport_error" if status_code is None else f"http_{status_code}"
+) -> tuple[FailureCategory, bool, str]:
+    """Map an HTTP status code to (category, retryable, message)."""
     if status_code in {401, 403, 404, 413, 415, 422}:
-        return FailureCategory.POLICY, code, False, exception_text
+        return FailureCategory.POLICY, False, exception_text
     if status_code in {429, 502, 503, 504}:
-        return FailureCategory.SOURCE_UNAVAILABLE, code, True, exception_text
+        return FailureCategory.SOURCE_UNAVAILABLE, True, exception_text
     retryable = status_code is None or status_code >= 500
-    return FailureCategory.SOURCE_UNAVAILABLE, code, retryable, exception_text
+    return FailureCategory.SOURCE_UNAVAILABLE, retryable, exception_text
 
 
 def classify_public_task_failure(
@@ -87,14 +86,12 @@ def classify_public_task_failure(
     merged_details: dict[str, str] = _safe_details(**(details or {}))
 
     category = FailureCategory.INTERNAL
-    code = "internal_error"
     retryable = False
     message = INTERNAL_TASK_ERROR_MESSAGE
 
     if isinstance(root_exc, TargetWriteError):
         # The user-provided PutTarget accepted the request but could not persist output.
         category = FailureCategory.TARGET_UNAVAILABLE
-        code = "target_write_error"
         retryable = False
         message = "Result could not be written to the requested target."
     elif isinstance(
@@ -102,7 +99,6 @@ def classify_public_task_failure(
     ):
         # The task exceeded an execution or transport timeout and can be retried.
         category = FailureCategory.TIMEOUT
-        code = "task_timeout"
         retryable = True
         merged_details = {
             **merged_details,
@@ -113,14 +109,13 @@ def classify_public_task_failure(
         # Local preflight rejected a document that exceeds configured service limits.
         category = FailureCategory.POLICY
         phase = FailurePhase.ADMISSION
-        code = "document_limits_exceeded"
         retryable = False
         message = "Document exceeds service limits."
     elif isinstance(root_exc, httpx.HTTPStatusError):
         # httpx fetched the source but the upstream HTTP status is not usable.
         merged_details = {**merged_details, **_safe_details(source_kind="http")}
         phase = FailurePhase.SOURCE_ENUMERATION
-        category, code, retryable, message = _classify_http_status(
+        category, retryable, message = _classify_http_status(
             root_exc.response.status_code, exception_text
         )
     elif isinstance(root_exc, RequestsHTTPError):
@@ -132,7 +127,7 @@ def classify_public_task_failure(
         )
         merged_details = {**merged_details, **_safe_details(source_kind="http")}
         phase = FailurePhase.SOURCE_ENUMERATION
-        category, code, retryable, message = _classify_http_status(
+        category, retryable, message = _classify_http_status(
             status_code, exception_text
         )
     elif isinstance(root_exc, httpx.HTTPError) or isinstance(
@@ -141,30 +136,25 @@ def classify_public_task_failure(
         # HTTP transport failed before a usable response body/status was available.
         category = FailureCategory.SOURCE_UNAVAILABLE
         phase = FailurePhase.SOURCE_ENUMERATION
-        code = "http_transport_error"
         retryable = True
         message = "Source document could not be reached."
     elif isinstance(root_exc, BotoCoreError):
         # S3 source enumeration or object retrieval failed through botocore.
         category = FailureCategory.SOURCE_UNAVAILABLE
         phase = FailurePhase.SOURCE_ENUMERATION
-        code = "s3_dependency_error"
         retryable = True
         merged_details = {**merged_details, **_safe_details(source_kind="s3")}
         message = "Source object storage could not be reached."
     elif isinstance(root_exc, MemoryError) or "oom" in exception_text.lower():
         # The local process or a nested exception reports memory exhaustion.
         category = FailureCategory.CAPACITY
-        code = "capacity_exhausted"
         retryable = True
         message = "Service capacity was exhausted while processing the task."
     return PublicFailureInfo(
-        code=code,
         category=category,
         message=message,
         retryable=retryable,
         phase=phase,
-        correlation_id=task_id,
         details=merged_details,
     )
 
