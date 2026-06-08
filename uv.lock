@@ -1197,9 +1197,9 @@ dev = [
 requires-dist = [
     { name = "boto3", specifier = "~=1.35" },
     { name = "codeflare-sdk", marker = "python_full_version >= '3.11' and python_full_version < '3.14' and extra == 'ray'", specifier = ">=0.20.0" },
-    { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", git = "https://github.com/docling-project/docling/?rev=cau%2Fclient-failure-mode-handling" },
-    { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", git = "https://github.com/docling-project/docling/?rev=cau%2Fclient-failure-mode-handling" },
-    { name = "docling-slim", extras = ["standard"], git = "https://github.com/docling-project/docling/?rev=cau%2Fclient-failure-mode-handling" },
+    { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", git = "https://github.com/docling-project/docling/?rev=cau%2Fs3-max-elements" },
+    { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", git = "https://github.com/docling-project/docling/?rev=cau%2Fs3-max-elements" },
+    { name = "docling-slim", extras = ["standard"], git = "https://github.com/docling-project/docling/?rev=cau%2Fs3-max-elements" },
     { name = "google-api-python-client", marker = "extra == 'gdrive'", specifier = ">=2.183.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'gdrive'", specifier = ">=1.2.2" },
     { name = "httpx", specifier = ">=0.28,<1" },
@@ -1271,8 +1271,8 @@ wheels = [
 
 [[package]]
 name = "docling-slim"
-version = "2.97.0"
-source = { git = "https://github.com/docling-project/docling/?rev=cau%2Fclient-failure-mode-handling#986fd87ff76a7ed2759e6b9c40bf9ee19c60fbae" }
+version = "2.98.0"
+source = { git = "https://github.com/docling-project/docling/?rev=cau%2Fs3-max-elements#d54935e54826fadd37abf2da618e4e4d1a05971e" }
 dependencies = [
     { name = "certifi" },
     { name = "docling-core" },

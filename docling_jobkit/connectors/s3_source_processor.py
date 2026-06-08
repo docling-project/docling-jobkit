@@ -38,12 +38,17 @@ class S3SourceProcessor(BaseSourceProcessor[S3Coordinates, S3FileIdentifier]):
 
     def _list_document_ids(self) -> Iterator[S3FileIdentifier]:
         paginator = self._client.get_paginator("list_objects_v2")
+        yielded = 0
+        max_num_elements = self._coords.max_num_elements
         for page in paginator.paginate(
             Bucket=self._coords.bucket,
             Prefix=self._coords.key_prefix,
         ):
             for obj in page.get("Contents", []):
+                if max_num_elements is not None and yielded >= max_num_elements:
+                    return
                 last_modified = obj.get("LastModified", None)
+                yielded += 1
                 yield S3FileIdentifier(
                     key=obj["Key"],  # type: ignore[typeddict-item]  # Key is always present in S3 list_objects_v2 response
                     size=obj.get("Size", 0),
@@ -52,12 +57,24 @@ class S3SourceProcessor(BaseSourceProcessor[S3Coordinates, S3FileIdentifier]):
 
     def _count_documents(self) -> int:
         total = 0
+        max_num_elements = self._coords.max_num_elements
         paginator = self._client.get_paginator("list_objects_v2")
         for page in paginator.paginate(
             Bucket=self._coords.bucket,
             Prefix=self._coords.key_prefix,
         ):
-            total += len(page.get("Contents", []))
+            page_count = len(page.get("Contents", []))
+            if max_num_elements is None:
+                total += page_count
+                continue
+
+            remaining = max_num_elements - total
+            if remaining <= 0:
+                return max_num_elements
+
+            total += min(page_count, remaining)
+            if total >= max_num_elements:
+                return max_num_elements
         return total
 
     @override

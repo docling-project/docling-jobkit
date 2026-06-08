@@ -93,6 +93,7 @@ def test_task_roundtrip_accepts_request_subclasses_without_normalization():
                 secret_key="minioadmin",
                 bucket="test-bucket",
                 key_prefix="incoming/",
+                max_num_elements=4,
             ),
         ],
         target=InBodyTarget(),
@@ -106,6 +107,7 @@ def test_task_roundtrip_accepts_request_subclasses_without_normalization():
     assert isinstance(rebuilt_task.sources[2], S3Coordinates)
     assert rebuilt_task.sources[2].access_key == "minioadmin"
     assert rebuilt_task.sources[2].secret_key == "minioadmin"
+    assert rebuilt_task.sources[2].max_num_elements == 4
 
 
 def test_task_json_roundtrip_preserves_s3_secrets_for_source_and_target():
