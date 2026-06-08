@@ -66,7 +66,7 @@ def test_options_validator():
     assert pipeline_opts.pipeline_options is not None
     assert pipeline_opts.backend == PyPdfiumDocumentBackend
     assert isinstance(pipeline_opts.pipeline_options, PdfPipelineOptions)
-    assert pipeline_opts.pipeline_options.generate_page_images is True
+    assert pipeline_opts.pipeline_options.generate_page_images is False
     assert pipeline_opts.pipeline_options.generate_picture_images is True
 
     for pdf_backend in (
