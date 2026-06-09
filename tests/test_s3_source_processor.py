@@ -1,5 +1,6 @@
 import socket
 from datetime import datetime, timezone
+from io import BytesIO
 from unittest.mock import MagicMock
 
 import pytest
@@ -99,6 +100,86 @@ def test_s3_document_ref_preserves_canonical_source_uri(minio_coords):
     assert ref.source_index == 5
     assert ref.source_uri == "s3://test/incoming/doc.pdf"
     assert ref.filename == "incoming/doc.pdf"
+
+
+def test_s3_list_document_ids_respects_max_num_elements(minio_coords):
+    capped_coords = minio_coords.model_copy(update={"max_num_elements": 3})
+    processor = S3SourceProcessor(capped_coords)
+    processor._client = MagicMock()
+    paginator = processor._client.get_paginator.return_value
+    paginator.paginate.return_value = [
+        {
+            "Contents": [
+                {"Key": "incoming/a.pdf", "Size": 1},
+                {"Key": "incoming/b.pdf", "Size": 2},
+            ]
+        },
+        {
+            "Contents": [
+                {"Key": "incoming/c.pdf", "Size": 3},
+                {"Key": "incoming/d.pdf", "Size": 4},
+            ]
+        },
+    ]
+
+    doc_ids = list(processor._list_document_ids())
+
+    assert [doc_id.key for doc_id in doc_ids] == [
+        "incoming/a.pdf",
+        "incoming/b.pdf",
+        "incoming/c.pdf",
+    ]
+
+
+def test_s3_count_documents_clips_to_max_num_elements(minio_coords):
+    capped_coords = minio_coords.model_copy(update={"max_num_elements": 3})
+    processor = S3SourceProcessor(capped_coords)
+    processor._client = MagicMock()
+    paginator = processor._client.get_paginator.return_value
+    paginator.paginate.return_value = [
+        {
+            "Contents": [
+                {"Key": "incoming/a.pdf", "Size": 1},
+                {"Key": "incoming/b.pdf", "Size": 2},
+            ]
+        },
+        {
+            "Contents": [
+                {"Key": "incoming/c.pdf", "Size": 3},
+                {"Key": "incoming/d.pdf", "Size": 4},
+            ]
+        },
+    ]
+
+    assert processor._count_documents() == 3
+
+
+def test_s3_iterate_documents_respects_max_num_elements(minio_coords):
+    capped_coords = minio_coords.model_copy(update={"max_num_elements": 2})
+    processor = S3SourceProcessor(capped_coords)
+    processor._initialized = True
+    processor._client = MagicMock()
+    paginator = processor._client.get_paginator.return_value
+    paginator.paginate.return_value = [
+        {
+            "Contents": [
+                {"Key": "incoming/a.pdf", "Size": 1},
+                {"Key": "incoming/b.pdf", "Size": 2},
+                {"Key": "incoming/c.pdf", "Size": 3},
+            ]
+        }
+    ]
+    processor._fetch_document_by_id = MagicMock(
+        side_effect=lambda identifier: DocumentStream(
+            name=identifier.key,
+            stream=BytesIO(b"content"),
+        )
+    )
+
+    docs = list(processor.iterate_documents())
+
+    assert [doc.name for doc in docs] == ["incoming/a.pdf", "incoming/b.pdf"]
+    assert processor._fetch_document_by_id.call_count == 2
 
 
 def test_s3_fetch_document_logs_and_reraises_client_error(minio_coords, caplog):
