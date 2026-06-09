@@ -84,6 +84,13 @@ class RayTaskDispatcher:
         self.active = False
         self.last_heartbeat = datetime.datetime.now(datetime.timezone.utc)
         self._background_tasks: set[asyncio.Task[None]] = set()
+        # Task IDs this dispatcher incarnation currently owns via an in-flight
+        # _process_task_async (response.result). Reconciliation must never
+        # terminalize these — their live owner is response.result, not the
+        # backup reconcile loop. After a dispatcher restart this set is empty,
+        # so tasks dispatched by a previous incarnation become eligible for
+        # claim-deadline recovery.
+        self._inflight_task_ids: set[str] = set()
         self._dispatch_loop_task: Optional[asyncio.Task[None]] = None
         self._runtime_lock = asyncio.Lock()
 
@@ -185,6 +192,7 @@ class RayTaskDispatcher:
         self._wake_event.clear()
         self._active_tenant_ids.clear()
         self._active_tenant_order.clear()
+        self._inflight_task_ids.clear()
         self._last_reconcile = 0.0
         self._dispatch_loop_task = asyncio.create_task(self._run_dispatch_loop())
         _log.info("Started Ray dispatcher background loop")
@@ -387,6 +395,9 @@ class RayTaskDispatcher:
 
         # Launch task asynchronously (fire-and-forget). The durable task state is
         # already in Redis, so dispatcher restarts do not lose ownership metadata.
+        # Mark the task as owned by this incarnation before launching so reconcile
+        # never races response.result for a task this dispatcher is still awaiting.
+        self._inflight_task_ids.add(task.task_id)
         background_task = asyncio.create_task(self._process_task_async(task, tenant_id))
         # Store a strong reference to prevent premature garbage collection.
         self._background_tasks.add(background_task)
@@ -477,15 +488,23 @@ class RayTaskDispatcher:
                 )
             # Capacity freed; wake dispatch loop for queued work.
             self._wake_event.set()
+        finally:
+            # Release ownership so the backup reconcile loop may recover the task
+            # if it is still active (e.g. status update raced terminalization).
+            self._inflight_task_ids.discard(task_id)
 
     async def _reconcile_active_tasks(self) -> None:
         """Reconcile active-task bookkeeping after dispatcher startup and per round.
 
-        This replaces the old stale-heartbeat orphan recovery path. The current
-        rule is intentionally conservative:
-        - STARTED tasks missing processing state are failed and released.
-        - Pre-start dispatched tasks are left unresolved because Ray Serve may
-          legitimately keep them queued for a long time.
+        Reconciliation is the backup recovery path for tasks no longer owned by a
+        live in-flight dispatch (response.result). It terminalizes active-set
+        tasks that are not backed by a live replica and releases their capacity:
+        - STARTED tasks whose replica execution lease is stale or missing past the
+          claim deadline.
+        - Pre-claim dispatched tasks (still PENDING) past the claim deadline — the
+          dispatcher that dispatched them is gone, so no replica will claim them.
+        Tasks still owned by this dispatcher incarnation are skipped; their live
+        owner is response.result, not this loop.
         """
         tenants = await self.redis_manager.get_all_tenants_with_active_tasks()
         for tenant_id in tenants:
@@ -499,80 +518,164 @@ class RayTaskDispatcher:
             return
 
         for task_id in active_task_ids:
+            # Tasks this incarnation is still awaiting via response.result are
+            # owned by that path; the backup reconcile loop must not touch them.
+            if task_id in self._inflight_task_ids:
+                continue
+
             metadata = await self.redis_manager.get_task_metadata_model(task_id)
+
+            # Durable SUCCESS/FAILURE is the terminal fence. Once durable status
+            # has moved to a terminal state, reconciliation leaves the task alone.
+            if metadata is not None and metadata.status in (
+                TaskStatus.SUCCESS,
+                TaskStatus.FAILURE,
+            ):
+                continue
+
             dispatch_hash = await self.redis_manager.get_task_dispatch_hash(task_id)
 
             if not dispatch_hash:
-                if metadata is None or metadata.status != TaskStatus.STARTED:
-                    # No processing state + non-STARTED metadata: already terminal or
-                    # was never properly dispatched. No action needed.
-                    continue
+                # The dispatch key carries a processing_ttl (≈ task_timeout + margin).
+                # If it has expired while the task is still in the active set and not
+                # terminal, the task never completed and no live dispatch remains:
+                # it is orphaned regardless of PENDING/STARTED. Release its capacity.
                 await self._fail_reconciled_task(
                     tenant_id=tenant_id,
                     task_id=task_id,
                     metadata=metadata,
-                    error_message="Task orphaned: processing state missing during reconciliation",
-                )
-                continue
-
-            # D3-owned durable SUCCESS is the terminal fence. Reconciliation only
-            # applies stale-heartbeat failure logic to tasks that are still
-            # durably STARTED; once durable status has moved to SUCCESS or
-            # FAILURE, this path must leave the task alone.
-            if metadata is None or metadata.status != TaskStatus.STARTED:
-                continue
-
-            execution_lease = await self.redis_manager.get_task_execution_lease(task_id)
-            if execution_lease is None:
-                # No lease written yet: narrow window between dispatch and replica claim,
-                # or an old in-flight task from before this code was deployed.
-                # Leave unresolved — conservative, no false positives.
-                continue
-
-            heartbeat_at_raw = execution_lease.get("heartbeat_at")
-            if heartbeat_at_raw is None:
-                # Lease exists but no heartbeat field — should not happen with current code.
-                # Leave unresolved rather than risk a false positive.
-                continue
-
-            try:
-                heartbeat_age = datetime.datetime.now(
-                    datetime.timezone.utc
-                ).timestamp() - float(heartbeat_at_raw)
-            except ValueError:
-                _log.warning(
-                    "[RECONCILE] %s: invalid execution lease heartbeat %r",
-                    task_id,
-                    heartbeat_at_raw,
-                )
-                continue
-
-            if heartbeat_age > self._get_task_processing_stale_after():
-                await self._fail_reconciled_task(
-                    tenant_id=tenant_id,
-                    task_id=task_id,
-                    metadata=metadata,
+                    dispatch_hash=dispatch_hash,
                     error_message=(
-                        "Task orphaned: replica execution lease stale during reconciliation"
+                        "Task orphaned: dispatch state expired before completion"
+                    ),
+                )
+                continue
+
+            if metadata is not None and metadata.status == TaskStatus.STARTED:
+                execution_lease = await self.redis_manager.get_task_execution_lease(
+                    task_id
+                )
+                if execution_lease is not None:
+                    heartbeat_age = self._execution_lease_heartbeat_age(
+                        task_id, execution_lease
+                    )
+                    if heartbeat_age is None:
+                        # Lease exists but heartbeat is missing/garbage. Leave
+                        # unresolved rather than risk a false positive; the lease
+                        # TTL still bounds the worst case.
+                        continue
+                    if heartbeat_age > self._get_task_processing_stale_after():
+                        await self._fail_reconciled_task(
+                            tenant_id=tenant_id,
+                            task_id=task_id,
+                            metadata=metadata,
+                            dispatch_hash=dispatch_hash,
+                            error_message=(
+                                "Task orphaned: replica execution lease stale "
+                                "during reconciliation"
+                            ),
+                        )
+                    # Fresh lease: a live replica owns the task. Leave it alone.
+                    continue
+                # STARTED without a lease (lease-write failure): fall through to the
+                # claim-deadline check below.
+
+            # Not backed by a live replica (PENDING with a dispatch key, or STARTED
+            # without a lease). Fail only once the claim deadline has elapsed; until
+            # then this is the narrow legitimate window before a replica claims the
+            # task.
+            claim_age = self._dispatch_claim_age(dispatch_hash)
+            if claim_age is None or claim_age > self.config.dispatch_claim_timeout:
+                await self._fail_reconciled_task(
+                    tenant_id=tenant_id,
+                    task_id=task_id,
+                    metadata=metadata,
+                    dispatch_hash=dispatch_hash,
+                    error_message=(
+                        "Task orphaned: no replica claim before dispatch deadline"
                     ),
                 )
 
         await self.redis_manager.resync_tenant_limits(tenant_id)
 
+    def _execution_lease_heartbeat_age(
+        self, task_id: str, execution_lease: dict[str, Any]
+    ) -> Optional[float]:
+        """Return the age of the lease heartbeat in seconds, or None if unusable."""
+        heartbeat_at_raw = execution_lease.get("heartbeat_at")
+        if heartbeat_at_raw is None:
+            return None
+        try:
+            heartbeat_at = float(heartbeat_at_raw)
+        except (TypeError, ValueError):
+            _log.warning(
+                "[RECONCILE] %s: invalid execution lease heartbeat %r",
+                task_id,
+                heartbeat_at_raw,
+            )
+            return None
+        return datetime.datetime.now(datetime.timezone.utc).timestamp() - heartbeat_at
+
+    def _dispatch_claim_age(self, dispatch_hash: dict[str, Any]) -> Optional[float]:
+        """Return seconds since dispatch, or None when past any reasonable deadline.
+
+        None is returned when the dispatch hash is missing or its timestamp is
+        unusable; callers treat None as "deadline elapsed" because a task in the
+        active set with no recoverable dispatch timestamp has been there at least
+        as long as the dispatch key's processing_ttl.
+        """
+        if not dispatch_hash:
+            return None
+        dispatched_at_raw = dispatch_hash.get("dispatched_at")
+        if dispatched_at_raw is None:
+            return None
+        try:
+            dispatched_at = float(dispatched_at_raw)
+        except (TypeError, ValueError):
+            return None
+        return datetime.datetime.now(datetime.timezone.utc).timestamp() - dispatched_at
+
+    def _resolve_reconciled_task_size(
+        self,
+        task_id: str,
+        metadata: Optional[RedisTaskMetadata],
+        dispatch_hash: dict[str, Any],
+    ) -> int:
+        """Best-effort task_size for capacity release during reconciliation.
+
+        Prefers durable metadata, then the dispatch hash, then a safe fallback of
+        1. resync_tenant_limits recomputes the canonical counters afterwards, so a
+        slightly stale size here only affects the single decrement, not the final
+        per-tenant totals.
+        """
+        if metadata is not None and metadata.task_size > 0:
+            return metadata.task_size
+
+        dispatch_task_size = dispatch_hash.get("task_size")
+        if dispatch_task_size is not None:
+            try:
+                parsed = int(dispatch_task_size)
+                if parsed > 0:
+                    return parsed
+            except (TypeError, ValueError):
+                pass
+
+        _log.warning(
+            "[RECONCILE] Missing durable task_size for %s; falling back to 1",
+            task_id,
+        )
+        return 1
+
     async def _fail_reconciled_task(
         self,
         tenant_id: str,
         task_id: str,
-        metadata: RedisTaskMetadata,
+        metadata: Optional[RedisTaskMetadata],
+        dispatch_hash: dict[str, Any],
         error_message: str,
     ) -> None:
         """Fail a reconciled task and release any capacity it still consumes."""
-        task_size = metadata.task_size if metadata.task_size > 0 else 1
-        if task_size == 1 and metadata.task_size <= 0:
-            _log.warning(
-                "[RECONCILE] Missing durable task_size for %s; falling back to 1",
-                task_id,
-            )
+        task_size = self._resolve_reconciled_task_size(task_id, metadata, dispatch_hash)
 
         _log.warning("[RECONCILE] %s: %s", task_id, error_message)
         failure = classify_public_task_failure(

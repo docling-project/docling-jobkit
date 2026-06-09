@@ -38,6 +38,7 @@ _log = logging.getLogger(__name__)
 _UPDATE_TASK_EXECUTION_HEARTBEAT_LUA = """
 if redis.call('EXISTS', KEYS[1]) == 1 then
     redis.call('HSET', KEYS[1], 'heartbeat_at', ARGV[1])
+    redis.call('EXPIRE', KEYS[1], ARGV[2])
     return 1
 end
 return 0
@@ -290,6 +291,13 @@ class RedisStateManager:
     ) -> None:
         """Update task status and metadata.
 
+        A durable terminal status (SUCCESS/FAILURE) is the final fence: this method
+        will not overwrite it. That keeps a late replica from resurrecting a task
+        that reconciliation already failed — e.g. a process_task request that Ray
+        Serve queued past the dispatch claim deadline and only ran after the
+        dispatcher restarted. Without this guard such a replica would flip the task
+        back to STARTED and then emit a second, contradictory terminal callback.
+
         Args:
             task_id: Task identifier
             status: New task status
@@ -321,7 +329,28 @@ class RedisStateManager:
             updates["finished_at"] = timestamp
 
         redis = self._ensure_redis()
-        await redis.hset(task_key, mapping=updates)  # type: ignore[misc]
+        async with redis.pipeline(transaction=True) as pipe:
+            while True:
+                try:
+                    await pipe.watch(task_key)
+                    status_raw = await redis.hget(task_key, "status")  # type: ignore[misc]
+                    current_status = (
+                        TaskStatus(status_raw.decode("utf-8")) if status_raw else None
+                    )
+                    if current_status in (TaskStatus.SUCCESS, TaskStatus.FAILURE):
+                        await pipe.unwatch()
+                        _log.debug(
+                            "Skipped status update for %s: already terminal (%s)",
+                            task_id,
+                            current_status.value,
+                        )
+                        return
+                    pipe.multi()
+                    pipe.hset(task_key, mapping=updates)
+                    await pipe.execute()
+                    break
+                except WatchError:
+                    continue
 
         _log.debug(f"Updated task {task_id} status to {status}")
 
@@ -1030,7 +1059,12 @@ class RedisStateManager:
         Called by the replica when it begins executing a task. The lease proves
         a live replica owns this work. It is refreshed by
         update_task_execution_heartbeat() and deleted by finalize_task_*_atomic().
-        No TTL — the key is cleaned up explicitly at terminalization.
+
+        A defensive TTL (``processing_ttl`` ≈ task_timeout + margin) is set on the
+        key and re-extended by every heartbeat refresh. The key is still deleted
+        explicitly at terminalization; the TTL only bounds the worst case where a
+        replica dies and reconciliation never visits the task, so the lease cannot
+        become immortal.
         """
         execution_key = f"task:{task_id}:execution"
         redis = self._ensure_redis()
@@ -1044,13 +1078,15 @@ class RedisStateManager:
                 "heartbeat_at": now_timestamp,
             },
         )
+        await redis.expire(execution_key, self.processing_ttl)  # type: ignore[misc]
 
     async def update_task_execution_heartbeat(self, task_id: str) -> bool:
         """Refresh the execution lease heartbeat timestamp.
 
         Uses a Lua script so the update is a no-op when the key is gone
         (replica died or task was already terminalized). Returns False when
-        the key no longer exists — the caller should stop heartbeating.
+        the key no longer exists — the caller should stop heartbeating. Each
+        refresh also re-extends the defensive lease TTL (``processing_ttl``).
         """
         if not self.redis:
             await self.connect()
@@ -1058,6 +1094,7 @@ class RedisStateManager:
         execution_key = f"task:{task_id}:execution"
         redis = self._ensure_redis()
         now_timestamp = str(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        ttl = str(self.processing_ttl)
 
         if self._update_task_execution_heartbeat_sha is None:
             self._update_task_execution_heartbeat_sha = await redis.script_load(  # type: ignore[misc]
@@ -1070,6 +1107,7 @@ class RedisStateManager:
                 1,
                 execution_key,
                 now_timestamp,
+                ttl,
             )
         except NoScriptError:
             self._update_task_execution_heartbeat_sha = await redis.script_load(  # type: ignore[misc]
@@ -1080,6 +1118,7 @@ class RedisStateManager:
                 1,
                 execution_key,
                 now_timestamp,
+                ttl,
             )
 
         return bool(updated)

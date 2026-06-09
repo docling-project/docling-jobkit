@@ -342,6 +342,17 @@ class RayOrchestratorConfig(BaseSettings):
         default=3600.0,
         description="Maximum seconds per task (None = no limit)",
     )
+    dispatch_claim_timeout: float = Field(
+        default=300.0,
+        gt=0,
+        description=(
+            "Seconds a dispatched task may sit in the tenant active set without a "
+            "live replica claim (durable STARTED + heartbeating execution lease) "
+            "before reconciliation treats it as orphaned and releases its capacity. "
+            "Only applied to tasks no longer owned by an in-flight dispatch on the "
+            "current dispatcher, i.e. after a dispatcher restart."
+        ),
+    )
     document_timeout: Optional[float] = Field(
         default=300.0,
         description="Maximum seconds per document (None = no limit)",
