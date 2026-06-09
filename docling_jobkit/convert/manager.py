@@ -1484,10 +1484,15 @@ class DoclingConverterManager:
                 picture_classification_options
             )
 
-        if request.image_export_mode != ImageRefMode.PLACEHOLDER:
+        if request.image_export_mode == ImageRefMode.EMBEDDED:
             pipeline_options.generate_page_images = True
-            if request.image_export_mode == ImageRefMode.REFERENCED:
-                pipeline_options.generate_picture_images = True
+        elif request.image_export_mode == ImageRefMode.REFERENCED:
+            # Page images are never externalized by image_export_mode=referenced
+            # (only PictureItem images are), so generating them here would just
+            # leak base64-embedded page images into the "referenced" JSON output.
+            pipeline_options.generate_picture_images = True
+
+        if request.image_export_mode != ImageRefMode.PLACEHOLDER:
             if request.images_scale:
                 pipeline_options.images_scale = request.images_scale
 

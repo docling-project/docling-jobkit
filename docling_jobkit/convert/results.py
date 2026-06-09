@@ -1,6 +1,7 @@
 import logging
 import shutil
 import time
+import zipfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
@@ -512,11 +513,21 @@ def _materialize_document_exports(
     artifacts_path = output_dir / artifacts_dir
     if bundle_resources and artifacts_path.exists() and any(artifacts_path.iterdir()):
         bundle_path = output_dir / f"{doc_filename}_bundle.zip"
-        shutil.make_archive(
-            base_name=str(bundle_path.with_suffix("")),
-            format="zip",
-            root_dir=artifacts_path,
-        )
+        with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as bundle_zip:
+            # Place the exported documents alongside the artifacts directory,
+            # using the same relative layout (`<artifacts_dir>/<file>`) that
+            # the documents themselves reference, so the bundle is
+            # self-contained and resolvable without any path rewriting.
+            for artifact in generated:
+                bundle_zip.write(artifact.path, arcname=artifact.target_filename)
+            for artifact_file in sorted(artifacts_path.rglob("*")):
+                if artifact_file.is_file():
+                    bundle_zip.write(
+                        artifact_file,
+                        arcname=str(
+                            artifacts_dir / artifact_file.relative_to(artifacts_path)
+                        ),
+                    )
         generated.append(
             _ExportedArtifactFile(
                 artifact_type="resource_bundle",
