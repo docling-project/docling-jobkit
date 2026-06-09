@@ -90,26 +90,24 @@ async def fetch_http_source_bytes_async(
     *,
     max_file_size: int | None,
     error_cls: type[MaterializationError] = SourceLimitExceededError,
-    probe_head: bool = True,
 ) -> bytes:
     filename = _filename_for_http_source(source)
     limit = normalize_max_file_size(max_file_size)
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        if probe_head:
-            try:
-                head_response = await client.head(
-                    str(source.url),
-                    headers=source.headers,
+        try:
+            head_response = await client.head(
+                str(source.url),
+                headers=source.headers,
+            )
+            if head_response.is_success:
+                _check_content_length_limit(
+                    content_length=_parse_content_length(head_response.headers),
+                    max_file_size=max_file_size,
+                    source_name=filename,
+                    error_cls=error_cls,
                 )
-                if head_response.is_success:
-                    _check_content_length_limit(
-                        content_length=_parse_content_length(head_response.headers),
-                        max_file_size=max_file_size,
-                        source_name=filename,
-                        error_cls=error_cls,
-                    )
-            except httpx.HTTPError:
-                pass
+        except httpx.HTTPError:
+            pass
 
         async with client.stream(
             "GET",
@@ -126,57 +124,6 @@ async def fetch_http_source_bytes_async(
             buffer = BytesIO()
             bytes_seen = 0
             async for chunk in response.aiter_bytes():
-                if chunk:
-                    bytes_seen += len(chunk)
-                    if limit is not None and bytes_seen > limit:
-                        raise error_cls(
-                            f"Source '{filename}' exceeds max_file_size={limit} bytes"
-                        )
-                    buffer.write(chunk)
-    return buffer.getvalue()
-
-
-def fetch_http_source_bytes(
-    source: HttpSource,
-    *,
-    max_file_size: int | None,
-    error_cls: type[MaterializationError] = SourceLimitExceededError,
-    probe_head: bool = True,
-) -> bytes:
-    filename = _filename_for_http_source(source)
-    limit = normalize_max_file_size(max_file_size)
-    with httpx.Client(follow_redirects=True) as client:
-        if probe_head:
-            try:
-                head_response = client.head(
-                    str(source.url),
-                    headers=source.headers,
-                )
-                if head_response.is_success:
-                    _check_content_length_limit(
-                        content_length=_parse_content_length(head_response.headers),
-                        max_file_size=max_file_size,
-                        source_name=filename,
-                        error_cls=error_cls,
-                    )
-            except httpx.HTTPError:
-                pass
-
-        with client.stream(
-            "GET",
-            str(source.url),
-            headers=source.headers,
-        ) as response:
-            response.raise_for_status()
-            _check_content_length_limit(
-                content_length=_parse_content_length(response.headers),
-                max_file_size=max_file_size,
-                source_name=filename,
-                error_cls=error_cls,
-            )
-            buffer = BytesIO()
-            bytes_seen = 0
-            for chunk in response.iter_bytes():
                 if chunk:
                     bytes_seen += len(chunk)
                     if limit is not None and bytes_seen > limit:

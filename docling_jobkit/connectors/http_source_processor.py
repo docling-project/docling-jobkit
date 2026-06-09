@@ -1,4 +1,3 @@
-from io import BytesIO
 from typing import Iterator
 
 from pydantic import BaseModel, ConfigDict
@@ -15,7 +14,6 @@ from docling_jobkit.connectors.source_processor import (
 from docling_jobkit.convert.materialization import (
     SourceLimitExceededError,
     _filename_for_http_source,
-    fetch_http_source_bytes,
     normalize_max_file_size,
 )
 
@@ -73,32 +71,16 @@ class HttpSourceProcessor(
         max_file_size: int | None = None,
     ) -> DocumentStream:
         """Fetch document from the identifier."""
+        del max_file_size
         source = identifier.source
         if isinstance(source, FileSource):
             return source.to_document_stream()
         elif isinstance(source, HttpSource):
-            limit = normalize_max_file_size(max_file_size)
-            if (
-                limit is not None
-                and identifier.size is not None
-                and identifier.size > limit
-            ):
-                raise SourceLimitExceededError(
-                    f"Source '{_filename_for_http_source(source)}' "
-                    f"exceeds max_file_size={limit} bytes"
-                )
-            # The HEAD probe already ran in _list_document_ids (identifier.size);
-            # skip the redundant HEAD here. The streamed cap below still guards
-            # against missing/incorrect Content-Length.
-            source_bytes = fetch_http_source_bytes(
-                source,
-                max_file_size=max_file_size,
-                probe_head=False,
-            )
-            return DocumentStream(
-                name=_filename_for_http_source(source),
-                stream=BytesIO(source_bytes),
-            )
+            # HttpSource is never materialized by this processor: service runtimes
+            # pass the raw URL through to the converter (see
+            # fetch_converter_source_by_ref / expand_task_sources). Direct byte
+            # retrieval here is intentionally unsupported.
+            raise NotImplementedError("HttpSource fetching is not supported")
         else:
             raise ValueError(f"Unsupported source type: {type(source)}")
 
@@ -128,12 +110,19 @@ class HttpSourceProcessor(
         max_file_size: int | None = None,
     ) -> ConverterSource:
         source = ref.id.source
-        # No effective limit -> keep raw URL passthrough so the converter fetches
-        # it directly. Materializing here would be accidental and is not allowed.
-        if (
-            isinstance(source, HttpSource)
-            and normalize_max_file_size(max_file_size) is None
-        ):
+        if isinstance(source, HttpSource):
+            # Enforce max_file_size from HEAD metadata only; never materialize in
+            # this path. Either reject on the advertised Content-Length (already
+            # probed into ref.id.size by _list_document_ids), or hand the raw URL
+            # to the converter so it performs the fetch -- identical to the
+            # no-limit behavior. Setting a limit must not introduce a fetch that
+            # would not otherwise happen.
+            limit = normalize_max_file_size(max_file_size)
+            if limit is not None and ref.id.size is not None and ref.id.size > limit:
+                raise SourceLimitExceededError(
+                    f"Source '{_filename_for_http_source(source)}' "
+                    f"exceeds max_file_size={limit} bytes"
+                )
             return str(source.url)
         return self._fetch_document_by_id(
             ref.id,
@@ -152,10 +141,9 @@ class HttpSourceProcessor(
     def _fetch_documents(
         self, *, max_file_size: int | None = None
     ) -> Iterator[DocumentStream]:
-        # _list_document_ids performs the single HEAD probe (populating
-        # identifier.size); reuse it so the fetch path does not HEAD again.
-        for identifier in self._list_document_ids():
-            yield self._fetch_document_by_id(
-                identifier,
-                max_file_size=max_file_size,
-            )
+        del max_file_size
+        if isinstance(self._source, FileSource):
+            yield self._source.to_document_stream()
+        elif isinstance(self._source, HttpSource):
+            # See _fetch_document_by_id: HttpSource is passthrough-only.
+            raise NotImplementedError("HttpSource fetching is not supported")

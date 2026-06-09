@@ -88,62 +88,31 @@ def test_http_source_ref_returns_converter_url_and_headers(monkeypatch):
         assert ref.source_uri == "https://example.com/document.pdf"
 
 
-def test_http_source_ref_passthrough_with_unlimited_sentinel(monkeypatch):
-    """max_file_size=sys.maxsize (the config default) must NOT materialize."""
+@pytest.mark.parametrize("head_size", [None, 4])
+def test_http_source_ref_passthrough_when_within_limit(monkeypatch, head_size):
+    """A limit alone must NOT materialize: an unknown or in-limit size passes the
+    raw URL through to the converter. Also covers the sys.maxsize sentinel."""
     import sys
 
-    _stub_head(monkeypatch)
-
-    def _should_not_fetch(*args, **kwargs):
-        raise AssertionError("passthrough must not materialize when unlimited")
-
-    monkeypatch.setattr(
-        "docling_jobkit.connectors.http_source_processor.fetch_http_source_bytes",
-        _should_not_fetch,
-    )
+    _stub_head(monkeypatch, size=head_size)
     http_source = HttpSource(url="https://example.com/document.pdf")
 
     with HttpSourceProcessor(http_source) as processor:
         chunk = next(processor.iterate_document_chunks(chunk_size=1))
         ref = chunk.refs[0]
         assert (
+            processor.fetch_converter_source_by_ref(ref, max_file_size=8)
+            == "https://example.com/document.pdf"
+        )
+        assert (
             processor.fetch_converter_source_by_ref(ref, max_file_size=sys.maxsize)
             == "https://example.com/document.pdf"
         )
 
 
-def test_http_source_ref_fetches_document_stream_when_limit_is_provided(
-    monkeypatch,
-):
-    _stub_head(monkeypatch)
-    http_source = HttpSource(url="https://example.com/document.pdf")
-
-    monkeypatch.setattr(
-        "docling_jobkit.connectors.http_source_processor.fetch_http_source_bytes",
-        lambda source, *, max_file_size, probe_head=True: b"pdf-bytes",
-    )
-
-    with HttpSourceProcessor(http_source) as processor:
-        chunk = next(processor.iterate_document_chunks(chunk_size=1))
-        ref = chunk.refs[0]
-        source = processor.fetch_converter_source_by_ref(ref, max_file_size=8)
-
-    assert isinstance(source, DocumentStream)
-    assert source.name == "document.pdf"
-    assert source.stream.read() == b"pdf-bytes"
-
-
-def test_http_source_ref_rejects_from_head_size_before_fetch(monkeypatch):
-    """A HEAD-advertised size over the limit rejects without a GET."""
+def test_http_source_ref_rejects_from_head_size(monkeypatch):
+    """A HEAD-advertised Content-Length over the limit rejects without a fetch."""
     _stub_head(monkeypatch, size=9)
-
-    def _should_not_fetch(*args, **kwargs):
-        raise AssertionError("must reject before downloading the body")
-
-    monkeypatch.setattr(
-        "docling_jobkit.connectors.http_source_processor.fetch_http_source_bytes",
-        _should_not_fetch,
-    )
     http_source = HttpSource(url="https://example.com/document.pdf")
 
     with HttpSourceProcessor(http_source) as processor:
@@ -153,26 +122,14 @@ def test_http_source_ref_rejects_from_head_size_before_fetch(monkeypatch):
             processor.fetch_converter_source_by_ref(ref, max_file_size=8)
 
 
-def test_http_source_ref_limit_failure_propagates(monkeypatch):
+def test_http_source_iterate_documents_not_supported(monkeypatch):
+    """HttpSource is passthrough-only; direct byte retrieval is unsupported."""
     _stub_head(monkeypatch)
     http_source = HttpSource(url="https://example.com/document.pdf")
 
-    def _raise_limit(source, *, max_file_size, probe_head=True):
-        del source, max_file_size, probe_head
-        raise SourceLimitExceededError(
-            "Source 'document.pdf' exceeds max_file_size=8 bytes"
-        )
-
-    monkeypatch.setattr(
-        "docling_jobkit.connectors.http_source_processor.fetch_http_source_bytes",
-        _raise_limit,
-    )
-
     with HttpSourceProcessor(http_source) as processor:
-        chunk = next(processor.iterate_document_chunks(chunk_size=1))
-        ref = chunk.refs[0]
-        with pytest.raises(SourceLimitExceededError, match="max_file_size=8"):
-            processor.fetch_converter_source_by_ref(ref, max_file_size=8)
+        with pytest.raises(NotImplementedError):
+            list(processor.iterate_documents())
 
 
 def test_http_file_source_iterate_documents():
