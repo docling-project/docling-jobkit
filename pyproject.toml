@@ -98,7 +98,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-# docling-slim = { git = "https://github.com/docling-project/docling/", rev = "cau/s3-max-elements" }
+docling-slim = { git = "https://github.com/docling-project/docling/", rev = "cau/consistent-image-inclusion" }
 # docling-slim = { path = "../docling", editable = true }
 
 
