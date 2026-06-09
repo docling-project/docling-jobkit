@@ -55,13 +55,18 @@ def _null_phase_cm(_: str) -> ContextManager[Any]:
 
 def _prepare_convert_sources(
     task: Task,
+    *,
+    max_file_size: int | None = None,
     on_source_prepared: Optional[_SourcePreparedHook] = None,
 ) -> tuple[
     list[Union[str, DocumentStream]],
     Optional[dict[str, Any]],
     list[dict[str, str]],
 ]:
-    convert_sources, headers = expand_task_sources(task)
+    convert_sources, headers = expand_task_sources(
+        task,
+        max_file_size=max_file_size,
+    )
     source_info: list[dict[str, str]] = []
 
     for idx, source in enumerate(task.sources):
@@ -123,9 +128,13 @@ def _run_docling_task(
                 ).model_dump_json(),
             )
 
+        if not conversion_manager:
+            raise RuntimeError("No converter")
+
         with phase_cm("prepare_sources"):
             convert_sources, headers, source_info = _prepare_convert_sources(
                 task,
+                max_file_size=conversion_manager.config.max_file_size,
                 on_source_prepared=on_source_prepared,
             )
             if on_sources_prepared:
@@ -135,8 +144,6 @@ def _run_docling_task(
                     headers is not None,
                 )
 
-        if not conversion_manager:
-            raise RuntimeError("No converter")
         if not task.convert_options:
             raise RuntimeError("No conversion options")
 

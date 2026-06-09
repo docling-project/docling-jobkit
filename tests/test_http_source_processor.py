@@ -1,7 +1,10 @@
+import pytest
+
 from docling.datamodel.service.sources import HttpSource
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.http_source_processor import HttpSourceProcessor
+from docling_jobkit.convert.materialization import SourceLimitExceededError
 from docling_jobkit.datamodel.http_inputs import FileSource
 
 
@@ -58,7 +61,17 @@ def test_http_file_source_list_and_fetch():
         assert doc.stream.read() == content
 
 
-def test_http_source_ref_returns_converter_url_and_headers():
+def _stub_head(monkeypatch, *, size=None, etag=None):
+    """Avoid real network HEAD probes in _list_document_ids."""
+    monkeypatch.setattr(
+        HttpSourceProcessor,
+        "_try_head_request",
+        lambda self, source: (size, etag),
+    )
+
+
+def test_http_source_ref_returns_converter_url_and_headers(monkeypatch):
+    _stub_head(monkeypatch)
     http_source = HttpSource(
         url="https://example.com/document.pdf",
         headers={"Authorization": "Bearer token"},
@@ -73,6 +86,93 @@ def test_http_source_ref_returns_converter_url_and_headers():
         )
         assert processor.headers_for_ref(ref) == {"Authorization": "Bearer token"}
         assert ref.source_uri == "https://example.com/document.pdf"
+
+
+def test_http_source_ref_passthrough_with_unlimited_sentinel(monkeypatch):
+    """max_file_size=sys.maxsize (the config default) must NOT materialize."""
+    import sys
+
+    _stub_head(monkeypatch)
+
+    def _should_not_fetch(*args, **kwargs):
+        raise AssertionError("passthrough must not materialize when unlimited")
+
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.http_source_processor.fetch_http_source_bytes",
+        _should_not_fetch,
+    )
+    http_source = HttpSource(url="https://example.com/document.pdf")
+
+    with HttpSourceProcessor(http_source) as processor:
+        chunk = next(processor.iterate_document_chunks(chunk_size=1))
+        ref = chunk.refs[0]
+        assert (
+            processor.fetch_converter_source_by_ref(ref, max_file_size=sys.maxsize)
+            == "https://example.com/document.pdf"
+        )
+
+
+def test_http_source_ref_fetches_document_stream_when_limit_is_provided(
+    monkeypatch,
+):
+    _stub_head(monkeypatch)
+    http_source = HttpSource(url="https://example.com/document.pdf")
+
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.http_source_processor.fetch_http_source_bytes",
+        lambda source, *, max_file_size, probe_head=True: b"pdf-bytes",
+    )
+
+    with HttpSourceProcessor(http_source) as processor:
+        chunk = next(processor.iterate_document_chunks(chunk_size=1))
+        ref = chunk.refs[0]
+        source = processor.fetch_converter_source_by_ref(ref, max_file_size=8)
+
+    assert isinstance(source, DocumentStream)
+    assert source.name == "document.pdf"
+    assert source.stream.read() == b"pdf-bytes"
+
+
+def test_http_source_ref_rejects_from_head_size_before_fetch(monkeypatch):
+    """A HEAD-advertised size over the limit rejects without a GET."""
+    _stub_head(monkeypatch, size=9)
+
+    def _should_not_fetch(*args, **kwargs):
+        raise AssertionError("must reject before downloading the body")
+
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.http_source_processor.fetch_http_source_bytes",
+        _should_not_fetch,
+    )
+    http_source = HttpSource(url="https://example.com/document.pdf")
+
+    with HttpSourceProcessor(http_source) as processor:
+        chunk = next(processor.iterate_document_chunks(chunk_size=1))
+        ref = chunk.refs[0]
+        with pytest.raises(SourceLimitExceededError, match="max_file_size=8"):
+            processor.fetch_converter_source_by_ref(ref, max_file_size=8)
+
+
+def test_http_source_ref_limit_failure_propagates(monkeypatch):
+    _stub_head(monkeypatch)
+    http_source = HttpSource(url="https://example.com/document.pdf")
+
+    def _raise_limit(source, *, max_file_size, probe_head=True):
+        del source, max_file_size, probe_head
+        raise SourceLimitExceededError(
+            "Source 'document.pdf' exceeds max_file_size=8 bytes"
+        )
+
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.http_source_processor.fetch_http_source_bytes",
+        _raise_limit,
+    )
+
+    with HttpSourceProcessor(http_source) as processor:
+        chunk = next(processor.iterate_document_chunks(chunk_size=1))
+        ref = chunk.refs[0]
+        with pytest.raises(SourceLimitExceededError, match="max_file_size=8"):
+            processor.fetch_converter_source_by_ref(ref, max_file_size=8)
 
 
 def test_http_file_source_iterate_documents():

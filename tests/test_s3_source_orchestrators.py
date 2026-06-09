@@ -57,7 +57,8 @@ def test_expand_task_sources_materializes_s3(monkeypatch: pytest.MonkeyPatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def iterate_documents(self):
+        def iterate_documents(self, *, max_file_size=None):
+            del max_file_size
             return iter(expected_docs)
 
     monkeypatch.setattr(
@@ -74,6 +75,42 @@ def test_expand_task_sources_materializes_s3(monkeypatch: pytest.MonkeyPatch):
 def test_get_source_processor_accepts_s3coordinates():
     processor = get_source_processor(_make_s3_source())
     assert isinstance(processor, S3SourceProcessor)
+
+
+def test_expand_task_sources_passes_max_file_size_to_source_processor(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    s3_source = _make_s3_source()
+    task = Task(
+        task_id="task-1",
+        task_type=TaskType.CONVERT,
+        sources=[s3_source],
+        target=InBodyTarget(),
+    )
+    expected_docs = [DocumentStream(name="a.pdf", stream=BytesIO(b"a"))]
+    seen_limits: list[int | None] = []
+
+    class FakeSourceProcessor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def iterate_documents(self, *, max_file_size=None):
+            seen_limits.append(max_file_size)
+            return iter(expected_docs)
+
+    monkeypatch.setattr(
+        "docling_jobkit.convert.source_expansion.get_source_processor",
+        lambda source: FakeSourceProcessor(),
+    )
+
+    convert_sources, headers = expand_task_sources(task, max_file_size=123)
+
+    assert headers is None
+    assert convert_sources == expected_docs
+    assert seen_limits == [123]
 
 
 def test_task_roundtrip_accepts_request_subclasses_without_normalization():

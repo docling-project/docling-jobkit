@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+from collections.abc import Mapping
 from io import BytesIO
 from pathlib import PurePath
 from urllib.parse import urlparse
@@ -43,10 +45,146 @@ class MaterializationLimitExceededError(MaterializationError):
     """Raised when the source exceeds configured document admission limits."""
 
 
+class SourceLimitExceededError(MaterializationError):
+    """Raised when source retrieval exceeds a configured fetch-time size limit."""
+
+
+def normalize_max_file_size(max_file_size: int | None) -> int | None:
+    if max_file_size is None or max_file_size >= sys.maxsize:
+        return None
+    return max_file_size
+
+
+def _check_content_length_limit(
+    *,
+    content_length: int | None,
+    max_file_size: int | None,
+    source_name: str,
+    error_cls: type[MaterializationError],
+) -> None:
+    limit = normalize_max_file_size(max_file_size)
+    if content_length is None or limit is None:
+        return
+    if content_length > limit:
+        raise error_cls(f"Source '{source_name}' exceeds max_file_size={limit} bytes")
+
+
+def _parse_content_length(headers: Mapping[str, str]) -> int | None:
+    raw_content_length = headers.get("content-length")
+    if raw_content_length is None:
+        return None
+    try:
+        return int(raw_content_length)
+    except (TypeError, ValueError):
+        return None
+
+
 def _filename_for_http_source(source: HttpSource) -> str:
     parsed = urlparse(str(source.url))
     filename = PurePath(parsed.path).name
     return filename or "document.pdf"
+
+
+async def fetch_http_source_bytes_async(
+    source: HttpSource,
+    *,
+    max_file_size: int | None,
+    error_cls: type[MaterializationError] = SourceLimitExceededError,
+    probe_head: bool = True,
+) -> bytes:
+    filename = _filename_for_http_source(source)
+    limit = normalize_max_file_size(max_file_size)
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        if probe_head:
+            try:
+                head_response = await client.head(
+                    str(source.url),
+                    headers=source.headers,
+                )
+                if head_response.is_success:
+                    _check_content_length_limit(
+                        content_length=_parse_content_length(head_response.headers),
+                        max_file_size=max_file_size,
+                        source_name=filename,
+                        error_cls=error_cls,
+                    )
+            except httpx.HTTPError:
+                pass
+
+        async with client.stream(
+            "GET",
+            str(source.url),
+            headers=source.headers,
+        ) as response:
+            response.raise_for_status()
+            _check_content_length_limit(
+                content_length=_parse_content_length(response.headers),
+                max_file_size=max_file_size,
+                source_name=filename,
+                error_cls=error_cls,
+            )
+            buffer = BytesIO()
+            bytes_seen = 0
+            async for chunk in response.aiter_bytes():
+                if chunk:
+                    bytes_seen += len(chunk)
+                    if limit is not None and bytes_seen > limit:
+                        raise error_cls(
+                            f"Source '{filename}' exceeds max_file_size={limit} bytes"
+                        )
+                    buffer.write(chunk)
+    return buffer.getvalue()
+
+
+def fetch_http_source_bytes(
+    source: HttpSource,
+    *,
+    max_file_size: int | None,
+    error_cls: type[MaterializationError] = SourceLimitExceededError,
+    probe_head: bool = True,
+) -> bytes:
+    filename = _filename_for_http_source(source)
+    limit = normalize_max_file_size(max_file_size)
+    with httpx.Client(follow_redirects=True) as client:
+        if probe_head:
+            try:
+                head_response = client.head(
+                    str(source.url),
+                    headers=source.headers,
+                )
+                if head_response.is_success:
+                    _check_content_length_limit(
+                        content_length=_parse_content_length(head_response.headers),
+                        max_file_size=max_file_size,
+                        source_name=filename,
+                        error_cls=error_cls,
+                    )
+            except httpx.HTTPError:
+                pass
+
+        with client.stream(
+            "GET",
+            str(source.url),
+            headers=source.headers,
+        ) as response:
+            response.raise_for_status()
+            _check_content_length_limit(
+                content_length=_parse_content_length(response.headers),
+                max_file_size=max_file_size,
+                source_name=filename,
+                error_cls=error_cls,
+            )
+            buffer = BytesIO()
+            bytes_seen = 0
+            for chunk in response.iter_bytes():
+                if chunk:
+                    bytes_seen += len(chunk)
+                    if limit is not None and bytes_seen > limit:
+                        raise error_cls(
+                            f"Source '{filename}' exceeds max_file_size={limit} bytes"
+                        )
+                    buffer.write(chunk)
+    return buffer.getvalue()
 
 
 async def materialize_and_preflight(
@@ -67,14 +205,12 @@ async def materialize_and_preflight(
         source_bytes = source.to_document_stream().stream.getvalue()
         filename = source.filename
     else:
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            response = await client.get(
-                str(source.url),
-                headers=source.headers,
-            )
-            response.raise_for_status()
-            source_bytes = response.content
-            filename = _filename_for_http_source(source)
+        source_bytes = await fetch_http_source_bytes_async(
+            source,
+            max_file_size=limits.max_file_size,
+            error_cls=MaterializationLimitExceededError,
+        )
+        filename = _filename_for_http_source(source)
 
     input_doc = InputDocument(
         path_or_stream=BytesIO(source_bytes),

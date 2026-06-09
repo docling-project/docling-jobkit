@@ -32,7 +32,10 @@ class GoogleDriveSourceProcessor(
     def _finalize(self):
         return
 
-    def _fetch_documents(self) -> Iterator[DocumentStream]:
+    def _fetch_documents(
+        self, *, max_file_size: int | None = None
+    ) -> Iterator[DocumentStream]:
+        del max_file_size
         from docling_jobkit.connectors.google_drive_helper import (
             download_file,
             get_source_files_infos,
@@ -64,7 +67,13 @@ class GoogleDriveSourceProcessor(
         for info in get_source_files_infos(self._service, self._coords):
             yield info
 
-    def _fetch_document_by_id(self, info: GoogleDriveFileIdentifier) -> DocumentStream:
+    def _fetch_document_by_id(
+        self,
+        info: GoogleDriveFileIdentifier,
+        *,
+        max_file_size: int | None = None,
+    ) -> DocumentStream:
+        del max_file_size
         from docling_jobkit.connectors.google_drive_helper import download_file
 
         buffer = BytesIO()
