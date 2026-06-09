@@ -75,7 +75,7 @@ def convert_payload(
         result_processor = ResultsProcessor(
             target_processor=target_processor,
             to_formats=[v.value for v in convert_options.to_formats],
-            generate_page_images=convert_options.include_images,
+            generate_page_images=convert_options.include_page_images,
             generate_picture_images=convert_options.include_images,
             artifact_root_prefix=source_root_prefix,
         )

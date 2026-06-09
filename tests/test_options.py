@@ -49,6 +49,9 @@ def test_to_list_of_strings():
 def test_options_validator():
     m = DoclingConverterManager(config=DoclingConverterManagerConfig())
 
+    # Image generation is controlled by include_images / include_page_images,
+    # independently of image_export_mode (which only controls serialization).
+    # Defaults: include_images=True, include_page_images=False.
     opts = ConvertDocumentsOptions(
         image_export_mode=ImageRefMode.EMBEDDED,
     )
@@ -56,8 +59,10 @@ def test_options_validator():
     assert pipeline_opts.pipeline_options is not None
     assert isinstance(pipeline_opts.pipeline_options, PdfPipelineOptions)
     assert pipeline_opts.backend == DoclingParseDocumentBackend
-    assert pipeline_opts.pipeline_options.generate_page_images is True
+    assert pipeline_opts.pipeline_options.generate_picture_images is True
+    assert pipeline_opts.pipeline_options.generate_page_images is False
 
+    # Picture images are generated regardless of image_export_mode...
     opts = ConvertDocumentsOptions(
         pdf_backend=PdfBackend.PYPDFIUM2,
         image_export_mode=ImageRefMode.REFERENCED,
@@ -68,6 +73,16 @@ def test_options_validator():
     assert isinstance(pipeline_opts.pipeline_options, PdfPipelineOptions)
     assert pipeline_opts.pipeline_options.generate_page_images is False
     assert pipeline_opts.pipeline_options.generate_picture_images is True
+
+    # ...and the include_* flags drive generation explicitly.
+    opts = ConvertDocumentsOptions(
+        include_images=False,
+        include_page_images=True,
+    )
+    pipeline_opts = m.get_pdf_pipeline_opts(opts)
+    assert pipeline_opts.pipeline_options is not None
+    assert pipeline_opts.pipeline_options.generate_picture_images is False
+    assert pipeline_opts.pipeline_options.generate_page_images is True
 
     for pdf_backend in (
         PdfBackend.DLPARSE_V4,

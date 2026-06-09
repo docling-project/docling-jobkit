@@ -58,7 +58,6 @@ from docling.models.factories import (
 # from docling.backend.picture_classification_factory import PictureClassificationFactory
 from docling.models.inference_engines.vlm.base import VlmEngineType
 from docling.pipeline.vlm_pipeline import VlmPipeline
-from docling_core.types.doc import ImageRefMode
 
 _log = logging.getLogger(__name__)
 
@@ -1484,15 +1483,14 @@ class DoclingConverterManager:
                 picture_classification_options
             )
 
-        if request.image_export_mode == ImageRefMode.EMBEDDED:
-            pipeline_options.generate_page_images = True
-        elif request.image_export_mode == ImageRefMode.REFERENCED:
-            # Page images are never externalized by image_export_mode=referenced
-            # (only PictureItem images are), so generating them here would just
-            # leak base64-embedded page images into the "referenced" JSON output.
-            pipeline_options.generate_picture_images = True
+        # Which images to generate is controlled explicitly by include_images
+        # (picture/element images) and include_page_images (full-page images).
+        # How they are serialized (embedded/referenced/placeholder) is a separate
+        # concern handled at export time via image_export_mode.
+        pipeline_options.generate_picture_images = request.include_images
+        pipeline_options.generate_page_images = request.include_page_images
 
-        if request.image_export_mode != ImageRefMode.PLACEHOLDER:
+        if request.include_images or request.include_page_images:
             if request.images_scale:
                 pipeline_options.images_scale = request.images_scale
 
@@ -1617,6 +1615,15 @@ class DoclingConverterManager:
         # Picture classification and description (common to both approaches)
         pipeline_options.do_picture_classification = request.do_picture_classification
         pipeline_options.do_picture_description = request.do_picture_description
+
+        # Explicit image-generation control, consistent with the standard pipeline.
+        # (VlmPipelineOptions defaults generate_page_images=True, which would
+        # otherwise emit page images regardless of the caller's intent.)
+        pipeline_options.generate_picture_images = request.include_images
+        pipeline_options.generate_page_images = request.include_page_images
+        if request.include_images or request.include_page_images:
+            if request.images_scale:
+                pipeline_options.images_scale = request.images_scale
 
         # === NEW ENGINE-BASED APPROACH for Picture Description ===
         new_picture_desc_options = self._parse_picture_description_options(request)
