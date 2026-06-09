@@ -1,7 +1,9 @@
+import logging
 from datetime import datetime
 from io import BytesIO
 from typing import Iterator
 
+from botocore.exceptions import ClientError
 from pydantic import BaseModel
 from typing_extensions import override
 
@@ -13,6 +15,8 @@ from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     SourceDocumentRef,
 )
+
+_log = logging.getLogger(__name__)
 
 
 class S3FileIdentifier(BaseModel):
@@ -72,9 +76,18 @@ class S3SourceProcessor(BaseSourceProcessor[S3Coordinates, S3FileIdentifier]):
 
     def _fetch_document_by_id(self, identifier: S3FileIdentifier) -> DocumentStream:
         buffer = BytesIO()
-        self._client.download_fileobj(
-            Bucket=self._coords.bucket, Key=identifier.key, Fileobj=buffer
-        )
+        try:
+            self._client.download_fileobj(
+                Bucket=self._coords.bucket, Key=identifier.key, Fileobj=buffer
+            )
+        except ClientError:
+            _log.warning(
+                "Failed to download s3://%s/%s",
+                self._coords.bucket,
+                identifier.key,
+                exc_info=True,
+            )
+            raise
         buffer.seek(0)
         return DocumentStream(name=identifier.key, stream=buffer)
 

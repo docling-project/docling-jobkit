@@ -9,9 +9,14 @@ from typing import Any, Optional
 
 import ray
 
+from docling.datamodel.service.responses import FailurePhase
+
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
+from docling_jobkit.orchestrators.ray.failure_classification import (
+    classify_ray_public_task_failure,
+)
 from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
 )
@@ -20,7 +25,10 @@ from docling_jobkit.orchestrators.ray.models import (
     TaskUpdate,
 )
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
-from docling_jobkit.public_errors import build_public_task_error
+from docling_jobkit.public_errors import (
+    classify_public_task_failure,
+    is_client_actionable_failure,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -420,17 +428,29 @@ class RayTaskDispatcher:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            error_message = build_public_task_error(
+            failure = classify_ray_public_task_failure(
                 exc,
-                debug_enabled=self.config.debug_error_details,
+                task_id=task_id,
+                phase=FailurePhase.ORCHESTRATION,
+                details={
+                    "task_size": str(task_size),
+                    "target_kind": task.target.kind,
+                },
             )
-            _log.error("[TASK-FAILURE] %s: %s", task_id, error_message, exc_info=True)
+            error_message = failure.message
+            _log.error(
+                "[TASK-FAILURE] %s: %s",
+                task_id,
+                error_message,
+                exc_info=not is_client_actionable_failure(failure),
+            )
 
             terminalization = await self.redis_manager.finalize_task_failure_atomic(
                 tenant_id=tenant_id,
                 task_id=task_id,
                 task_size=task_size,
                 error_message=error_message,
+                failure=failure,
             )
             if (
                 terminalization.status_changed
@@ -441,6 +461,7 @@ class RayTaskDispatcher:
                         task_id=task_id,
                         task_status=TaskStatus.FAILURE,
                         error_message=error_message,
+                        failure=failure,
                     )
                 )
                 await self.redis_manager.update_tenant_stats(
@@ -554,12 +575,19 @@ class RayTaskDispatcher:
             )
 
         _log.warning("[RECONCILE] %s: %s", task_id, error_message)
+        failure = classify_public_task_failure(
+            RuntimeError(error_message),
+            task_id=task_id,
+            phase=FailurePhase.ORCHESTRATION,
+            details={"task_size": str(task_size)},
+        )
 
         terminalization = await self.redis_manager.finalize_task_failure_atomic(
             tenant_id=tenant_id,
             task_id=task_id,
             task_size=task_size,
-            error_message=error_message,
+            error_message=failure.message,
+            failure=failure,
         )
         if (
             terminalization.status_changed
@@ -569,7 +597,8 @@ class RayTaskDispatcher:
                 TaskUpdate(
                     task_id=task_id,
                     task_status=TaskStatus.FAILURE,
-                    error_message=error_message,
+                    error_message=failure.message,
+                    failure=failure,
                 )
             )
 

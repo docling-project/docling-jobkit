@@ -1,6 +1,7 @@
 import logging
 import shutil
 import time
+import zipfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
@@ -53,6 +54,7 @@ from docling_jobkit.datamodel.result import (
 from docling_jobkit.datamodel.source_identity import SourceIdentity
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.public_errors import (
+    TargetWriteError,
     build_public_error_item,
     render_public_error_list,
 )
@@ -135,7 +137,7 @@ def _build_failed_exportable_document(
             "status": ConversionStatus.FAILURE,
             "errors": [
                 *exportable_document.errors,
-                build_public_error_item(exc, debug_enabled=debug_error_details),
+                build_public_error_item(exc),
             ],
             "document": None,
         }
@@ -363,8 +365,8 @@ def _upload_to_put_target(
             )
             if attempt < max_retries - 1:
                 time.sleep(retry_delay * (attempt + 1))
-    raise RuntimeError(
-        f"Failed to upload zip to target url after {max_retries} attempts."
+    raise TargetWriteError(
+        f"Failed to upload to target URL after {max_retries} attempts."
     ) from last_exc
 
 
@@ -511,11 +513,21 @@ def _materialize_document_exports(
     artifacts_path = output_dir / artifacts_dir
     if bundle_resources and artifacts_path.exists() and any(artifacts_path.iterdir()):
         bundle_path = output_dir / f"{doc_filename}_bundle.zip"
-        shutil.make_archive(
-            base_name=str(bundle_path.with_suffix("")),
-            format="zip",
-            root_dir=artifacts_path,
-        )
+        with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as bundle_zip:
+            # Place the exported documents alongside the artifacts directory,
+            # using the same relative layout (`<artifacts_dir>/<file>`) that
+            # the documents themselves reference, so the bundle is
+            # self-contained and resolvable without any path rewriting.
+            for artifact in generated:
+                bundle_zip.write(artifact.path, arcname=artifact.target_filename)
+            for artifact_file in sorted(artifacts_path.rglob("*")):
+                if artifact_file.is_file():
+                    bundle_zip.write(
+                        artifact_file,
+                        arcname=str(
+                            artifacts_dir / artifact_file.relative_to(artifacts_path)
+                        ),
+                    )
         generated.append(
             _ExportedArtifactFile(
                 artifact_type="resource_bundle",

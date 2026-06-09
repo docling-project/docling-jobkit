@@ -217,10 +217,7 @@ def _run_docling_task(
                 _TaskUpdate(
                     task_id=task_id,
                     task_status=TaskStatus.FAILURE,
-                    error_message=build_public_task_error(
-                        e,
-                        debug_enabled=orchestrator_config.debug_error_details,
-                    ),
+                    error_message=build_public_task_error(e),
                 ).model_dump_json(),
             )
         raise
