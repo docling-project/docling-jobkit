@@ -1,3 +1,15 @@
+## [v1.21.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.21.0) - 2026-06-09
+
+### Feature
+
+* Failure mode handling ([#164](https://github.com/docling-project/docling-jobkit/issues/164)) ([`76b368a`](https://github.com/docling-project/docling-jobkit/commit/76b368a6b2af9a3a0735d06bc2fdd608b54dd488))
+* Support pre-signed URL targets, S3 batch inputs and output ([#157](https://github.com/docling-project/docling-jobkit/issues/157)) ([`f108cdb`](https://github.com/docling-project/docling-jobkit/commit/f108cdb910990ce11538d0780d6094bbf1b25120))
+* RQOrchestrator support for shared Redis ([#159](https://github.com/docling-project/docling-jobkit/issues/159)) ([`9d0f2a3`](https://github.com/docling-project/docling-jobkit/commit/9d0f2a36573ce6ae5187eae87878fc46fc4b6d79))
+
+### Fix
+
+* Declare variable before opening image. ([#162](https://github.com/docling-project/docling-jobkit/issues/162)) ([`4925655`](https://github.com/docling-project/docling-jobkit/commit/49256551c7ae35965128755de74ab9361c4afb8f))
+
 ## [v1.20.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.20.1) - 2026-06-01
 
 ### Fix
