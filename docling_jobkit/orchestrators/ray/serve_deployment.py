@@ -109,6 +109,12 @@ _log = logging.getLogger(__name__)
 
 _SOURCE_CHUNK_CALLBACK_MODE = CallbackMode.CHILD_ONLY
 
+# Back-off between retries when a coordinator is fully starved of converter units
+# (the tenant's whole budget is held by its own sibling tasks and nothing is in
+# flight on this coordinator to wait on). Only this rare case polls; coordinators
+# with in-flight children wait on child completion instead.
+_CONVERTER_UNIT_POLL_INTERVAL_S = 0.25
+
 DEFAULT_SERVE_APP_NAME = "docling_processor"
 
 try:
@@ -1178,6 +1184,7 @@ class DoclingProcessorCoordinatorDeployment:
                         filename=filename,
                         slice_plan=slice_plan,
                         options=convert_options,
+                        task=task,
                     )
                     callback_invoker = CallbackInvoker() if task.callbacks else None
                     try:
@@ -1198,15 +1205,14 @@ class DoclingProcessorCoordinatorDeployment:
                         # ExportableDocuments) are also released here.
                         del slice_refs
                 else:
-                    converter_result = (
-                        await self.converter_handle.process_converter_request.remote(
-                            MaterializedConvertRequest(
-                                artifact_ref=artifact_ref,
-                                filename=filename,
-                                task=task.model_copy(update={"sources": []}),
-                                source_count=len(task.sources),
-                            )
-                        )
+                    converter_result = await self._run_single_converter_call(
+                        task,
+                        MaterializedConvertRequest(
+                            artifact_ref=artifact_ref,
+                            filename=filename,
+                            task=task.model_copy(update={"sources": []}),
+                            source_count=len(task.sources),
+                        ),
                     )
                     if isinstance(converter_result, ConverterFailureResult):
                         return converter_result
@@ -1214,10 +1220,8 @@ class DoclingProcessorCoordinatorDeployment:
             finally:
                 del artifact_ref
         else:
-            converter_result = (
-                await self.converter_handle.process_converter_request.remote(
-                    PassthroughTaskRequest(task=task)
-                )
+            converter_result = await self._run_single_converter_call(
+                task, PassthroughTaskRequest(task=task)
             )
             if isinstance(converter_result, ConverterFailureResult):
                 return converter_result
@@ -1227,12 +1231,51 @@ class DoclingProcessorCoordinatorDeployment:
         self, task: Task, workdir: Path
     ) -> DoclingTaskResult | ConverterFailureResult:
         del workdir
-        converter_result = await self.converter_handle.process_converter_request.remote(
-            PassthroughTaskRequest(task=task)
+        converter_result = await self._run_single_converter_call(
+            task, PassthroughTaskRequest(task=task)
         )
         if isinstance(converter_result, ConverterFailureResult):
             return converter_result
         return converter_result.task_result
+
+    async def _converter_unit_ceiling(self, tenant_id: str) -> int:
+        """Per-tenant in-flight converter-unit ceiling (= max_concurrent_tasks)."""
+        limits = await self.redis_manager.get_tenant_limits(tenant_id)
+        return limits.max_concurrent_tasks
+
+    async def _acquire_converter_unit_blocking(
+        self, tenant_id: str, task_id: str, ceiling: int
+    ) -> bool:
+        """Block until one converter unit is acquired for the task.
+
+        Returns False if the task no longer holds an execution lease
+        (terminalized/reconciled) so the caller can abort.
+        """
+        while True:
+            granted = await self.redis_manager.acquire_converter_unit(
+                tenant_id, task_id, ceiling
+            )
+            if granted < 0:
+                return False
+            if granted >= 1:
+                return True
+            await asyncio.sleep(_CONVERTER_UNIT_POLL_INTERVAL_S)
+
+    async def _run_single_converter_call(self, task: Task, request: Any) -> Any:
+        """Dispatch a single (non-fanned-out) converter call under one converter unit."""
+        tenant_id = task.metadata.get("tenant_id", "default")
+        ceiling = await self._converter_unit_ceiling(tenant_id)
+        acquired = await self._acquire_converter_unit_blocking(
+            tenant_id, task.task_id, ceiling
+        )
+        if not acquired:
+            raise RuntimeError(
+                f"Task {task.task_id} was terminalized before converter dispatch"
+            )
+        try:
+            return await self.converter_handle.process_converter_request.remote(request)
+        finally:
+            await self.redis_manager.release_converter_units(tenant_id, task.task_id, 1)
 
     def _iter_source_chunks_for_s3_fanout(
         self, task: Task
@@ -1308,31 +1351,49 @@ class DoclingProcessorCoordinatorDeployment:
                 progress=ProgressSetNumDocs(num_docs=total_docs),
             )
 
-        parallelism = self.config.max_s3_doc_parallelism
+        # Fan-out is gated purely by the tenant's in-flight converter-unit budget
+        # (= max_concurrent_tasks). A child only launches once a unit is acquired;
+        # in-flight count therefore self-adjusts to available tenant capacity with
+        # no separate per-task parallelism knob.
+        tenant_id = task.metadata.get("tenant_id", "default")
+        ceiling = await self._converter_unit_ceiling(tenant_id)
         pending_chunks = iter(all_chunks)
         in_flight: dict[asyncio.Task[ConverterTaskResult], DocumentChunk[Any, Any]] = {}
         child_results: list[tuple[DocumentChunk[Any, Any], ConverterTaskResult]] = []
-
-        for _ in range(parallelism):
-            chunk = next(pending_chunks, None)
-            if chunk is None:
-                break
-            child_task = asyncio.create_task(
-                self._execute_source_chunk(
-                    chunk,
-                    task,
-                    total_docs,
-                )
-            )
-            in_flight[child_task] = chunk
+        next_chunk = next(pending_chunks, None)
+        terminalized = False
 
         try:
-            while in_flight:
+            while next_chunk is not None or in_flight:
+                while next_chunk is not None:
+                    granted = await self.redis_manager.acquire_converter_unit(
+                        tenant_id, task.task_id, ceiling
+                    )
+                    if granted < 0:
+                        terminalized = True
+                        break
+                    if granted == 0:
+                        break  # at tenant ceiling; drain an in-flight child first
+                    in_flight[
+                        asyncio.create_task(
+                            self._execute_source_chunk(next_chunk, task, total_docs)
+                        )
+                    ] = next_chunk
+                    next_chunk = next(pending_chunks, None)
+                if terminalized:
+                    break
+                if not in_flight:
+                    # Fully starved: budget held by sibling tasks. Back off, retry.
+                    await asyncio.sleep(_CONVERTER_UNIT_POLL_INTERVAL_S)
+                    continue
                 done, _ = await asyncio.wait(
                     set(in_flight), return_when=asyncio.FIRST_COMPLETED
                 )
                 for completed in done:
                     chunk = in_flight.pop(completed)
+                    await self.redis_manager.release_converter_units(
+                        tenant_id, task.task_id, 1
+                    )
                     try:
                         converter_result = await completed
                     except Exception as exc:
@@ -1370,21 +1431,19 @@ class DoclingProcessorCoordinatorDeployment:
                                     debug_error_details=self.config.debug_error_details,
                                 )
                     child_results.append((chunk, converter_result))
-                    next_chunk = next(pending_chunks, None)
-                    if next_chunk is not None:
-                        child_task = asyncio.create_task(
-                            self._execute_source_chunk(
-                                next_chunk,
-                                task,
-                                total_docs,
-                            )
-                        )
-                        in_flight[child_task] = next_chunk
         finally:
             if in_flight:
                 for child_task in in_flight:
                     child_task.cancel()
                 await asyncio.gather(*in_flight, return_exceptions=True)
+                await self.redis_manager.release_converter_units(
+                    tenant_id, task.task_id, len(in_flight)
+                )
+
+        if terminalized:
+            raise RuntimeError(
+                f"Task {task.task_id} was terminalized during S3 fan-out"
+            )
 
         ordered_results = [
             converter_result
@@ -1459,6 +1518,7 @@ class DoclingProcessorCoordinatorDeployment:
         filename: str,
         slice_plan: SlicePlan,
         options: ConvertDocumentsOptions,
+        task: Task,
     ) -> list[ObjectRef]:
         requests = [
             SliceConvertRequest(
@@ -1471,29 +1531,57 @@ class DoclingProcessorCoordinatorDeployment:
             for page_slice in slice_plan.slices
         ]
 
-        parallelism = self.config.max_page_slice_parallelism
-        assert parallelism is not None
+        # Slice fan-out is gated by the tenant converter-unit budget, like S3
+        # fan-out — no per-task parallelism knob.
+        tenant_id = task.metadata.get("tenant_id", "default")
+        ceiling = await self._converter_unit_ceiling(tenant_id)
         in_flight: set[asyncio.Task[ObjectRef]] = set()
         pending_requests = iter(requests)
         collected_results: list[ObjectRef] = []
+        next_request = next(pending_requests, None)
+        terminalized = False
 
-        for _ in range(min(parallelism, len(requests))):
-            request = next(pending_requests, None)
-            if request is None:
-                break
-            in_flight.add(asyncio.create_task(self._execute_slice_request(request)))
-
-        while in_flight:
-            done, in_flight = await asyncio.wait(
-                in_flight, return_when=asyncio.FIRST_COMPLETED
-            )
-            for completed in done:
-                collected_results.append(await completed)
-                next_request = next(pending_requests, None)
-                if next_request is not None:
+        try:
+            while next_request is not None or in_flight:
+                while next_request is not None:
+                    granted = await self.redis_manager.acquire_converter_unit(
+                        tenant_id, task.task_id, ceiling
+                    )
+                    if granted < 0:
+                        terminalized = True
+                        break
+                    if granted == 0:
+                        break  # at tenant ceiling; drain an in-flight slice first
                     in_flight.add(
                         asyncio.create_task(self._execute_slice_request(next_request))
                     )
+                    next_request = next(pending_requests, None)
+                if terminalized:
+                    break
+                if not in_flight:
+                    await asyncio.sleep(_CONVERTER_UNIT_POLL_INTERVAL_S)
+                    continue
+                done, in_flight = await asyncio.wait(
+                    in_flight, return_when=asyncio.FIRST_COMPLETED
+                )
+                for completed in done:
+                    await self.redis_manager.release_converter_units(
+                        tenant_id, task.task_id, 1
+                    )
+                    collected_results.append(await completed)
+        finally:
+            if in_flight:
+                for slice_task in in_flight:
+                    slice_task.cancel()
+                await asyncio.gather(*in_flight, return_exceptions=True)
+                await self.redis_manager.release_converter_units(
+                    tenant_id, task.task_id, len(in_flight)
+                )
+
+        if terminalized:
+            raise RuntimeError(
+                f"Task {task.task_id} was terminalized during slice fan-out"
+            )
 
         return collected_results
 

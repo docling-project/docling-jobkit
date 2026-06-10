@@ -233,18 +233,18 @@ class RayOrchestratorConfig(BaseSettings):
         default=None,
         ge=1,
         description=(
-            "Concurrent child slice requests per parent task. "
-            "Defaults to max_concurrent_tasks when unset."
+            "DEPRECATED and ignored. Fan-out concurrency is now governed per tenant "
+            "by max_concurrent_tasks (in-flight converter units). Kept only so "
+            "existing configs do not fail to parse; will be removed."
         ),
     )
     max_s3_doc_parallelism: int = Field(
         default=8,
         ge=1,
         description=(
-            "Concurrent source-chunk converter dispatches per parent S3 fan-out task. "
-            "This mirrors max_page_slice_parallelism for source expansion, but it is "
-            "not a tenant-capacity limit and does not enforce any cross-task fairness "
-            "on its own."
+            "DEPRECATED and ignored. Fan-out concurrency is now governed per tenant "
+            "by max_concurrent_tasks (in-flight converter units). Kept only so "
+            "existing configs do not fail to parse; will be removed."
         ),
     )
     s3_source_listing_timeout_s: float = Field(
@@ -422,9 +422,6 @@ class RayOrchestratorConfig(BaseSettings):
             )
 
     def _normalize_coordinator_config(self) -> None:
-        if self.max_page_slice_parallelism is None:
-            self.max_page_slice_parallelism = self.max_concurrent_tasks
-
         if self.coordinator_min_actors is None:
             self.coordinator_min_actors = self.min_actors
 
