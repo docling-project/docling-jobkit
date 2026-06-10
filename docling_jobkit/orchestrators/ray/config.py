@@ -413,7 +413,7 @@ class RayOrchestratorConfig(BaseSettings):
 
     # RayService Mode
     use_rayservice_deployment: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enable RayService mode: connect to existing Ray Serve deployments "
             "managed by RayService CRD instead of creating them programmatically. "
