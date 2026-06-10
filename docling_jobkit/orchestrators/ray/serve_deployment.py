@@ -1673,3 +1673,54 @@ def deploy_processor(
     handle = serve.run(deployment, name=app_name, route_prefix=f"/{app_name}")
     _log.info("Ray Serve app '%s' is running", app_name)
     return handle
+
+
+def create_deployment_from_env(
+    app_name: str = DEFAULT_SERVE_APP_NAME,
+) -> Any:
+    """Create Ray Serve deployment from environment variables.
+
+    This factory function is designed to be called by RayService's serveConfigV2.
+    It reads all configuration from environment variables prefixed with DOCLING_.
+
+    Environment variables:
+        DOCLING_REDIS_URL: Redis connection URL
+        DOCLING_MIN_ACTORS: Minimum converter replicas
+        DOCLING_MAX_ACTORS: Maximum converter replicas
+        DOCLING_COORDINATOR_MIN_ACTORS: Minimum coordinator replicas
+        DOCLING_COORDINATOR_MAX_ACTORS: Maximum coordinator replicas
+        ... (all other RayOrchestratorConfig fields)
+
+    Returns:
+        Ray Serve deployment handle for the coordinator
+    """
+    _log.info("Creating Ray Serve deployment from environment variables")
+
+    # Load configuration from environment variables
+    config = RayOrchestratorConfig()
+
+    # Load converter manager configuration from environment
+    # This uses the default DoclingConverterManagerConfig which also
+    # reads from environment variables
+    from docling_jobkit.convert.manager import DoclingConverterManagerConfig
+
+    converter_manager_config = DoclingConverterManagerConfig()
+
+    _log.info(
+        "Loaded configuration: min_actors=%d, max_actors=%d, "
+        "coordinator_min_actors=%d, coordinator_max_actors=%d, "
+        "redis_url=%s",
+        config.min_actors,
+        config.max_actors,
+        config.coordinator_min_actors,
+        config.coordinator_max_actors,
+        config.redis_url,
+    )
+
+    # Create the deployment using the existing create_deployment function
+    return create_deployment(
+        converter_manager_config=converter_manager_config,
+        config=config,
+        redis_url=config.redis_url,
+        app_name=app_name,
+    )

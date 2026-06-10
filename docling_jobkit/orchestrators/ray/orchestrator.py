@@ -398,39 +398,67 @@ class RayOrchestrator(BaseOrchestrator):
             except RuntimeError:
                 _log.info("Ray Serve already running")
 
-            app_present, app_status = await self._get_existing_serve_app_state(app_name)
+            # Check if we're running in RayService mode (deployments managed by K8s)
+            use_rayservice = config.use_rayservice_deployment
 
-            if not app_present:
-                _log.info("serve_app_absent_deploying: app=%s", app_name)
-                self.deployment_handle = await self._run_ray_admin(
-                    deploy_processor,
-                    converter_manager_config=self.cm.config,
-                    config=config,
-                    redis_url=config.redis_url,
-                    app_name=app_name,
-                )
-            elif app_status == ApplicationStatus.DELETING:
-                _log.warning("serve_app_deleting_retry_later: app=%s", app_name)
-                raise DispatcherUnavailableError(
-                    f"Serve app '{app_name}' is being deleted; will retry"
-                )
-            else:
+            if use_rayservice:
                 _log.info(
-                    "serve_app_present_attaching: app=%s status=%s",
+                    "rayservice_mode_enabled: connecting to existing deployment app=%s",
                     app_name,
-                    app_status,
                 )
+                # In RayService mode, deployments are created by the RayService CRD
+                # We just need to connect to the existing application
                 try:
                     self.deployment_handle = await self._run_ray_admin(
                         serve.get_app_handle, app_name
                     )
+                    _log.info("rayservice_mode_connected: app=%s", app_name)
                 except Exception as exc:
-                    _log.warning(
-                        "serve_app_attach_failed: app=%s error=%s", app_name, exc
+                    _log.error(
+                        "rayservice_mode_connection_failed: app=%s error=%s",
+                        app_name,
+                        exc,
                     )
                     raise DispatcherUnavailableError(
-                        f"Serve app '{app_name}' exists but attach failed: {exc}"
+                        f"RayService mode: Failed to connect to app '{app_name}': {exc}"
                     ) from exc
+            else:
+                # Legacy mode: manage deployments from code
+                app_present, app_status = await self._get_existing_serve_app_state(
+                    app_name
+                )
+
+                if not app_present:
+                    _log.info("serve_app_absent_deploying: app=%s", app_name)
+                    self.deployment_handle = await self._run_ray_admin(
+                        deploy_processor,
+                        converter_manager_config=self.cm.config,
+                        config=config,
+                        redis_url=config.redis_url,
+                        app_name=app_name,
+                    )
+                elif app_status == ApplicationStatus.DELETING:
+                    _log.warning("serve_app_deleting_retry_later: app=%s", app_name)
+                    raise DispatcherUnavailableError(
+                        f"Serve app '{app_name}' is being deleted; will retry"
+                    )
+                else:
+                    _log.info(
+                        "serve_app_present_attaching: app=%s status=%s",
+                        app_name,
+                        app_status,
+                    )
+                    try:
+                        self.deployment_handle = await self._run_ray_admin(
+                            serve.get_app_handle, app_name
+                        )
+                    except Exception as exc:
+                        _log.warning(
+                            "serve_app_attach_failed: app=%s error=%s", app_name, exc
+                        )
+                        raise DispatcherUnavailableError(
+                            f"Serve app '{app_name}' exists but attach failed: {exc}"
+                        ) from exc
 
             self.dispatcher = await self._run_ray_admin(self._bind_dispatcher)
             _log.info("Ray runtime initialized")

@@ -411,6 +411,16 @@ class RayOrchestratorConfig(BaseSettings):
         description="Optional server-managed presigned URL target configuration.",
     )
 
+    # RayService Mode
+    use_rayservice_deployment: bool = Field(
+        default=False,
+        description=(
+            "Enable RayService mode: connect to existing Ray Serve deployments "
+            "managed by RayService CRD instead of creating them programmatically. "
+            "Set to True when running with RayService in Kubernetes."
+        ),
+    )
+
     def _validate_worker_request_concurrency(self) -> None:
         if (
             self.max_ongoing_requests_per_replica is not None
