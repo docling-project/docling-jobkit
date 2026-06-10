@@ -486,12 +486,6 @@ class RayOrchestrator(BaseOrchestrator):
         The health-check RPC is bounded by config.dispatcher_rpc_timeout so this
         method never hangs when the Ray head is gone.
 
-        This probe is side-effect-free with respect to ``self.dispatcher``: it
-        never nulls the handle. Handle repair (rebind/redeploy/session-restart)
-        is owned exclusively by ``_supervise_dispatcher``, which nulls the handle
-        in its own exception path. Keeping this method non-mutating lets the
-        readiness probe (check_connection) call it without racing the supervisor
-        by clearing the handle out from under it.
         """
         rpc_timeout = self.config.dispatcher_rpc_timeout
         try:
