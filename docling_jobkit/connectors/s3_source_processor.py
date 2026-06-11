@@ -15,6 +15,10 @@ from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     SourceDocumentRef,
 )
+from docling_jobkit.convert.materialization import (
+    SourceLimitExceededError,
+    normalize_max_file_size,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -91,7 +95,18 @@ class S3SourceProcessor(BaseSourceProcessor[S3Coordinates, S3FileIdentifier]):
 
     # ----------------- Document fetch -----------------
 
-    def _fetch_document_by_id(self, identifier: S3FileIdentifier) -> DocumentStream:
+    def _fetch_document_by_id(
+        self,
+        identifier: S3FileIdentifier,
+        *,
+        max_file_size: int | None = None,
+    ) -> DocumentStream:
+        limit = normalize_max_file_size(max_file_size)
+        if limit is not None and identifier.size > limit:
+            raise SourceLimitExceededError(
+                f"Source '{identifier.key}' exceeds max_file_size={limit} bytes"
+            )
+
         buffer = BytesIO()
         try:
             self._client.download_fileobj(
@@ -108,6 +123,11 @@ class S3SourceProcessor(BaseSourceProcessor[S3Coordinates, S3FileIdentifier]):
         buffer.seek(0)
         return DocumentStream(name=identifier.key, stream=buffer)
 
-    def _fetch_documents(self):
+    def _fetch_documents(
+        self, *, max_file_size: int | None = None
+    ) -> Iterator[DocumentStream]:
         for key in self._list_document_ids():
-            yield self._fetch_document_by_id(key)
+            yield self._fetch_document_by_id(
+                key,
+                max_file_size=max_file_size,
+            )

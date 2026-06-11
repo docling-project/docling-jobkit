@@ -42,7 +42,10 @@ from docling_jobkit.orchestrators.rq.orchestrator import (
     RQOrchestrator,
     RQOrchestratorConfig,
 )
-from docling_jobkit.orchestrators.rq.worker import CustomRQWorker
+from docling_jobkit.orchestrators.rq.worker import (
+    CustomRQWorker,
+    _prepare_convert_sources,
+)
 
 
 @pytest_asyncio.fixture
@@ -137,6 +140,39 @@ async def test_convert_file(orchestrator: RQOrchestrator):
     assert isinstance(task_result.result, ExportResult)
 
     assert task_result.result.status == ConversionStatus.SUCCESS
+
+
+def test_prepare_convert_sources_threads_max_file_size(monkeypatch: pytest.MonkeyPatch):
+    task = Task(
+        task_id="task-prepare",
+        sources=[
+            FileSource(
+                filename="doc.pdf", base64_string=base64.b64encode(b"pdf").decode()
+            )
+        ],
+        target=InBodyTarget(),
+    )
+    captured: list[int | None] = []
+
+    def _fake_expand(task_arg, *, max_file_size=None):
+        assert task_arg is task
+        captured.append(max_file_size)
+        return ([], None)
+
+    monkeypatch.setattr(
+        "docling_jobkit.orchestrators.rq.worker.expand_task_sources",
+        _fake_expand,
+    )
+
+    convert_sources, headers, source_info = _prepare_convert_sources(
+        task,
+        max_file_size=123,
+    )
+
+    assert convert_sources == []
+    assert headers is None
+    assert source_info == [{"type": "FileSource", "filename": "doc.pdf"}]
+    assert captured == [123]
 
 
 @pytest.mark.parametrize("include_converted_doc", [False, True])
