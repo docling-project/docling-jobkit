@@ -317,7 +317,7 @@ def process_batch(
                 result_processor = ResultsProcessor(
                     target_processor=target_processor,
                     to_formats=[v.value for v in options.to_formats],
-                    generate_page_images=options.include_images,
+                    generate_page_images=options.include_page_images,
                     generate_picture_images=options.include_images,
                 )
 
