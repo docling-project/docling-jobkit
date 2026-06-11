@@ -23,6 +23,7 @@ from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
+    SystemCapacity,
 )
 from docling_jobkit.orchestrators.local.worker import AsyncLocalWorker
 
@@ -96,6 +97,19 @@ class LocalOrchestrator(BaseOrchestrator):
 
     async def queue_size(self) -> int:
         return self.task_queue.qsize()
+
+    async def get_capacity(self) -> SystemCapacity:
+        queued = self.task_queue.qsize()
+        active = sum(
+            1
+            for t in self.tasks.values()
+            if not t.is_completed() and t.task_id not in self.queue_list
+        )
+        return SystemCapacity(
+            queue_depth=queued,
+            active_jobs=active,
+            active_workers=self.config.num_workers,
+        )
 
     async def get_queue_position(self, task_id: str) -> Optional[int]:
         return (

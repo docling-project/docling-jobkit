@@ -3,6 +3,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Optional
 
+from pydantic import BaseModel
+
 from docling.datamodel.service.callbacks import CallbackSpec, ProgressCallbackRequest
 from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling.datamodel.service.options import ConvertDocumentsOptions
@@ -17,6 +19,15 @@ if TYPE_CHECKING:
     from docling_jobkit.orchestrators.base_notifier import BaseNotifier
 
 _log = logging.getLogger(__name__)
+
+
+class SystemCapacity(BaseModel):
+    """System-level capacity snapshot for back pressure signalling."""
+
+    queue_depth: int
+    active_jobs: int
+    active_workers: int
+    max_queue_size: Optional[int] = None
 
 
 class OrchestratorError(Exception):
@@ -112,6 +123,14 @@ class BaseOrchestrator(ABC):
             await self.notifier.remove_task(task_id=task_id)
         if task_id in self.tasks:
             del self.tasks[task_id]
+
+    async def get_capacity(self) -> Optional[SystemCapacity]:
+        """Return a system-level capacity snapshot for back pressure signalling.
+
+        Returns ``None`` by default.  Orchestrator subclasses that can report
+        queue depth, active jobs and worker count should override this method.
+        """
+        return None
 
     async def on_result_fetched(self, task_id: str) -> None:
         """Called after a result has been successfully returned to the caller.
