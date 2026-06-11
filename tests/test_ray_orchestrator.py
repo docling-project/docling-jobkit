@@ -529,7 +529,7 @@ def test_create_deployment_sets_hard_replica_concurrency_limit():
     )
     assert (
         mock_coordinator_options_call.call_args.kwargs["autoscaling_config"][
-            "target_num_ongoing_requests_per_replica"
+            "target_ongoing_requests"
         ]
         == 4
     )
@@ -586,7 +586,45 @@ def test_create_deployment_defaults_replica_cap_to_autoscaling_target():
     )
     assert (
         mock_coordinator_options_call.call_args.kwargs["autoscaling_config"][
-            "target_num_ongoing_requests_per_replica"
+            "target_ongoing_requests"
         ]
         == 2
     )
+
+
+def test_create_deployment_threads_max_replicas_per_node():
+    """max_replicas_per_node should be emitted per deployment only when set."""
+    from unittest.mock import MagicMock, patch
+
+    from docling_jobkit.orchestrators.ray.serve_deployment import create_deployment
+
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/",
+        coordinator_max_replicas_per_node=1,
+        converter_max_replicas_per_node=None,
+    )
+
+    mock_converter_options = MagicMock()
+    mock_converter_options.bind.return_value = MagicMock()
+    mock_coordinator_options = MagicMock()
+    mock_coordinator_options.bind.return_value = MagicMock()
+
+    with (
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment.DoclingProcessorConverterDeployment.options",
+            return_value=mock_converter_options,
+        ) as mock_converter_options_call,
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment.DoclingProcessorCoordinatorDeployment.options",
+            return_value=mock_coordinator_options,
+        ) as mock_coordinator_options_call,
+    ):
+        create_deployment(
+            converter_manager_config=MagicMock(),
+            config=config,
+            redis_url=config.redis_url,
+        )
+
+    assert mock_coordinator_options_call.call_args.kwargs["max_replicas_per_node"] == 1
+    # Unset converter cap must not emit the option (let Ray pack for density).
+    assert "max_replicas_per_node" not in mock_converter_options_call.call_args.kwargs

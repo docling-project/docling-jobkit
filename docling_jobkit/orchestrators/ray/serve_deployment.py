@@ -1565,19 +1565,23 @@ def _build_deployment_options(
     downscale_delay_s: float,
     graceful_shutdown_wait_loop_s: Optional[float],
     graceful_shutdown_timeout_s: Optional[float],
+    max_replicas_per_node: Optional[int] = None,
 ) -> dict[str, Any]:
     deployment_options: dict[str, Any] = {
         "name": name,
         "autoscaling_config": {
             "min_replicas": min_replicas,
             "max_replicas": max_replicas,
-            "target_num_ongoing_requests_per_replica": target_requests_per_replica,
+            "target_ongoing_requests": target_requests_per_replica,
             "upscale_delay_s": upscale_delay_s,
             "downscale_delay_s": downscale_delay_s,
         },
         "ray_actor_options": {"num_cpus": num_cpus},
         "max_ongoing_requests": max_ongoing_requests,
     }
+
+    if max_replicas_per_node is not None:
+        deployment_options["max_replicas_per_node"] = max_replicas_per_node
 
     memory_bytes = parse_memory_bytes(memory_limit)
     if memory_bytes is not None:
@@ -1628,6 +1632,7 @@ def create_deployment(
         downscale_delay_s=config.downscale_delay_s,
         graceful_shutdown_wait_loop_s=config.graceful_shutdown_wait_loop_s,
         graceful_shutdown_timeout_s=config.graceful_shutdown_timeout_s,
+        max_replicas_per_node=config.converter_max_replicas_per_node,
     )
     coordinator_options = _build_deployment_options(
         name="coordinator",
@@ -1641,6 +1646,7 @@ def create_deployment(
         downscale_delay_s=config.downscale_delay_s,
         graceful_shutdown_wait_loop_s=config.graceful_shutdown_wait_loop_s,
         graceful_shutdown_timeout_s=config.graceful_shutdown_timeout_s,
+        max_replicas_per_node=config.coordinator_max_replicas_per_node,
     )
 
     _log.info(
