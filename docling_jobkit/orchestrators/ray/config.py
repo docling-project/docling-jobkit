@@ -188,6 +188,15 @@ class RayOrchestratorConfig(BaseSettings):
             "Defaults to target_requests_per_replica when unset."
         ),
     )
+    converter_max_replicas_per_node: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description=(
+            "Hard cap on converter Serve replicas per Ray node (KubeRay worker "
+            "pod). None = no cap (let Ray pack replicas for density)."
+        ),
+    )
     upscale_delay_s: float = Field(
         default=30.0,
         description="Seconds to wait before scaling up (prevents flapping)",
@@ -291,6 +300,17 @@ class RayOrchestratorConfig(BaseSettings):
         default=None,
         ge=1,
         description="Coordinator hard cap on in-flight requests per replica",
+    )
+    coordinator_max_replicas_per_node: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description=(
+            "Hard cap on coordinator Serve replicas per Ray node (KubeRay worker "
+            "pod). None = no cap. Setting this to 1 spreads coordinators one per "
+            "node, which caps coordinator replicas at the node count until the "
+            "node autoscaler adds nodes."
+        ),
     )
     coordinator_actor_num_cpus: float = Field(
         default=0.25,
