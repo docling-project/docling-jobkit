@@ -485,6 +485,7 @@ class RayOrchestrator(BaseOrchestrator):
 
         The health-check RPC is bounded by config.dispatcher_rpc_timeout so this
         method never hangs when the Ray head is gone.
+
         """
         rpc_timeout = self.config.dispatcher_rpc_timeout
         try:
@@ -495,14 +496,12 @@ class RayOrchestrator(BaseOrchestrator):
                 dispatcher.get_health.remote(), timeout=rpc_timeout
             )
         except asyncio.TimeoutError as exc:
-            self.dispatcher = None
             raise DispatcherUnavailableError(
                 f"Ray dispatcher health check timed out after {rpc_timeout}s"
             ) from exc
         except asyncio.CancelledError:
             raise
         except BaseException as exc:
-            self.dispatcher = None
             raise DispatcherUnavailableError(
                 f"Ray dispatcher is unavailable: {exc}"
             ) from exc
@@ -687,7 +686,21 @@ class RayOrchestrator(BaseOrchestrator):
                     f"Tenant {tenant_id} exceeding limits but enqueueing: {reason}"
                 )
 
-            await self.ensure_dispatcher_ready()
+            # Admission does NOT perform a live Ray RPC. Redis is the durable
+            # queue: the task is safely enqueued the moment enqueue_task()
+            # returns, and the supervisor (_supervise_dispatcher) owns dispatcher
+            # health, rebind, and dispatch-loop restart. A per-request
+            # get_health.remote() converged every replica's storm onto the single
+            # detached actor, and a slow probe both manufactured 503s and (by
+            # holding the Redis gate across the RPC) throttled enqueue throughput.
+            # We instead refuse new work only once the dispatcher has been
+            # continuously unavailable past the liveness deadline, using a cheap
+            # in-memory check (no RPC, no lock, no actor round-trip).
+            if not self.is_liveness_healthy():
+                raise DispatcherUnavailableError(
+                    "Ray dispatcher has been unavailable past the liveness "
+                    "deadline; refusing new work until it recovers."
+                )
             await self.redis_manager.set_task_metadata(
                 task_id=task_id,
                 tenant_id=tenant_id,
