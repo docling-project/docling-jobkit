@@ -81,6 +81,9 @@ from docling_jobkit.orchestrators.ray.config import (
     RayOrchestratorConfig,
     parse_memory_bytes,
 )
+from docling_jobkit.orchestrators.ray.dispatcher import (
+    DoclingProcessorDispatcherDeployment,
+)
 from docling_jobkit.orchestrators.ray.failure_classification import (
     classify_ray_public_task_failure,
 )
@@ -1592,6 +1595,39 @@ def _build_deployment_options(
     return deployment_options
 
 
+def _build_dispatcher_options(config: RayOrchestratorConfig) -> dict[str, Any]:
+    """Build Serve options for the singleton dispatcher deployment.
+
+    The dispatcher owns an in-memory tenant fairness ring and a single dispatch
+    loop, so it must run as exactly one replica (min == max == 1). Correctness
+    against double-dispatch during a rolling-update overlap is still guaranteed by
+    the atomic Redis dispatch path, but the steady state is a singleton.
+    """
+    deployment_options: dict[str, Any] = {
+        "name": "dispatcher",
+        "autoscaling_config": {
+            "min_replicas": 1,
+            "max_replicas": 1,
+        },
+        "ray_actor_options": {"num_cpus": config.dispatcher_num_cpus},
+        "max_ongoing_requests": config.dispatcher_max_ongoing_requests_per_replica,
+    }
+
+    memory_bytes = parse_memory_bytes(config.dispatcher_memory_request)
+    if memory_bytes is not None:
+        deployment_options["ray_actor_options"]["memory"] = memory_bytes
+    if config.graceful_shutdown_wait_loop_s is not None:
+        deployment_options["graceful_shutdown_wait_loop_s"] = (
+            config.graceful_shutdown_wait_loop_s
+        )
+    if config.graceful_shutdown_timeout_s is not None:
+        deployment_options["graceful_shutdown_timeout_s"] = (
+            config.graceful_shutdown_timeout_s
+        )
+
+    return deployment_options
+
+
 def create_deployment(
     converter_manager_config: DoclingConverterManagerConfig,
     config: RayOrchestratorConfig,
@@ -1643,9 +1679,13 @@ def create_deployment(
         graceful_shutdown_timeout_s=config.graceful_shutdown_timeout_s,
     )
 
+    dispatcher_options = _build_dispatcher_options(config)
+
     _log.info(
-        "Creating Ray Serve app '%s' with coordinator '%s' and converter '%s'",
+        "Creating Ray Serve app '%s' with dispatcher '%s', coordinator '%s' and "
+        "converter '%s'",
         app_name,
+        dispatcher_options["name"],
         coordinator_options["name"],
         converter_options["name"],
     )
@@ -1664,7 +1704,16 @@ def create_deployment(
         redis_url=redis_url,
         converter_handle=converter,
     )
-    return coordinator
+    # The dispatcher is the application ingress (root). It calls the coordinator,
+    # so the bind graph is dispatcher -> coordinator -> converter (acyclic).
+    dispatcher = DoclingProcessorDispatcherDeployment.options(  # type: ignore[attr-defined]
+        **dispatcher_options,
+    ).bind(
+        config=config,
+        redis_url=redis_url,
+        coordinator_handle=coordinator,
+    )
+    return dispatcher
 
 
 def deploy_processor(
@@ -1683,3 +1732,54 @@ def deploy_processor(
     handle = serve.run(deployment, name=app_name, route_prefix=f"/{app_name}")
     _log.info("Ray Serve app '%s' is running", app_name)
     return handle
+
+
+def create_deployment_from_env(
+    app_name: str = DEFAULT_SERVE_APP_NAME,
+) -> Any:
+    """Create Ray Serve deployment from environment variables.
+
+    This factory function is designed to be called by RayService's serveConfigV2.
+    It reads all configuration from environment variables prefixed with DOCLING_.
+
+    Environment variables:
+        DOCLING_REDIS_URL: Redis connection URL
+        DOCLING_MIN_ACTORS: Minimum converter replicas
+        DOCLING_MAX_ACTORS: Maximum converter replicas
+        DOCLING_COORDINATOR_MIN_ACTORS: Minimum coordinator replicas
+        DOCLING_COORDINATOR_MAX_ACTORS: Maximum coordinator replicas
+        ... (all other RayOrchestratorConfig fields)
+
+    Returns:
+        Ray Serve deployment handle for the coordinator
+    """
+    _log.info("Creating Ray Serve deployment from environment variables")
+
+    # Load configuration from environment variables
+    config = RayOrchestratorConfig()
+
+    # Load converter manager configuration from environment
+    # This uses the default DoclingConverterManagerConfig which also
+    # reads from environment variables
+    from docling_jobkit.convert.manager import DoclingConverterManagerConfig
+
+    converter_manager_config = DoclingConverterManagerConfig()
+
+    _log.info(
+        "Loaded configuration: min_actors=%d, max_actors=%d, "
+        "coordinator_min_actors=%d, coordinator_max_actors=%d, "
+        "redis_url=%s",
+        config.min_actors,
+        config.max_actors,
+        config.coordinator_min_actors,
+        config.coordinator_max_actors,
+        config.redis_url,
+    )
+
+    # Create the deployment using the existing create_deployment function
+    return create_deployment(
+        converter_manager_config=converter_manager_config,
+        config=config,
+        redis_url=config.redis_url,
+        app_name=app_name,
+    )

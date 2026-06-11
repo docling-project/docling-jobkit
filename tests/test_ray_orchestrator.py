@@ -491,10 +491,13 @@ def test_create_deployment_sets_hard_replica_concurrency_limit():
 
     mock_converter = MagicMock(name="converter")
     mock_coordinator = MagicMock(name="coordinator")
+    mock_dispatcher = MagicMock(name="dispatcher")
     mock_converter_options = MagicMock()
     mock_converter_options.bind.return_value = mock_converter
     mock_coordinator_options = MagicMock()
     mock_coordinator_options.bind.return_value = mock_coordinator
+    mock_dispatcher_options = MagicMock()
+    mock_dispatcher_options.bind.return_value = mock_dispatcher
 
     with (
         patch(
@@ -505,6 +508,10 @@ def test_create_deployment_sets_hard_replica_concurrency_limit():
             "docling_jobkit.orchestrators.ray.serve_deployment.DoclingProcessorCoordinatorDeployment.options",
             return_value=mock_coordinator_options,
         ) as mock_coordinator_options_call,
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment.DoclingProcessorDispatcherDeployment.options",
+            return_value=mock_dispatcher_options,
+        ) as mock_dispatcher_options_call,
     ):
         deployment = create_deployment(
             converter_manager_config=MagicMock(),
@@ -512,7 +519,25 @@ def test_create_deployment_sets_hard_replica_concurrency_limit():
             redis_url=config.redis_url,
         )
 
-    assert deployment is mock_coordinator
+    # The dispatcher is the application ingress (root), bound with the coordinator
+    # handle and pinned to a single replica.
+    assert deployment is mock_dispatcher
+    assert (
+        mock_dispatcher_options_call.call_args.kwargs["autoscaling_config"][
+            "min_replicas"
+        ]
+        == 1
+    )
+    assert (
+        mock_dispatcher_options_call.call_args.kwargs["autoscaling_config"][
+            "max_replicas"
+        ]
+        == 1
+    )
+    assert (
+        mock_dispatcher_options.bind.call_args.kwargs["coordinator_handle"]
+        is mock_coordinator
+    )
     assert mock_converter_options_call.call_args.kwargs["max_ongoing_requests"] == 1
     assert (
         mock_converter_options_call.call_args.kwargs["autoscaling_config"][
@@ -553,6 +578,8 @@ def test_create_deployment_defaults_replica_cap_to_autoscaling_target():
     mock_converter_options.bind.return_value = MagicMock()
     mock_coordinator_options = MagicMock()
     mock_coordinator_options.bind.return_value = MagicMock()
+    mock_dispatcher_options = MagicMock()
+    mock_dispatcher_options.bind.return_value = MagicMock()
 
     with (
         patch(
@@ -563,6 +590,10 @@ def test_create_deployment_defaults_replica_cap_to_autoscaling_target():
             "docling_jobkit.orchestrators.ray.serve_deployment.DoclingProcessorCoordinatorDeployment.options",
             return_value=mock_coordinator_options,
         ) as mock_coordinator_options_call,
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment.DoclingProcessorDispatcherDeployment.options",
+            return_value=mock_dispatcher_options,
+        ),
     ):
         create_deployment(
             converter_manager_config=MagicMock(),
@@ -589,4 +620,56 @@ def test_create_deployment_defaults_replica_cap_to_autoscaling_target():
             "target_num_ongoing_requests_per_replica"
         ]
         == 2
+    )
+
+
+def test_create_deployment_binds_dispatcher_coordinator_converter_chain():
+    """create_deployment wires dispatcher -> coordinator -> converter, dispatcher root."""
+    from unittest.mock import MagicMock, patch
+
+    from docling_jobkit.orchestrators.ray.serve_deployment import create_deployment
+
+    config = RayOrchestratorConfig(redis_url="redis://localhost:6379/")
+
+    mock_converter = MagicMock(name="converter")
+    mock_coordinator = MagicMock(name="coordinator")
+    mock_dispatcher = MagicMock(name="dispatcher")
+    mock_converter_options = MagicMock()
+    mock_converter_options.bind.return_value = mock_converter
+    mock_coordinator_options = MagicMock()
+    mock_coordinator_options.bind.return_value = mock_coordinator
+    mock_dispatcher_options = MagicMock()
+    mock_dispatcher_options.bind.return_value = mock_dispatcher
+
+    with (
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment.DoclingProcessorConverterDeployment.options",
+            return_value=mock_converter_options,
+        ),
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment.DoclingProcessorCoordinatorDeployment.options",
+            return_value=mock_coordinator_options,
+        ),
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment.DoclingProcessorDispatcherDeployment.options",
+            return_value=mock_dispatcher_options,
+        ) as mock_dispatcher_options_call,
+    ):
+        root = create_deployment(
+            converter_manager_config=MagicMock(),
+            config=config,
+            redis_url=config.redis_url,
+        )
+
+    # Root is the dispatcher, named "dispatcher", bound with the coordinator handle.
+    assert root is mock_dispatcher
+    assert mock_dispatcher_options_call.call_args.kwargs["name"] == "dispatcher"
+    assert (
+        mock_dispatcher_options.bind.call_args.kwargs["coordinator_handle"]
+        is mock_coordinator
+    )
+    # Coordinator is bound with the converter handle (chain is acyclic, one-way).
+    assert (
+        mock_coordinator_options.bind.call_args.kwargs["converter_handle"]
+        is mock_converter
     )

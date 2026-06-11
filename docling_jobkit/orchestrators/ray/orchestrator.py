@@ -41,7 +41,6 @@ from docling_jobkit.orchestrators.ray.config import (
     RayOrchestratorConfig,
     parse_memory_bytes,
 )
-from docling_jobkit.orchestrators.ray.dispatcher import RayTaskDispatcher
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 from docling_jobkit.orchestrators.ray.serve_deployment import (
     DEFAULT_SERVE_APP_NAME,
@@ -129,10 +128,14 @@ class RayOrchestrator(BaseOrchestrator):
         # Pub/sub listener task
         self._pubsub_task: Optional[asyncio.Task] = None
         self._dispatcher_supervisor_task: Optional[asyncio.Task] = None
-        self.deployment_handle: Optional[Any] = None
+        # Serve handle to the dispatcher deployment (the application ingress).
+        # Serves as the readiness sentinel for the Ray runtime.
         self.dispatcher: Optional[Any] = None
-        self.dispatcher_name = "docling_task_dispatcher"
+        # Name of the dispatcher Serve deployment within the app.
+        self.dispatcher_name = "dispatcher"
         self.serve_app_name = DEFAULT_SERVE_APP_NAME
+        # Strong refs to in-flight fire-and-forget wake() tasks.
+        self._wake_tasks: set[asyncio.Task[None]] = set()
         self._ray_admin_executor: Optional[ThreadPoolExecutor] = None
 
         # Configure logging level
@@ -285,29 +288,6 @@ class RayOrchestrator(BaseOrchestrator):
 
         return init_kwargs
 
-    def _bind_dispatcher(self) -> Any:
-        """Bind to the named detached dispatcher actor for this namespace."""
-        if self.deployment_handle is None:
-            raise DispatcherUnavailableError("Ray runtime is not initialized")
-
-        dispatcher_kwargs: dict[str, Any] = {
-            "name": self.dispatcher_name,
-            "lifetime": "detached",
-            "get_if_exists": True,
-            "num_cpus": self.config.dispatcher_num_cpus,
-            "max_restarts": self.config.dispatcher_max_restarts,
-            "max_task_retries": self.config.dispatcher_max_task_retries,
-        }
-        if self.config.dispatcher_memory_request is not None:
-            dispatcher_kwargs["memory"] = parse_memory_bytes(
-                self.config.dispatcher_memory_request
-            )
-
-        _log.info("Binding to named Ray Task Dispatcher actor")
-        return RayTaskDispatcher.options(  # type: ignore[attr-defined]
-            **dispatcher_kwargs
-        ).remote(self.config, self.deployment_handle)
-
     async def _get_existing_serve_app_state(
         self, app_name: str
     ) -> tuple[bool, ApplicationStatus | None]:
@@ -342,7 +322,7 @@ class RayOrchestrator(BaseOrchestrator):
           - app DELETING               → DispatcherUnavailableError (retry later)
           - app present, attach fails  → DispatcherUnavailableError (no deploy fallback)
         """
-        if self.dispatcher is not None and self.deployment_handle is not None:
+        if self.dispatcher is not None:
             return
 
         config = self.config
@@ -358,7 +338,6 @@ class RayOrchestrator(BaseOrchestrator):
                 )
                 self._ray_session_needs_restart = False
                 self.dispatcher = None
-                self.deployment_handle = None
                 try:
                     await self._run_ray_admin(ray.shutdown)
                 except Exception as exc:
@@ -398,51 +377,76 @@ class RayOrchestrator(BaseOrchestrator):
             except RuntimeError:
                 _log.info("Ray Serve already running")
 
-            app_present, app_status = await self._get_existing_serve_app_state(app_name)
+            # Check if we're running in RayService mode (deployments managed by K8s)
+            use_rayservice = config.use_rayservice_deployment
 
-            if not app_present:
-                _log.info("serve_app_absent_deploying: app=%s", app_name)
-                self.deployment_handle = await self._run_ray_admin(
-                    deploy_processor,
-                    converter_manager_config=self.cm.config,
-                    config=config,
-                    redis_url=config.redis_url,
-                    app_name=app_name,
-                )
-            elif app_status == ApplicationStatus.DELETING:
-                _log.warning("serve_app_deleting_retry_later: app=%s", app_name)
-                raise DispatcherUnavailableError(
-                    f"Serve app '{app_name}' is being deleted; will retry"
-                )
-            else:
+            if use_rayservice:
                 _log.info(
-                    "serve_app_present_attaching: app=%s status=%s",
+                    "rayservice_mode_enabled: connecting to existing deployment app=%s",
                     app_name,
-                    app_status,
                 )
-                try:
-                    self.deployment_handle = await self._run_ray_admin(
-                        serve.get_app_handle, app_name
-                    )
-                except Exception as exc:
-                    _log.warning(
-                        "serve_app_attach_failed: app=%s error=%s", app_name, exc
-                    )
-                    raise DispatcherUnavailableError(
-                        f"Serve app '{app_name}' exists but attach failed: {exc}"
-                    ) from exc
+                # In RayService mode, all deployments (dispatcher, coordinator,
+                # converter) are created by the RayService CRD. We just attach to
+                # the dispatcher deployment handle below.
+            else:
+                # Legacy mode: manage deployments from code.
+                app_present, app_status = await self._get_existing_serve_app_state(
+                    app_name
+                )
 
-            self.dispatcher = await self._run_ray_admin(self._bind_dispatcher)
+                if not app_present:
+                    _log.info("serve_app_absent_deploying: app=%s", app_name)
+                    await self._run_ray_admin(
+                        deploy_processor,
+                        converter_manager_config=self.cm.config,
+                        config=config,
+                        redis_url=config.redis_url,
+                        app_name=app_name,
+                    )
+                elif app_status == ApplicationStatus.DELETING:
+                    _log.warning("serve_app_deleting_retry_later: app=%s", app_name)
+                    raise DispatcherUnavailableError(
+                        f"Serve app '{app_name}' is being deleted; will retry"
+                    )
+                else:
+                    _log.info(
+                        "serve_app_present_attaching: app=%s status=%s",
+                        app_name,
+                        app_status,
+                    )
+
+            # Attach to the dispatcher Serve deployment (the application ingress).
+            # The dispatcher owns the coordinator handle via Serve binding, so the
+            # orchestrator only needs this one handle.
+            try:
+                self.dispatcher = await self._run_ray_admin(
+                    serve.get_deployment_handle, self.dispatcher_name, app_name
+                )
+                _log.info(
+                    "dispatcher_handle_attached: app=%s deployment=%s",
+                    app_name,
+                    self.dispatcher_name,
+                )
+            except Exception as exc:
+                _log.warning(
+                    "dispatcher_handle_attach_failed: app=%s deployment=%s error=%s",
+                    app_name,
+                    self.dispatcher_name,
+                    exc,
+                )
+                raise DispatcherUnavailableError(
+                    f"Failed to attach to dispatcher deployment "
+                    f"'{self.dispatcher_name}' in app '{app_name}': {exc}"
+                ) from exc
+
             _log.info("Ray runtime initialized")
         except asyncio.CancelledError:
             raise
         except DispatcherUnavailableError:
             self.dispatcher = None
-            self.deployment_handle = None
             raise
         except BaseException as exc:
             self.dispatcher = None
-            self.deployment_handle = None
             try:
                 await self._run_ray_admin(ray.shutdown)
             except Exception as shutdown_exc:
@@ -454,34 +458,8 @@ class RayOrchestrator(BaseOrchestrator):
                 f"Ray runtime initialization failed: {exc}"
             ) from exc
 
-    async def _refresh_dispatcher_runtime(self) -> None:
-        """Refresh dispatcher runtime state without allowing the supervisor to hang forever."""
-        rpc_timeout = self.config.dispatcher_rpc_timeout
-        try:
-            dispatcher = self.dispatcher
-            if dispatcher is None:
-                dispatcher = self._bind_dispatcher()
-                self.dispatcher = dispatcher
-
-            await asyncio.wait_for(
-                dispatcher.refresh_runtime.remote(self.deployment_handle, self.config),
-                timeout=rpc_timeout,
-            )
-        except asyncio.TimeoutError as exc:
-            self.dispatcher = None
-            raise DispatcherUnavailableError(
-                f"Ray dispatcher runtime refresh timed out after {rpc_timeout}s"
-            ) from exc
-        except asyncio.CancelledError:
-            raise
-        except BaseException as exc:
-            self.dispatcher = None
-            raise DispatcherUnavailableError(
-                f"Ray dispatcher runtime refresh failed: {exc}"
-            ) from exc
-
     async def ensure_dispatcher_ready(self) -> None:
-        """Verify that the named dispatcher actor is reachable and healthy.
+        """Verify that the dispatcher deployment is reachable and healthy.
 
         The health-check RPC is bounded by config.dispatcher_rpc_timeout so this
         method never hangs when the Ray head is gone.
@@ -510,7 +488,7 @@ class RayOrchestrator(BaseOrchestrator):
             raise DispatcherUnavailableError("Ray dispatcher loop is not running")
 
     async def _supervise_dispatcher(self) -> None:
-        """Keep Ray runtime initialized, dispatcher binding refreshed, and health verified.
+        """Keep the Ray runtime initialized, the dispatcher handle attached, and health verified.
 
         Handles the full lifecycle from initial Ray init through steady-state health
         checks, so process_queue() can start the supervisor without waiting for Ray to
@@ -521,10 +499,8 @@ class RayOrchestrator(BaseOrchestrator):
 
         while True:
             try:
-                if self.deployment_handle is None:
-                    await self._initialize_ray_runtime()
                 if self.dispatcher is None:
-                    await self._refresh_dispatcher_runtime()
+                    await self._initialize_ray_runtime()
                 await self.ensure_dispatcher_ready()
                 if self._unhealthy_since is not None:
                     _log.info(
@@ -553,14 +529,12 @@ class RayOrchestrator(BaseOrchestrator):
                     )
                     if not app_present:
                         _log.warning(
-                            "Serve app absent on reachable cluster; clearing handle to re-deploy"
+                            "Serve app absent on reachable cluster; will re-attach/re-deploy"
                         )
-                        self.deployment_handle = None
                 except (DispatcherUnavailableError, asyncio.TimeoutError):
                     _log.warning(
                         "Serve control plane unreachable; will restart Ray session for re-init"
                     )
-                    self.deployment_handle = None
                     self._ray_session_needs_restart = True
                 await asyncio.sleep(1.0)
 
@@ -712,10 +686,32 @@ class RayOrchestrator(BaseOrchestrator):
             await self.init_task_tracking(task)
 
             if self.dispatcher is not None:
-                self.dispatcher.wake.remote(tenant_id=tenant_id)
+                self._fire_wake(tenant_id)
 
             _log.debug(f"Task {task_id} enqueued successfully")
             return task
+
+    def _fire_wake(self, tenant_id: str) -> None:
+        """Fire-and-forget a wake to the dispatcher deployment after enqueue.
+
+        The dispatcher's Serve DeploymentResponse must be awaited or it logs a
+        "response was never awaited" warning, so the await is wrapped in a
+        background task whose errors are swallowed (the dispatch loop also polls on
+        dispatcher_interval, so a dropped wake only delays pickup briefly).
+        """
+        dispatcher = self.dispatcher
+        if dispatcher is None:
+            return
+
+        async def _wake() -> None:
+            try:
+                await dispatcher.wake.remote(tenant_id=tenant_id)
+            except Exception as exc:  # pragma: no cover - best-effort notification
+                _log.debug("Dispatcher wake for tenant %s failed: %s", tenant_id, exc)
+
+        task = asyncio.ensure_future(_wake())
+        self._wake_tasks.add(task)
+        task.add_done_callback(self._wake_tasks.discard)
 
     async def queue_size(self) -> int:
         """Get total queue size across all tenants.
@@ -935,6 +931,10 @@ class RayOrchestrator(BaseOrchestrator):
             except asyncio.CancelledError:
                 pass
 
+        for wake_task in list(self._wake_tasks):
+            wake_task.cancel()
+        self._wake_tasks.clear()
+
         await self.redis_manager.disconnect()
         executor = self._ray_admin_executor
         if executor is not None:
@@ -943,22 +943,13 @@ class RayOrchestrator(BaseOrchestrator):
         _log.info("RayOrchestrator shutdown complete")
 
     async def cleanup_shared_runtime_for_tests(self) -> None:
-        """Explicit destructive cleanup for test environments only."""
-        dispatcher = self.dispatcher
-        if dispatcher is not None:
-            try:
-                await dispatcher.stop_dispatching.remote()
-            except Exception as exc:
-                _log.warning(
-                    "Error stopping shared dispatcher in test cleanup: %s", exc
-                )
+        """Explicit destructive cleanup for test environments only.
 
-            try:
-                ray.kill(dispatcher, no_restart=True)
-            except Exception as exc:
-                _log.warning("Error killing shared dispatcher in test cleanup: %s", exc)
-
-            self.dispatcher = None
+        The dispatcher is now a Serve deployment, so deleting the Serve app tears
+        it down (loop cancellation runs in the replica's graceful shutdown). We
+        only drop our handle reference here.
+        """
+        self.dispatcher = None
 
         try:
             serve.delete(self.serve_app_name)

@@ -321,20 +321,35 @@ class RayOrchestratorConfig(BaseSettings):
         default=2, description="Maximum retries per document within a task"
     )
 
-    # Ray Actor Configuration (for fault tolerance)
+    # Dispatcher Serve deployment configuration.
+    # NOTE: The dispatcher runs as a singleton Ray Serve deployment
+    # (min_replicas == max_replicas == 1); Serve owns its lifecycle and restarts.
+    # dispatcher_max_restarts / dispatcher_max_task_retries are retained only for
+    # backwards-compatible config/env parsing and are no longer applied.
     dispatcher_max_restarts: int = Field(
         default=-1,
-        description="Max dispatcher actor restarts (-1 = unlimited, for high availability)",
+        description="Deprecated: unused; Serve manages dispatcher replica restarts",
     )
     dispatcher_max_task_retries: int = Field(
-        default=3, description="Ray-level task retries for dispatcher operations"
+        default=3,
+        description="Deprecated: unused; Serve manages dispatcher replica restarts",
     )
     dispatcher_num_cpus: float = Field(
-        default=0.25, gt=0, description="Ray CPU request for the dispatcher actor"
+        default=0.25,
+        gt=0,
+        description="CPU request for the dispatcher Serve deployment replica",
     )
     dispatcher_memory_request: Optional[str] = Field(
         default=None,
-        description='Ray memory request for the dispatcher actor (e.g., "256MB")',
+        description='Memory request for the dispatcher Serve deployment replica (e.g., "256MB")',
+    )
+    dispatcher_max_ongoing_requests_per_replica: int = Field(
+        default=1000,
+        gt=0,
+        description=(
+            "Max concurrent in-flight requests (wake/health/stats) the singleton "
+            "dispatcher replica accepts; kept high so cross-pod wakes never queue"
+        ),
     )
 
     # Timeouts
@@ -409,6 +424,16 @@ class RayOrchestratorConfig(BaseSettings):
     s3_presigned_config: S3PresignedConfig | None = Field(
         default=None,
         description="Optional server-managed presigned URL target configuration.",
+    )
+
+    # RayService Mode
+    use_rayservice_deployment: bool = Field(
+        default=True,
+        description=(
+            "Enable RayService mode: connect to existing Ray Serve deployments "
+            "managed by RayService CRD instead of creating them programmatically. "
+            "Set to True when running with RayService in Kubernetes."
+        ),
     )
 
     def _validate_worker_request_concurrency(self) -> None:
