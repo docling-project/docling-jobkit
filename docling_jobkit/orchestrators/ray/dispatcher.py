@@ -1,4 +1,4 @@
-"""Ray Task Dispatcher - Ray Actor for round-robin task scheduling."""
+"""Ray Task Dispatcher - Ray Serve deployment for round-robin task scheduling."""
 
 import asyncio
 import datetime
@@ -7,7 +7,7 @@ import math
 from collections import deque
 from typing import Any, Optional
 
-import ray
+from ray import serve
 
 from docling.datamodel.service.responses import FailurePhase
 
@@ -33,11 +33,11 @@ from docling_jobkit.public_errors import (
 _log = logging.getLogger(__name__)
 
 
-@ray.remote
-class RayTaskDispatcher:
+@serve.deployment
+class DoclingProcessorDispatcherDeployment:
     """Ray Task Dispatcher - round-robin scheduling at TASK level.
 
-    This detached Ray actor runs a continuous dispatch loop that:
+    This Ray Serve deployment runs a continuous dispatch loop that:
     1. Discovers all tenants with pending tasks.
     2. For each tenant in round-robin order:
        - Peeks at the next task in that tenant's queue.
@@ -52,21 +52,24 @@ class RayTaskDispatcher:
     def __init__(
         self,
         config: RayOrchestratorConfig,
-        deployment_handle: Any,
+        redis_url: str,
+        coordinator_handle: Any,
     ) -> None:
-        """Initialize the shared dispatcher actor.
+        """Initialize the dispatcher Serve deployment.
 
         Args:
             config: Orchestrator configuration.
-            deployment_handle: Ray Serve deployment handle used to process tasks.
+            redis_url: Redis connection URL for durable state.
+            coordinator_handle: Serve handle to the coordinator deployment used to
+                process tasks. Supplied via Serve deployment binding.
         """
         configure_ray_actor_logging(config.log_level)
 
         self.config = config
-        self.deployment_handle = deployment_handle
+        self.coordinator_handle = coordinator_handle
 
         self.redis_manager = RedisStateManager(
-            redis_url=config.redis_url,
+            redis_url=redis_url,
             results_ttl=config.results_ttl,
             results_prefix=config.results_prefix,
             sub_channel=config.sub_channel,
@@ -93,39 +96,45 @@ class RayTaskDispatcher:
         self._last_reconcile: float = 0.0
         self._reconcile_interval: float = 30.0
 
-        _log.setLevel(self.config.log_level.upper())
-        _log.info("RayTaskDispatcher initialized")
-
-    async def refresh_runtime(
-        self,
-        deployment_handle: Any,
-        config: RayOrchestratorConfig,
-    ) -> None:
-        """Refresh Serve handle and runtime-derived settings after API startup."""
-        async with self._runtime_lock:
-            self.deployment_handle = deployment_handle
-            self.config = config
-
-            # Processing keys must outlive the typical task runtime so the
-            # dispatcher can tell whether a STARTED task still has a live worker.
-            if config.task_timeout is not None:
-                self.redis_manager.processing_ttl = max(
-                    int(config.task_timeout) + 300,
-                    300,
-                )
-            else:
-                self.redis_manager.processing_ttl = max(
-                    self.redis_manager.results_ttl,
-                    7200,
-                )
-
-            # Heartbeat is refreshed on the reconciliation cadence, not on every
-            # dispatch tick, so the TTL must reflect that cadence.
-            self.redis_manager.dispatcher_heartbeat_ttl = max(
-                math.ceil(self._reconcile_interval * 3),
-                1,
+        # Runtime-derived Redis TTLs, fixed at deploy time (the Serve deployment
+        # owns its config for its whole lifetime).
+        #
+        # Processing keys must outlive the typical task runtime so the dispatcher
+        # can tell whether a STARTED task still has a live worker.
+        if config.task_timeout is not None:
+            self.redis_manager.processing_ttl = max(int(config.task_timeout) + 300, 300)
+        else:
+            self.redis_manager.processing_ttl = max(
+                self.redis_manager.results_ttl, 7200
             )
-            _log.setLevel(self.config.log_level.upper())
+        # Heartbeat is refreshed on the reconciliation cadence, not on every
+        # dispatch tick, so the TTL must reflect that cadence.
+        self.redis_manager.dispatcher_heartbeat_ttl = max(
+            math.ceil(self._reconcile_interval * 3),
+            1,
+        )
+
+        _log.setLevel(self.config.log_level.upper())
+        _log.info("DoclingProcessorDispatcherDeployment initialized")
+
+        # Self-start the dispatch loop so the deployment works without the API
+        # process having to poke it. get_health()/wake() also ensure the loop is
+        # running, so a missing event loop here (defensive) is non-fatal. Keep a
+        # strong reference to the startup task so it is not garbage collected.
+        self._startup_task: Optional[asyncio.Task[None]] = None
+        try:
+            loop = asyncio.get_running_loop()
+            self._startup_task = loop.create_task(self._ensure_dispatch_loop_started())
+        except RuntimeError:
+            _log.debug(
+                "No running event loop during __init__; dispatch loop will start "
+                "lazily on first get_health()/wake()"
+            )
+
+    async def _ensure_dispatch_loop_started(self) -> None:
+        """Acquire the runtime lock and start the dispatch loop if not running."""
+        async with self._runtime_lock:
+            await self._ensure_dispatch_loop_started_locked()
 
     async def get_health(self) -> bool:
         """Ensure the dispatch loop is running and report health."""
@@ -157,8 +166,12 @@ class RayTaskDispatcher:
     async def wake(self, tenant_id: str | None = None) -> None:
         """Signal the dispatcher to run a dispatch pass immediately.
 
-        Called fire-and-forget from the orchestrator after enqueue.
+        Called fire-and-forget from the orchestrator after enqueue. Also acts as a
+        lazy-start fallback for the dispatch loop in case it was not started during
+        deployment construction.
         """
+        if not self._dispatch_loop_running():
+            await self._ensure_dispatch_loop_started()
         if tenant_id is not None and tenant_id not in self._active_tenant_ids:
             self._active_tenant_ids.add(tenant_id)
             self._active_tenant_order.append(tenant_id)
@@ -413,11 +426,12 @@ class RayTaskDispatcher:
         try:
             _log.info("[TASK-START] %s: processing %s documents", task_id, task_size)
 
-            response = self.deployment_handle.process_task.remote(task)
-            await asyncio.to_thread(
-                response.result,
-                timeout_s=self.config.task_timeout,
-                _skip_asyncio_check=True,
+            # The coordinator is a Serve deployment; its DeploymentResponse is
+            # awaitable and re-raises any remote error. asyncio.wait_for enforces
+            # the per-task timeout that the actor path used to pass to .result().
+            await asyncio.wait_for(
+                self.coordinator_handle.process_task.remote(task),
+                timeout=self.config.task_timeout,
             )
             _log.info(
                 "[TASK-SUCCESS] %s: replica completed; durable success is replica-owned",
