@@ -17,6 +17,7 @@ from docling_jobkit.datamodel.exportable_document import (
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
+from docling_jobkit.public_errors import build_public_task_error
 
 if TYPE_CHECKING:
     from docling_jobkit.orchestrators.local.orchestrator import LocalOrchestrator
@@ -68,7 +69,10 @@ class AsyncLocalWorker:
 
                 # Define a callback function to send progress updates to the client.
                 def run_task() -> DoclingTaskResult:
-                    convert_sources, headers = expand_task_sources(task)
+                    convert_sources, headers = expand_task_sources(
+                        task,
+                        max_file_size=cm.config.max_file_size,
+                    )
                     # Note: results are only an iterator->lazy evaluation
                     conv_results = cm.convert_documents(
                         sources=convert_sources,
@@ -129,6 +133,7 @@ class AsyncLocalWorker:
                     f"Worker {self.worker_id} failed to process job {task_id}: {e}"
                 )
                 task.set_status(TaskStatus.FAILURE)
+                task.error_message = build_public_task_error(e)
 
             finally:
                 if workdir.exists():

@@ -9,6 +9,8 @@ from docling_jobkit.datamodel.task import Task
 
 def expand_task_sources(
     task: Task,
+    *,
+    max_file_size: int | None = None,
 ) -> tuple[list[Union[str, DocumentStream]], Optional[dict[str, Any]]]:
     """Expand task sources into converter inputs and optional HTTP headers."""
     convert_sources: list[Union[str, DocumentStream]] = []
@@ -29,7 +31,9 @@ def expand_task_sources(
             # change task/result semantics for DocumentStream/FileSource/HttpSource
             # inputs, so the runtime path expands sources directly here instead.
             with get_source_processor(source) as source_processor:
-                for document_stream in source_processor.iterate_documents():
+                for document_stream in source_processor.iterate_documents(
+                    max_file_size=max_file_size
+                ):
                     convert_sources.append(document_stream)
         else:
             raise RuntimeError(f"Unsupported runtime task source: {type(source)!r}")

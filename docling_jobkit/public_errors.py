@@ -14,7 +14,10 @@ from docling.datamodel.service.responses import (
     PublicFailureInfo,
 )
 
-from docling_jobkit.convert.materialization import MaterializationLimitExceededError
+from docling_jobkit.convert.materialization import (
+    MaterializationLimitExceededError,
+    SourceLimitExceededError,
+)
 
 
 class TargetWriteError(RuntimeError):
@@ -111,6 +114,11 @@ def classify_public_task_failure(
         phase = FailurePhase.ADMISSION
         retryable = False
         message = "Document exceeds service limits."
+    elif isinstance(root_exc, SourceLimitExceededError):
+        category = FailureCategory.POLICY
+        phase = FailurePhase.SOURCE_ENUMERATION
+        retryable = False
+        message = exception_text
     elif isinstance(root_exc, httpx.HTTPStatusError):
         # httpx fetched the source but the upstream HTTP status is not usable.
         merged_details = {**merged_details, **_safe_details(source_kind="http")}
@@ -161,8 +169,10 @@ def classify_public_task_failure(
 
 def build_public_task_error(exc: BaseException) -> str:
     root_exc = _unwrap_failure_exception(exc)
-    if isinstance(root_exc, httpx.HTTPStatusError) or isinstance(
-        root_exc, RequestsHTTPError
+    if (
+        isinstance(root_exc, httpx.HTTPStatusError)
+        or isinstance(root_exc, RequestsHTTPError)
+        or isinstance(root_exc, SourceLimitExceededError)
     ):
         return _exception_text(root_exc)
     return INTERNAL_TASK_ERROR_MESSAGE

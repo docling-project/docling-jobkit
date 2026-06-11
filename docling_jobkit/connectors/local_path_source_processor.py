@@ -116,9 +116,13 @@ class LocalPathSourceProcessor(
         return sum(1 for _ in self._list_document_ids())
 
     def _fetch_document_by_id(
-        self, identifier: LocalPathFileIdentifier
+        self,
+        identifier: LocalPathFileIdentifier,
+        *,
+        max_file_size: int | None = None,
     ) -> DocumentStream:
         """Fetch a document by opening the file from the local filesystem."""
+        del max_file_size
         file_path = identifier.path
 
         # Open file in binary mode and return as DocumentStream
@@ -143,7 +147,12 @@ class LocalPathSourceProcessor(
             filename=str(file_path),
         )
 
-    def _fetch_documents(self) -> Iterator[DocumentStream]:
+    def _fetch_documents(
+        self, *, max_file_size: int | None = None
+    ) -> Iterator[DocumentStream]:
         """Iterate through all documents."""
         for identifier in self._list_document_ids():
-            yield self._fetch_document_by_id(identifier)
+            yield self._fetch_document_by_id(
+                identifier,
+                max_file_size=max_file_size,
+            )

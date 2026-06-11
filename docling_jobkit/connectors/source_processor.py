@@ -93,13 +93,21 @@ class BaseSourceProcessor(
         """Clean up resources."""
 
     @abstractmethod
-    def _fetch_documents(self) -> Iterator[DocumentStream]:
+    def _fetch_documents(
+        self, *, max_file_size: int | None = None
+    ) -> Iterator[DocumentStream]:
         """Yield documents from the source."""
 
     def _list_document_ids(self) -> Iterator[FileIdentifierT] | None:
         return None
 
-    def _fetch_document_by_id(self, identifier: FileIdentifierT) -> DocumentStream:
+    def _fetch_document_by_id(
+        self,
+        identifier: FileIdentifierT,
+        *,
+        max_file_size: int | None = None,
+    ) -> DocumentStream:
+        del max_file_size
         raise NotImplementedError
 
     def _make_document_ref(
@@ -123,7 +131,10 @@ class BaseSourceProcessor(
         return None
 
     def fetch_converter_source_by_ref(
-        self, ref: SourceDocumentRef[FileIdentifierT]
+        self,
+        ref: SourceDocumentRef[FileIdentifierT],
+        *,
+        max_file_size: int | None = None,
     ) -> ConverterSource:
         """Resolve a ref into the converter input expected by the backend.
 
@@ -131,7 +142,7 @@ class BaseSourceProcessor(
         Connectors with remote-fetch semantics may override this to return a lighter
         representation such as a source URL.
         """
-        return self._fetch_document_by_id(ref.id)
+        return self._fetch_document_by_id(ref.id, max_file_size=max_file_size)
 
     def headers_for_ref(
         self, ref: SourceDocumentRef[FileIdentifierT]
@@ -140,12 +151,14 @@ class BaseSourceProcessor(
         del ref
         return None
 
-    def iterate_documents(self) -> Iterator[DocumentStream]:
+    def iterate_documents(
+        self, *, max_file_size: int | None = None
+    ) -> Iterator[DocumentStream]:
         if not self._initialized:
             raise RuntimeError(
                 "Processor not initialized. Use 'with' to open it first."
             )
-        yield from self._fetch_documents()
+        yield from self._fetch_documents(max_file_size=max_file_size)
 
     def iterate_document_chunks(
         self, chunk_size: int

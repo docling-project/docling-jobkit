@@ -592,7 +592,10 @@ class DoclingProcessorConverterDeployment:
             conv_results = await self._run_with_retry(
                 f"{request.task.task_id}:chunk:{request.chunk.chunk_index}",
                 lambda: self._convert_source_chunk_request(request),
+                task=request.task,
             )
+            if isinstance(conv_results, ConverterFailureResult):
+                return conv_results
             exportable = _to_exportable_documents_from_chunk(
                 request.chunk, conv_results
             )
@@ -737,7 +740,10 @@ class DoclingProcessorConverterDeployment:
 
     def _convert_passthrough_task(self, task: Task) -> list[ConversionResult]:
         _validate_no_s3_source_in_passthrough(task)
-        convert_sources, headers = expand_task_sources(task)
+        convert_sources, headers = expand_task_sources(
+            task,
+            max_file_size=self.converter_manager_config.max_file_size,
+        )
         convert_opts = task.convert_options or ConvertDocumentsOptions()
         return list(
             self.cm.convert_documents(
@@ -765,9 +771,13 @@ class DoclingProcessorConverterDeployment:
             convert_sources: list[str | DocumentStream] = []
             headers: Optional[dict[str, Any]] = None
             for ref in request.chunk.refs:
-                convert_sources.append(
-                    source_processor.fetch_converter_source_by_ref(ref)
+                convert_source = source_processor.fetch_converter_source_by_ref(
+                    ref,
+                    max_file_size=self.converter_manager_config.max_file_size,
                 )
+                convert_sources.append(convert_source)
+                if not isinstance(convert_source, str):
+                    continue
                 ref_headers = source_processor.headers_for_ref(ref)
                 if headers is None and ref_headers:
                     headers = ref_headers

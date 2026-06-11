@@ -34,13 +34,18 @@ class MockSourceProcessor(BaseSourceProcessor):
         return len(self._all_ids)
 
     # ---- Simulated fetch ----
-    def _fetch_document_by_id(self, identifier: str) -> DocumentStream:
+    def _fetch_document_by_id(
+        self, identifier: str, *, max_file_size: int | None = None
+    ) -> DocumentStream:
+        del max_file_size
         return DocumentStream(name=identifier, stream=BytesIO(b"content"))
 
     # ---- Only used for full streaming ----
-    def _fetch_documents(self) -> Iterator[DocumentStream]:
+    def _fetch_documents(
+        self, *, max_file_size: int | None = None
+    ) -> Iterator[DocumentStream]:
         for x in self._list_document_ids():
-            yield self._fetch_document_by_id(x)
+            yield self._fetch_document_by_id(x, max_file_size=max_file_size)
 
 
 # -------------------------------------------------------------------

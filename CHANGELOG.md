@@ -1,3 +1,15 @@
+## [v1.22.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.22.0) - 2026-06-11
+
+### Feature
+
+* Enforce source size limits early in service paths ([#168](https://github.com/docling-project/docling-jobkit/issues/168)) ([`7cfe28b`](https://github.com/docling-project/docling-jobkit/commit/7cfe28b03652a5c6dcd47f5931dbf0ddfe4ce5ba))
+* Introduce ConvertDocumentsOptions.include_page_images and align usage to be consistent ([#169](https://github.com/docling-project/docling-jobkit/issues/169)) ([`7aabe62`](https://github.com/docling-project/docling-jobkit/commit/7aabe624f734956b61f2d27ad85b4e9a7941bdec))
+* Support max_num_elements in source iteration ([#165](https://github.com/docling-project/docling-jobkit/issues/165)) ([`53855fb`](https://github.com/docling-project/docling-jobkit/commit/53855fbb1ad71ab3185a08913f4fb86abe87ccb2))
+
+### Fix
+
+* Make Ray enqueue cheap by dropping per-request dispatcher health RPC ([#172](https://github.com/docling-project/docling-jobkit/issues/172)) ([`e1eb522`](https://github.com/docling-project/docling-jobkit/commit/e1eb522c15fe8d1a4171ba822150b7eadb0c65de))
+
 ## [v1.21.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.21.0) - 2026-06-09
 
 ### Feature

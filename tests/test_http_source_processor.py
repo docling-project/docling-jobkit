@@ -1,7 +1,10 @@
+import pytest
+
 from docling.datamodel.service.sources import HttpSource
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.http_source_processor import HttpSourceProcessor
+from docling_jobkit.convert.materialization import SourceLimitExceededError
 from docling_jobkit.datamodel.http_inputs import FileSource
 
 
@@ -58,7 +61,17 @@ def test_http_file_source_list_and_fetch():
         assert doc.stream.read() == content
 
 
-def test_http_source_ref_returns_converter_url_and_headers():
+def _stub_head(monkeypatch, *, size=None, etag=None):
+    """Avoid real network HEAD probes in _list_document_ids."""
+    monkeypatch.setattr(
+        HttpSourceProcessor,
+        "_try_head_request",
+        lambda self, source: (size, etag),
+    )
+
+
+def test_http_source_ref_returns_converter_url_and_headers(monkeypatch):
+    _stub_head(monkeypatch)
     http_source = HttpSource(
         url="https://example.com/document.pdf",
         headers={"Authorization": "Bearer token"},
@@ -73,6 +86,50 @@ def test_http_source_ref_returns_converter_url_and_headers():
         )
         assert processor.headers_for_ref(ref) == {"Authorization": "Bearer token"}
         assert ref.source_uri == "https://example.com/document.pdf"
+
+
+@pytest.mark.parametrize("head_size", [None, 4])
+def test_http_source_ref_passthrough_when_within_limit(monkeypatch, head_size):
+    """A limit alone must NOT materialize: an unknown or in-limit size passes the
+    raw URL through to the converter. Also covers the sys.maxsize sentinel."""
+    import sys
+
+    _stub_head(monkeypatch, size=head_size)
+    http_source = HttpSource(url="https://example.com/document.pdf")
+
+    with HttpSourceProcessor(http_source) as processor:
+        chunk = next(processor.iterate_document_chunks(chunk_size=1))
+        ref = chunk.refs[0]
+        assert (
+            processor.fetch_converter_source_by_ref(ref, max_file_size=8)
+            == "https://example.com/document.pdf"
+        )
+        assert (
+            processor.fetch_converter_source_by_ref(ref, max_file_size=sys.maxsize)
+            == "https://example.com/document.pdf"
+        )
+
+
+def test_http_source_ref_rejects_from_head_size(monkeypatch):
+    """A HEAD-advertised Content-Length over the limit rejects without a fetch."""
+    _stub_head(monkeypatch, size=9)
+    http_source = HttpSource(url="https://example.com/document.pdf")
+
+    with HttpSourceProcessor(http_source) as processor:
+        chunk = next(processor.iterate_document_chunks(chunk_size=1))
+        ref = chunk.refs[0]
+        with pytest.raises(SourceLimitExceededError, match="max_file_size=8"):
+            processor.fetch_converter_source_by_ref(ref, max_file_size=8)
+
+
+def test_http_source_iterate_documents_not_supported(monkeypatch):
+    """HttpSource is passthrough-only; direct byte retrieval is unsupported."""
+    _stub_head(monkeypatch)
+    http_source = HttpSource(url="https://example.com/document.pdf")
+
+    with HttpSourceProcessor(http_source) as processor:
+        with pytest.raises(NotImplementedError):
+            list(processor.iterate_documents())
 
 
 def test_http_file_source_iterate_documents():

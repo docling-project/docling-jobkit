@@ -12,6 +12,7 @@ from docling_jobkit.connectors.s3_source_processor import (
     S3FileIdentifier,
     S3SourceProcessor,
 )
+from docling_jobkit.convert.materialization import SourceLimitExceededError
 from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
 # -------------------------------------------------------------------
@@ -170,7 +171,7 @@ def test_s3_iterate_documents_respects_max_num_elements(minio_coords):
         }
     ]
     processor._fetch_document_by_id = MagicMock(
-        side_effect=lambda identifier: DocumentStream(
+        side_effect=lambda identifier, *, max_file_size=None: DocumentStream(
             name=identifier.key,
             stream=BytesIO(b"content"),
         )
@@ -180,6 +181,21 @@ def test_s3_iterate_documents_respects_max_num_elements(minio_coords):
 
     assert [doc.name for doc in docs] == ["incoming/a.pdf", "incoming/b.pdf"]
     assert processor._fetch_document_by_id.call_count == 2
+
+
+def test_s3_fetch_document_rejects_identifier_size_before_download(minio_coords):
+    processor = S3SourceProcessor(minio_coords)
+    processor._client = MagicMock()
+    identifier = S3FileIdentifier(
+        key="incoming/too-large.pdf",
+        size=9,
+        last_modified=None,
+    )
+
+    with pytest.raises(SourceLimitExceededError, match="max_file_size=8"):
+        processor._fetch_document_by_id(identifier, max_file_size=8)
+
+    processor._client.download_fileobj.assert_not_called()
 
 
 def test_s3_fetch_document_logs_and_reraises_client_error(minio_coords, caplog):
