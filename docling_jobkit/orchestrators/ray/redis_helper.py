@@ -10,7 +10,7 @@ from typing import Optional
 import msgpack
 from redis.asyncio import Redis
 from redis.asyncio.connection import ConnectionPool
-from redis.exceptions import NoScriptError, WatchError
+from redis.exceptions import WatchError
 
 from docling.datamodel.service.responses import PublicFailureInfo
 from docling.datamodel.service.tasks import TaskType
@@ -148,9 +148,6 @@ class RedisStateManager:
         # Connection pool and client will be created in connect()
         self.pool: Optional[ConnectionPool] = None
         self.redis: Optional[Redis] = None
-        self._update_task_execution_heartbeat_sha: Optional[str] = None
-        self._acquire_converter_unit_sha: Optional[str] = None
-        self._release_converter_units_sha: Optional[str] = None
 
     def _compute_processing_ttl(self, task_timeout: Optional[float]) -> int:
         if task_timeout is not None:
@@ -177,9 +174,6 @@ class RedisStateManager:
                 decode_responses=False,  # We handle encoding/decoding
             )
             self.redis = Redis(connection_pool=self.pool)
-            self._update_task_execution_heartbeat_sha = None
-            self._acquire_converter_unit_sha = None
-            self._release_converter_units_sha = None
             _log.debug("Connected to Redis at %s", self.redis_url)
 
     async def disconnect(self):
@@ -187,9 +181,6 @@ class RedisStateManager:
         if self.redis:
             await self.redis.aclose()
             self.redis = None
-            self._update_task_execution_heartbeat_sha = None
-            self._acquire_converter_unit_sha = None
-            self._release_converter_units_sha = None
         if self.pool:
             await self.pool.aclose()
             self.pool = None
@@ -1118,29 +1109,10 @@ class RedisStateManager:
         redis = self._ensure_redis()
         now_timestamp = str(datetime.datetime.now(datetime.timezone.utc).timestamp())
 
-        if self._update_task_execution_heartbeat_sha is None:
-            self._update_task_execution_heartbeat_sha = await redis.script_load(  # type: ignore[misc]
-                _UPDATE_TASK_EXECUTION_HEARTBEAT_LUA
-            )
-
-        try:
-            updated = await redis.evalsha(  # type: ignore[misc]
-                self._update_task_execution_heartbeat_sha,
-                1,
-                execution_key,
-                now_timestamp,
-            )
-        except NoScriptError:
-            self._update_task_execution_heartbeat_sha = await redis.script_load(  # type: ignore[misc]
-                _UPDATE_TASK_EXECUTION_HEARTBEAT_LUA
-            )
-            updated = await redis.evalsha(  # type: ignore[misc]
-                self._update_task_execution_heartbeat_sha,
-                1,
-                execution_key,
-                now_timestamp,
-            )
-
+        # register_script caches the SHA and transparently reloads on NOSCRIPT.
+        updated = await redis.register_script(_UPDATE_TASK_EXECUTION_HEARTBEAT_LUA)(
+            keys=[execution_key], args=[now_timestamp]
+        )
         return bool(updated)
 
     async def acquire_converter_unit(
@@ -1161,29 +1133,9 @@ class RedisStateManager:
         execution_key = f"task:{task_id}:execution"
         redis = self._ensure_redis()
 
-        if self._acquire_converter_unit_sha is None:
-            self._acquire_converter_unit_sha = await redis.script_load(  # type: ignore[misc]
-                _ACQUIRE_CONVERTER_UNIT_LUA
-            )
-        try:
-            granted = await redis.evalsha(  # type: ignore[misc]
-                self._acquire_converter_unit_sha,
-                2,
-                limits_key,
-                execution_key,
-                str(ceiling),
-            )
-        except NoScriptError:
-            self._acquire_converter_unit_sha = await redis.script_load(  # type: ignore[misc]
-                _ACQUIRE_CONVERTER_UNIT_LUA
-            )
-            granted = await redis.evalsha(  # type: ignore[misc]
-                self._acquire_converter_unit_sha,
-                2,
-                limits_key,
-                execution_key,
-                str(ceiling),
-            )
+        granted = await redis.register_script(_ACQUIRE_CONVERTER_UNIT_LUA)(
+            keys=[limits_key, execution_key], args=[ceiling]
+        )
         return int(granted)
 
     async def release_converter_units(
@@ -1204,29 +1156,9 @@ class RedisStateManager:
         execution_key = f"task:{task_id}:execution"
         redis = self._ensure_redis()
 
-        if self._release_converter_units_sha is None:
-            self._release_converter_units_sha = await redis.script_load(  # type: ignore[misc]
-                _RELEASE_CONVERTER_UNITS_LUA
-            )
-        try:
-            released = await redis.evalsha(  # type: ignore[misc]
-                self._release_converter_units_sha,
-                2,
-                limits_key,
-                execution_key,
-                str(count),
-            )
-        except NoScriptError:
-            self._release_converter_units_sha = await redis.script_load(  # type: ignore[misc]
-                _RELEASE_CONVERTER_UNITS_LUA
-            )
-            released = await redis.evalsha(  # type: ignore[misc]
-                self._release_converter_units_sha,
-                2,
-                limits_key,
-                execution_key,
-                str(count),
-            )
+        released = await redis.register_script(_RELEASE_CONVERTER_UNITS_LUA)(
+            keys=[limits_key, execution_key], args=[count]
+        )
         return int(released)
 
     async def get_task_execution_lease(self, task_id: str) -> Optional[dict]:

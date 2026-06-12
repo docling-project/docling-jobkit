@@ -1365,13 +1365,18 @@ class DoclingProcessorCoordinatorDeployment:
         # (= max_concurrent_tasks). A child only launches once a unit is acquired;
         # in-flight count therefore self-adjusts to available tenant capacity with
         # no separate per-task parallelism knob.
+        #
+        # NOTE: this acquire/launch/drain loop is intentionally duplicated in
+        # _dispatch_slice_conversions. The bookkeeping differs just enough
+        # (chunk-keyed results and per-child failure wrapping here vs. bare
+        # ObjectRefs there) that a shared abstraction would obscure the gating
+        # logic. Keep the acquire/release semantics of both loops in sync.
         tenant_id = task.metadata.get("tenant_id", "default")
         ceiling = await self._converter_unit_ceiling(tenant_id)
         pending_chunks = iter(all_chunks)
         in_flight: dict[asyncio.Task[ConverterTaskResult], DocumentChunk[Any, Any]] = {}
         child_results: list[tuple[DocumentChunk[Any, Any], ConverterTaskResult]] = []
         next_chunk = next(pending_chunks, None)
-        terminalized = False
 
         try:
             while next_chunk is not None or in_flight:
@@ -1380,8 +1385,9 @@ class DoclingProcessorCoordinatorDeployment:
                         tenant_id, task.task_id, ceiling
                     )
                     if granted < 0:
-                        terminalized = True
-                        break
+                        raise RuntimeError(
+                            f"Task {task.task_id} was terminalized during S3 fan-out"
+                        )
                     if granted == 0:
                         break  # at tenant ceiling; drain an in-flight child first
                     in_flight[
@@ -1390,8 +1396,6 @@ class DoclingProcessorCoordinatorDeployment:
                         )
                     ] = next_chunk
                     next_chunk = next(pending_chunks, None)
-                if terminalized:
-                    break
                 if not in_flight:
                     # Fully starved: budget held by sibling tasks. Back off, retry.
                     await asyncio.sleep(_CONVERTER_UNIT_POLL_INTERVAL_S)
@@ -1449,11 +1453,6 @@ class DoclingProcessorCoordinatorDeployment:
                 await self.redis_manager.release_converter_units(
                     tenant_id, task.task_id, len(in_flight)
                 )
-
-        if terminalized:
-            raise RuntimeError(
-                f"Task {task.task_id} was terminalized during S3 fan-out"
-            )
 
         ordered_results = [
             converter_result
@@ -1543,13 +1542,17 @@ class DoclingProcessorCoordinatorDeployment:
 
         # Slice fan-out is gated by the tenant converter-unit budget, like S3
         # fan-out — no per-task parallelism knob.
+        #
+        # NOTE: this acquire/launch/drain loop is intentionally duplicated in
+        # _handle_s3_fanout (which additionally wraps per-child failures and
+        # keys results by chunk). A shared abstraction would obscure the gating
+        # logic. Keep the acquire/release semantics of both loops in sync.
         tenant_id = task.metadata.get("tenant_id", "default")
         ceiling = await self._converter_unit_ceiling(tenant_id)
         in_flight: set[asyncio.Task[ObjectRef]] = set()
         pending_requests = iter(requests)
         collected_results: list[ObjectRef] = []
         next_request = next(pending_requests, None)
-        terminalized = False
 
         try:
             while next_request is not None or in_flight:
@@ -1558,16 +1561,15 @@ class DoclingProcessorCoordinatorDeployment:
                         tenant_id, task.task_id, ceiling
                     )
                     if granted < 0:
-                        terminalized = True
-                        break
+                        raise RuntimeError(
+                            f"Task {task.task_id} was terminalized during slice fan-out"
+                        )
                     if granted == 0:
                         break  # at tenant ceiling; drain an in-flight slice first
                     in_flight.add(
                         asyncio.create_task(self._execute_slice_request(next_request))
                     )
                     next_request = next(pending_requests, None)
-                if terminalized:
-                    break
                 if not in_flight:
                     await asyncio.sleep(_CONVERTER_UNIT_POLL_INTERVAL_S)
                     continue
@@ -1587,11 +1589,6 @@ class DoclingProcessorCoordinatorDeployment:
                 await self.redis_manager.release_converter_units(
                     tenant_id, task.task_id, len(in_flight)
                 )
-
-        if terminalized:
-            raise RuntimeError(
-                f"Task {task.task_id} was terminalized during slice fan-out"
-            )
 
         return collected_results
 

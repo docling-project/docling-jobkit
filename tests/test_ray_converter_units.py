@@ -26,8 +26,6 @@ class _FakeConverterUnitRedis:
 
     def __init__(self) -> None:
         self.hashes: dict[str, dict[str, int]] = {}
-        self._scripts: dict[str, str] = {}
-        self._next_sha = 0
 
     def prime_execution_lease(self, task_id: str) -> None:
         self.hashes[f"task:{task_id}:execution"] = {"replica_id": 1}
@@ -45,21 +43,18 @@ class _FakeConverterUnitRedis:
             "converter_units", 0
         )
 
-    async def script_load(self, script: str) -> str:
-        sha = f"sha-{self._next_sha}"
-        self._next_sha += 1
-        self._scripts[sha] = script
-        return sha
-
-    async def evalsha(self, sha: str, numkeys: int, *args: object) -> int:
-        script = self._scripts[sha]
-        keys = [str(a) for a in args[:numkeys]]
-        argv = [int(a) for a in args[numkeys:]]
+    def register_script(self, script: str):
         if script == _ACQUIRE_CONVERTER_UNIT_LUA:
-            return self._acquire(keys[0], keys[1], argv[0])
-        if script == _RELEASE_CONVERTER_UNITS_LUA:
-            return self._release(keys[0], keys[1], argv[0])
-        raise AssertionError("unexpected script")
+            impl = self._acquire
+        elif script == _RELEASE_CONVERTER_UNITS_LUA:
+            impl = self._release
+        else:
+            raise AssertionError("unexpected script")
+
+        async def run(keys: list[str], args: list[int]) -> int:
+            return impl(keys[0], keys[1], int(args[0]))
+
+        return run
 
     def _exists(self, key: str) -> bool:
         return bool(self.hashes.get(key))
