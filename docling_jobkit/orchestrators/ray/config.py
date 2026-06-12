@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, Field, PositiveFloat, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from docling_jobkit.config.target_config import S3PresignedConfig
@@ -175,14 +175,12 @@ class RayOrchestratorConfig(BaseSettings):
         default=10,
         description="Maximum number of Ray Serve replicas (autoscaling upper bound)",
     )
-    target_requests_per_replica: int = Field(
+    target_requests_per_replica: PositiveFloat = Field(
         default=1,
-        ge=1,
         description="Target number of concurrent requests per replica for autoscaling",
     )
-    max_ongoing_requests_per_replica: Optional[int] = Field(
+    max_ongoing_requests_per_replica: Optional[PositiveFloat] = Field(
         default=None,
-        ge=1,
         description=(
             "Hard cap on in-flight requests per Ray Serve replica. "
             "Defaults to target_requests_per_replica when unset."
@@ -291,14 +289,12 @@ class RayOrchestratorConfig(BaseSettings):
         ge=1,
         description="Coordinator autoscaling maximum replicas; defaults to max_actors",
     )
-    coordinator_target_requests_per_replica: Optional[int] = Field(
+    coordinator_target_requests_per_replica: Optional[PositiveFloat] = Field(
         default=None,
-        ge=1,
         description="Coordinator autoscaling target requests per replica",
     )
-    coordinator_max_ongoing_requests_per_replica: Optional[int] = Field(
+    coordinator_max_ongoing_requests_per_replica: Optional[PositiveFloat] = Field(
         default=None,
-        ge=1,
         description="Coordinator hard cap on in-flight requests per replica",
     )
     coordinator_max_replicas_per_node: Optional[int] = Field(
@@ -451,7 +447,7 @@ class RayOrchestratorConfig(BaseSettings):
         if self.coordinator_target_requests_per_replica is None:
             self.coordinator_target_requests_per_replica = max(
                 self.target_requests_per_replica,
-                self.coordinator_max_ongoing_requests_per_replica or 1,
+                self.coordinator_max_ongoing_requests_per_replica or 1.0,
             )
 
         if self.coordinator_max_ongoing_requests_per_replica is None:
