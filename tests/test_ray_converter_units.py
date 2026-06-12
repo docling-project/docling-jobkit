@@ -9,6 +9,9 @@ coverage hermetic and isolated from the Session A dispatcher tests.
 
 import pytest
 
+pytest.importorskip("msgpack")
+pytest.importorskip("redis")
+
 from docling_jobkit.orchestrators.ray.redis_helper import (
     _ACQUIRE_CONVERTER_UNIT_LUA,
     _RELEASE_CONVERTER_UNITS_LUA,

@@ -17,6 +17,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+pytest.importorskip("ray")
+
 from docling.datamodel.base_models import ConversionStatus, OutputFormat
 from docling.datamodel.service.callbacks import ProcessedDocsItem
 from docling.datamodel.service.options import ConvertDocumentsOptions
