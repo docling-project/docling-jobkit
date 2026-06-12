@@ -45,7 +45,11 @@ jobs:
           echo "WORKER_PID=$!" >> $GITHUB_ENV
       - name: Testing
         run: |
-          uv run --no-sync pytest -v --cov=docling_jobkit --cov-report=xml tests
+          if [[ "${{ matrix.python-version }}" == "3.14" ]]; then
+            uv run --no-sync pytest -v --cov=docling_jobkit --cov-report=xml tests --ignore-glob='tests/test_ray*.py'
+          else
+            uv run --no-sync pytest -v --cov=docling_jobkit --cov-report=xml tests
+          fi
       - name: Terminate background worker
         if: always()
         run: |
