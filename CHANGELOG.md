@@ -1,3 +1,15 @@
+## [v1.23.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.23.0) - 2026-06-12
+
+### Feature
+
+* Cap per-tenant in-flight converter units at max_concurrent_tasks ([#171](https://github.com/docling-project/docling-jobkit/issues/171)) ([`a5b1afa`](https://github.com/docling-project/docling-jobkit/commit/a5b1afa076915c78707444d2c3bf927a68e966e6))
+* Expose max_replicas_per_node for coordinator and converter deployments ([#173](https://github.com/docling-project/docling-jobkit/issues/173)) ([`181afc2`](https://github.com/docling-project/docling-jobkit/commit/181afc2497dec8c13109eee5005556a6a4fa3ac7))
+
+### Fix
+
+* Correctly allow floating values for target_requests_per_replica ([#175](https://github.com/docling-project/docling-jobkit/issues/175)) ([`bf65865`](https://github.com/docling-project/docling-jobkit/commit/bf658654e06ad910115bc80386ea26858d445805))
+* **ray:** Make Redis pub/sub subscriber resilient to idle socket_timeout and transient drops ([#174](https://github.com/docling-project/docling-jobkit/issues/174)) ([`ec528d4`](https://github.com/docling-project/docling-jobkit/commit/ec528d427a29a0917789145e1961007ffa1adbe8))
+
 ## [v1.22.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.22.0) - 2026-06-11
 
 ### Feature
