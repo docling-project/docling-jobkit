@@ -1,5 +1,6 @@
 """Redis state management for Ray orchestrator."""
 
+import asyncio
 import datetime
 import inspect
 import json
@@ -8,6 +9,7 @@ import math
 from typing import Optional
 
 import msgpack
+from pydantic import ValidationError
 from redis.asyncio import Redis
 from redis.asyncio.connection import ConnectionPool
 from redis.exceptions import WatchError
@@ -149,6 +151,16 @@ class RedisStateManager:
         self.pool: Optional[ConnectionPool] = None
         self.redis: Optional[Redis] = None
 
+        # Dedicated pub/sub client, created lazily in subscribe_to_updates().
+        # Kept separate from the command pool so the long-lived, mostly-idle
+        # subscriber is never subject to the command-path socket_timeout (which
+        # would raise on every idle gap and kill the listener). A genuinely dead
+        # connection is surfaced by PING health checks instead of a read deadline.
+        self._pubsub_redis: Optional[Redis] = None
+        self._pubsub_health_check_interval = 15.0
+        self._pubsub_poll_timeout = 15.0
+        self._pubsub_reconnect_backoff_max = 30.0
+
     def _compute_processing_ttl(self, task_timeout: Optional[float]) -> int:
         if task_timeout is not None:
             return max(int(task_timeout) + 300, 300)
@@ -184,6 +196,9 @@ class RedisStateManager:
         if self.pool:
             await self.pool.aclose()
             self.pool = None
+        if self._pubsub_redis:
+            await self._pubsub_redis.aclose()
+            self._pubsub_redis = None
         _log.debug("Disconnected from Redis")
 
     def _ensure_redis(self) -> Redis:
@@ -1223,24 +1238,89 @@ class RedisStateManager:
 
         _log.debug(f"Published update for task {update.task_id}")
 
-    async def subscribe_to_updates(self):
-        """Subscribe to task updates channel.
+    def _build_pubsub_redis(self) -> Redis:
+        """Build the dedicated pub/sub client.
 
-        Returns:
-            Async iterator of TaskUpdate messages
+        Unlike the command pool, this connection has no read ``socket_timeout``:
+        a subscriber blocks waiting for the next published message, so an idle
+        gap is expected, not a failure. Liveness of an otherwise-idle connection
+        is detected via PING ``health_check_interval`` plus TCP keepalive, so a
+        truly dead Redis still surfaces promptly without conflating "quiet" with
+        "broken".
         """
-        if not self.redis:
-            await self.connect()
+        return Redis.from_url(
+            self.redis_url,
+            socket_timeout=None,
+            socket_connect_timeout=self.socket_connect_timeout,
+            socket_keepalive=True,
+            health_check_interval=self._pubsub_health_check_interval,
+            decode_responses=False,
+        )
 
-        pubsub = self.redis.pubsub()
-        await pubsub.subscribe(self.sub_channel)
+    async def subscribe_to_updates(self):
+        """Yield task updates from the pub/sub channel.
 
-        try:
-            async for message in pubsub.listen():
-                if message["type"] == "message":
-                    update_json = message["data"]
-                    update = TaskUpdate.model_validate_json(update_json)
+        Resilient by design: reconnects with exponential backoff if the
+        subscription drops, skips malformed messages, and treats idle gaps as
+        normal rather than fatal. The generator only ends on cancellation, so a
+        transient Redis hiccup can never silently kill WebSocket push delivery.
+
+        Yields:
+            TaskUpdate messages as they are published.
+        """
+        backoff = 1.0
+        while True:
+            pubsub = None
+            try:
+                if self._pubsub_redis is None:
+                    self._pubsub_redis = self._build_pubsub_redis()
+                pubsub = self._pubsub_redis.pubsub()
+                await pubsub.subscribe(self.sub_channel)
+                _log.info("Subscribed to pub/sub channel %s", self.sub_channel)
+                backoff = 1.0  # reset after a successful (re)subscribe
+                while True:
+                    message = await pubsub.get_message(
+                        ignore_subscribe_messages=True,
+                        timeout=self._pubsub_poll_timeout,
+                    )
+                    if message is None:
+                        # Idle gap: no message within the poll window. The health
+                        # check keeps the connection warm; just keep waiting.
+                        continue
+                    if message.get("type") != "message":
+                        continue
+                    try:
+                        update = TaskUpdate.model_validate_json(message["data"])
+                    except ValidationError as exc:
+                        _log.warning(
+                            "Skipping malformed pub/sub message on %s: %s",
+                            self.sub_channel,
+                            exc,
+                        )
+                        continue
                     yield update
-        finally:
-            await pubsub.unsubscribe(self.sub_channel)
-            await pubsub.aclose()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _log.warning(
+                    "Pub/sub subscription on %s dropped (%s); reconnecting in %.1fs",
+                    self.sub_channel,
+                    exc,
+                    backoff,
+                )
+                # Discard the (possibly broken) connection so the next iteration
+                # rebuilds it from scratch.
+                if self._pubsub_redis is not None:
+                    try:
+                        await self._pubsub_redis.aclose()
+                    except Exception:
+                        pass
+                    self._pubsub_redis = None
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, self._pubsub_reconnect_backoff_max)
+            finally:
+                if pubsub is not None:
+                    try:
+                        await pubsub.aclose()
+                    except Exception:
+                        pass
