@@ -41,6 +41,13 @@ class TenantLimits(BaseModel):
     active_tasks: int = Field(default=0, description="Currently being processed")
     queued_tasks: int = Field(default=0, description="Waiting in queue")
     active_documents: int = Field(default=0, description="Currently being processed")
+    converter_units: int = Field(
+        default=0,
+        description=(
+            "In-flight converter calls (fan-out children + slices + passthrough), "
+            "capped per tenant at max_concurrent_tasks"
+        ),
+    )
 
 
 class TenantStats(BaseModel):

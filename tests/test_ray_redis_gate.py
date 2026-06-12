@@ -42,14 +42,17 @@ class TestRayRedisGate:
         )
         assert config.redis_gate_concurrency == 10
 
-    def test_slice_parallelism_defaults_to_max_concurrent_tasks(self):
+    def test_slice_parallelism_knob_is_deprecated_and_not_defaulted(self):
+        # max_page_slice_parallelism is deprecated/ignored: fan-out concurrency is
+        # governed per tenant by max_concurrent_tasks (in-flight converter units).
+        # The knob is kept only so existing configs parse; it is no longer defaulted.
         config = RayOrchestratorConfig(
             redis_url="redis://localhost:6379/",
             max_concurrent_tasks=7,
             max_page_slice_parallelism=None,
         )
 
-        assert config.max_page_slice_parallelism == 7
+        assert config.max_page_slice_parallelism is None
 
     @pytest.mark.asyncio
     async def test_enqueue_raises_backpressure_when_gate_saturated(self):

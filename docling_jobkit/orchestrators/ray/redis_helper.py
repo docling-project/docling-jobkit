@@ -10,7 +10,7 @@ from typing import Optional
 import msgpack
 from redis.asyncio import Redis
 from redis.asyncio.connection import ConnectionPool
-from redis.exceptions import NoScriptError, WatchError
+from redis.exceptions import WatchError
 
 from docling.datamodel.service.responses import PublicFailureInfo
 from docling.datamodel.service.tasks import TaskType
@@ -41,6 +41,42 @@ if redis.call('EXISTS', KEYS[1]) == 1 then
     return 1
 end
 return 0
+"""
+
+# Reserve one in-flight converter unit for a task, bounded by the tenant ceiling
+# ARGV[1] (max_concurrent_tasks). Units are tracked on both the tenant limits
+# hash (KEYS[1]) and the task execution hash (KEYS[2]) so that
+# terminalization/reconcile can release a parent's units crash-safely.
+# Returns 1 if granted, 0 if the tenant is at its ceiling, or -1 if the task no
+# longer has an execution lease (terminalized/reconciled).
+_ACQUIRE_CONVERTER_UNIT_LUA = """
+if redis.call('EXISTS', KEYS[2]) == 0 then
+    return -1
+end
+local current = tonumber(redis.call('HGET', KEYS[1], 'converter_units') or '0')
+if current >= tonumber(ARGV[1]) then
+    return 0
+end
+redis.call('HINCRBY', KEYS[1], 'converter_units', 1)
+redis.call('HINCRBY', KEYS[2], 'converter_units', 1)
+return 1
+"""
+
+# Release up to ARGV[1] converter units held by a task, clamped to the units the
+# task still holds (per its execution hash KEYS[2]) so that explicit per-child
+# releases and terminalization cannot double-release. Returns units released.
+_RELEASE_CONVERTER_UNITS_LUA = """
+local held = tonumber(redis.call('HGET', KEYS[2], 'converter_units') or '0')
+local rel = tonumber(ARGV[1])
+if rel > held then
+    rel = held
+end
+if rel <= 0 then
+    return 0
+end
+redis.call('HINCRBY', KEYS[1], 'converter_units', -rel)
+redis.call('HINCRBY', KEYS[2], 'converter_units', -rel)
+return rel
 """
 
 
@@ -112,7 +148,6 @@ class RedisStateManager:
         # Connection pool and client will be created in connect()
         self.pool: Optional[ConnectionPool] = None
         self.redis: Optional[Redis] = None
-        self._update_task_execution_heartbeat_sha: Optional[str] = None
 
     def _compute_processing_ttl(self, task_timeout: Optional[float]) -> int:
         if task_timeout is not None:
@@ -139,7 +174,6 @@ class RedisStateManager:
                 decode_responses=False,  # We handle encoding/decoding
             )
             self.redis = Redis(connection_pool=self.pool)
-            self._update_task_execution_heartbeat_sha = None
             _log.debug("Connected to Redis at %s", self.redis_url)
 
     async def disconnect(self):
@@ -147,7 +181,6 @@ class RedisStateManager:
         if self.redis:
             await self.redis.aclose()
             self.redis = None
-            self._update_task_execution_heartbeat_sha = None
         if self.pool:
             await self.pool.aclose()
             self.pool = None
@@ -828,6 +861,16 @@ class RedisStateManager:
                         TaskStatus(status_raw.decode("utf-8")) if status_raw else None
                     )
 
+                    # Release any converter units the parent still holds. The held
+                    # count lives on the execution hash (deleted below in the same
+                    # transaction), so a second finalize reads 0 — exactly-once.
+                    held_units_raw = await redis.hget(  # type: ignore[misc]
+                        execution_key, "converter_units"
+                    )
+                    held_units = (
+                        int(held_units_raw.decode("utf-8")) if held_units_raw else 0
+                    )
+
                     sismember_result = pipe.sismember(active_key, task_id)
                     if inspect.isawaitable(sismember_result):
                         was_active = bool(await sismember_result)
@@ -870,6 +913,8 @@ class RedisStateManager:
 
                     if terminal_status == TaskStatus.SUCCESS:
                         pipe.hdel(task_key, "error_message", "failure")
+                    if held_units > 0:
+                        pipe.hincrby(limits_key, "converter_units", -held_units)
                     pipe.delete(dispatch_key, execution_key)
 
                     if was_active:
@@ -992,13 +1037,18 @@ class RedisStateManager:
         """Resynchronize tenant counters from canonical Redis structures."""
         active_task_ids = await self.get_tenant_active_task_ids(tenant_id)
         active_documents = 0
+        converter_units = 0
         for task_id in active_task_ids:
             active_documents += await self._get_task_size_for_resync(task_id)
+            lease = await self.get_task_execution_lease(task_id)
+            if lease is not None:
+                converter_units += int(lease.get("converter_units") or 0)
 
         limits = await self.get_tenant_limits(tenant_id)
         limits.active_tasks = len(active_task_ids)
         limits.queued_tasks = await self.get_tenant_queue_size(tenant_id)
         limits.active_documents = active_documents
+        limits.converter_units = converter_units
 
         limits_key = f"tenant:{tenant_id}:limits"
         limits_dict = {key: str(value) for key, value in limits.model_dump().items()}
@@ -1059,30 +1109,57 @@ class RedisStateManager:
         redis = self._ensure_redis()
         now_timestamp = str(datetime.datetime.now(datetime.timezone.utc).timestamp())
 
-        if self._update_task_execution_heartbeat_sha is None:
-            self._update_task_execution_heartbeat_sha = await redis.script_load(  # type: ignore[misc]
-                _UPDATE_TASK_EXECUTION_HEARTBEAT_LUA
-            )
-
-        try:
-            updated = await redis.evalsha(  # type: ignore[misc]
-                self._update_task_execution_heartbeat_sha,
-                1,
-                execution_key,
-                now_timestamp,
-            )
-        except NoScriptError:
-            self._update_task_execution_heartbeat_sha = await redis.script_load(  # type: ignore[misc]
-                _UPDATE_TASK_EXECUTION_HEARTBEAT_LUA
-            )
-            updated = await redis.evalsha(  # type: ignore[misc]
-                self._update_task_execution_heartbeat_sha,
-                1,
-                execution_key,
-                now_timestamp,
-            )
-
+        # register_script caches the SHA and transparently reloads on NOSCRIPT.
+        updated = await redis.register_script(_UPDATE_TASK_EXECUTION_HEARTBEAT_LUA)(
+            keys=[execution_key], args=[now_timestamp]
+        )
         return bool(updated)
+
+    async def acquire_converter_unit(
+        self, tenant_id: str, task_id: str, ceiling: int
+    ) -> int:
+        """Atomically reserve one in-flight converter unit for a task.
+
+        Units are bounded by the tenant ceiling (``max_concurrent_tasks``) and
+        tracked on the task's execution lease so terminalization/reconcile can
+        release them crash-safely. Returns 1 if granted, 0 if the tenant is at
+        its ceiling, or -1 if the task no longer has an execution lease
+        (terminalized/reconciled) — the caller should stop launching children.
+        """
+        if not self.redis:
+            await self.connect()
+
+        limits_key = f"tenant:{tenant_id}:limits"
+        execution_key = f"task:{task_id}:execution"
+        redis = self._ensure_redis()
+
+        granted = await redis.register_script(_ACQUIRE_CONVERTER_UNIT_LUA)(
+            keys=[limits_key, execution_key], args=[ceiling]
+        )
+        return int(granted)
+
+    async def release_converter_units(
+        self, tenant_id: str, task_id: str, count: int
+    ) -> int:
+        """Release up to ``count`` converter units held by a task.
+
+        Clamped to the units the task still holds (per its execution hash), so
+        explicit per-child releases and terminalization cannot double-release.
+        Returns the number of units actually released.
+        """
+        if count <= 0:
+            return 0
+        if not self.redis:
+            await self.connect()
+
+        limits_key = f"tenant:{tenant_id}:limits"
+        execution_key = f"task:{task_id}:execution"
+        redis = self._ensure_redis()
+
+        released = await redis.register_script(_RELEASE_CONVERTER_UNITS_LUA)(
+            keys=[limits_key, execution_key], args=[count]
+        )
+        return int(released)
 
     async def get_task_execution_lease(self, task_id: str) -> Optional[dict]:
         """Return the replica-owned execution lease, or None if it does not exist.
