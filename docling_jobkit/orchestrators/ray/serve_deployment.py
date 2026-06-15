@@ -20,6 +20,7 @@ from ray import ObjectRef, serve
 from docling.datamodel.base_models import (
     ConversionStatus,
     DocumentStream,
+    ErrorItem,
 )
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.callbacks import (
@@ -102,6 +103,7 @@ from docling_jobkit.orchestrators.ray.models import (
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 from docling_jobkit.public_errors import (
     build_public_error_item,
+    build_public_error_item_from_failure,
     is_client_actionable_failure,
 )
 
@@ -256,14 +258,12 @@ def _failed_task_placeholder(task_size: int) -> DoclingTaskResult:
 
 def _build_failed_source_chunk_exportable_document(
     ref: SourceDocumentRef[Any],
-    exc: Exception,
-    *,
-    debug_error_details: bool,
+    error: ErrorItem,
 ) -> ExportableDocument:
     return ExportableDocument(
         file=Path(ref.filename),
         status=ConversionStatus.FAILURE,
-        errors=[build_public_error_item(exc)],
+        errors=[error],
         source_index=ref.source_index,
         source_uri=ref.source_uri,
     )
@@ -271,18 +271,13 @@ def _build_failed_source_chunk_exportable_document(
 
 def _build_failed_source_chunk_result(
     chunk: DocumentChunk[Any, Any],
-    exc: Exception,
+    error: ErrorItem,
     *,
     target: Any,
     debug_error_details: bool,
 ) -> ConverterTaskResult:
     failed_documents = [
-        _build_failed_source_chunk_exportable_document(
-            ref,
-            exc,
-            debug_error_details=debug_error_details,
-        )
-        for ref in chunk.refs
+        _build_failed_source_chunk_exportable_document(ref, error) for ref in chunk.refs
     ]
     processed_docs = [
         _build_processed_docs_item(
@@ -1411,6 +1406,9 @@ class DoclingProcessorCoordinatorDeployment:
                     try:
                         converter_result = await completed
                     except Exception as exc:
+                        # An unexpected/raised chunk failure: degrade to a
+                        # document-level FAILURE for this chunk so sibling chunks
+                        # still complete instead of aborting the whole task.
                         _log.warning(
                             "Coordinator replica %s: source chunk %s for task %s failed: %s",
                             self.replica_id,
@@ -1418,32 +1416,38 @@ class DoclingProcessorCoordinatorDeployment:
                             task.task_id,
                             exc,
                         )
-                        converter_result = _build_failed_source_chunk_result(
-                            chunk,
-                            exc,
-                            target=task.target,
-                            debug_error_details=self.config.debug_error_details,
+                        converter_result = self._handle_failed_source_chunk(
+                            chunk=chunk,
+                            error=build_public_error_item(exc),
+                            task=task,
+                            total_docs=total_docs,
+                            callback_invoker=callback_invoker,
                         )
-                        if callback_invoker and task.callbacks:
-                            failed_documents = [
-                                _build_failed_source_chunk_exportable_document(
-                                    ref,
-                                    exc,
-                                    debug_error_details=self.config.debug_error_details,
-                                )
-                                for ref in chunk.refs
-                            ]
-                            for exportable_document in failed_documents:
-                                _maybe_emit_document_completed(
-                                    callback_invoker=callback_invoker,
-                                    callbacks=task.callbacks,
-                                    task_id=task.task_id,
-                                    exportable_document=exportable_document,
-                                    total_processed=1,
-                                    total_docs=total_docs,
-                                    callback_mode=_SOURCE_CHUNK_CALLBACK_MODE,
-                                    debug_error_details=self.config.debug_error_details,
-                                )
+                    else:
+                        if isinstance(converter_result, ConverterFailureResult):
+                            # A per-source converter request returned a structured,
+                            # client-actionable failure (e.g. a missing or too-large
+                            # S3 object). The fan-out aggregator only understands
+                            # ConverterTaskResult, so without this the whole task
+                            # would abort on a single bad source. Record it as a
+                            # document-level FAILURE and keep going.
+                            _log.warning(
+                                "Coordinator replica %s: source chunk %s for task %s "
+                                "returned client-actionable failure: %s",
+                                self.replica_id,
+                                chunk.chunk_index,
+                                task.task_id,
+                                converter_result.failure.message,
+                            )
+                            converter_result = self._handle_failed_source_chunk(
+                                chunk=chunk,
+                                error=build_public_error_item_from_failure(
+                                    converter_result.failure
+                                ),
+                                task=task,
+                                total_docs=total_docs,
+                                callback_invoker=callback_invoker,
+                            )
                     child_results.append((chunk, converter_result))
         finally:
             if in_flight:
@@ -1486,6 +1490,45 @@ class DoclingProcessorCoordinatorDeployment:
             )
 
         return aggregated
+
+    def _handle_failed_source_chunk(
+        self,
+        *,
+        chunk: DocumentChunk[Any, Any],
+        error: ErrorItem,
+        task: Task,
+        total_docs: int,
+        callback_invoker: Optional[CallbackInvoker],
+    ) -> ConverterTaskResult:
+        """Turn a failed source chunk into a document-level FAILURE result.
+
+        Shared by both the raised-exception and the returned-
+        ``ConverterFailureResult`` paths in the fan-out drain loop, so that a
+        single unreachable/invalid source becomes a per-document failure instead
+        of aborting the whole task, and emits the same completion callbacks.
+        """
+        converter_result = _build_failed_source_chunk_result(
+            chunk,
+            error,
+            target=task.target,
+            debug_error_details=self.config.debug_error_details,
+        )
+        if callback_invoker and task.callbacks:
+            for ref in chunk.refs:
+                exportable_document = _build_failed_source_chunk_exportable_document(
+                    ref, error
+                )
+                _maybe_emit_document_completed(
+                    callback_invoker=callback_invoker,
+                    callbacks=task.callbacks,
+                    task_id=task.task_id,
+                    exportable_document=exportable_document,
+                    total_processed=1,
+                    total_docs=total_docs,
+                    callback_mode=_SOURCE_CHUNK_CALLBACK_MODE,
+                    debug_error_details=self.config.debug_error_details,
+                )
+        return converter_result
 
     async def _execute_source_chunk(
         self,
