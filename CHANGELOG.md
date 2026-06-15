@@ -1,3 +1,9 @@
+## [v1.23.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.23.1) - 2026-06-15
+
+### Fix
+
+* Surface S3 fan-out per-source failures as document-level failures ([#176](https://github.com/docling-project/docling-jobkit/issues/176)) ([`9e42d78`](https://github.com/docling-project/docling-jobkit/commit/9e42d78bdfb9d7ac30af5e20b7b10ee13b6b61c7))
+
 ## [v1.23.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.23.0) - 2026-06-12
 
 ### Feature
