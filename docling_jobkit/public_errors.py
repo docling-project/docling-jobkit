@@ -199,6 +199,21 @@ def build_public_error_item(exc: BaseException) -> ErrorItem:
     )
 
 
+def build_public_error_item_from_failure(failure: PublicFailureInfo) -> ErrorItem:
+    """Build a document-level ErrorItem from a structured converter failure.
+
+    Used when a per-source converter request returns a ``ConverterFailureResult``
+    (an already-sanitized, client-actionable failure such as a missing or
+    too-large S3 object) and we want to record it as a document-level FAILURE
+    rather than aborting the whole task.
+    """
+    return ErrorItem(
+        component_type=DoclingComponentType.PIPELINE,
+        module_name=failure.category.value,
+        error_message=failure.message,
+    )
+
+
 def render_public_error_list(
     errors: Sequence[ErrorItem],
     debug_enabled: bool,
