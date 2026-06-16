@@ -49,8 +49,10 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManagerConfig,
 )
 from docling_jobkit.convert.materialization import (
+    MaterializationError,
     MaterializationLimitExceededError,
     MaterializationLimits,
+    SourceFetchError,
     materialize_and_preflight,
 )
 from docling_jobkit.convert.results import (
@@ -325,7 +327,7 @@ def _build_failed_source_chunk_result(
 def _build_materialization_failure_result(
     task: Task,
     source: FileSource | HttpSource,
-    exc: MaterializationLimitExceededError,
+    exc: MaterializationError,
     start_time: float,
 ) -> DoclingTaskResult:
     """Build the public per-document result for admission-time source rejection."""
@@ -1158,7 +1160,11 @@ class DoclingProcessorCoordinatorDeployment:
                         max_num_pages=self.converter_manager_config.max_num_pages,
                     ),
                 )
-            except MaterializationLimitExceededError as exc:
+            except (MaterializationLimitExceededError, SourceFetchError) as exc:
+                # Explicit client-actionable source failures -- admission-limit
+                # rejection or an unreachable/erroring URL download -- should
+                # surface as a document-level FAILURE for this source instead of
+                # aborting the task as a generic internal error.
                 return _build_materialization_failure_result(
                     task, source, exc, materialized_start_time
                 )
