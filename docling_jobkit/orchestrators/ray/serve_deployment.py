@@ -50,9 +50,7 @@ from docling_jobkit.convert.manager import (
 )
 from docling_jobkit.convert.materialization import (
     MaterializationError,
-    MaterializationLimitExceededError,
     MaterializationLimits,
-    SourceFetchError,
     materialize_and_preflight,
 )
 from docling_jobkit.convert.results import (
@@ -329,19 +327,68 @@ def _build_materialization_failure_result(
     source: FileSource | HttpSource,
     exc: MaterializationError,
     start_time: float,
+    *,
+    debug_error_details: bool,
 ) -> DoclingTaskResult:
-    """Build the public per-document result for admission-time source rejection."""
-    source_uri = source_to_public_uri(source)
+    """Per-document result + progress callbacks for an admission-time source rejection.
+
+    Emits the same SET_NUM_DOCS / DOCUMENT_COMPLETED / UPDATE_PROCESSED callbacks a
+    source rejected inside the converter produces on the passthrough path, so metering
+    stays in parity. The result is built inline rather than routed through
+    process_exportable_results: a preflight rejection must not initialize target storage
+    (no S3/presigned client setup, no s3_presigned_config requirement) nor depend on
+    task.convert_options, both of which would turn a source failure into a target/config
+    failure and skip these callbacks.
+    """
     filename = source.filename if isinstance(source, FileSource) else "document.pdf"
     error_item = build_public_error_item(exc)
-    elapsed = time.monotonic() - start_time
+    failed_document = ExportableDocument(
+        file=Path(filename),
+        status=ConversionStatus.FAILURE,
+        errors=[error_item],
+        source_index=0,
+        source_uri=source_to_public_uri(source),
+    )
+
+    callback_invoker = CallbackInvoker() if task.callbacks else None
+    if callback_invoker and task.callbacks:
+        callback_invoker.invoke_callbacks_async(
+            callbacks=task.callbacks,
+            task_id=task.task_id,
+            progress=ProgressSetNumDocs(num_docs=1),
+        )
+        _maybe_emit_document_completed(
+            callback_invoker=callback_invoker,
+            callbacks=task.callbacks,
+            task_id=task.task_id,
+            exportable_document=failed_document,
+            total_processed=1,
+            total_docs=1,
+            callback_mode=CallbackMode.FULL,
+            debug_error_details=debug_error_details,
+        )
+        callback_invoker.invoke_callbacks_async(
+            callbacks=task.callbacks,
+            task_id=task.task_id,
+            progress=ProgressUpdateProcessed(
+                num_processed=1,
+                num_succeeded=0,
+                num_partially_succeeded=0,
+                num_failed=1,
+                docs=[
+                    _build_processed_docs_item(
+                        failed_document, debug_error_details=debug_error_details
+                    )
+                ],
+            ),
+        )
 
     if isinstance(task.target, PresignedUrlTarget):
         result: ResultType = PresignedArtifactResult(
             documents=[
                 DocumentArtifactItem(
                     source_index=0,
-                    source_uri=source_uri,
+                    source_uri=failed_document.source_uri,
                     filename=filename,
                     status=ConversionStatus.FAILURE,
                     errors=[error_item],
@@ -359,7 +406,7 @@ def _build_materialization_failure_result(
 
     return DoclingTaskResult(
         result=result,
-        processing_time=elapsed,
+        processing_time=time.monotonic() - start_time,
         num_converted=1,
         num_succeeded=0,
         num_partially_succeeded=0,
@@ -1160,13 +1207,18 @@ class DoclingProcessorCoordinatorDeployment:
                         max_num_pages=self.converter_manager_config.max_num_pages,
                     ),
                 )
-            except (MaterializationLimitExceededError, SourceFetchError) as exc:
-                # Explicit client-actionable source failures -- admission-limit
-                # rejection or an unreachable/erroring URL download -- should
-                # surface as a document-level FAILURE for this source instead of
-                # aborting the task as a generic internal error.
+            except MaterializationError as exc:
+                # Any admission-time source failure -- limit rejection, an
+                # unreachable/erroring URL, or a PDF that fails preflight -- is
+                # surfaced as a document-level FAILURE for this source, emitting the
+                # same progress callbacks as a source the converter rejects on the
+                # passthrough path (metering parity).
                 return _build_materialization_failure_result(
-                    task, source, exc, materialized_start_time
+                    task,
+                    source,
+                    exc,
+                    materialized_start_time,
+                    debug_error_details=self.config.debug_error_details,
                 )
             artifact_ref = ray.put(materialized.content_bytes)
             page_count = materialized.page_count
