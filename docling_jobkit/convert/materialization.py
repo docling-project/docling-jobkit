@@ -49,6 +49,15 @@ class SourceLimitExceededError(MaterializationError):
     """Raised when source retrieval exceeds a configured fetch-time size limit."""
 
 
+class SourceFetchError(MaterializationError):
+    """Raised when a remote source cannot be downloaded.
+
+    Covers unreachable hosts, connection/timeout failures, and error status
+    codes (404/403/5xx) for an otherwise well-formed URL. Typed so callers can
+    surface it as a document-level FAILURE instead of a generic internal error.
+    """
+
+
 def normalize_max_file_size(max_file_size: int | None) -> int | None:
     if max_file_size is None or max_file_size >= sys.maxsize:
         return None
@@ -109,28 +118,40 @@ async def fetch_http_source_bytes_async(
         except httpx.HTTPError:
             pass
 
-        async with client.stream(
-            "GET",
-            str(source.url),
-            headers=source.headers,
-        ) as response:
-            response.raise_for_status()
-            _check_content_length_limit(
-                content_length=_parse_content_length(response.headers),
-                max_file_size=max_file_size,
-                source_name=filename,
-                error_cls=error_cls,
-            )
-            buffer = BytesIO()
-            bytes_seen = 0
-            async for chunk in response.aiter_bytes():
-                if chunk:
-                    bytes_seen += len(chunk)
-                    if limit is not None and bytes_seen > limit:
-                        raise error_cls(
-                            f"Source '{filename}' exceeds max_file_size={limit} bytes"
-                        )
-                    buffer.write(chunk)
+        try:
+            async with client.stream(
+                "GET",
+                str(source.url),
+                headers=source.headers,
+            ) as response:
+                response.raise_for_status()
+                _check_content_length_limit(
+                    content_length=_parse_content_length(response.headers),
+                    max_file_size=max_file_size,
+                    source_name=filename,
+                    error_cls=error_cls,
+                )
+                buffer = BytesIO()
+                bytes_seen = 0
+                async for chunk in response.aiter_bytes():
+                    if chunk:
+                        bytes_seen += len(chunk)
+                        if limit is not None and bytes_seen > limit:
+                            raise error_cls(
+                                f"Source '{filename}' exceeds max_file_size={limit} bytes"
+                            )
+                        buffer.write(chunk)
+        except httpx.HTTPError as exc:
+            # Unreachable host, connection/timeout failure, or an error status
+            # (404/403/5xx) for an otherwise well-formed URL. Translate to a typed
+            # source error so the caller records a document-level FAILURE instead
+            # of bubbling up as a generic internal task error. httpx exceptions are
+            # not OSError subclasses, so they must be translated explicitly here.
+            # The size-limit error_cls raised above is not an httpx.HTTPError, so
+            # it intentionally passes through untouched.
+            raise SourceFetchError(
+                f"Source '{filename}' could not be downloaded: {exc}"
+            ) from exc
     return buffer.getvalue()
 
 
