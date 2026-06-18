@@ -102,7 +102,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-# docling-slim = { git = "https://github.com/docling-project/docling/", rev = "main" }
+docling-slim = { git = "https://github.com/docling-project/docling/", rev = "cau/expose-confidence-through-service" }
 # docling-slim = { path = "../docling", editable = true }
 
 
