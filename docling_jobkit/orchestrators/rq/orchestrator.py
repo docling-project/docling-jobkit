@@ -404,6 +404,15 @@ class RQOrchestrator(BaseOrchestrator):
             if original_task is not None and original_task.is_completed():
                 return original_task
 
+            job_task_data: dict[str, Any] = {}
+            try:
+                job = await asyncio.to_thread(
+                    Job.fetch, task_id, connection=self._redis_conn
+                )
+                job_task_data = job.kwargs.get("task_data") or {}
+            except NoSuchJobError:
+                pass
+
             temp_task = Task(
                 task_id=task_id,
                 task_type=TaskType.CONVERT,
@@ -415,6 +424,7 @@ class RQOrchestrator(BaseOrchestrator):
                     "num_partially_succeeded": 0,
                     "num_failed": 0,
                 },
+                metadata=job_task_data.get("metadata") or {},
             )
 
             self.tasks[task_id] = temp_task
