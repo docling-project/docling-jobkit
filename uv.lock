@@ -1224,9 +1224,9 @@ dev = [
 requires-dist = [
     { name = "boto3", specifier = "~=1.35" },
     { name = "codeflare-sdk", marker = "python_full_version >= '3.11' and python_full_version < '3.14' and extra == 'ray'", specifier = ">=0.20.0" },
-    { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", git = "https://github.com/docling-project/docling/?rev=cau%2Fexpose-confidence-through-service" },
-    { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", git = "https://github.com/docling-project/docling/?rev=cau%2Fexpose-confidence-through-service" },
-    { name = "docling-slim", extras = ["standard"], git = "https://github.com/docling-project/docling/?rev=cau%2Fexpose-confidence-through-service" },
+    { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", specifier = ">=2.94.0,<3.0.0" },
+    { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", specifier = ">=2.95.0,<3.0.0" },
+    { name = "docling-slim", extras = ["standard"], specifier = ">=2.104.0,<3.0.0" },
     { name = "google-api-python-client", marker = "extra == 'gdrive'", specifier = ">=2.183.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'gdrive'", specifier = ">=1.2.2" },
     { name = "httpx", specifier = ">=0.28,<1" },
@@ -1302,8 +1302,8 @@ wheels = [
 
 [[package]]
 name = "docling-slim"
-version = "2.103.0"
-source = { git = "https://github.com/docling-project/docling/?rev=cau%2Fexpose-confidence-through-service#935d40bf9c8b50f5b10ded3f6cd3d4bbe3014154" }
+version = "2.104.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
     { name = "docling-core" },
@@ -1313,6 +1313,10 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "requests" },
     { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/aa/75/217803d56063d559c7565c59f3dc27c898eeec857cd4ba890c4a3c8681a7/docling_slim-2.104.0.tar.gz", hash = "sha256:a426ba5802fe0b6102da9a8f19079036dcf4eac33791a8967df9887bb7449b53", size = 442998, upload-time = "2026-06-19T04:52:06.9Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/ea/113dc379562b1c1911e658bbd92800d3a35c0146a7cfc58d16e71a8e5a92/docling_slim-2.104.0-py3-none-any.whl", hash = "sha256:952df3510c596bab561cd9bba6758a3eb4ea3b142ded52b0c2ffe839e026f8ce", size = 568758, upload-time = "2026-06-19T04:52:04.977Z" },
 ]
 
 [package.optional-dependencies]
