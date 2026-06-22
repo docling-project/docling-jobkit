@@ -1,3 +1,14 @@
+## [v1.24.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.24.0) - 2026-06-22
+
+### Feature
+
+* Carry document confidence through to service results ([#179](https://github.com/docling-project/docling-jobkit/issues/179)) ([`a499841`](https://github.com/docling-project/docling-jobkit/commit/a4998414a7677e8dea6f18d484a1083f25ffc071))
+
+### Fix
+
+* **rq:** Preserve Task.metadata in _get_task_from_rq_direct ([#180](https://github.com/docling-project/docling-jobkit/issues/180)) ([`7822a85`](https://github.com/docling-project/docling-jobkit/commit/7822a85833f779f89c27381aab186d718f94c221))
+* Correctly treat input download failures in PDF slice path ([#177](https://github.com/docling-project/docling-jobkit/issues/177)) ([`124b301`](https://github.com/docling-project/docling-jobkit/commit/124b30109661fa1012c331c07b8ff7299e8b7a4a))
+
 ## [v1.23.1](https://github.com/docling-project/docling-jobkit/releases/tag/v1.23.1) - 2026-06-15
 
 ### Fix
