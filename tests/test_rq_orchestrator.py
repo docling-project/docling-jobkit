@@ -433,3 +433,32 @@ async def test_convert_with_callbacks(orchestrator: RQOrchestrator, callback_ser
     assert len(final_callback["docs"]) == 1
     assert final_callback["docs"][0]["source"] == doc_filename.name
     assert final_callback["docs"][0]["status"] == ConversionStatus.SUCCESS
+
+
+async def test_get_task_from_rq_direct_preserves_metadata(
+    orchestrator: RQOrchestrator,
+):
+    from rq.job import Job, JobStatus
+
+    options = ConvertDocumentsOptions()
+    sources: list[TaskSource] = [HttpSource(url="https://example.com/test.pdf")]
+
+    task = await orchestrator.enqueue(
+        sources=sources,
+        convert_options=options,
+        target=InBodyTarget(),
+        metadata={"tenant_id": "test-tenant"},
+    )
+    assert task.metadata == {"tenant_id": "test-tenant"}
+
+    orchestrator.tasks.pop(task.task_id, None)
+
+    job = Job.fetch(task.task_id, connection=orchestrator._redis_conn)
+    job.set_status(JobStatus.FINISHED)
+
+    refreshed = await orchestrator.task_status(task_id=task.task_id)
+    assert refreshed.metadata == {"tenant_id": "test-tenant"}
+
+    cached = await orchestrator._get_task_from_redis(task.task_id)
+    assert cached is not None
+    assert cached.metadata == {"tenant_id": "test-tenant"}
