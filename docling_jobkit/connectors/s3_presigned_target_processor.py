@@ -6,6 +6,7 @@ from pathlib import Path
 from docling.datamodel.base_models import ConversionStatus, ErrorItem
 from docling.datamodel.service.responses import (
     ArtifactRef,
+    ConfidenceScores,
     DocumentArtifactItem,
 )
 from docling.utils.profiling import ProfilingItem
@@ -66,6 +67,7 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
         status: ConversionStatus,
         errors: list[ErrorItem],
         timings: dict[str, ProfilingItem],
+        confidence: ConfidenceScores | None = None,
     ) -> DocumentArtifactItem:
         uploaded = self._uploaded_artifacts.get(source.source_index, [])
         expires_at = datetime.now(timezone.utc) + timedelta(
@@ -92,6 +94,7 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
             errors=errors,
             timings=timings,
             artifacts=artifacts,
+            confidence=confidence,
         )
 
     def _build_object_metadata(self) -> dict[str, str]:

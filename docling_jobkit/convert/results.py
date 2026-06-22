@@ -583,6 +583,7 @@ def _upload_document_as_presigned_artifact(
         status=exportable_document.status,
         errors=exportable_document.errors,
         timings=exportable_document.timings,
+        confidence=exportable_document.confidence,
     )
 
 
@@ -974,6 +975,7 @@ def _process_exportable_results_internal(
             status=exportable_document.status,
             errors=exportable_document.errors,
             timings=exportable_document.timings,
+            confidence=exportable_document.confidence,
         )
     else:
         output_dir = work_dir / "output"

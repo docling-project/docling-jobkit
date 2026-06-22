@@ -10,6 +10,7 @@ from docling.datamodel.base_models import (
     InputFormat,
 )
 from docling.datamodel.document import ConversionResult
+from docling.datamodel.service.responses import ConfidenceScores
 from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
 from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
@@ -50,6 +51,9 @@ class ExportableDocument(BaseModel):
     document: Optional[DoclingDocument] = Field(
         default=None, description="Converted document content when exportable"
     )
+    confidence: Optional[ConfidenceScores] = Field(
+        default=None, description="Document-level confidence scores, if computed"
+    )
     source_index: Optional[int] = Field(
         default=None, description="Ordinal position in the expanded document list"
     )
@@ -74,10 +78,13 @@ class ExportableDocument(BaseModel):
         slice_index: Optional[int] = None,
     ) -> "ExportableDocument":
         document: Optional[DoclingDocument] = conversion_result.document
-        if conversion_result.status not in (
+        confidence: Optional[ConfidenceScores] = None
+        if conversion_result.status in (
             ConversionStatus.SUCCESS,
             ConversionStatus.PARTIAL_SUCCESS,
         ):
+            confidence = ConfidenceScores.from_scores(conversion_result.confidence)
+        else:
             document = None
 
         return cls(
@@ -88,6 +95,7 @@ class ExportableDocument(BaseModel):
             errors=conversion_result.errors,
             timings=conversion_result.timings,
             document=document,
+            confidence=confidence,
             source_index=source_index,
             source_uri=source_uri,
             page_range=page_range,
