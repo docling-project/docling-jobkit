@@ -989,7 +989,7 @@ class DoclingProcessorConverterDeployment:
             if isinstance(conv_results, ConverterFailureResult):
                 return conv_results
             exportable, metrics = _to_exportable_documents(request.task, conv_results)
-            emit_metrics(metrics=metrics, tenant_id=tenant_id)
+            self.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             result = await asyncio.to_thread(
                 lambda: self._build_task_result(
                     request.task,
@@ -1005,7 +1005,7 @@ class DoclingProcessorConverterDeployment:
                 lambda: self._convert_materialized_request(request),
             )
             exportable, metrics = _to_exportable_documents(request.task, conv_results)
-            emit_metrics(metrics=metrics, tenant_id=tenant_id)
+            self.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             result = await asyncio.to_thread(
                 lambda: self._build_task_result(
                     request.task,
@@ -1027,7 +1027,7 @@ class DoclingProcessorConverterDeployment:
             exportable, metrics = _to_exportable_documents_from_chunk(
                 request.chunk, conv_results
             )
-            emit_metrics(metrics=metrics, tenant_id=tenant_id)
+            self.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             result = await asyncio.to_thread(
                 lambda: self._build_task_result(
                     request.task,
