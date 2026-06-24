@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING, Optional, List, Tuple, Union
 from docling.datamodel.document import ConversionResult
+from docling.datamodel.base_models import ConversionStatus
 
 
 def calculate_stats(values: List[Union[int, float]]) -> Tuple[Union[int, float], Union[int, float], float]:
