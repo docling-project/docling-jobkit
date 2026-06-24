@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import BinaryIO, Optional
 
 import httpx
+from pydantic import BaseModel
 
 from docling.datamodel.service.targets import PutTarget
 
@@ -14,6 +15,10 @@ _log = logging.getLogger(__name__)
 
 class HttpPutTargetProcessor(BaseTargetProcessor):
     """Target processor that PUTs file/object bytes to a remote HTTP URL."""
+
+    @classmethod
+    def get_config_types(cls) -> tuple[type[BaseModel], ...]:
+        return (PutTarget,)
 
     def __init__(
         self, target: PutTarget, *, max_retries: int = 3, retry_delay: float = 1.0

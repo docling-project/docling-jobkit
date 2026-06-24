@@ -1,30 +1,20 @@
-from docling.datamodel.service.targets import PutTarget, S3Target
-
-from docling_jobkit.connectors.http_put_target_processor import HttpPutTargetProcessor
-from docling_jobkit.connectors.local_path_target_processor import (
-    LocalPathTargetProcessor,
-)
-from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
+from docling_jobkit.connectors.connector_factory import get_target_connector_factory
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
-from docling_jobkit.datamodel.task_targets import (
-    GoogleDriveTarget,
-    LocalPathTarget,
-    TaskTarget,
-)
+from docling_jobkit.datamodel.task_targets import TaskTarget
 
 
-def get_target_processor(target: TaskTarget) -> BaseTargetProcessor:
-    if isinstance(target, PutTarget):
-        return HttpPutTargetProcessor(target)
-    if isinstance(target, S3Target):
-        return S3TargetProcessor(target)
-    if isinstance(target, GoogleDriveTarget):
-        from docling_jobkit.connectors.google_drive_target_processor import (
-            GoogleDriveTargetProcessor,
-        )
+def get_target_processor(
+    target: TaskTarget,
+    *,
+    allow_external_plugins: bool = False,
+) -> BaseTargetProcessor:
+    """Instantiate the target processor for ``target`` via the connector factory.
 
-        return GoogleDriveTargetProcessor(target)
-    if isinstance(target, LocalPathTarget):
-        return LocalPathTargetProcessor(target)
-
-    raise RuntimeError(f"No target processor for this target. {type(target)=}")
+    Thin backward-compatible wrapper: dispatch is now driven by the pluggy-based
+    :class:`TargetConnectorFactory` (keyed on the config model's ``kind``), so new
+    target connectors are added by registering a plugin rather than editing this
+    function. Service-only targets (in-body / zip / presigned) are handled by the
+    result-export path and are intentionally not registered here.
+    """
+    factory = get_target_connector_factory(allow_external_plugins)
+    return factory.create_instance(target)

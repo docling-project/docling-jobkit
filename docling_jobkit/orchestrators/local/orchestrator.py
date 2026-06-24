@@ -35,6 +35,7 @@ class LocalOrchestratorConfig(BaseModel):
     scratch_dir: Optional[Path] = None
     result_removal_delay: int = 300  # seconds until result is deleted after fetch
     s3_presigned_config: S3PresignedConfig | None = None
+    allowed_target_kinds: Optional[set[str]] = None
 
 
 class LocalOrchestrator(BaseOrchestrator):
@@ -45,6 +46,7 @@ class LocalOrchestrator(BaseOrchestrator):
     ):
         super().__init__()
         self.config = config
+        self.allowed_target_kinds = config.allowed_target_kinds
         self.task_queue: asyncio.Queue[str] = asyncio.Queue()
         self.queue_list: list[str] = []
         self.cm = converter_manager
@@ -76,6 +78,7 @@ class LocalOrchestrator(BaseOrchestrator):
                 DeprecationWarning,
                 stacklevel=2,
             )
+        self._validate_target(target)
         task_id = str(uuid.uuid4())
         chunking_export_options = chunking_export_options or ChunkingExportOptions()
         task = Task(

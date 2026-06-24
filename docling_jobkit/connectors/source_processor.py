@@ -62,6 +62,22 @@ class DocumentChunk(BaseModel, Generic[SourceT, FileIdentifierT]):
         for ref in self.refs:
             yield self._fetcher(ref.id)
 
+    def for_transport(self) -> "DocumentChunk[SourceT, FileIdentifierT]":
+        """Return a fetcher-stripped copy safe to send across a process boundary.
+
+        The ``_fetcher`` is a bound method of an initialized connector that may
+        capture unpicklable state (e.g. a boto3 client with thread locks). Any
+        chunk crossing a process boundary — CLI ``mp.Pool`` (pickle) or Ray
+        (cloudpickle) — must carry only ``source`` + ``refs``; the worker
+        reconstructs its own processor via ``get_source_processor(chunk.source)``
+        and fetches lazily with ``fetch_converter_source_by_ref``.
+        """
+        return DocumentChunk(
+            source=self.source,
+            refs=self.refs,
+            chunk_index=self.chunk_index,
+        )
+
 
 class BaseSourceProcessor(
     Generic[SourceT, FileIdentifierT], AbstractContextManager, ABC
@@ -74,6 +90,19 @@ class BaseSourceProcessor(
     def __init__(self, source: SourceT):
         self._processor_source = source
         self._initialized = False  # Track whether the processor is ready
+
+    @classmethod
+    def get_config_types(cls) -> tuple[type[BaseModel], ...]:
+        """Config (pydantic) models this processor accepts.
+
+        Each returned model must carry a ``Literal`` ``kind`` field. The connector
+        factory keys its registry on these types, so a processor that handles
+        several config shapes (e.g. file + http) returns a multi-element tuple.
+        """
+        raise NotImplementedError(
+            f"{cls.__name__} must implement get_config_types() to be registered "
+            "as a connector plugin."
+        )
 
     def __enter__(self):
         self._initialize()

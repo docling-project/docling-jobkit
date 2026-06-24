@@ -35,13 +35,35 @@ class ProgressInvalid(OrchestratorError):
     pass
 
 
+class TargetNotAllowedError(OrchestratorError):
+    """Raised at enqueue when a target kind is not permitted by the orchestrator."""
+
+
 class BaseOrchestrator(ABC):
     def __init__(self):
         self.tasks: dict[str, Task] = {}
         self.notifier: Optional["BaseNotifier"] = None
+        # Optional allowlist of target ``kind`` values this orchestrator accepts.
+        # ``None`` means "allow all". Concrete orchestrators set this from config.
+        self.allowed_target_kinds: Optional[set[str]] = None
 
     def bind_notifier(self, notifier: "BaseNotifier"):
         self.notifier = notifier
+
+    def _validate_target(self, target: TaskTarget) -> None:
+        """Reject targets whose ``kind`` is not permitted by this orchestrator.
+
+        Called at the top of each concrete ``enqueue`` so a disallowed target
+        fails fast with a clear, non-retryable error before the task is queued.
+        """
+        if self.allowed_target_kinds is None:
+            return
+        kind = getattr(target, "kind", None)
+        if kind not in self.allowed_target_kinds:
+            raise TargetNotAllowedError(
+                f"Target kind {kind!r} is not permitted by this orchestrator. "
+                f"Allowed kinds: {sorted(self.allowed_target_kinds)}"
+            )
 
     @abstractmethod
     async def enqueue(

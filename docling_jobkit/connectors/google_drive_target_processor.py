@@ -2,14 +2,21 @@ from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO
 
+from pydantic import BaseModel
+
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
+from docling_jobkit.datamodel.task_targets import GoogleDriveTarget
 
 
 class GoogleDriveTargetProcessor(BaseTargetProcessor):
     def __init__(self, coords: GoogleDriveCoordinates):
         super().__init__()
         self._coords = coords
+
+    @classmethod
+    def get_config_types(cls) -> tuple[type[BaseModel], ...]:
+        return (GoogleDriveTarget,)
 
     def _initialize(self):
         from docling_jobkit.connectors.google_drive_helper import get_service

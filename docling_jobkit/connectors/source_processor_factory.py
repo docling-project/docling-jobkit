@@ -1,10 +1,6 @@
 from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
 
-from docling_jobkit.connectors.http_source_processor import HttpSourceProcessor
-from docling_jobkit.connectors.local_path_source_processor import (
-    LocalPathSourceProcessor,
-)
-from docling_jobkit.connectors.s3_source_processor import S3SourceProcessor
+from docling_jobkit.connectors.connector_factory import get_source_connector_factory
 from docling_jobkit.connectors.source_processor import BaseSourceProcessor
 from docling_jobkit.datamodel.task_sources import (
     TaskGoogleDriveSource,
@@ -20,18 +16,15 @@ def get_source_processor(
         | TaskGoogleDriveSource
         | TaskLocalPathSource
     ),
+    *,
+    allow_external_plugins: bool = False,
 ) -> BaseSourceProcessor:
-    if isinstance(source, (FileSource, HttpSource)):
-        return HttpSourceProcessor(source)
-    elif isinstance(source, S3Coordinates):
-        return S3SourceProcessor(source)
-    elif isinstance(source, TaskGoogleDriveSource):
-        from docling_jobkit.connectors.google_drive_source_processor import (
-            GoogleDriveSourceProcessor,
-        )
+    """Instantiate the source processor for ``source`` via the connector factory.
 
-        return GoogleDriveSourceProcessor(source)
-    elif isinstance(source, TaskLocalPathSource):
-        return LocalPathSourceProcessor(source)
-
-    raise RuntimeError(f"No source processor for this source. {type(source)=}")
+    Thin backward-compatible wrapper: dispatch is now driven by the pluggy-based
+    :class:`SourceConnectorFactory` (keyed on the config model's ``kind``), so new
+    source connectors are added by registering a plugin rather than editing this
+    function.
+    """
+    factory = get_source_connector_factory(allow_external_plugins)
+    return factory.create_instance(source)

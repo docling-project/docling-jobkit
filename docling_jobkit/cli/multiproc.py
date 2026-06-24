@@ -25,13 +25,16 @@ from docling.datamodel.service.requests import (
 )
 from docling.datamodel.service.targets import S3Target, ZipTarget
 
+from docling_jobkit.connectors.source_processor import DocumentChunk
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
+from docling_jobkit.convert.chunk_execution import open_chunk_sources
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
 )
 from docling_jobkit.convert.results_processor import ResultsProcessor
+from docling_jobkit.datamodel.dynamic_unions import build_job_config_model
 from docling_jobkit.datamodel.task_sources import (
     TaskGoogleDriveSource,
     TaskLocalPathSource,
@@ -85,12 +88,18 @@ class BatchResult(BaseModel):
     error_message: Optional[str] = None
 
 
-def _load_config(config_file: Path) -> JobConfig:
-    """Load and validate configuration file."""
+def _load_config(config_file: Path, allow_external_plugins: bool = False) -> JobConfig:
+    """Load and validate configuration file.
+
+    The config model is built from the connector factories so that, when external
+    plugins are allowed, third-party source/target ``kind`` values validate from
+    YAML exactly like the built-ins.
+    """
     try:
         with config_file.open("r") as f:
             raw_data = yaml.safe_load(f)
-        return JobConfig(**raw_data)
+        config_model = build_job_config_model(allow_external_plugins)
+        return config_model(**raw_data)
     except FileNotFoundError:
         err_console.print(f"[red]❌ File not found: {config_file}[/red]")
         raise typer.Exit(1)
@@ -122,7 +131,9 @@ def _process_source(
 
     batch_results: list[BatchResult] = []
 
-    with get_source_processor(source) as source_processor:
+    with get_source_processor(
+        source, allow_external_plugins=allow_external_plugins
+    ) as source_processor:
         # Check if source supports chunking
         try:
             chunks_iter = source_processor.iterate_document_chunks(batch_size)
@@ -133,41 +144,10 @@ def _process_source(
             )
             raise typer.Exit(1)
 
-        # Collect all chunks first to know total count
-        chunks = list(chunks_iter)
-        num_chunks = len(chunks)
-
-        if num_chunks == 0:
-            if not quiet:
-                console.print("[yellow]No documents found in source[/yellow]")
-            return batch_results
-
-        # Calculate total number of documents across all chunks
-        total_documents = sum(len(list(chunk.ids)) for chunk in chunks)
-
-        if not quiet:
-            console.print(
-                f"Found {total_documents} documents in {num_chunks} batches to process"
-            )
-
-        # Prepare arguments for each batch
-        batch_args = [
-            (
-                chunk.index,
-                list(chunk.ids),
-                source,
-                config.target,
-                config.options,
-                artifacts_path,
-                enable_remote_services,
-                allow_external_plugins,
-                log_level,
-                progress_queue,
-            )
-            for chunk in chunks
-        ]
-
-        # Process batches in parallel with progress tracking
+        # Process batches in parallel with progress tracking. Chunks are streamed
+        # from the source and submitted to the pool as they are produced — only the
+        # lightweight refs (no document bytes) ever live in this process, and each
+        # subprocess fetches its documents lazily from chunk.source.
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -176,21 +156,51 @@ def _process_source(
             console=console,
             disable=quiet,
         ) as progress:
-            task = progress.add_task("Processing documents...", total=total_documents)
+            task = progress.add_task("Processing documents...", total=0)
 
             with mp.Pool(processes=num_processes) as pool:
-                # Start async processing
-                async_results = [
-                    pool.apply_async(process_batch, args) for args in batch_args
-                ]
+                async_results = []
+                total_documents = 0
+                try:
+                    for chunk in chunks_iter:
+                        total_documents += len(chunk.refs)
+                        progress.update(task, total=total_documents)
+                        async_results.append(
+                            pool.apply_async(
+                                process_batch,
+                                (
+                                    chunk.for_transport(),
+                                    config.target,
+                                    config.options,
+                                    artifacts_path,
+                                    enable_remote_services,
+                                    allow_external_plugins,
+                                    log_level,
+                                    progress_queue,
+                                ),
+                            )
+                        )
 
-                # Track which results have been collected
-                collected_indices = set()
-                completed_batches = 0
+                    num_chunks = len(async_results)
+                    if num_chunks == 0:
+                        if not quiet:
+                            console.print(
+                                "[yellow]No documents found in source[/yellow]"
+                            )
+                        return batch_results
 
-                # Monitor progress queue while batches are processing
-                while completed_batches < len(batch_args):
-                    try:
+                    if not quiet:
+                        console.print(
+                            f"Found {total_documents} documents in "
+                            f"{num_chunks} batches to process"
+                        )
+
+                    # Track which results have been collected
+                    collected_indices: set[int] = set()
+                    completed_batches = 0
+
+                    # Monitor progress queue while batches are processing
+                    while completed_batches < num_chunks:
                         # Check for progress updates (non-blocking with timeout)
                         if progress_queue:
                             try:
@@ -203,13 +213,12 @@ def _process_source(
                         # Check if any batch has completed
                         for idx, async_result in enumerate(async_results):
                             if idx not in collected_indices and async_result.ready():
-                                batch_result = async_result.get()
-                                batch_results.append(batch_result)
+                                batch_results.append(async_result.get())
                                 collected_indices.add(idx)
                                 completed_batches += 1
-                    except KeyboardInterrupt:
-                        pool.terminate()
-                        raise
+                except KeyboardInterrupt:
+                    pool.terminate()
+                    raise
 
     return batch_results
 
@@ -259,9 +268,7 @@ def _display_summary(
 
 
 def process_batch(
-    chunk_index: int,
-    document_ids: list[Any],
-    source: JobTaskSource,
+    chunk: DocumentChunk,
     target: JobTaskTarget,
     options: ConvertDocumentsOptions,
     artifacts_path: Optional[Path],
@@ -275,14 +282,17 @@ def process_batch(
 
     This function is executed in a separate process and handles:
     - Initializing source and target processors from config
+    - Fetching the batch's documents lazily from the chunk's refs
     - Converting documents in the batch
     - Writing results to target
     - Tracking successes and failures
 
+    The chunk arrives fetcher-stripped (see ``DocumentChunk.for_transport``); the
+    documents are fetched one at a time via ``open_chunk_sources`` so peak memory
+    stays bounded to a single in-flight document regardless of batch size.
+
     Args:
-        chunk_index: Index of this batch/chunk
-        document_ids: List of document identifiers for this batch
-        source: Source configuration
+        chunk: Transport (fetcher-stripped) chunk carrying source + refs
         target: Target configuration
         options: Conversion options
         artifacts_path: Optional path to model artifacts
@@ -300,6 +310,8 @@ def process_batch(
     num_succeeded = 0
     num_failed = 0
     failed_documents: list[str] = []
+    chunk_index = chunk.chunk_index
+    num_documents = len(chunk.refs)
 
     try:
         # Initialize converter manager
@@ -312,37 +324,27 @@ def process_batch(
         manager = DoclingConverterManager(config=cm_config)
 
         # Process documents in this batch using factories
-        with get_source_processor(source) as source_processor:
-            with get_target_processor(target) as target_processor:
-                result_processor = ResultsProcessor(
-                    target_processor=target_processor,
-                    to_formats=[v.value for v in options.to_formats],
-                    generate_page_images=options.include_page_images,
-                    generate_picture_images=options.include_images,
-                )
+        with get_target_processor(
+            target, allow_external_plugins=allow_external_plugins
+        ) as target_processor:
+            result_processor = ResultsProcessor(
+                target_processor=target_processor,
+                to_formats=[v.value for v in options.to_formats],
+                generate_page_images=options.include_page_images,
+                generate_picture_images=options.include_images,
+            )
 
-                # Get a new chunk with the same document IDs
-                # This recreates the chunk in the subprocess context
-                chunk = None
-                for c in source_processor.iterate_document_chunks(len(document_ids)):
-                    # Find the chunk with matching IDs
-                    if list(c.ids) == document_ids:
-                        chunk = c
-                        break
-
-                if chunk is None:
-                    raise RuntimeError(
-                        f"Could not find documents for batch {chunk_index} with IDs: {document_ids}"
-                    )
-
-                # Use the chunk's iter_documents method to get documents
-                documents = list(chunk.iter_documents())
-
-                # Convert and process documents
+            # Fetch documents lazily from the chunk refs (one in flight at a time)
+            with open_chunk_sources(
+                chunk,
+                max_file_size=manager.config.max_file_size,
+                allow_external_plugins=allow_external_plugins,
+            ) as (sources, headers):
                 for item in result_processor.process_documents(
                     manager.convert_documents(
-                        sources=documents,
+                        sources=sources,
                         options=options,
+                        headers=headers,
                     )
                 ):
                     if "SUCCESS" in item:
@@ -359,7 +361,7 @@ def process_batch(
 
         return BatchResult(
             chunk_index=chunk_index,
-            num_documents=len(document_ids),
+            num_documents=num_documents,
             num_succeeded=num_succeeded,
             num_failed=num_failed,
             failed_documents=failed_documents,
@@ -371,9 +373,9 @@ def process_batch(
         _log.error(f"Batch {chunk_index} failed with error: {e}")
         return BatchResult(
             chunk_index=chunk_index,
-            num_documents=len(document_ids),
+            num_documents=num_documents,
             num_succeeded=num_succeeded,
-            num_failed=len(document_ids) - num_succeeded,
+            num_failed=num_documents - num_succeeded,
             failed_documents=failed_documents or [f"Batch error: {e!s}"],
             processing_time=processing_time,
             error_message=str(e),
@@ -469,7 +471,7 @@ def convert(
         console.print()
 
     # Load and validate config file
-    config = _load_config(config_file)
+    config = _load_config(config_file, allow_external_plugins=allow_external_plugins)
 
     # Create a queue for progress updates from worker processes
     manager = mp.Manager()

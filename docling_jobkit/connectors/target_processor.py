@@ -3,6 +3,8 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import BinaryIO
 
+from pydantic import BaseModel
+
 
 class BaseTargetProcessor(AbstractContextManager, ABC):
     """
@@ -12,6 +14,18 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
 
     def __init__(self):
         self._initialized = False
+
+    @classmethod
+    def get_config_types(cls) -> tuple[type[BaseModel], ...]:
+        """Config (pydantic) models this processor accepts.
+
+        Each returned model must carry a ``Literal`` ``kind`` field. The connector
+        factory keys its registry on these types.
+        """
+        raise NotImplementedError(
+            f"{cls.__name__} must implement get_config_types() to be registered "
+            "as a connector plugin."
+        )
 
     def __enter__(self):
         self._initialize()

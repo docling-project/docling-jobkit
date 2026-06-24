@@ -1,7 +1,6 @@
 import logging
 import shutil
 import time
-import zipfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
@@ -29,14 +28,20 @@ from docling_core.types.doc import ImageRefMode
 
 from docling_jobkit.config.target_config import S3PresignedConfig
 from docling_jobkit.connectors.artifact_paths import (
-    ArtifactType,
     hash_path_component,
 )
 from docling_jobkit.connectors.s3_presigned_target_processor import (
     S3PresignedTargetProcessor,
 )
-from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
+from docling_jobkit.connectors.target_processor_factory import get_target_processor
+from docling_jobkit.convert.export import (
+    _is_exportable_status,
+    cleanup_document_output_dir as _cleanup_document_output_dir,
+    materialize_document_exports as _materialize_document_exports,
+    release_exportable_document_references as _release_exportable_document_references,
+    upload_exportable_document,
+)
 from docling_jobkit.datamodel.exportable_document import (
     ExportableDocument,
     source_to_public_uri,
@@ -53,6 +58,10 @@ from docling_jobkit.datamodel.result import (
 )
 from docling_jobkit.datamodel.source_identity import SourceIdentity
 from docling_jobkit.datamodel.task import Task
+from docling_jobkit.datamodel.task_targets import (
+    GoogleDriveTarget,
+    LocalPathTarget,
+)
 from docling_jobkit.public_errors import (
     TargetWriteError,
     build_public_error_item,
@@ -66,14 +75,6 @@ _log = logging.getLogger(__name__)
 
 
 @dataclass
-class _ExportedArtifactFile:
-    artifact_type: ArtifactType
-    path: Path
-    target_filename: str
-    mime_type: str
-
-
-@dataclass
 class _ProcessedExportResults:
     task_result: DoclingTaskResult
     processed_docs: list[ProcessedDocsItem]
@@ -84,10 +85,6 @@ class CallbackMode(str, Enum):
 
     FULL = "full"
     CHILD_ONLY = "child_only"
-
-
-def _is_exportable_status(status: ConversionStatus) -> bool:
-    return status in (ConversionStatus.SUCCESS, ConversionStatus.PARTIAL_SUCCESS)
 
 
 def _count_document_statuses(
@@ -404,142 +401,6 @@ def _resolve_source_identity(
     )
 
 
-def _materialize_document_exports(
-    exportable_document: ExportableDocument,
-    output_dir: Path,
-    *,
-    export_json: bool,
-    export_html: bool,
-    export_md: bool,
-    export_txt: bool,
-    export_doctags: bool,
-    image_export_mode: ImageRefMode,
-    md_page_break_placeholder: str,
-    bundle_resources: bool,
-) -> list[_ExportedArtifactFile]:
-    if not (
-        _is_exportable_status(exportable_document.status)
-        and exportable_document.document is not None
-    ):
-        return []
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    artifacts_dir = Path("artifacts")
-    generated: list[_ExportedArtifactFile] = []
-    doc_filename = exportable_document.file.stem
-
-    if export_json:
-        fname = output_dir / f"{doc_filename}.json"
-        _log.info(f"writing JSON output to {fname}")
-        exportable_document.document.save_as_json(
-            filename=fname,
-            image_mode=image_export_mode,
-            artifacts_dir=artifacts_dir,
-        )
-        generated.append(
-            _ExportedArtifactFile(
-                artifact_type="json",
-                path=fname,
-                target_filename=fname.name,
-                mime_type="application/json",
-            )
-        )
-
-    if export_html:
-        fname = output_dir / f"{doc_filename}.html"
-        _log.info(f"writing HTML output to {fname}")
-        exportable_document.document.save_as_html(
-            filename=fname,
-            image_mode=image_export_mode,
-            artifacts_dir=artifacts_dir,
-        )
-        generated.append(
-            _ExportedArtifactFile(
-                artifact_type="html",
-                path=fname,
-                target_filename=fname.name,
-                mime_type="text/html",
-            )
-        )
-
-    if export_txt:
-        fname = output_dir / f"{doc_filename}.txt"
-        _log.info(f"writing TXT output to {fname}")
-        exportable_document.document.save_as_markdown(
-            filename=fname,
-            strict_text=True,
-            image_mode=ImageRefMode.PLACEHOLDER,
-        )
-        generated.append(
-            _ExportedArtifactFile(
-                artifact_type="text",
-                path=fname,
-                target_filename=fname.name,
-                mime_type="text/plain",
-            )
-        )
-
-    if export_md:
-        fname = output_dir / f"{doc_filename}.md"
-        _log.info(f"writing Markdown output to {fname}")
-        exportable_document.document.save_as_markdown(
-            filename=fname,
-            artifacts_dir=artifacts_dir,
-            image_mode=image_export_mode,
-            page_break_placeholder=md_page_break_placeholder or None,
-        )
-        generated.append(
-            _ExportedArtifactFile(
-                artifact_type="markdown",
-                path=fname,
-                target_filename=fname.name,
-                mime_type="text/markdown",
-            )
-        )
-
-    if export_doctags:
-        fname = output_dir / f"{doc_filename}.doctags"
-        _log.info(f"writing Doc Tags output to {fname}")
-        exportable_document.document.save_as_doctags(filename=fname)
-        generated.append(
-            _ExportedArtifactFile(
-                artifact_type="doctags",
-                path=fname,
-                target_filename=fname.name,
-                mime_type="text/plain",
-            )
-        )
-
-    artifacts_path = output_dir / artifacts_dir
-    if bundle_resources and artifacts_path.exists() and any(artifacts_path.iterdir()):
-        bundle_path = output_dir / f"{doc_filename}_bundle.zip"
-        with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as bundle_zip:
-            # Place the exported documents alongside the artifacts directory,
-            # using the same relative layout (`<artifacts_dir>/<file>`) that
-            # the documents themselves reference, so the bundle is
-            # self-contained and resolvable without any path rewriting.
-            for artifact in generated:
-                bundle_zip.write(artifact.path, arcname=artifact.target_filename)
-            for artifact_file in sorted(artifacts_path.rglob("*")):
-                if artifact_file.is_file():
-                    bundle_zip.write(
-                        artifact_file,
-                        arcname=str(
-                            artifacts_dir / artifact_file.relative_to(artifacts_path)
-                        ),
-                    )
-        generated.append(
-            _ExportedArtifactFile(
-                artifact_type="resource_bundle",
-                path=bundle_path,
-                target_filename=bundle_path.name,
-                mime_type="application/zip",
-            )
-        )
-
-    return generated
-
-
 def _upload_document_as_presigned_artifact(
     *,
     task: Task,
@@ -612,9 +473,10 @@ def _upload_document_via_processor(
     """
     source = _resolve_source_identity(task, exportable_document, response_index)
     document_dir = output_dir / f"{source.source_index:06d}"
-    for artifact in _materialize_document_exports(
-        exportable_document,
-        document_dir,
+    upload_exportable_document(
+        target_processor=target_processor,
+        exportable_document=exportable_document,
+        document_dir=document_dir,
         export_json=export_json,
         export_html=export_html,
         export_md=export_md,
@@ -622,27 +484,21 @@ def _upload_document_via_processor(
         export_doctags=export_doctags,
         image_export_mode=image_export_mode,
         md_page_break_placeholder=md_page_break_placeholder,
-        bundle_resources=True,
-    ):
-        target_filename = (
-            target_filename_fn(source, artifact.target_filename)
+        target_filename_fn=(
+            (lambda fn: target_filename_fn(source, fn))
             if target_filename_fn is not None
-            else artifact.target_filename
-        )
-        target_processor.upload_file(
-            filename=artifact.path,
-            target_filename=target_filename,
-            content_type=artifact.mime_type,
-        )
+            else (lambda fn: fn)
+        ),
+    )
 
 
-def _upload_document_to_s3_target(
+def _upload_document_to_storage_target(
     *,
     task: Task,
     exportable_document: ExportableDocument,
     response_index: int,
     output_dir: Path,
-    target_processor: S3TargetProcessor,
+    target_processor: BaseTargetProcessor,
     export_json: bool,
     export_html: bool,
     export_md: bool,
@@ -651,6 +507,12 @@ def _upload_document_to_s3_target(
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
 ) -> None:
+    """Upload one document to any storage target via ``get_target_processor``.
+
+    Used for every user-owned storage target (S3, local path, Google Drive, …):
+    the per-source artifact layout (``<source_key>/<artifact>``) is identical, and
+    each target processor applies its own prefix/root when writing.
+    """
     _upload_document_via_processor(
         task=task,
         exportable_document=exportable_document,
@@ -667,17 +529,6 @@ def _upload_document_to_s3_target(
         target_filename_fn=lambda source,
         artifact_filename: f"{source.source_key}/{artifact_filename}",
     )
-
-
-def _cleanup_document_output_dir(document_dir: Path) -> None:
-    shutil.rmtree(document_dir, ignore_errors=True)
-
-
-def _release_exportable_document_references(
-    *exportable_documents: ExportableDocument,
-) -> None:
-    for exportable_document in exportable_documents:
-        exportable_document.document = None
 
 
 def _process_remote_document(
@@ -811,11 +662,13 @@ def _process_remote_exportable_results(
             raise RuntimeError("No documents were generated by Docling.")
 
         task_result: ResultType = PresignedArtifactResult(documents=presigned_documents)
-    elif isinstance(task.target, S3Target):
-        # User-owned S3 targets preserve the caller's bucket layout. The shorter
-        # per-source artifact path is computed here, and S3TargetProcessor prepends
-        # the user-provided target.key_prefix when uploading.
-        with S3TargetProcessor(task.target) as target_processor:
+    elif isinstance(task.target, (S3Target, LocalPathTarget, GoogleDriveTarget)):
+        # Every user-owned storage target is handled identically through the
+        # connector factory: the per-source artifact path is computed here and
+        # the target processor applies its own prefix/root (S3 key_prefix, local
+        # directory, Drive folder, …) when writing. Adding a new storage
+        # connector therefore needs no change in this module.
+        with get_target_processor(task.target) as target_processor:
             for idx, exportable_document in enumerate(exportable_documents):
                 final_document, processed_doc, _ = _process_remote_document(
                     task=task,
@@ -826,7 +679,7 @@ def _process_remote_exportable_results(
                     callback_invoker=callback_invoker,
                     debug_error_details=debug_error_details,
                     callback_mode=callback_mode,
-                    upload_document=lambda _source: _upload_document_to_s3_target(
+                    upload_document=lambda _source: _upload_document_to_storage_target(
                         task=task,
                         exportable_document=exportable_document,
                         response_index=idx,
@@ -913,7 +766,10 @@ def _process_exportable_results_internal(
     export_txt = OutputFormat.TEXT in conversion_options.to_formats
     export_doctags = OutputFormat.DOCTAGS in conversion_options.to_formats
 
-    if isinstance(task.target, (PresignedUrlTarget, S3Target)):
+    if isinstance(
+        task.target,
+        (PresignedUrlTarget, S3Target, LocalPathTarget, GoogleDriveTarget),
+    ):
         return _process_remote_exportable_results(
             task=task,
             exportable_documents=exportable_documents,

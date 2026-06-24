@@ -117,6 +117,9 @@ docling-ray-job = "docling_jobkit.ray_job.main:main"
 docling-jobkit-local = "docling_jobkit.cli.local:app"
 docling-jobkit-multiproc = "docling_jobkit.cli.multiproc:app"
 
+[project.entry-points.docling_jobkit]
+docling_jobkit_defaults = "docling_jobkit.connectors.plugins.defaults"
+
 [project.urls]
 Homepage = "https://github.com/docling-project/docling-jobkit"
 Documentation = "https://docling-project.github.io/docling/usage/jobkit/"

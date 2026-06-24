@@ -21,6 +21,7 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManagerConfig,
 )
 from docling_jobkit.convert.results_processor import ResultsProcessor
+from docling_jobkit.datamodel.dynamic_unions import build_job_config_model
 from docling_jobkit.datamodel.task_sources import (
     TaskGoogleDriveSource,
     TaskLocalPathSource,
@@ -87,11 +88,14 @@ def convert(
         ),
     ] = False,
 ):
-    # Open and validate config file
+    # Open and validate config file. The config model is built from the connector
+    # factories so that, when external plugins are allowed, third-party source/
+    # target ``kind`` values validate from YAML exactly like the built-ins.
     try:
         with config_file.open("r") as f:
             raw_data = yaml.safe_load(f)
-        config = JobConfig(**raw_data)
+        config_model = build_job_config_model(allow_external_plugins)
+        config = config_model(**raw_data)
     except ValidationError as e:
         typer.echo("❌ Validation failed:")
         typer.echo(e.json(indent=2))
@@ -106,7 +110,9 @@ def convert(
     manager = DoclingConverterManager(config=cm_config)
 
     results = []
-    with get_target_processor(config.target) as target_processor:
+    with get_target_processor(
+        config.target, allow_external_plugins=allow_external_plugins
+    ) as target_processor:
         result_processor = ResultsProcessor(
             target_processor=target_processor,
             to_formats=[v.value for v in config.options.to_formats],
@@ -114,7 +120,9 @@ def convert(
             generate_picture_images=config.options.include_images,
         )
         for source in config.sources:
-            with get_source_processor(source) as source_processor:
+            with get_source_processor(
+                source, allow_external_plugins=allow_external_plugins
+            ) as source_processor:
                 for item in result_processor.process_documents(
                     manager.convert_documents(
                         sources=source_processor.iterate_documents(),

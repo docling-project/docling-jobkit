@@ -63,6 +63,10 @@ class LocalPathSourceProcessor(
         super().__init__(source)
         self._source = source
 
+    @classmethod
+    def get_config_types(cls) -> tuple[type[BaseModel], ...]:
+        return (TaskLocalPathSource,)
+
     def _initialize(self):
         """Validate that the path exists."""
         if not self._source.path.exists():
