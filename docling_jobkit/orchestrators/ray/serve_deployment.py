@@ -109,6 +109,8 @@ from docling_jobkit.public_errors import (
     is_client_actionable_failure,
 )
 
+# metrics
+from ray.util.metrics import Counter, Gauge, Histogram
 import os
 generate_metrics = bool(os.environ.get("SETTINGS_GENERATE_METRICS", False))
 metrics_port = str(os.environ.get("SETTINGS_METRICS_PORT", "8080"))
