@@ -580,266 +580,266 @@ class DoclingProcessorConverterDeployment:
             hist_max = 2592000.0
 
             self.success_counter = Counter(
-                "conversion_success",
+                "dcls_conversion_success",
                 description="Number of successeful conversions",
                 tag_keys=("tenant_id",),
             )
             
             self.partial_counter = Counter(
-                "conversion_partial",
+                "dcls_conversion_partial",
                 description="Number of partial conversions",
                 tag_keys=("tenant_id",),
             )
 
             self.failed_counter = Counter(
-                "conversion_failed",
+                "dcls_conversion_failed",
                 description="Number of failed conversions",
                 tag_keys=("tenant_id",),
             )
             #-----
             self.pipeline_total_hist = Histogram(
-                "pipeline_total",
+                "dcls_pipeline_total",
                 description="Total pipeline execution time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.page_parse_low_hist = Histogram(
-                "page_parse_low",
+                "dcls_page_parse_low",
                 description="Lowest page parse time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
 
             self.page_parse_high_hist = Histogram(
-                "page_parse_high",
+                "dcls_page_parse_high",
                 description="Highest page parse time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
 
             self.page_parse_median_hist = Histogram(
-                "page_parse_median",
+                "dcls_page_parse_median",
                 description="Median page parse time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.ocr_low_hist = Histogram(
-                "ocr_low",
+                "dcls_ocr_low",
                 description="Lowest ocr time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
 
             self.ocr_high_hist = Histogram(
-                "ocr_high",
+                "dcls_ocr_high",
                 description="Highest ocr time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
 
             self.ocr_median_hist = Histogram(
-                "ocr_median",
+                "dcls_ocr_median",
                 description="Median ocr time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.layout_low_hist = Histogram(
-                "layout_low",
+                "dcls_layout_low",
                 description="Lowest layout time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
 
             self.layout_high_hist = Histogram(
-                "layout_high",
+                "dcls_layout_high",
                 description="Highest layout time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
 
             self.layout_median_hist = Histogram(
-                "layout_median",
+                "dcls_layout_median",
                 description="Median layout time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.table_structure_low_hist = Histogram(
-                "table_structure_low",
+                "dcls_table_structure_low",
                 description="Lowest table structure time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
             
             self.table_structure_high_hist = Histogram(
-                "table_structure_high",
+                "dcls_table_structure_high",
                 description="Highest table structure time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
 
             self.table_structure_median_hist = Histogram(
-                "table_structure_median",
+                "dcls_table_structure_median",
                 description="Median table structure time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.page_assemble_low_hist = Histogram(
-                "page_assemble_low",
+                "dcls_page_assemble_low",
                 description="Lowest page assemble time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
 
             self.page_assemble_high_hist = Histogram(
-                "page_assemble_high",
+                "dcls_page_assemble_high",
                 description="Highest page assemble time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
 
             self.page_assemble_median_hist = Histogram(
-                "page_assemble_median",
+                "dcls_page_assemble_median",
                 description="Median page assemble time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.doc_assemble_hist = Histogram(
-                "doc_assemble",
+                "dcls_doc_assemble",
                 description="Document assemble time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.reading_order_hist = Histogram(
-                "reading_order",
+                "dcls_reading_order",
                 description="Reading order time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.doc_enrich_hist = Histogram(
-                "doc_enrich",
+                "dcls_doc_enrich",
                 description="Document enrichment time in seconds",
                 boundaries=[hist_min, hist_max],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.doc_type_pdf_counter = Counter(
-                "doc_type_pdf",
+                "dcls_doc_type_pdf",
                 description="Number of pdf documents",
                 tag_keys=("tenant_id",),
             )
             #-----
             self.doc_type_docx_counter = Counter(
-                "doc_type_docx",
+                "dcls_doc_type_docx",
                 description="Number of docx documents",
                 tag_keys=("tenant_id",),
             )
             #-----
             self.doc_type_pptx_counter = Counter(
-                "doc_type_pptx",
+                "dcls_doc_type_pptx",
                 description="Number of pptx documents",
                 tag_keys=("tenant_id",),
             )
             #-----
             self.doc_type_html_counter = Counter(
-                "doc_type_html",
+                "dcls_doc_type_html",
                 description="Number of html documents",
                 tag_keys=("tenant_id",),
             )
             #-----
             self.doc_type_image_counter = Counter(
-                "doc_type_image",
+                "dcls_doc_type_image",
                 description="Number of image documents",
                 tag_keys=("tenant_id",),
             )
             #-----
             self.doc_type_md_counter = Counter(
-                "doc_type_md",
+                "dcls_doc_type_md",
                 description="Number of md documents",
                 tag_keys=("tenant_id",),
             )
             #-----
             self.doc_type_xlsx_counter = Counter(
-                "doc_type_xlsx",
+                "dcls_doc_type_xlsx",
                 description="Number of xlsx documents",
                 tag_keys=("tenant_id",),
             )
             #-----
             self.doc_type_xml_counter = Counter(
-                "doc_type_xml",
+                "dcls_doc_type_xml",
                 description="Number of xml documents",
                 tag_keys=("tenant_id",),
             )
             #-----
             self.doc_type_doclang_counter = Counter(
-                "doc_type_doclang",
+                "dcls_doc_type_doclang",
                 description="Number of doclang documents",
                 tag_keys=("tenant_id",),
             )
             #-----
             self.doc_type_docling_counter = Counter(
-                "doc_type_docling",
+                "dcls_doc_type_docling",
                 description="Number of docling type documents",
                 tag_keys=("tenant_id",),
             )
             #-----
             self.doc_type_other_counter = Counter(
-                "doc_type_other",
+                "dcls_doc_type_other",
                 description="Number of other type documents",
                 tag_keys=("tenant_id",),
             )
             #-----
             self.num_pages_hist = Histogram(
-                "num_pages",
+                "dcls_num_pages",
                 description="Number of pages in converted document",
                 boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.pictures_hist = Histogram(
-                "pictures",
+                "dcls_pictures",
                 description="Number of pictures in converted document",
                 boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.tables_hist = Histogram(
-                "tables",
+                "dcls_tables",
                 description="Number of tables in converted document",
                 boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.key_value_items_hist = Histogram(
-                "key_value_items",
+                "dcls_key_value_items",
                 description="Number of key value items in converted document",
                 boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.form_items_hist = Histogram(
-                "form_items",
+                "dcls_form_items",
                 description="Number of form items in converted document",
                 boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.texts_hist = Histogram(
-                "texts",
+                "dcls_texts",
                 description="Number of text items in converted document",
                 boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.groups_hist = Histogram(
-                "groups",
+                "dcls_groups",
                 description="Number of group items in converted document",
                 boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
