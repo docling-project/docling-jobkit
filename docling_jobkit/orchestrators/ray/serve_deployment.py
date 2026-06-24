@@ -17,6 +17,8 @@ from typing import Any, Iterator, Optional, cast
 import ray
 from ray import ObjectRef, serve
 
+from metrics_utils import get_metrics_from_conversion_result
+
 from docling.datamodel.base_models import (
     ConversionStatus,
     DocumentStream,
@@ -107,6 +109,10 @@ from docling_jobkit.public_errors import (
     is_client_actionable_failure,
 )
 
+import os
+generate_metrics = bool(os.environ.get("SETTINGS_GENERATE_METRICS", False))
+metrics_port = str(os.environ.get("SETTINGS_METRICS_PORT", "8080"))
+
 _log = logging.getLogger(__name__)
 
 _SOURCE_CHUNK_CALLBACK_MODE = CallbackMode.CHILD_ONLY
@@ -139,8 +145,8 @@ def _is_pdf_source(source: Any) -> bool:
 def _to_exportable_documents(
     task: Task,
     conv_results: list[ConversionResult],
-) -> list[ExportableDocument]:
-    return [
+) -> tuple[list[ExportableDocument], list[dict]]:
+    exportable_docs = [
         ExportableDocument.from_conversion_result(
             conv_res,
             source_index=idx,
@@ -152,13 +158,24 @@ def _to_exportable_documents(
         )
         for idx, conv_res in enumerate(conv_results)
     ]
+    # calculate metrics
+    if generate_metrics:
+        metrics = [
+            get_metrics_from_conversion_result(conv_res)
+            for conv_res in conv_results
+        ]
+    else:
+        metrics = []
+    
+    return exportable_docs, metrics
 
 
 def _to_exportable_documents_from_chunk(
     chunk: DocumentChunk[Any, Any],
     conv_results: list[ConversionResult],
-) -> list[ExportableDocument]:
+) -> tuple[list[ExportableDocument], list[dict]]:
     exportable: list[ExportableDocument] = []
+    metrics = []
     for idx, conv_res in enumerate(conv_results):
         ref = chunk.refs[idx] if idx < len(chunk.refs) else None
         exportable.append(
@@ -170,7 +187,17 @@ def _to_exportable_documents_from_chunk(
                 ),
             )
         )
-    return exportable
+        # calculate metrics
+        metrics = []
+        if generate_metrics:
+            for idx, conv_res in enumerate(conv_results):
+                chunk_metric = {
+                    "metrics": get_metrics_from_conversion_result(conv_res),
+                    "reference": ref.source_index if ref is not None else idx
+                }
+                metrics.append(chunk_metric)
+
+    return exportable, metrics
 
 
 def _is_s3_fanout_task(task: Task) -> bool:
@@ -542,8 +569,384 @@ class DoclingProcessorConverterDeployment:
         self.memory_warnings = 0
         self._chunker_manager: DocumentChunkerManager | None = None
 
+        ## ------------ metrics ---------------
+        if generate_metrics:
+            # move this into where docling isntance is created
+            # settings.debug.profile_pipeline_timings = True
+
+            
+            
+            self.success_counter = Counter(
+                "conversion_success",
+                description="Number of successeful conversions",
+                tag_keys=("tenant_id",),
+            )
+            
+            self.partial_counter = Counter(
+                "conversion_partial",
+                description="Number of partial conversions",
+                tag_keys=("tenant_id",),
+            )
+
+            self.failed_counter = Counter(
+                "conversion_failed",
+                description="Number of failed conversions",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.pipeline_total_hist = Histogram(
+                "pipeline_total",
+                description="Total pipeline execution time in seconds",
+                #boundaries=[0.1, 1],
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.page_parse_low_hist = Histogram(
+                "page_parse_low",
+                description="Lowest page parse time in seconds",
+                tag_keys=("tenant_id",),
+            )
+
+            self.page_parse_high_hist = Histogram(
+                "page_parse_high",
+                description="Highest page parse time in seconds",
+                tag_keys=("tenant_id",),
+            )
+
+            self.page_parse_median_hist = Histogram(
+                "page_parse_median",
+                description="Median page parse time in seconds",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.ocr_low_hist = Histogram(
+                "ocr_low",
+                description="Lowest ocr time in seconds",
+                tag_keys=("tenant_id",),
+            )
+
+            self.ocr_high_hist = Histogram(
+                "ocr_high",
+                description="Highest ocr time in seconds",
+                tag_keys=("tenant_id",),
+            )
+
+            self.ocr_median_hist = Histogram(
+                "ocr_median",
+                description="Median ocr time in seconds",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.layout_low_hist = Histogram(
+                "layout_low",
+                description="Lowest layout time in seconds",
+                tag_keys=("tenant_id",),
+            )
+
+            self.layout_high_hist = Histogram(
+                "layout_high",
+                description="Highest layout time in seconds",
+                tag_keys=("tenant_id",),
+            )
+
+            self.layout_median_hist = Histogram(
+                "layout_median",
+                description="Median layout time in seconds",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.table_structure_low_hist = Histogram(
+                "table_structure_low",
+                description="Lowest table structure time in seconds",
+                tag_keys=("tenant_id",),
+            )
+            
+            self.table_structure_high_hist = Histogram(
+                "table_structure_high",
+                description="Highest table structure time in seconds",
+                tag_keys=("tenant_id",),
+            )
+
+            self.table_structure_median_hist = Histogram(
+                "table_structure_median",
+                description="Median table structure time in seconds",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.page_assemble_low_hist = Histogram(
+                "page_assemble_low",
+                description="Lowest page assemble time in seconds",
+                tag_keys=("tenant_id",),
+            )
+
+            self.page_assemble_high_hist = Histogram(
+                "page_assemble_high",
+                description="Highest page assemble time in seconds",
+                tag_keys=("tenant_id",),
+            )
+
+            self.page_assemble_median_hist = Histogram(
+                "page_assemble_median",
+                description="Median page assemble time in seconds",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.doc_assemble_hist = Histogram(
+                "doc_assemble",
+                description="Document assemble time in seconds",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.reading_order_hist = Histogram(
+                "reading_order",
+                description="Reading order time in seconds",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.doc_enrich_hist = Histogram(
+                "doc_enrich",
+                description="Document enrichment time in seconds",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.doc_type_pdf_counter = Counter(
+                "doc_type_pdf",
+                description="Number of pdf documents",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.doc_type_docx_counter = Counter(
+                "doc_type_docx",
+                description="Number of docx documents",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.doc_type_pptx_counter = Counter(
+                "doc_type_pptx",
+                description="Number of pptx documents",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.doc_type_html_counter = Counter(
+                "doc_type_html",
+                description="Number of html documents",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.doc_type_image_counter = Counter(
+                "doc_type_image",
+                description="Number of image documents",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.doc_type_md_counter = Counter(
+                "doc_type_md",
+                description="Number of md documents",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.doc_type_xlsx_counter = Counter(
+                "doc_type_xlsx",
+                description="Number of xlsx documents",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.doc_type_xml_counter = Counter(
+                "doc_type_xml",
+                description="Number of xml documents",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.doc_type_doclang_counter = Counter(
+                "doc_type_doclang",
+                description="Number of doclang documents",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.doc_type_docling_counter = Counter(
+                "doc_type_docling",
+                description="Number of docling type documents",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.doc_type_other_counter = Counter(
+                "doc_type_other",
+                description="Number of other type documents",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.num_pages_hist = Histogram(
+                "num_pages",
+                description="Number of pages in converted document",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.pictures_hist = Histogram(
+                "pictures",
+                description="Number of pictures in converted document",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.tables_hist = Histogram(
+                "tables",
+                description="Number of tables in converted document",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.key_value_items_hist = Histogram(
+                "key_value_items",
+                description="Number of key value items in converted document",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.form_items_hist = Histogram(
+                "form_items",
+                description="Number of form items in converted document",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.texts_hist = Histogram(
+                "texts",
+                description="Number of text items in converted document",
+                tag_keys=("tenant_id",),
+            )
+            #-----
+            self.groups_hist = Histogram(
+                "groups",
+                description="Number of group items in converted document",
+                tag_keys=("tenant_id",),
+            )
+
+    def emit_metrics(self, metrics: list, tenant_id: str):
+        for item in metrics:
+            if hasattr(item, 'reference'):
+                metric_list = item["metrics"]
+            else:
+                metrics_list = [item]
+            
+            for record in metrics_list:
+                document_hash = record["document_hash"]
+                pipeline_stats = record["timings_stats"]
+                if hasattr(pipeline_stats, 'pipeline_total'):
+                    self.pipeline_total_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.pipeline_total_hist.observe(pipeline_stats["pipeline_total"])
+                if hasattr(pipeline_stats, 'page_parse'):
+                    self.page_parse_low_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.page_parse_high_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.page_parse_median_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.page_parse_low_hist.observe(pipeline_stats["page_parse"]["min"])
+                    self.page_parse_high_hist.observe(pipeline_stats["page_parse"]["max"])
+                    self.page_parse_median_hist.observe(pipeline_stats["page_parse"]["median"])
+                if hasattr(pipeline_stats, 'ocr'):
+                    self.ocr_low_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.ocr_high_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.ocr_median_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.ocr_low_hist.observe(pipeline_stats["ocr"]["min"])
+                    self.ocr_high_hist.observe(pipeline_stats["ocr"]["max"])
+                    self.ocr_median_hist.observe(pipeline_stats["ocr"]["median"])
+                if hasattr(pipeline_stats, 'layout'):
+                    self.layout_low_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.layout_high_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.layout_median_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.layout_low_hist.observe(pipeline_stats["layout"]["min"])
+                    self.layout_high_hist.observe(pipeline_stats["layout"]["max"])
+                    self.layout_median_hist.observe(pipeline_stats["layout"]["median"])
+                if hasattr(pipeline_stats, 'table_structure'):
+                    self.table_structure_low_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.table_structure_high_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.table_structure_median_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.table_structure_low_hist.observe(pipeline_stats["table_structure"]["min"])
+                    self.table_structure_high_hist.observe(pipeline_stats["table_structure"]["max"])
+                    self.table_structure_median_hist.observe(pipeline_stats["table_structure"]["median"])
+                if hasattr(pipeline_stats, 'page_assemble'):
+                    self.page_assemble_low_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.page_assemble_high_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.page_assemble_median_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.page_assemble_low_hist.observe(pipeline_stats["page_assemble"]["min"])
+                    self.page_assemble_high_hist.observe(pipeline_stats["page_assemble"]["max"])
+                    self.page_assemble_median_hist.observe(pipeline_stats["page_assemble"]["median"])
+                if hasattr(pipeline_stats, 'doc_assemble'):
+                    self.doc_assemble_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.doc_assemble_hist.observe(pipeline_stats["doc_assemble"])
+                if hasattr(pipeline_stats, 'reading_order'):
+                    self.reading_order_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.reading_order_hist.observe(pipeline_stats["reading_order"])
+                if hasattr(pipeline_stats, 'doc_enrich'):
+                    self.doc_enrich_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.doc_enrich_hist.observe(pipeline_stats["doc_enrich"])
+
+                document_stats = record["document_stats"]
+                if hasattr(document_stats, 'input_format'):
+                    doc_type = document_stats["input_format"]
+                    if doc_type == InputFormat.PDF :
+                        self.doc_type_pdf_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_pdf_counter.inc()
+                    elif doc_type == InputFormat.DOCX :
+                        self.doc_type_docx_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_docx_counter.inc()
+                    elif doc_type == InputFormat.PPTX :
+                        self.doc_type_pptx_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_pptx_counter.inc()
+                    elif doc_type == InputFormat.HTML :
+                        self.doc_type_html_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_html_counter.inc()
+                    elif doc_type == InputFormat.IMAGE :
+                        self.doc_type_image_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_image_counter.inc()
+                    elif doc_type == InputFormat.MD :
+                        self.doc_type_md_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_md_counter.inc()
+                    elif doc_type == InputFormat.XLSX :
+                        self.doc_type_xlsx_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_xlsx_counter.inc()
+                    elif doc_type in (InputFormat.XML_USPTO, InputFormat.XML_JATS, InputFormat.XML_XBRL) :
+                        self.doc_type_xml_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_xml_counter.inc()
+                    elif doc_type == InputFormat.XML_DOCLANG :
+                        self.doc_type_doclang_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_doclang_counter.inc()
+                    elif doc_type == InputFormat.JSON_DOCLING :
+                        self.doc_type_docling_counter.inc()
+                        self.doc_type_docling_counter.set_default_tags({"tenant_id": tenant_id})
+                    else:
+                        self.doc_type_other_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_other_counter.inc()
+                if hasattr(document_stats, 'num_pages'):
+                    self.num_pages_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.num_pages_hist.observe(document_stats["num_pages"])
+                if hasattr(document_stats, 'pictures'):
+                    self.pictures_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.pictures_hist.observe(document_stats["pictures"])
+                if hasattr(document_stats, 'tables'):
+                    self.tables_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.tables_hist.observe(document_stats["tables"])
+                if hasattr(document_stats, 'key_value_items'):
+                    self.key_value_items_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.key_value_items_hist.observe(document_stats["key_value_items"])
+                if hasattr(document_stats, 'form_items'):
+                    self.form_items_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.form_items_hist.observe(document_stats["form_items"])
+                if hasattr(document_stats, 'texts'):
+                    self.texts_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.texts_hist.observe(document_stats["texts"])
+                if hasattr(document_stats, 'groups'):
+                    self.groups_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.groups_hist.observe(document_stats["groups"])
+
+                conv_status = record["status"]
+                if conv_status == "success":
+                    self.success_counter.set_default_tags({"tenant_id": tenant_id})
+                    self.success_counter.inc()
+                elif conv_status == "partial":
+                    self.partial_counter.set_default_tags({"tenant_id": tenant_id})
+                    self.partial_counter.inc()
+                else:
+                    self.failed_counter.set_default_tags({"tenant_id": tenant_id})
+                    self.failed_counter.inc()
+
+
     async def process_converter_request(
-        self, request: ConverterRequest
+        self, request: ConverterRequest, tenant_id: str
     ) -> ConverterTaskResult | ConverterFailureResult | ObjectRef:
         if self.config.enable_oom_protection and PSUTIL_AVAILABLE:
             await self._check_memory()
@@ -557,7 +960,8 @@ class DoclingProcessorConverterDeployment:
             )
             if isinstance(conv_results, ConverterFailureResult):
                 return conv_results
-            exportable = _to_exportable_documents(request.task, conv_results)
+            exportable, metrics = _to_exportable_documents(request.task, conv_results)
+            emit_metrics(metrics=metrics, tenant_id=tenant_id)
             result = await asyncio.to_thread(
                 lambda: self._build_task_result(
                     request.task,
@@ -572,7 +976,8 @@ class DoclingProcessorConverterDeployment:
                 request.filename,
                 lambda: self._convert_materialized_request(request),
             )
-            exportable = _to_exportable_documents(request.task, conv_results)
+            exportable, metrics = _to_exportable_documents(request.task, conv_results)
+            emit_metrics(metrics=metrics, tenant_id=tenant_id)
             result = await asyncio.to_thread(
                 lambda: self._build_task_result(
                     request.task,
@@ -591,9 +996,10 @@ class DoclingProcessorConverterDeployment:
             )
             if isinstance(conv_results, ConverterFailureResult):
                 return conv_results
-            exportable = _to_exportable_documents_from_chunk(
+            exportable, metrics = _to_exportable_documents_from_chunk(
                 request.chunk, conv_results
             )
+            emit_metrics(metrics=metrics, tenant_id=tenant_id)
             result = await asyncio.to_thread(
                 lambda: self._build_task_result(
                     request.task,
@@ -898,6 +1304,7 @@ class DoclingProcessorCoordinatorDeployment:
         )
 
         _log.setLevel(self.config.log_level.upper())
+
 
     async def process_task(self, task: Task) -> DoclingTaskResult:
         task_start = datetime.datetime.now(datetime.timezone.utc)
@@ -1278,7 +1685,7 @@ class DoclingProcessorCoordinatorDeployment:
                 f"Task {task.task_id} was terminalized before converter dispatch"
             )
         try:
-            return await self.converter_handle.process_converter_request.remote(request)
+            return await self.converter_handle.process_converter_request.remote(request=request, tenant_id=tenant_id)
         finally:
             await self.redis_manager.release_converter_units(tenant_id, task.task_id, 1)
 
@@ -1537,6 +1944,7 @@ class DoclingProcessorCoordinatorDeployment:
         expected_doc_count: int,
     ) -> ConverterTaskResult:
         child_task = task.model_copy(update={"sources": [chunk.source]})
+        tenant_id = task.metadata.get("tenant_id", "default")
         # Strip the fetcher before cross-process dispatch. The fetcher is a bound
         # method of the coordinator's initialized S3SourceProcessor, which holds a
         # boto3 client containing thread locks. Pydantic v2 serializes
@@ -1548,11 +1956,12 @@ class DoclingProcessorCoordinatorDeployment:
             source=chunk.source, refs=chunk.refs, chunk_index=chunk.chunk_index
         )
         return await self.converter_handle.process_converter_request.remote(
-            SourceChunkConvertRequest(
+            request=SourceChunkConvertRequest(
                 task=child_task,
                 chunk=serializable_chunk,
                 expected_doc_count=expected_doc_count,
-            )
+            ),
+            tenant_id=tenant_id
         )
 
     def _should_materialize_pdf(self, task: Task) -> bool:
@@ -1610,7 +2019,7 @@ class DoclingProcessorCoordinatorDeployment:
                     if granted == 0:
                         break  # at tenant ceiling; drain an in-flight slice first
                     in_flight.add(
-                        asyncio.create_task(self._execute_slice_request(next_request))
+                        asyncio.create_task(self._execute_slice_request(request=next_request, tenant_id=tenant_id))
                     )
                     next_request = next(pending_requests, None)
                 if not in_flight:
@@ -1635,12 +2044,12 @@ class DoclingProcessorCoordinatorDeployment:
 
         return collected_results
 
-    async def _execute_slice_request(self, request: SliceConvertRequest) -> ObjectRef:
+    async def _execute_slice_request(self, request: SliceConvertRequest, tenant_id: str) -> ObjectRef:
         try:
             # On success the converter returns an ObjectRef pointing to the
             # ExportableDocument in the plasma store — the coordinator never
             # holds the document object itself while waiting for other slices.
-            return await self.converter_handle.process_converter_request.remote(request)
+            return await self.converter_handle.process_converter_request.remote(request=request, tenant_id=tenant_id)
         except Exception as exc:
             _log.warning(
                 "Coordinator replica %s: slice %s for %s failed: %s",
