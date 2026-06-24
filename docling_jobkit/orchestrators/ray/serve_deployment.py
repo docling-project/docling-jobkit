@@ -799,49 +799,49 @@ class DoclingProcessorConverterDeployment:
             self.num_pages_hist = Histogram(
                 "num_pages",
                 description="Number of pages in converted document",
-                boundaries=[0, 10000000],
+                boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.pictures_hist = Histogram(
                 "pictures",
                 description="Number of pictures in converted document",
-                boundaries=[0, 10000000],
+                boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.tables_hist = Histogram(
                 "tables",
                 description="Number of tables in converted document",
-                boundaries=[0, 10000000],
+                boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.key_value_items_hist = Histogram(
                 "key_value_items",
                 description="Number of key value items in converted document",
-                boundaries=[0, 10000000],
+                boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.form_items_hist = Histogram(
                 "form_items",
                 description="Number of form items in converted document",
-                boundaries=[0, 10000000],
+                boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.texts_hist = Histogram(
                 "texts",
                 description="Number of text items in converted document",
-                boundaries=[0, 10000000],
+                boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
             self.groups_hist = Histogram(
                 "groups",
                 description="Number of group items in converted document",
-                boundaries=[0, 10000000],
+                boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
 
