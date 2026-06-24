@@ -17,7 +17,7 @@ from typing import Any, Iterator, Optional, cast
 import ray
 from ray import ObjectRef, serve
 
-from metrics_utils import get_metrics_from_conversion_result
+from docling_jobkit.orchestrators.ray.metrics_utils import get_metrics_from_conversion_result
 
 from docling.datamodel.base_models import (
     ConversionStatus,
@@ -574,7 +574,7 @@ class DoclingProcessorConverterDeployment:
             # move this into where docling isntance is created
             # settings.debug.profile_pipeline_timings = True
 
-            
+
             
             self.success_counter = Counter(
                 "conversion_success",
