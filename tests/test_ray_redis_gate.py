@@ -22,6 +22,7 @@ def _make_orchestrator(
     with patch.object(RayOrchestrator, "__init__", lambda self, **kw: None):
         orch = object.__new__(RayOrchestrator)
     orch.config = config
+    orch.allowed_target_kinds = config.allowed_target_kinds
     orch.tasks = {}
     orch.notifier = None
     orch.redis_manager = AsyncMock()
