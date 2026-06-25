@@ -91,8 +91,8 @@ return rel
 # ARGV[1] = "started", ARGV[2] = ISO timestamp
 _MARK_TASK_STARTED_LUA = """
 local cur = redis.call('HGET', KEYS[1], 'status')
-redis.call('HSET', KEYS[1], 'status', ARGV[1], 'last_update_at', ARGV[2], 'started_at', ARGV[2])
 if cur ~= 'started' and cur ~= 'success' and cur ~= 'failure' then
+    redis.call('HSET', KEYS[1], 'status', ARGV[1], 'last_update_at', ARGV[2], 'started_at', ARGV[2])
     redis.call('HINCRBY', KEYS[2], 'tasks_started_total', 1)
     return 1
 end

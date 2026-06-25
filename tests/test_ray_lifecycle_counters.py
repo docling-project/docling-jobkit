@@ -130,10 +130,10 @@ class _FakeRedis:
         status, timestamp = argv[0], argv[1]
         task = self.hashes.setdefault(task_key, {})
         cur = task.get("status")
-        task["status"] = status
-        task["last_update_at"] = timestamp
-        task["started_at"] = timestamp
         if cur not in ("started", "success", "failure"):
+            task["status"] = status
+            task["last_update_at"] = timestamp
+            task["started_at"] = timestamp
             counters = self.hashes.setdefault(task_counters_key, {})
             counters["tasks_started_total"] = str(
                 int(counters.get("tasks_started_total", "0")) + 1
@@ -304,6 +304,21 @@ async def test_mark_task_started_noop_when_already_terminal() -> None:
     assert transitioned is False
     counters = await manager.get_tenant_task_counters("tenant-a")
     assert counters.tasks_started_total == 0
+    # Status must not be overwritten back to 'started'
+    assert fake.hashes["task:t1"]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_mark_task_started_does_not_overwrite_failure_status() -> None:
+    manager, fake = _manager()
+    fake.hashes["task:t1"] = {"status": "failure"}
+
+    transitioned = await manager.mark_task_started("t1", "tenant-a")
+
+    assert transitioned is False
+    counters = await manager.get_tenant_task_counters("tenant-a")
+    assert counters.tasks_started_total == 0
+    assert fake.hashes["task:t1"]["status"] == "failure"
 
 
 # --- terminal -------------------------------------------------------------
