@@ -1102,7 +1102,7 @@ wheels = [
 
 [[package]]
 name = "docling-core"
-version = "2.83.1"
+version = "2.84.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "defusedxml" },
@@ -1118,9 +1118,9 @@ dependencies = [
     { name = "typer" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4f/04/0f62e8092dfeccf7d287b7898d8dcf793417e96f6976b41f5359bf143ebe/docling_core-2.83.1.tar.gz", hash = "sha256:e09ce91d18522bb161b45ca79b9bd2c94f0b38ca744a1f8605f3e1d9bff26902", size = 317894, upload-time = "2026-06-19T05:45:49.651Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cb/bc/41d9d5a38502538a7cd3c7fb66a06eb676f8cc1d6d275d7fbe971352efd7/docling_core-2.84.0.tar.gz", hash = "sha256:331035d5032be683a6d66d476146652491d2c75e4562e04da3f1a8d989d74bfc", size = 317993, upload-time = "2026-06-23T09:44:42.339Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2b/7b/dfe63a732152097d6770a112389dbcc99f99928781d9f4ac72e29cadee91/docling_core-2.83.1-py3-none-any.whl", hash = "sha256:154db6d6be5ac0bc0affa272a39e81346dc953ea7ce5cd6f20809cc5272499c6", size = 257780, upload-time = "2026-06-19T05:45:47.866Z" },
+    { url = "https://files.pythonhosted.org/packages/50/d4/a8742fdd4c8b782608005ffde77a24bbfd54602c4c49825bf04ea25363ab/docling_core-2.84.0-py3-none-any.whl", hash = "sha256:2aee881b94138234c703298066b5ed94999490323ae6a29cbe5110f9248b83dd", size = 257936, upload-time = "2026-06-23T09:44:40.506Z" },
 ]
 
 [package.optional-dependencies]
@@ -1224,9 +1224,9 @@ dev = [
 requires-dist = [
     { name = "boto3", specifier = "~=1.35" },
     { name = "codeflare-sdk", marker = "python_full_version >= '3.11' and python_full_version < '3.14' and extra == 'ray'", specifier = ">=0.20.0" },
-    { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", git = "https://github.com/docling-project/docling/?rev=feat-errortype-reporting" },
-    { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", git = "https://github.com/docling-project/docling/?rev=feat-errortype-reporting" },
-    { name = "docling-slim", extras = ["standard"], git = "https://github.com/docling-project/docling/?rev=feat-errortype-reporting" },
+    { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", specifier = ">=2.94.0,<3.0.0" },
+    { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", specifier = ">=2.95.0,<3.0.0" },
+    { name = "docling-slim", extras = ["standard"], specifier = ">=2.107.0,<3.0.0" },
     { name = "google-api-python-client", marker = "extra == 'gdrive'", specifier = ">=2.183.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'gdrive'", specifier = ">=1.2.2" },
     { name = "httpx", specifier = ">=0.28,<1" },
@@ -1301,8 +1301,8 @@ wheels = [
 
 [[package]]
 name = "docling-slim"
-version = "2.105.0"
-source = { git = "https://github.com/docling-project/docling/?rev=feat-errortype-reporting#906a5df6b086b6f150953e84f0618668b512be16" }
+version = "2.107.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
     { name = "docling-core" },
@@ -1312,6 +1312,10 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "requests" },
     { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a5/54/639a7517fcd128d0a488c71e033c194f72e105bc77ca18c50f8ccd3861da/docling_slim-2.107.0.tar.gz", hash = "sha256:bd89476fae7558c68a2f5b61f9afead0afc6797fb7bd74a8a19e2b0e8ec49e07", size = 476596, upload-time = "2026-06-24T13:11:55.64Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bb/ad/9d52dc9929f3128aee448815e3cbbf3a17601881def3dc8019e6fc1b1a6e/docling_slim-2.107.0-py3-none-any.whl", hash = "sha256:3aabe2dcd3bfec0c12162c9774d29ae17779ef6fc290d7f92a5791f93e94ea61", size = 604722, upload-time = "2026-06-24T13:11:53.611Z" },
 ]
 
 [package.optional-dependencies]
