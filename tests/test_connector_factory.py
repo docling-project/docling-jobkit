@@ -183,22 +183,20 @@ class _FakeSourceProcessor(BaseSourceProcessor):
         yield from ()
 
 
-def test_document_chunk_for_transport_strips_fetcher():
+def test_document_chunk_is_plain_serializable():
+    """A chunk carries only source + refs (no fetcher), so it is transport-safe."""
     refs = [
         SourceDocumentRef(id="a", source_index=0, source_uri="a", filename="a"),
     ]
-    chunk = DocumentChunk(
-        source=_FakeSource(),
-        refs=refs,
-        chunk_index=3,
-        fetcher=lambda _id: DocumentStream(name="a", stream=None),  # type: ignore[arg-type]
-    )
-    transport = chunk.for_transport()
-    assert transport._fetcher is None
-    assert transport.chunk_index == 3
-    assert list(transport.refs) == refs
-    # Original keeps its fetcher (local callers may still use it).
-    assert chunk._fetcher is not None
+    chunk = DocumentChunk(source=_FakeSource(), refs=refs, chunk_index=3)
+    assert chunk.chunk_index == 3
+    assert list(chunk.refs) == refs
+    # Round-trips through pickle (the CLI mp.Pool path) without special handling.
+    import pickle
+
+    restored = pickle.loads(pickle.dumps(chunk))
+    assert restored.chunk_index == 3
+    assert restored.ids == ["a"]
 
 
 # --- Orchestrator allowlist ----------------------------------------------------

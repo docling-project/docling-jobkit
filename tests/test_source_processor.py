@@ -79,7 +79,8 @@ def test_chunks_can_fetch_documents_lazily():
         chunks = list(p.iterate_document_chunks(chunk_size=2))
         first_chunk = chunks[0]
 
-        docs = list(first_chunk.iter_documents())
+        # Documents are fetched from the chunk refs via the source processor.
+        docs = [p.fetch_converter_source_by_ref(ref) for ref in first_chunk.refs]
 
         assert docs[0].name == "a"
         assert docs[1].name == "b"

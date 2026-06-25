@@ -1586,18 +1586,13 @@ class DoclingProcessorCoordinatorDeployment:
         expected_doc_count: int,
     ) -> ConverterTaskResult:
         child_task = task.model_copy(update={"sources": [chunk.source]})
-        # Strip the fetcher before cross-process dispatch. The fetcher is a bound
-        # method of the coordinator's initialized S3SourceProcessor, which holds a
-        # boto3 client containing thread locks. Pydantic v2 serializes
-        # __pydantic_private__ via __getstate__, so the fetcher would be included
-        # when Ray cloudpickle serializes the chunk — causing a TypeError on thread
-        # locks. The converter never calls iter_documents(); it reconstructs its own
-        # source processor from chunk.source and uses fetch_converter_source_by_ref().
-        serializable_chunk = chunk.for_transport()
+        # The chunk carries only source + refs, so it is safe to cloudpickle as-is.
+        # The converter reconstructs its own source processor from chunk.source and
+        # fetches each ref via fetch_converter_source_by_ref().
         return await self.converter_handle.process_converter_request.remote(
             SourceChunkConvertRequest(
                 task=child_task,
-                chunk=serializable_chunk,
+                chunk=chunk,
                 expected_doc_count=expected_doc_count,
             )
         )

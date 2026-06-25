@@ -36,11 +36,11 @@ from docling_jobkit.connectors.s3_presigned_target_processor import (
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.convert.export import (
+    _cleanup_document_output_dir,
     _is_exportable_status,
-    cleanup_document_output_dir as _cleanup_document_output_dir,
-    materialize_document_exports as _materialize_document_exports,
-    release_exportable_document_references as _release_exportable_document_references,
-    upload_exportable_document,
+    _materialize_document_exports,
+    _release_exportable_document_references,
+    _upload_exportable_document,
 )
 from docling_jobkit.datamodel.exportable_document import (
     ExportableDocument,
@@ -473,7 +473,7 @@ def _upload_document_via_processor(
     """
     source = _resolve_source_identity(task, exportable_document, response_index)
     document_dir = output_dir / f"{source.source_index:06d}"
-    upload_exportable_document(
+    _upload_exportable_document(
         target_processor=target_processor,
         exportable_document=exportable_document,
         document_dir=document_dir,

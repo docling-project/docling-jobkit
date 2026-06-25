@@ -169,7 +169,7 @@ def _process_source(
                             pool.apply_async(
                                 process_batch,
                                 (
-                                    chunk.for_transport(),
+                                    chunk,
                                     config.target,
                                     config.options,
                                     artifacts_path,
@@ -287,9 +287,9 @@ def process_batch(
     - Writing results to target
     - Tracking successes and failures
 
-    The chunk arrives fetcher-stripped (see ``DocumentChunk.for_transport``); the
-    documents are fetched one at a time via ``open_chunk_sources`` so peak memory
-    stays bounded to a single in-flight document regardless of batch size.
+    The chunk carries only source + refs; the documents are fetched one at a time
+    via ``open_chunk_sources`` so peak memory stays bounded to a single in-flight
+    document regardless of batch size.
 
     Args:
         chunk: Transport (fetcher-stripped) chunk carrying source + refs

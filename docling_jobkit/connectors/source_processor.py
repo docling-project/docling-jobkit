@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from itertools import islice
-from typing import Callable, Generic, Iterator, Sequence, TypeVar
+from typing import Generic, Iterator, Sequence, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 
@@ -22,12 +22,13 @@ class SourceDocumentRef(BaseModel, Generic[FileIdentifierT]):
 
 
 class DocumentChunk(BaseModel, Generic[SourceT, FileIdentifierT]):
-    """A serializable source chunk plus an optional local fetcher convenience.
+    """A serializable batch of connector-native document references.
 
-    Local/CLI callers may attach a fetcher so ``iter_documents()`` can materialize
-    streams lazily from the refs. Cross-process callers such as Ray must strip that
-    fetcher because it may capture initialized connector state that is not safe to
-    serialize.
+    A chunk carries only the root ``source`` plus the ``refs`` needed to fetch its
+    documents, so it is always safe to send across a process boundary (CLI
+    ``mp.Pool`` pickling or Ray cloudpickle). Workers reconstruct their own
+    processor via ``get_source_processor(chunk.source)`` and fetch each ref with
+    ``fetch_converter_source_by_ref``.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -35,17 +36,6 @@ class DocumentChunk(BaseModel, Generic[SourceT, FileIdentifierT]):
     source: SourceT
     refs: Sequence[SourceDocumentRef[FileIdentifierT]]
     chunk_index: int
-    _fetcher: Callable[[FileIdentifierT], DocumentStream] | None = None
-
-    def __init__(
-        self,
-        source: SourceT,
-        refs: Sequence[SourceDocumentRef[FileIdentifierT]],
-        chunk_index: int,
-        fetcher: Callable[[FileIdentifierT], DocumentStream] | None = None,
-    ):
-        super().__init__(source=source, refs=refs, chunk_index=chunk_index)
-        self._fetcher = fetcher
 
     @property
     def ids(self) -> list[FileIdentifierT]:
@@ -54,29 +44,6 @@ class DocumentChunk(BaseModel, Generic[SourceT, FileIdentifierT]):
     @property
     def index(self) -> int:
         return self.chunk_index
-
-    def iter_documents(self) -> Iterator[DocumentStream]:
-        """Materialize documents for local callers when a fetcher is attached."""
-        if self._fetcher is None:
-            raise RuntimeError("DocumentChunk does not have an attached fetcher.")
-        for ref in self.refs:
-            yield self._fetcher(ref.id)
-
-    def for_transport(self) -> "DocumentChunk[SourceT, FileIdentifierT]":
-        """Return a fetcher-stripped copy safe to send across a process boundary.
-
-        The ``_fetcher`` is a bound method of an initialized connector that may
-        capture unpicklable state (e.g. a boto3 client with thread locks). Any
-        chunk crossing a process boundary — CLI ``mp.Pool`` (pickle) or Ray
-        (cloudpickle) — must carry only ``source`` + ``refs``; the worker
-        reconstructs its own processor via ``get_source_processor(chunk.source)``
-        and fetches lazily with ``fetch_converter_source_by_ref``.
-        """
-        return DocumentChunk(
-            source=self.source,
-            refs=self.refs,
-            chunk_index=self.chunk_index,
-        )
 
 
 class BaseSourceProcessor(
@@ -212,7 +179,6 @@ class BaseSourceProcessor(
                 source=self.source,
                 refs=refs,
                 chunk_index=chunk_index,
-                fetcher=self._fetch_document_by_id,
             )
 
             chunk_index += 1

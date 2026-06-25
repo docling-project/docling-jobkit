@@ -6,6 +6,9 @@ materialize→upload step here means the *same code* runs whether a connector is
 exercised locally (CLI) or on distributed compute (Ray/RQ/local orchestrator),
 and keeps memory bounded: callers stream documents one at a time and release each
 document's heavy ``DoclingDocument`` reference right after its artifacts are sent.
+
+Only :func:`export_documents_to_target` is public; the other helpers are internal
+building blocks (underscore-prefixed) that ``convert.results`` reuses directly.
 """
 
 import logging
@@ -26,26 +29,18 @@ _log = logging.getLogger(__name__)
 
 
 @dataclass
-class ExportedArtifactFile:
+class _ExportedArtifactFile:
     artifact_type: ArtifactType
     path: Path
     target_filename: str
     mime_type: str
 
 
-# Backwards-compatible private alias (historically defined in results.py).
-_ExportedArtifactFile = ExportedArtifactFile
-
-
-def is_exportable_status(status: ConversionStatus) -> bool:
+def _is_exportable_status(status: ConversionStatus) -> bool:
     return status in (ConversionStatus.SUCCESS, ConversionStatus.PARTIAL_SUCCESS)
 
 
-# Backwards-compatible private alias.
-_is_exportable_status = is_exportable_status
-
-
-def materialize_document_exports(
+def _materialize_document_exports(
     exportable_document: ExportableDocument,
     output_dir: Path,
     *,
@@ -57,21 +52,21 @@ def materialize_document_exports(
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
     bundle_resources: bool,
-) -> list[ExportedArtifactFile]:
+) -> list[_ExportedArtifactFile]:
     """Write the requested export formats to ``output_dir`` and return their files.
 
     When ``bundle_resources`` is set and referenced artifacts (images) were
     written, a self-contained ``<doc>_bundle.zip`` is also produced.
     """
     if not (
-        is_exportable_status(exportable_document.status)
+        _is_exportable_status(exportable_document.status)
         and exportable_document.document is not None
     ):
         return []
 
     output_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir = Path("artifacts")
-    generated: list[ExportedArtifactFile] = []
+    generated: list[_ExportedArtifactFile] = []
     doc_filename = exportable_document.file.stem
 
     if export_json:
@@ -83,7 +78,7 @@ def materialize_document_exports(
             artifacts_dir=artifacts_dir,
         )
         generated.append(
-            ExportedArtifactFile(
+            _ExportedArtifactFile(
                 artifact_type="json",
                 path=fname,
                 target_filename=fname.name,
@@ -100,7 +95,7 @@ def materialize_document_exports(
             artifacts_dir=artifacts_dir,
         )
         generated.append(
-            ExportedArtifactFile(
+            _ExportedArtifactFile(
                 artifact_type="html",
                 path=fname,
                 target_filename=fname.name,
@@ -117,7 +112,7 @@ def materialize_document_exports(
             image_mode=ImageRefMode.PLACEHOLDER,
         )
         generated.append(
-            ExportedArtifactFile(
+            _ExportedArtifactFile(
                 artifact_type="text",
                 path=fname,
                 target_filename=fname.name,
@@ -135,7 +130,7 @@ def materialize_document_exports(
             page_break_placeholder=md_page_break_placeholder or None,
         )
         generated.append(
-            ExportedArtifactFile(
+            _ExportedArtifactFile(
                 artifact_type="markdown",
                 path=fname,
                 target_filename=fname.name,
@@ -148,7 +143,7 @@ def materialize_document_exports(
         _log.info(f"writing Doc Tags output to {fname}")
         exportable_document.document.save_as_doctags(filename=fname)
         generated.append(
-            ExportedArtifactFile(
+            _ExportedArtifactFile(
                 artifact_type="doctags",
                 path=fname,
                 target_filename=fname.name,
@@ -175,7 +170,7 @@ def materialize_document_exports(
                         ),
                     )
         generated.append(
-            ExportedArtifactFile(
+            _ExportedArtifactFile(
                 artifact_type="resource_bundle",
                 path=bundle_path,
                 target_filename=bundle_path.name,
@@ -186,7 +181,7 @@ def materialize_document_exports(
     return generated
 
 
-def upload_exportable_document(
+def _upload_exportable_document(
     *,
     target_processor: BaseTargetProcessor,
     exportable_document: ExportableDocument,
@@ -200,7 +195,7 @@ def upload_exportable_document(
     md_page_break_placeholder: str,
     target_filename_fn: Callable[[str], str],
     bundle_resources: bool = True,
-) -> list[ExportedArtifactFile]:
+) -> list[_ExportedArtifactFile]:
     """Materialize one document's exports and upload them via ``target_processor``.
 
     ``target_filename_fn(artifact_filename) -> target_key`` is the single seam
@@ -208,7 +203,7 @@ def upload_exportable_document(
     (e.g. ``<source_key>/<artifact>`` for orchestrators or ``json/<name>.json``
     for the CLI) while the materialize+upload code itself stays shared.
     """
-    artifacts = materialize_document_exports(
+    artifacts = _materialize_document_exports(
         exportable_document,
         document_dir,
         export_json=export_json,
@@ -229,14 +224,14 @@ def upload_exportable_document(
     return artifacts
 
 
-def release_exportable_document_references(
+def _release_exportable_document_references(
     *exportable_documents: ExportableDocument,
 ) -> None:
     for exportable_document in exportable_documents:
         exportable_document.document = None
 
 
-def cleanup_document_output_dir(document_dir: Path) -> None:
+def _cleanup_document_output_dir(document_dir: Path) -> None:
     shutil.rmtree(document_dir, ignore_errors=True)
 
 
@@ -280,7 +275,7 @@ def export_documents_to_target(
             return target_filename_fn(_doc, artifact_filename)
 
         try:
-            artifacts = upload_exportable_document(
+            artifacts = _upload_exportable_document(
                 target_processor=target_processor,
                 exportable_document=exportable_document,
                 document_dir=document_dir,
@@ -299,6 +294,6 @@ def export_documents_to_target(
             if on_document_uploaded is not None:
                 on_document_uploaded(exportable_document)
         finally:
-            release_exportable_document_references(exportable_document)
-            cleanup_document_output_dir(document_dir)
+            _release_exportable_document_references(exportable_document)
+            _cleanup_document_output_dir(document_dir)
     return uploaded

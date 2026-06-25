@@ -26,8 +26,8 @@ def test_http_file_source_chunking():
         assert chunks[0].index == 0, "First chunk should have index 0"
         assert len(chunks[0].ids) == 1, "Chunk should contain one identifier"
 
-        # Verify document can be fetched from chunk
-        docs = list(chunks[0].iter_documents())
+        # Verify document can be fetched from the chunk refs via the processor
+        docs = [processor.fetch_converter_source_by_ref(ref) for ref in chunks[0].refs]
         assert len(docs) == 1
         assert isinstance(docs[0], DocumentStream)
         assert docs[0].name == "test.pdf"

@@ -1,11 +1,10 @@
 """Shared, low-memory consumption of a transport ``DocumentChunk``.
 
 Both the CLI multiprocessing workers and the Ray converter replica receive a
-fetcher-stripped :class:`DocumentChunk` (see ``DocumentChunk.for_transport``) and
-need to turn its ``refs`` into converter inputs. This module centralizes that step
-so the same logic runs everywhere and keeps peak memory bounded to a single
-in-flight document: sources are fetched lazily, one at a time, as the converter
-pulls them.
+:class:`DocumentChunk` (source + refs) and need to turn its ``refs`` into converter
+inputs. This module centralizes that step so the same logic runs everywhere and
+keeps peak memory bounded to a single in-flight document: sources are fetched
+lazily, one at a time, as the converter pulls them.
 """
 
 from contextlib import contextmanager
@@ -28,6 +27,12 @@ def _resolve_headers(
     ``headers_for_ref`` only inspects the ref metadata, so this pre-pass is cheap.
     Headers are assumed uniform across a chunk (the converter accepts a single
     ``headers`` argument); the first non-empty value wins.
+
+    NOTE: this per-chunk-uniform assumption is a workaround for
+    ``DoclingConverterManager.convert_documents`` taking a single ``headers``
+    argument. The proper fix is to let the converter accept per-document
+    ``HttpSourceRequest`` inputs (which already carry their own headers); that is
+    an upstream change in docling and out of scope here.
     """
     for ref in refs:
         ref_headers = source_processor.headers_for_ref(ref)
