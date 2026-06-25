@@ -956,8 +956,9 @@ class DoclingProcessorCoordinatorDeployment:
         workdir = self.scratch_dir / task.task_id
 
         try:
-            await self.redis_manager.update_task_status(
-                task.task_id, TaskStatus.STARTED
+            await self.redis_manager.mark_task_started(
+                task_id=task.task_id,
+                tenant_id=tenant_id,
             )
         except Exception as exc:  # pragma: no cover - best effort status update
             _log.warning(
