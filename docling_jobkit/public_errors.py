@@ -192,10 +192,12 @@ def is_client_actionable_failure(failure: PublicFailureInfo) -> bool:
 
 
 def build_public_error_item(exc: BaseException) -> ErrorItem:
+    failure = classify_public_task_failure(exc, task_id="")
     return ErrorItem(
         component_type=DoclingComponentType.PIPELINE,
         module_name=exc.__class__.__name__,
         error_message=_exception_text(exc),
+        category=failure.category,
     )
 
 
@@ -209,8 +211,9 @@ def build_public_error_item_from_failure(failure: PublicFailureInfo) -> ErrorIte
     """
     return ErrorItem(
         component_type=DoclingComponentType.PIPELINE,
-        module_name=failure.category.value,
+        module_name="",
         error_message=failure.message,
+        category=failure.category,
     )
 
 

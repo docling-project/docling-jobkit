@@ -32,6 +32,7 @@ from docling_jobkit.orchestrators.ray.models import (
     TaskUpdate,
     TenantLimits,
     TenantStats,
+    TenantTaskCounters,
 )
 from docling_jobkit.orchestrators.serialization import make_msgpack_safe
 
@@ -79,6 +80,23 @@ end
 redis.call('HINCRBY', KEYS[1], 'converter_units', -rel)
 redis.call('HINCRBY', KEYS[2], 'converter_units', -rel)
 return rel
+"""
+
+# Atomically mark a task STARTED and bump the per-tenant started counter, but
+# only on a genuine transition INTO started (i.e. not when the task is already
+# started or already terminal). This guarantees tasks_started_total increments
+# exactly once per task even if process_task is retried, and never counts a task
+# that reconciliation already terminalized.
+# KEYS[1] = task:{id}, KEYS[2] = tenant:{id}:task_counters
+# ARGV[1] = "started", ARGV[2] = ISO timestamp
+_MARK_TASK_STARTED_LUA = """
+local cur = redis.call('HGET', KEYS[1], 'status')
+redis.call('HSET', KEYS[1], 'status', ARGV[1], 'last_update_at', ARGV[2], 'started_at', ARGV[2])
+if cur ~= 'started' and cur ~= 'success' and cur ~= 'failure' then
+    redis.call('HINCRBY', KEYS[2], 'tasks_started_total', 1)
+    return 1
+end
+return 0
 """
 
 
@@ -230,9 +248,16 @@ class RedisStateManager:
             await self.connect()
 
         queue_key = f"tenant:{tenant_id}:tasks"
+        task_counters_key = f"tenant:{tenant_id}:task_counters"
         task_json = task.model_dump_json()
 
-        await self.redis.rpush(queue_key, task_json)  # type: ignore[misc, union-attr]
+        # Push the task and bump the monotonic enqueued counter atomically so the
+        # counter can never drift from the queue contents.
+        redis = self._ensure_redis()
+        async with redis.pipeline(transaction=True) as pipe:
+            pipe.rpush(queue_key, task_json)
+            pipe.hincrby(task_counters_key, "tasks_enqueued_total", 1)
+            await pipe.execute()
 
         # Update tenant limits
         await self.update_tenant_limits(tenant_id, delta_queued_tasks=1)
@@ -372,6 +397,38 @@ class RedisStateManager:
         await redis.hset(task_key, mapping=updates)  # type: ignore[misc]
 
         _log.debug(f"Updated task {task_id} status to {status}")
+
+    async def mark_task_started(self, task_id: str, tenant_id: str) -> bool:
+        """Atomically mark a task STARTED and bump the started counter once.
+
+        Replaces ``update_task_status(STARTED)`` at the processing entry point.
+        Uses a Lua script so the status write and the counter increment are atomic
+        and the increment only happens on a genuine transition into STARTED
+        (idempotent under Ray retries, and a no-op if the task was already
+        terminalized by reconciliation).
+
+        Returns:
+            True if the task transitioned into STARTED (counter bumped), False if
+            it was already started/terminal.
+        """
+        if not self.redis:
+            await self.connect()
+
+        task_key = f"task:{task_id}"
+        task_counters_key = f"tenant:{tenant_id}:task_counters"
+        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        redis = self._ensure_redis()
+        result = await redis.eval(  # type: ignore[misc]
+            _MARK_TASK_STARTED_LUA,
+            2,
+            task_key,
+            task_counters_key,
+            TaskStatus.STARTED.value,
+            timestamp,
+        )
+        _log.debug(f"Marked task {task_id} STARTED (transitioned={bool(result)})")
+        return bool(result)
 
     async def get_task_metadata(self, task_id: str) -> dict:
         """Get task metadata.
@@ -714,6 +771,32 @@ class RedisStateManager:
 
         return TenantStats.model_validate(stats_dict)
 
+    async def get_tenant_task_counters(self, tenant_id: str) -> TenantTaskCounters:
+        """Get the monotonic lifecycle counters for a tenant.
+
+        Args:
+            tenant_id: Tenant identifier
+
+        Returns:
+            Tenant counters object (all-zero if the tenant has no counters yet)
+        """
+        if not self.redis:
+            await self.connect()
+
+        task_counters_key = f"tenant:{tenant_id}:task_counters"
+        redis = self._ensure_redis()
+        task_counters_data = await redis.hgetall(task_counters_key)  # type: ignore[misc]
+
+        if not task_counters_data:
+            return TenantTaskCounters()
+
+        # Decode bytes; pydantic coerces the string values to int and ignores any
+        # unexpected fields.
+        decoded = {
+            k.decode("utf-8"): v.decode("utf-8") for k, v in task_counters_data.items()
+        }
+        return TenantTaskCounters.model_validate(decoded)
+
     # Atomic Task Dispatch Operations
 
     async def dispatch_task_atomic(
@@ -734,6 +817,7 @@ class RedisStateManager:
         queue_key = f"tenant:{tenant_id}:tasks"
         active_key = f"tenant:{tenant_id}:active_tasks"
         limits_key = f"tenant:{tenant_id}:limits"
+        task_counters_key = f"tenant:{tenant_id}:task_counters"
         dispatch_key = f"task:{task_id}:dispatch"
 
         redis = self._ensure_redis()
@@ -785,6 +869,11 @@ class RedisStateManager:
                     },
                 )
                 pipe.expire(dispatch_key, self.processing_ttl)
+
+                # 5. Bump the monotonic dispatched counter (atomic with the
+                # pop/add). On a raced dispatch we return before reaching
+                # pipe.execute(), so this is never committed.
+                pipe.hincrby(task_counters_key, "tasks_dispatched_total", 1)
 
                 # Execute transaction
                 await pipe.execute()
@@ -862,6 +951,7 @@ class RedisStateManager:
         task_key = f"task:{task_id}"
         active_key = f"tenant:{tenant_id}:active_tasks"
         limits_key = f"tenant:{tenant_id}:limits"
+        task_counters_key = f"tenant:{tenant_id}:task_counters"
         dispatch_key = f"task:{task_id}:dispatch"
         execution_key = f"task:{task_id}:execution"
         redis = self._ensure_redis()
@@ -925,6 +1015,16 @@ class RedisStateManager:
                         ):
                             updates["failure"] = failure.model_dump_json()
                         pipe.hset(task_key, mapping=updates)
+
+                        # Bump the monotonic terminal counter exactly once: this
+                        # block only runs on the first transition into a terminal
+                        # state (the status_changed guard), so duplicate finalizes
+                        # from replica + dispatcher + reconciliation never
+                        # double-count.
+                        if terminal_status == TaskStatus.SUCCESS:
+                            pipe.hincrby(task_counters_key, "tasks_succeeded_total", 1)
+                        elif terminal_status == TaskStatus.FAILURE:
+                            pipe.hincrby(task_counters_key, "tasks_failed_total", 1)
 
                     if terminal_status == TaskStatus.SUCCESS:
                         pipe.hdel(task_key, "error_message", "failure")
@@ -1036,6 +1136,27 @@ class RedisStateManager:
         tenants_set.update(active_tenants)
 
         return list(tenants_set)
+
+    async def get_all_tenants_with_task_counters(self) -> list[str]:
+        """Get list of all tenants that have lifecycle counters.
+
+        Counters persist after a tenant's queue and active set drain, so this is
+        needed (in addition to get_all_tenants_with_any_tasks) to keep scraping a
+        tenant's cumulative counters even when it is currently idle. A counter
+        that disappears and later reappears would look like a reset to Prometheus
+        and corrupt rate()/increase().
+
+        Returns:
+            List of tenant IDs that have a counters hash
+        """
+        tenants = []
+        redis = self._ensure_redis()
+        async for key in redis.scan_iter(match="tenant:*:task_counters"):  # type: ignore[union-attr]
+            key_str = key.decode("utf-8")
+            parts = key_str.split(":")
+            if len(parts) == 3:
+                tenants.append(parts[1])
+        return tenants
 
     async def _get_task_size_for_resync(self, task_id: str) -> int:
         metadata = await self.get_task_metadata_model(task_id)

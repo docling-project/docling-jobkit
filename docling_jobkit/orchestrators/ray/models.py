@@ -68,6 +68,30 @@ class TenantStats(BaseModel):
     failed_documents: int = Field(default=0, description="Failed documents")
 
 
+class TenantTaskCounters(BaseModel):
+    """Per-tenant monotonic task-lifecycle counters.
+
+    These are cumulative, never-decremented counters incremented atomically at
+    each task state transition (queued -> dispatched -> started -> terminal).
+    Because they persist in Redis and only ever increase, Prometheus can read
+    them at any scrape interval without losing transitions that happen between
+    scrapes. Exposed by docling-serve as Prometheus counters; instantaneous
+    occupancy (currently running/dispatched) is derived in Grafana from the
+    differences between these counters.
+
+    These count tasks, not documents: the number of documents in a task is only
+    known once the coordinator actor expands the sources (e.g. iterating an S3
+    bucket), so it cannot be attributed at enqueue/dispatch/start time. Per-
+    document outcome counts live in TenantStats instead.
+    """
+
+    tasks_enqueued_total: int = Field(default=0, description="Tasks enqueued")
+    tasks_dispatched_total: int = Field(default=0, description="Tasks dispatched")
+    tasks_started_total: int = Field(default=0, description="Tasks started")
+    tasks_succeeded_total: int = Field(default=0, description="Tasks succeeded")
+    tasks_failed_total: int = Field(default=0, description="Tasks failed")
+
+
 class TaskUpdate(BaseModel):
     """Internal task status update message for pub/sub communication.
 
