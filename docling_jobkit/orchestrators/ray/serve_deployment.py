@@ -17,12 +17,13 @@ from typing import Any, Iterator, Optional, cast
 import ray
 from ray import ObjectRef, serve
 
-from docling_jobkit.orchestrators.ray.metrics_utils import get_metrics_from_conversion_result
+from docling_jobkit.orchestrators.ray.metrics_utils import get_metrics_from_exportable_doc
 
 from docling.datamodel.base_models import (
     ConversionStatus,
     DocumentStream,
     ErrorItem,
+    InputFormat,
 )
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.callbacks import (
@@ -147,7 +148,7 @@ def _is_pdf_source(source: Any) -> bool:
 def _to_exportable_documents(
     task: Task,
     conv_results: list[ConversionResult],
-) -> tuple[list[ExportableDocument], list[dict]]:
+) -> list[ExportableDocument]:
     exportable_docs = [
         ExportableDocument.from_conversion_result(
             conv_res,
@@ -160,22 +161,13 @@ def _to_exportable_documents(
         )
         for idx, conv_res in enumerate(conv_results)
     ]
-    # calculate metrics
-    if generate_metrics:
-        metrics = [
-            get_metrics_from_conversion_result(conv_res)
-            for conv_res in conv_results
-        ]
-    else:
-        metrics = []
-    
-    return exportable_docs, metrics
+    return exportable_docs
 
 
 def _to_exportable_documents_from_chunk(
     chunk: DocumentChunk[Any, Any],
     conv_results: list[ConversionResult],
-) -> tuple[list[ExportableDocument], list[dict]]:
+) -> list[ExportableDocument]:
     exportable: list[ExportableDocument] = []
     metrics = []
     for idx, conv_res in enumerate(conv_results):
@@ -189,17 +181,7 @@ def _to_exportable_documents_from_chunk(
                 ),
             )
         )
-        # calculate metrics
-        metrics = []
-        if generate_metrics:
-            for idx, conv_res in enumerate(conv_results):
-                chunk_metric = {
-                    "metrics": get_metrics_from_conversion_result(conv_res),
-                    "reference": ref.source_index if ref is not None else idx
-                }
-                metrics.append(chunk_metric)
-
-    return exportable, metrics
+    return exportable
 
 
 def _is_s3_fanout_task(task: Task) -> bool:
@@ -847,7 +829,7 @@ class DoclingProcessorConverterDeployment:
 
     def emit_metrics(self, metrics: list, tenant_id: str):
         for item in metrics:
-            if hasattr(item, 'reference'):
+            if 'reference' in item:
                 metric_list = item["metrics"]
             else:
                 metrics_list = [item]
@@ -855,56 +837,56 @@ class DoclingProcessorConverterDeployment:
             for record in metrics_list:
                 document_hash = record["document_hash"]
                 pipeline_stats = record["timings_stats"]
-                if hasattr(pipeline_stats, 'pipeline_total'):
+                if 'pipeline_total' in pipeline_stats:
                     self.pipeline_total_hist.set_default_tags({"tenant_id": tenant_id})
                     self.pipeline_total_hist.observe(pipeline_stats["pipeline_total"])
-                if hasattr(pipeline_stats, 'page_parse'):
+                if 'page_parse' in pipeline_stats:
                     self.page_parse_low_hist.set_default_tags({"tenant_id": tenant_id})
                     self.page_parse_high_hist.set_default_tags({"tenant_id": tenant_id})
                     self.page_parse_median_hist.set_default_tags({"tenant_id": tenant_id})
                     self.page_parse_low_hist.observe(pipeline_stats["page_parse"]["min"])
                     self.page_parse_high_hist.observe(pipeline_stats["page_parse"]["max"])
                     self.page_parse_median_hist.observe(pipeline_stats["page_parse"]["median"])
-                if hasattr(pipeline_stats, 'ocr'):
+                if 'ocr' in pipeline_stats:
                     self.ocr_low_hist.set_default_tags({"tenant_id": tenant_id})
                     self.ocr_high_hist.set_default_tags({"tenant_id": tenant_id})
                     self.ocr_median_hist.set_default_tags({"tenant_id": tenant_id})
                     self.ocr_low_hist.observe(pipeline_stats["ocr"]["min"])
                     self.ocr_high_hist.observe(pipeline_stats["ocr"]["max"])
                     self.ocr_median_hist.observe(pipeline_stats["ocr"]["median"])
-                if hasattr(pipeline_stats, 'layout'):
+                if 'layout' in pipeline_stats:
                     self.layout_low_hist.set_default_tags({"tenant_id": tenant_id})
                     self.layout_high_hist.set_default_tags({"tenant_id": tenant_id})
                     self.layout_median_hist.set_default_tags({"tenant_id": tenant_id})
                     self.layout_low_hist.observe(pipeline_stats["layout"]["min"])
                     self.layout_high_hist.observe(pipeline_stats["layout"]["max"])
                     self.layout_median_hist.observe(pipeline_stats["layout"]["median"])
-                if hasattr(pipeline_stats, 'table_structure'):
+                if 'table_structure' in pipeline_stats:
                     self.table_structure_low_hist.set_default_tags({"tenant_id": tenant_id})
                     self.table_structure_high_hist.set_default_tags({"tenant_id": tenant_id})
                     self.table_structure_median_hist.set_default_tags({"tenant_id": tenant_id})
                     self.table_structure_low_hist.observe(pipeline_stats["table_structure"]["min"])
                     self.table_structure_high_hist.observe(pipeline_stats["table_structure"]["max"])
                     self.table_structure_median_hist.observe(pipeline_stats["table_structure"]["median"])
-                if hasattr(pipeline_stats, 'page_assemble'):
+                if 'page_assemble' in pipeline_stats:
                     self.page_assemble_low_hist.set_default_tags({"tenant_id": tenant_id})
                     self.page_assemble_high_hist.set_default_tags({"tenant_id": tenant_id})
                     self.page_assemble_median_hist.set_default_tags({"tenant_id": tenant_id})
                     self.page_assemble_low_hist.observe(pipeline_stats["page_assemble"]["min"])
                     self.page_assemble_high_hist.observe(pipeline_stats["page_assemble"]["max"])
                     self.page_assemble_median_hist.observe(pipeline_stats["page_assemble"]["median"])
-                if hasattr(pipeline_stats, 'doc_assemble'):
+                if 'doc_assemble' in pipeline_stats:
                     self.doc_assemble_hist.set_default_tags({"tenant_id": tenant_id})
                     self.doc_assemble_hist.observe(pipeline_stats["doc_assemble"])
-                if hasattr(pipeline_stats, 'reading_order'):
+                if 'reading_order' in pipeline_stats:
                     self.reading_order_hist.set_default_tags({"tenant_id": tenant_id})
                     self.reading_order_hist.observe(pipeline_stats["reading_order"])
-                if hasattr(pipeline_stats, 'doc_enrich'):
+                if 'doc_enrich' in pipeline_stats:
                     self.doc_enrich_hist.set_default_tags({"tenant_id": tenant_id})
                     self.doc_enrich_hist.observe(pipeline_stats["doc_enrich"])
 
                 document_stats = record["document_stats"]
-                if hasattr(document_stats, 'input_format'):
+                if 'input_format' in document_stats:
                     doc_type = document_stats["input_format"]
                     if doc_type == InputFormat.PDF :
                         self.doc_type_pdf_counter.set_default_tags({"tenant_id": tenant_id})
@@ -939,25 +921,25 @@ class DoclingProcessorConverterDeployment:
                     else:
                         self.doc_type_other_counter.set_default_tags({"tenant_id": tenant_id})
                         self.doc_type_other_counter.inc()
-                if hasattr(document_stats, 'num_pages'):
+                if 'num_pages' in document_stats:
                     self.num_pages_hist.set_default_tags({"tenant_id": tenant_id})
                     self.num_pages_hist.observe(document_stats["num_pages"])
-                if hasattr(document_stats, 'pictures'):
+                if 'pictures' in document_stats:
                     self.pictures_hist.set_default_tags({"tenant_id": tenant_id})
                     self.pictures_hist.observe(document_stats["pictures"])
-                if hasattr(document_stats, 'tables'):
+                if 'tables' in document_stats:
                     self.tables_hist.set_default_tags({"tenant_id": tenant_id})
                     self.tables_hist.observe(document_stats["tables"])
-                if hasattr(document_stats, 'key_value_items'):
+                if 'key_value_items' in document_stats:
                     self.key_value_items_hist.set_default_tags({"tenant_id": tenant_id})
                     self.key_value_items_hist.observe(document_stats["key_value_items"])
-                if hasattr(document_stats, 'form_items'):
+                if 'form_items' in document_stats:
                     self.form_items_hist.set_default_tags({"tenant_id": tenant_id})
                     self.form_items_hist.observe(document_stats["form_items"])
-                if hasattr(document_stats, 'texts'):
+                if 'texts' in document_stats:
                     self.texts_hist.set_default_tags({"tenant_id": tenant_id})
                     self.texts_hist.observe(document_stats["texts"])
-                if hasattr(document_stats, 'groups'):
+                if 'groups' in document_stats:
                     self.groups_hist.set_default_tags({"tenant_id": tenant_id})
                     self.groups_hist.observe(document_stats["groups"])
 
@@ -988,8 +970,12 @@ class DoclingProcessorConverterDeployment:
             )
             if isinstance(conv_results, ConverterFailureResult):
                 return conv_results
-            exportable, metrics = _to_exportable_documents(request.task, conv_results)
-            self.emit_metrics(metrics=metrics, tenant_id=tenant_id)
+            exportable = _to_exportable_documents(request.task, conv_results)
+            if generate_metrics:
+                metrics = [
+                    get_metrics_from_exportable_doc(doc) for doc in exportable
+                ]
+                self.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             result = await asyncio.to_thread(
                 lambda: self._build_task_result(
                     request.task,
@@ -1004,8 +990,12 @@ class DoclingProcessorConverterDeployment:
                 request.filename,
                 lambda: self._convert_materialized_request(request),
             )
-            exportable, metrics = _to_exportable_documents(request.task, conv_results)
-            self.emit_metrics(metrics=metrics, tenant_id=tenant_id)
+            exportable = _to_exportable_documents(request.task, conv_results)
+            if generate_metrics:
+                metrics = [
+                    get_metrics_from_exportable_doc(doc) for doc in exportable
+                ]
+                self.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             result = await asyncio.to_thread(
                 lambda: self._build_task_result(
                     request.task,
@@ -1024,10 +1014,14 @@ class DoclingProcessorConverterDeployment:
             )
             if isinstance(conv_results, ConverterFailureResult):
                 return conv_results
-            exportable, metrics = _to_exportable_documents_from_chunk(
+            exportable = _to_exportable_documents_from_chunk(
                 request.chunk, conv_results
             )
-            self.emit_metrics(metrics=metrics, tenant_id=tenant_id)
+            if generate_metrics:
+                metrics = [
+                    get_metrics_from_exportable_doc(doc) for doc in exportable
+                ]
+                self.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             result = await asyncio.to_thread(
                 lambda: self._build_task_result(
                     request.task,

@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING, Optional, List, Tuple, Union
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.base_models import ConversionStatus
+from docling_jobkit.datamodel.exportable_document import ExportableDocument
 
 
 def calculate_stats(values: List[Union[int, float]]) -> Tuple[Union[int, float], Union[int, float], float]:
@@ -28,12 +29,12 @@ def calculate_stats(values: List[Union[int, float]]) -> Tuple[Union[int, float],
     return min_val, max_val, median
 
 
-def reduce_timings(conv_res: ConversionResult):
-    conversion_timings = conv_res.timings
+def reduce_timings(timings: dict):
+    conversion_timings = timings
     timing_stats={}
     if conversion_timings:
         if "pipeline_total" in conversion_timings:
-            timing_stats["total_pipeline"] = conversion_timings["pipeline_total"].times[0]
+            timing_stats["pipeline_total"] = conversion_timings["pipeline_total"].times[0]
         if "page_parse" in conversion_timings:
             page_parse_min, page_parse_max, page_parse_median  = calculate_stats(conversion_timings["page_parse"].times)
             timing_stats["page_parse"] = {"min": page_parse_min, "max": page_parse_max, "median": page_parse_median}
@@ -57,12 +58,12 @@ def reduce_timings(conv_res: ConversionResult):
             timing_stats["doc_enrich"] = conversion_timings["doc_enrich"].times[0]
     return timing_stats
     
-def collect_doc_stats(conv_res: ConversionResult):
+def collect_doc_stats(exp_doc: ExportableDocument):
     doc_stats = {}
-    if hasattr(conv_res.input, 'format'):
-        doc_stats["input_format"] = conv_res.input.format
-    doc = conv_res.document
-    if hasattr(doc, 'pages'):
+
+    doc_stats["input_format"] = exp_doc.document_type
+    doc = exp_doc.document
+    if 'pages' in doc:
         doc_stats["num_pages"] = len(doc.pages)
         doc_stats["pictures"] = len(doc.pictures)
         doc_stats["tables"] = len(doc.tables)
@@ -72,19 +73,36 @@ def collect_doc_stats(conv_res: ConversionResult):
         doc_stats["groups"] = len(doc.groups)
     return doc_stats
 
-def get_metrics_from_conversion_result(conversion_result: ConversionResult):
-    metrics = {}
-    metrics["document_hash"] = conversion_result.input.document_hash
-    metrics["timings_stats"] = reduce_timings(conv_res=conversion_result)
-    metrics["document_stats"] = collect_doc_stats(conv_res=conversion_result)
+# def get_metrics_from_conversion_result(conversion_result: ConversionResult):
+#     metrics = {}
+#     metrics["document_hash"] = conversion_result.input.document_hash
+#     metrics["timings_stats"] = reduce_timings(timings=conversion_result.timings)
+#     metrics["document_stats"] = collect_doc_stats(conv_res=conversion_result)
     
-    conv_status = conversion_result.status
-    if conv_status == ConversionStatus.SUCCESS:
-        status = "success"
-    elif conv_status == ConversionStatus.PARTIAL_SUCCESS:
-        status = "partial"
-    else:
-        status = "failed"
-    metrics["status"] = status
+#     conv_status = conversion_result.status
+#     if conv_status == ConversionStatus.SUCCESS:
+#         status = "success"
+#     elif conv_status == ConversionStatus.PARTIAL_SUCCESS:
+#         status = "partial"
+#     else:
+#         status = "failed"
+#     metrics["status"] = status
+
+#     return metrics
+
+def get_metrics_from_exportable_doc(exp_doc: ExportableDocument):
+    metrics = {}
+    metrics["document_hash"] = exp_doc.document_hash
+    metrics["timings_stats"] = reduce_timings(timings=exp_doc.timings)
+    metrics["document_stats"] = collect_doc_stats(exp_doc=exp_doc)
+    
+    # conv_status = exp_doc.status
+    # if conv_status == ConversionStatus.SUCCESS:
+    #     status = "success"
+    # elif conv_status == ConversionStatus.PARTIAL_SUCCESS:
+    #     status = "partial"
+    # else:
+    #     status = "failed"
+    metrics["status"] = exp_doc.status
 
     return metrics
