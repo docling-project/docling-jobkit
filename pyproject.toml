@@ -95,6 +95,7 @@ dev = [
     "ruff>=0.9.6",
     "types-pyyaml>=6.0.12.20250915",
     "aiohttp>=3.13.3",
+    "numpy<2.5.0",  # temporary pinning to avoid typing incompatibility for python < 3.12
     "types-psutil>=7.2.2.20260130",
 ]
 
@@ -215,12 +216,6 @@ module = [
     "codeflare_sdk.*",
 ]
 ignore_missing_imports = true
-
-# numpy 2.5+ bundles stubs using `type` statement syntax (Python 3.12+),
-# which mypy rejects at python_version = "3.10".
-[[tool.mypy.overrides]]
-module = "numpy.*"
-ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
