@@ -61,9 +61,6 @@ onnxruntime = [
 # asr = [
 #     "docling[asr]~=2.53",
 # ]
-kfp = [
-    "kfp[kubernetes]>=2.10.0",
-]
 rq = [
     "rq~=2.4",
     "msgpack~=1.1",
@@ -85,8 +82,8 @@ dev = [
     "coverage>=7.8.0",
     "mypy~=1.11",
     "pre-commit~=3.8",
-    "pytest~=8.3",
-    "pytest-asyncio~=0.24",
+    "pytest~=9.0.3",
+    "pytest-asyncio~=1.4.0",
     "pytest-check~=2.4",
     "pytest-cov>=6.1.1",
     "python-semantic-release~=7.32",
@@ -98,6 +95,7 @@ dev = [
     "ruff>=0.9.6",
     "types-pyyaml>=6.0.12.20250915",
     "aiohttp>=3.13.3",
+    "numpy<2.5.0",  # temporary pinning to avoid typing incompatibility for python < 3.12
     "types-psutil>=7.2.2.20260130",
 ]
 
@@ -113,7 +111,6 @@ package = true
 include = ["docling_jobkit"]
 
 [project.scripts]
-docling-ray-job = "docling_jobkit.ray_job.main:main"
 docling-jobkit-local = "docling_jobkit.cli.local:app"
 docling-jobkit-multiproc = "docling_jobkit.cli.multiproc:app"
 
@@ -213,8 +210,6 @@ module = [
     "easyocr.*",
     "tesserocr.*",
     "rapidocr_onnxruntime.*",
-    "kfp.*",
-    "kfp_server_api.*",
     "pandas.*",
     "msgpack.*",
     "mlx_vlm.*",
@@ -224,11 +219,6 @@ module = [
     "codeflare_sdk.*",
 ]
 ignore_missing_imports = true
-
-# Skip ray_job module on Python 3.14+ where ray is not supported
-[[tool.mypy.overrides]]
-module = "docling_jobkit.ray_job.*"
-ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
