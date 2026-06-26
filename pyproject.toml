@@ -61,9 +61,6 @@ onnxruntime = [
 # asr = [
 #     "docling[asr]~=2.53",
 # ]
-kfp = [
-    "kfp[kubernetes]>=2.10.0",
-]
 rq = [
     "rq~=2.4",
     "msgpack~=1.1",
@@ -113,7 +110,6 @@ package = true
 include = ["docling_jobkit"]
 
 [project.scripts]
-docling-ray-job = "docling_jobkit.ray_job.main:main"
 docling-jobkit-local = "docling_jobkit.cli.local:app"
 docling-jobkit-multiproc = "docling_jobkit.cli.multiproc:app"
 
@@ -210,8 +206,6 @@ module = [
     "easyocr.*",
     "tesserocr.*",
     "rapidocr_onnxruntime.*",
-    "kfp.*",
-    "kfp_server_api.*",
     "pandas.*",
     "msgpack.*",
     "mlx_vlm.*",
@@ -221,11 +215,6 @@ module = [
     "codeflare_sdk.*",
 ]
 ignore_missing_imports = true
-
-# Skip ray_job module on Python 3.14+ where ray is not supported
-[[tool.mypy.overrides]]
-module = "docling_jobkit.ray_job.*"
-ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
