@@ -422,6 +422,14 @@ class RayOrchestratorConfig(BaseSettings):
         default=False,
         description="Return raw infrastructure exception detail in public task/document errors",
     )
+    generate_metrics: bool = Field(
+        default=False,
+        description="Enable Prometheus metrics emission from converter replicas",
+    )
+    metrics_port: int = Field(
+        default=8090,
+        description="Port on which converter replicas expose Prometheus metrics",
+    )
     s3_presigned_config: S3PresignedConfig | None = Field(
         default=None,
         description="Optional server-managed presigned URL target configuration.",

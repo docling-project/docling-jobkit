@@ -54,11 +54,6 @@ from docling.models.factories import (
     get_table_structure_factory,
 )
 
-# metrics
-import os
-from docling.datamodel.settings import settings
-settings.debug.profile_pipeline_timings = bool(os.environ.get("SETTINGS_GENERATE_METRICS", False))
-
 # Note: PictureClassificationFactory will be imported when available in docling
 # from docling.backend.picture_classification_factory import PictureClassificationFactory
 from docling.models.inference_engines.vlm.base import VlmEngineType

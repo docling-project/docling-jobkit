@@ -19,6 +19,7 @@ from ray import ObjectRef, serve
 
 from docling_jobkit.orchestrators.ray.metrics_utils import get_metrics_from_exportable_doc
 
+from docling.datamodel.settings import settings as docling_settings
 from docling.datamodel.base_models import (
     ConversionStatus,
     DocumentStream,
@@ -112,9 +113,6 @@ from docling_jobkit.public_errors import (
 
 # metrics
 from ray.util.metrics import Counter, Gauge, Histogram
-import os
-generate_metrics = bool(os.environ.get("SETTINGS_GENERATE_METRICS", False))
-metrics_port = str(os.environ.get("SETTINGS_METRICS_PORT", "8080"))
 
 _log = logging.getLogger(__name__)
 
@@ -554,9 +552,8 @@ class DoclingProcessorConverterDeployment:
         self._chunker_manager: DocumentChunkerManager | None = None
 
         ## ------------ metrics ---------------
-        if generate_metrics:
-            # move this into where docling isntance is created
-            # settings.debug.profile_pipeline_timings = True
+        if self.config.generate_metrics:
+            docling_settings.debug.profile_pipeline_timings = True
 
             hist_min = 0.000001
             hist_max = 2592000.0
@@ -971,7 +968,7 @@ class DoclingProcessorConverterDeployment:
             if isinstance(conv_results, ConverterFailureResult):
                 return conv_results
             exportable = _to_exportable_documents(request.task, conv_results)
-            if generate_metrics:
+            if self.config.generate_metrics:
                 metrics = [
                     get_metrics_from_exportable_doc(doc) for doc in exportable
                 ]
@@ -991,7 +988,7 @@ class DoclingProcessorConverterDeployment:
                 lambda: self._convert_materialized_request(request),
             )
             exportable = _to_exportable_documents(request.task, conv_results)
-            if generate_metrics:
+            if self.config.generate_metrics:
                 metrics = [
                     get_metrics_from_exportable_doc(doc) for doc in exportable
                 ]
@@ -1017,7 +1014,7 @@ class DoclingProcessorConverterDeployment:
             exportable = _to_exportable_documents_from_chunk(
                 request.chunk, conv_results
             )
-            if generate_metrics:
+            if self.config.generate_metrics:
                 metrics = [
                     get_metrics_from_exportable_doc(doc) for doc in exportable
                 ]
