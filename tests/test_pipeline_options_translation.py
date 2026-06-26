@@ -92,6 +92,21 @@ class TestPipelineOptionsTranslation:
         assert ocr_opts.transport == "grpc"
         assert ocr_opts.force_full_page_ocr is True  # from force_ocr=True in payload
 
+    def test_ocr_text_layer_skip_translated(self, manager, monkeypatch):
+        calls = []
+
+        def fake_create_options(**kwargs):
+            calls.append(kwargs)
+            return object()
+
+        options = ConvertDocumentsOptions.model_validate(PAYLOAD)
+        object.__setattr__(options, "ocr_skip_text_layer_pages", True)
+        monkeypatch.setattr(manager.ocr_factory, "create_options", fake_create_options)
+
+        manager._parse_ocr_options(options)
+
+        assert calls[0]["skip_text_layer_pages"] is True
+
     def test_pdf_pipeline_options_flags(self, manager):
         options = ConvertDocumentsOptions.model_validate(PAYLOAD)
         pdf_format_option = manager.get_pdf_pipeline_opts(options)
