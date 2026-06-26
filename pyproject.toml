@@ -206,7 +206,6 @@ module = [
     "easyocr.*",
     "tesserocr.*",
     "rapidocr_onnxruntime.*",
-    "numpy.*",  # typing can be validated only for python >= 3.12
     "pandas.*",
     "msgpack.*",
     "mlx_vlm.*",
@@ -216,6 +215,12 @@ module = [
     "codeflare_sdk.*",
 ]
 ignore_missing_imports = true
+
+# numpy 2.5+ bundles stubs using `type` statement syntax (Python 3.12+),
+# which mypy rejects at python_version = "3.10".
+[[tool.mypy.overrides]]
+module = "numpy.*"
+ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
