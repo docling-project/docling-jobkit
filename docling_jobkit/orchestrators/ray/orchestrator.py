@@ -48,10 +48,6 @@ from docling_jobkit.orchestrators.ray.serve_deployment import (
     deploy_processor,
 )
 
-import os
-generate_metrics = bool(os.environ.get("SETTINGS_GENERATE_METRICS", False))
-metrics_port = str(os.environ.get("SETTINGS_METRICS_PORT", "8080"))
-
 _log = logging.getLogger(__name__)
 
 
@@ -276,9 +272,8 @@ class RayOrchestrator(BaseOrchestrator):
             "namespace": config.ray_namespace,
             "runtime_env": config.ray_runtime_env,
         }
-        # add metrics port
-        if generate_metrics:
-            init_kwargs["_metrics_export_port"]=metrics_port
+        if config.generate_metrics:
+            init_kwargs["_metrics_export_port"] = config.metrics_port
 
         if config.ray_object_store_memory:
             try:
