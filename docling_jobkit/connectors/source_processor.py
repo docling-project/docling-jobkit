@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from itertools import islice
-from typing import Callable, Generic, Iterator, Sequence, TypeVar
+from typing import Generic, Iterator, Sequence, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 
@@ -22,12 +22,13 @@ class SourceDocumentRef(BaseModel, Generic[FileIdentifierT]):
 
 
 class DocumentChunk(BaseModel, Generic[SourceT, FileIdentifierT]):
-    """A serializable source chunk plus an optional local fetcher convenience.
+    """A serializable batch of connector-native document references.
 
-    Local/CLI callers may attach a fetcher so ``iter_documents()`` can materialize
-    streams lazily from the refs. Cross-process callers such as Ray must strip that
-    fetcher because it may capture initialized connector state that is not safe to
-    serialize.
+    A chunk carries only the root ``source`` plus the ``refs`` needed to fetch its
+    documents, so it is always safe to send across a process boundary (CLI
+    ``mp.Pool`` pickling or Ray cloudpickle). Workers reconstruct their own
+    processor via ``get_source_processor(chunk.source)`` and fetch each ref with
+    ``fetch_converter_source_by_ref``.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -35,17 +36,6 @@ class DocumentChunk(BaseModel, Generic[SourceT, FileIdentifierT]):
     source: SourceT
     refs: Sequence[SourceDocumentRef[FileIdentifierT]]
     chunk_index: int
-    _fetcher: Callable[[FileIdentifierT], DocumentStream] | None = None
-
-    def __init__(
-        self,
-        source: SourceT,
-        refs: Sequence[SourceDocumentRef[FileIdentifierT]],
-        chunk_index: int,
-        fetcher: Callable[[FileIdentifierT], DocumentStream] | None = None,
-    ):
-        super().__init__(source=source, refs=refs, chunk_index=chunk_index)
-        self._fetcher = fetcher
 
     @property
     def ids(self) -> list[FileIdentifierT]:
@@ -54,13 +44,6 @@ class DocumentChunk(BaseModel, Generic[SourceT, FileIdentifierT]):
     @property
     def index(self) -> int:
         return self.chunk_index
-
-    def iter_documents(self) -> Iterator[DocumentStream]:
-        """Materialize documents for local callers when a fetcher is attached."""
-        if self._fetcher is None:
-            raise RuntimeError("DocumentChunk does not have an attached fetcher.")
-        for ref in self.refs:
-            yield self._fetcher(ref.id)
 
 
 class BaseSourceProcessor(
@@ -74,6 +57,19 @@ class BaseSourceProcessor(
     def __init__(self, source: SourceT):
         self._processor_source = source
         self._initialized = False  # Track whether the processor is ready
+
+    @classmethod
+    def get_config_types(cls) -> tuple[type[BaseModel], ...]:
+        """Config (pydantic) models this processor accepts.
+
+        Each returned model must carry a ``Literal`` ``kind`` field. The connector
+        factory keys its registry on these types, so a processor that handles
+        several config shapes (e.g. file + http) returns a multi-element tuple.
+        """
+        raise NotImplementedError(
+            f"{cls.__name__} must implement get_config_types() to be registered "
+            "as a connector plugin."
+        )
 
     def __enter__(self):
         self._initialize()
@@ -183,7 +179,6 @@ class BaseSourceProcessor(
                 source=self.source,
                 refs=refs,
                 chunk_index=chunk_index,
-                fetcher=self._fetch_document_by_id,
             )
 
             chunk_index += 1

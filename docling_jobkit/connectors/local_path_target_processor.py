@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import BinaryIO
 
+from pydantic import BaseModel
+
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.datamodel.task_targets import LocalPathTarget
 
@@ -9,6 +11,10 @@ class LocalPathTargetProcessor(BaseTargetProcessor):
     def __init__(self, target: LocalPathTarget):
         super().__init__()
         self._target = target
+
+    @classmethod
+    def get_config_types(cls) -> tuple[type[BaseModel], ...]:
+        return (LocalPathTarget,)
 
     def _initialize(self) -> None:
         """

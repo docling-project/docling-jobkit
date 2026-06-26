@@ -46,6 +46,7 @@ def _make_orchestrator_with_task():
     with patch.object(RQOrchestrator, "__init__", lambda self, **kw: None):
         orch = object.__new__(RQOrchestrator)
     orch.config = config
+    orch.allowed_target_kinds = config.allowed_target_kinds
     orch.tasks = {}
     orch.notifier = None
     orch._task_result_keys = {}

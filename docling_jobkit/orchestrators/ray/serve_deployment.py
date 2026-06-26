@@ -40,6 +40,7 @@ from docling_jobkit.connectors.source_processor import (
     SourceDocumentRef,
 )
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
+from docling_jobkit.convert.chunk_execution import open_chunk_sources
 from docling_jobkit.convert.chunking import (
     DocumentChunkerManager,
     process_chunkable_results,
@@ -811,28 +812,18 @@ class DoclingProcessorConverterDeployment:
     def _convert_source_chunk_request(
         self, request: SourceChunkConvertRequest
     ) -> list[ConversionResult]:
-        with get_source_processor(request.chunk.source) as source_processor:
-            convert_sources: list[str | DocumentStream] = []
-            headers: Optional[dict[str, Any]] = None
-            for ref in request.chunk.refs:
-                convert_source = source_processor.fetch_converter_source_by_ref(
-                    ref,
-                    max_file_size=self.converter_manager_config.max_file_size,
+        with open_chunk_sources(
+            request.chunk,
+            max_file_size=self.converter_manager_config.max_file_size,
+            allow_external_plugins=self.converter_manager_config.allow_external_plugins,
+        ) as (convert_sources, headers):
+            return list(
+                self.cm.convert_documents(
+                    sources=convert_sources,
+                    options=request.task.convert_options or ConvertDocumentsOptions(),
+                    headers=headers,
                 )
-                convert_sources.append(convert_source)
-                if not isinstance(convert_source, str):
-                    continue
-                ref_headers = source_processor.headers_for_ref(ref)
-                if headers is None and ref_headers:
-                    headers = ref_headers
-
-        return list(
-            self.cm.convert_documents(
-                sources=convert_sources,
-                options=request.task.convert_options or ConvertDocumentsOptions(),
-                headers=headers,
             )
-        )
 
     def _process_slice_convert(
         self, request: SliceConvertRequest
@@ -1596,20 +1587,13 @@ class DoclingProcessorCoordinatorDeployment:
         expected_doc_count: int,
     ) -> ConverterTaskResult:
         child_task = task.model_copy(update={"sources": [chunk.source]})
-        # Strip the fetcher before cross-process dispatch. The fetcher is a bound
-        # method of the coordinator's initialized S3SourceProcessor, which holds a
-        # boto3 client containing thread locks. Pydantic v2 serializes
-        # __pydantic_private__ via __getstate__, so the fetcher would be included
-        # when Ray cloudpickle serializes the chunk — causing a TypeError on thread
-        # locks. The converter never calls iter_documents(); it reconstructs its own
-        # source processor from chunk.source and uses fetch_converter_source_by_ref().
-        serializable_chunk = DocumentChunk(
-            source=chunk.source, refs=chunk.refs, chunk_index=chunk.chunk_index
-        )
+        # The chunk carries only source + refs, so it is safe to cloudpickle as-is.
+        # The converter reconstructs its own source processor from chunk.source and
+        # fetches each ref via fetch_converter_source_by_ref().
         return await self.converter_handle.process_converter_request.remote(
             SourceChunkConvertRequest(
                 task=child_task,
-                chunk=serializable_chunk,
+                chunk=chunk,
                 expected_doc_count=expected_doc_count,
             )
         )

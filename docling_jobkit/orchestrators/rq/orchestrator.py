@@ -59,6 +59,7 @@ class RQOrchestratorConfig(BaseModel):
     result_removal_delay: int = 300  # seconds until result key expires after fetch
     debug_error_details: bool = False
     s3_presigned_config: S3PresignedConfig | None = None
+    allowed_target_kinds: Optional[set[str]] = None
 
     @model_validator(mode="after")
     def resolve_redis_gate_concurrency(self) -> "RQOrchestratorConfig":
@@ -121,6 +122,7 @@ class RQOrchestrator(BaseOrchestrator):
     ):
         super().__init__()
         self.config = config
+        self.allowed_target_kinds = config.allowed_target_kinds
         assert self.config.redis_gate_concurrency is not None
         self._redis_gate = RedisCallerGate(self.config.redis_gate_concurrency)
         self._redis_conn, self._rq_queue = self.make_rq_queue(self.config)
@@ -158,6 +160,7 @@ class RQOrchestrator(BaseOrchestrator):
         callbacks: list[CallbackSpec] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Task:
+        self._validate_target(target)
         async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
             if options is not None and convert_options is None:
                 convert_options = options

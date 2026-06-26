@@ -105,6 +105,7 @@ class RayOrchestrator(BaseOrchestrator):
         """
         super().__init__()
         self.config = config
+        self.allowed_target_kinds = config.allowed_target_kinds
         self.cm = converter_manager
         assert self.config.redis_gate_concurrency is not None
         self._redis_gate = RedisCallerGate(self.config.redis_gate_concurrency)
@@ -625,7 +626,9 @@ class RayOrchestrator(BaseOrchestrator):
 
         Raises:
             QueueLimitExceededError: If queue limit exceeded and rejection enabled
+            TargetNotAllowedError: If the target kind is not permitted
         """
+        self._validate_target(target)
         async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
             # Ensure Redis is connected
             await self.redis_manager.connect()

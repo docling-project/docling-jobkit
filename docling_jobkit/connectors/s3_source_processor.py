@@ -7,6 +7,7 @@ from botocore.exceptions import ClientError
 from pydantic import BaseModel
 from typing_extensions import override
 
+from docling.datamodel.service.requests import S3SourceRequest
 from docling.datamodel.service.sources import S3Coordinates
 from docling_core.types.io import DocumentStream
 
@@ -33,6 +34,10 @@ class S3SourceProcessor(BaseSourceProcessor[S3Coordinates, S3FileIdentifier]):
     def __init__(self, coords: S3Coordinates):
         super().__init__(coords)
         self._coords = coords
+
+    @classmethod
+    def get_config_types(cls) -> tuple[type[BaseModel], ...]:
+        return (S3SourceRequest,)
 
     def _initialize(self):
         self._client, self._resource = get_s3_connection(self._coords)

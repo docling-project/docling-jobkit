@@ -1,7 +1,10 @@
 from pathlib import Path
 from typing import BinaryIO
 
+from pydantic import BaseModel
+
 from docling.datamodel.service.sources import S3Coordinates
+from docling.datamodel.service.targets import S3Target
 
 from docling_jobkit.connectors.s3_helper import get_s3_connection
 from docling_jobkit.connectors.s3_upload_support import (
@@ -15,6 +18,10 @@ class S3TargetProcessor(BaseTargetProcessor):
     def __init__(self, coords: S3Coordinates):
         super().__init__()
         self._coords = coords
+
+    @classmethod
+    def get_config_types(cls) -> tuple[type[BaseModel], ...]:
+        return (S3Target,)
 
     def _initialize(self):
         self._client, self._resource = get_s3_connection(self._coords)

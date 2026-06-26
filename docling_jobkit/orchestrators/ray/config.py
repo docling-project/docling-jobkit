@@ -51,6 +51,14 @@ class RayOrchestratorConfig(BaseSettings):
         extra="ignore",
     )
 
+    allowed_target_kinds: Optional[set[str]] = Field(
+        default=None,
+        description=(
+            "If set, only these target kinds may be submitted to this orchestrator. "
+            "None allows all registered targets."
+        ),
+    )
+
     # Redis Configuration
     # Supports standard Redis, Redis Sentinel, and Redis Cluster via URL:
     # - Standard: "redis://localhost:6379/"

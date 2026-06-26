@@ -3,6 +3,10 @@ from typing import Iterator
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import override
 
+from docling.datamodel.service.requests import (
+    FileSourceRequest,
+    HttpSourceRequest,
+)
 from docling.datamodel.service.sources import FileSource, HttpSource
 from docling_core.types.io import DocumentStream
 
@@ -32,6 +36,10 @@ class HttpSourceProcessor(
     def __init__(self, source: HttpSource | FileSource):
         super().__init__(source)
         self._source = source
+
+    @classmethod
+    def get_config_types(cls) -> tuple[type[BaseModel], ...]:
+        return (FileSourceRequest, HttpSourceRequest)
 
     def _initialize(self):
         pass

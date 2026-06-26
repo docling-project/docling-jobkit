@@ -10,19 +10,26 @@ from docling.datamodel.base_models import DocumentStream
 if TYPE_CHECKING:
     from docling_jobkit.connectors.google_drive_helper import GoogleDriveFileIdentifier
 
+from pydantic import BaseModel
+
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     SourceDocumentRef,
 )
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
+from docling_jobkit.datamodel.task_sources import TaskGoogleDriveSource
 
 
 class GoogleDriveSourceProcessor(
-    BaseSourceProcessor[GoogleDriveCoordinates, GoogleDriveFileIdentifier]
+    BaseSourceProcessor[GoogleDriveCoordinates, "GoogleDriveFileIdentifier"]
 ):
     def __init__(self, coords: GoogleDriveCoordinates):
         super().__init__(coords)
         self._coords = coords
+
+    @classmethod
+    def get_config_types(cls) -> tuple[type[BaseModel], ...]:
+        return (TaskGoogleDriveSource,)
 
     def _initialize(self):
         from docling_jobkit.connectors.google_drive_helper import get_service
