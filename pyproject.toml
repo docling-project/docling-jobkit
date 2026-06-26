@@ -206,6 +206,7 @@ module = [
     "easyocr.*",
     "tesserocr.*",
     "rapidocr_onnxruntime.*",
+    "numpy.*",  # typing can be validated only for python >= 3.12
     "pandas.*",
     "msgpack.*",
     "mlx_vlm.*",
