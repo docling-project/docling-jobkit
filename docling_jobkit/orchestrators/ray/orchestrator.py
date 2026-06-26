@@ -35,6 +35,7 @@ from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
     OrchestratorError,
+    SystemCapacity,
     TaskNotFoundError,
 )
 from docling_jobkit.orchestrators.ray.config import (
@@ -734,6 +735,27 @@ class RayOrchestrator(BaseOrchestrator):
             total_size += size
 
         return total_size
+
+    async def get_capacity(self) -> SystemCapacity:
+        """Get system-level capacity snapshot across all tenants."""
+        async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
+            await self.redis_manager.connect()
+            tenants = await self.redis_manager.get_all_tenants_with_any_tasks()
+            total_queued = 0
+            total_running = 0
+            for tenant_id in tenants:
+                total_queued += await self.redis_manager.get_tenant_queue_size(
+                    tenant_id
+                )
+                total_running += await self.redis_manager.get_user_running_task_count(
+                    tenant_id
+                )
+            return SystemCapacity(
+                queue_depth=total_queued,
+                active_jobs=total_running,
+                active_workers=self.config.max_actors,
+                max_queue_size=self.config.max_queued_tasks,
+            )
 
     async def get_queue_position(self, task_id: str) -> Optional[int]:
         """Get position in queue for a specific task.
