@@ -1,3 +1,20 @@
+## [v2.0.0](https://github.com/docling-project/docling-jobkit/releases/tag/v2.0.0) - 2026-06-29
+
+### Feature
+
+* Removing legacy orchestrators ([#185](https://github.com/docling-project/docling-jobkit/issues/185)) ([`7cf953f`](https://github.com/docling-project/docling-jobkit/commit/7cf953ff905fdf2c1d269e10486e55464224b613))
+* Unify CLI/Ray connector processing and add a pluggy connector plugin system ([#182](https://github.com/docling-project/docling-jobkit/issues/182)) ([`52a79ca`](https://github.com/docling-project/docling-jobkit/commit/52a79ca2fb76ce120919e219b169e76cdc1302af))
+
+### Fix
+
+* Guard task start transition before mutating Redis status ([#184](https://github.com/docling-project/docling-jobkit/issues/184)) ([`e9d66d1`](https://github.com/docling-project/docling-jobkit/commit/e9d66d17ec05a64181a0b51a672ce02b44d0f030))
+* **ray:** Task-lifecycle metrics via monotonic Redis counters ([#181](https://github.com/docling-project/docling-jobkit/issues/181)) ([`a65608d`](https://github.com/docling-project/docling-jobkit/commit/a65608d7fd5493aa8cbd5fd1a1491cf8ebb8b418))
+* Propagate structured failure categories into document error items ([#183](https://github.com/docling-project/docling-jobkit/issues/183)) ([`6e31f81`](https://github.com/docling-project/docling-jobkit/commit/6e31f81613c0ca03db9f89ca3d6c0b05befebb57))
+
+### Breaking
+
+* removing legacy orchestrators ([#185](https://github.com/docling-project/docling-jobkit/issues/185)) ([`7cf953f`](https://github.com/docling-project/docling-jobkit/commit/7cf953ff905fdf2c1d269e10486e55464224b613))
+
 ## [v1.24.0](https://github.com/docling-project/docling-jobkit/releases/tag/v1.24.0) - 2026-06-22
 
 ### Feature
