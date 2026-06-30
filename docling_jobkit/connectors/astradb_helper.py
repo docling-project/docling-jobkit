@@ -42,8 +42,7 @@ def build_chunk_records(raw: bytes, source_name: str) -> list[dict]:
 
     doc = DoclingDocument.model_validate_json(raw)
 
-    # TODO: expose chunking_options on AstraDBCoordinates so callers can
-    # control tokenizer, max_tokens, etc. from the YAML config.
+    # TODO: add chunking_options on AstraDBCoordinates
     options = HybridChunkerOptions()
     chunks = list(
         DocumentChunkerManager().chunk_document(
@@ -58,18 +57,13 @@ def build_chunk_records(raw: bytes, source_name: str) -> list[dict]:
         logging.warning("AstraDB: no chunks produced for '%s'", source_name)
         return []
 
-    # doc_id: prefer the binary hash from origin (stable across re-conversions
-    # of the same file); fall back to source_name if origin is absent.
     doc_id = str(doc.origin.binary_hash) if doc.origin else source_name
 
     records = []
     for chunk in chunks:
         records.append(
             {
-                # Stable _id: re-indexing the same document overwrites existing
-                # records rather than creating duplicates (upsert semantics via
-                # insert_many with ordered=False).
-                # TODO (Route B): move ID generation to a shared utility.
+                # TODO: Think more on id generation
                 "_id": f"{doc_id}:chunk:{chunk.chunk_index}",
                 "doc_id": doc_id,
                 "source_name": source_name,
