@@ -553,10 +553,17 @@ class DoclingProcessorConverterDeployment:
 
         ## ------------ metrics ---------------
         if self.config.generate_metrics:
+            _log.warning(
+                    "Setting up metric generation"
+                )
+
             docling_settings.debug.profile_pipeline_timings = True
 
-            hist_min = 0.000001
-            hist_max = 2592000.0
+            timings_hist_buckets = [
+                0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.025, 0.05, 0.075, 0.1,
+                0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 3.5, 4.0,
+                5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 12.5, 15.0, 17.5, 20.0, 25.0, 30.0
+            ]
 
             self.success_counter = Counter(
                 "dcls_conversion_success",
@@ -579,133 +586,133 @@ class DoclingProcessorConverterDeployment:
             self.pipeline_total_hist = Histogram(
                 "dcls_pipeline_total",
                 description="Total pipeline execution time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
             #-----
             self.page_parse_low_hist = Histogram(
                 "dcls_page_parse_low",
                 description="Lowest page parse time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
 
             self.page_parse_high_hist = Histogram(
                 "dcls_page_parse_high",
                 description="Highest page parse time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
 
             self.page_parse_median_hist = Histogram(
                 "dcls_page_parse_median",
                 description="Median page parse time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
             #-----
             self.ocr_low_hist = Histogram(
                 "dcls_ocr_low",
                 description="Lowest ocr time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
 
             self.ocr_high_hist = Histogram(
                 "dcls_ocr_high",
                 description="Highest ocr time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
 
             self.ocr_median_hist = Histogram(
                 "dcls_ocr_median",
                 description="Median ocr time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
             #-----
             self.layout_low_hist = Histogram(
                 "dcls_layout_low",
                 description="Lowest layout time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
 
             self.layout_high_hist = Histogram(
                 "dcls_layout_high",
                 description="Highest layout time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
 
             self.layout_median_hist = Histogram(
                 "dcls_layout_median",
                 description="Median layout time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
             #-----
             self.table_structure_low_hist = Histogram(
                 "dcls_table_structure_low",
                 description="Lowest table structure time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
             
             self.table_structure_high_hist = Histogram(
                 "dcls_table_structure_high",
                 description="Highest table structure time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
 
             self.table_structure_median_hist = Histogram(
                 "dcls_table_structure_median",
                 description="Median table structure time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
             #-----
             self.page_assemble_low_hist = Histogram(
                 "dcls_page_assemble_low",
                 description="Lowest page assemble time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
 
             self.page_assemble_high_hist = Histogram(
                 "dcls_page_assemble_high",
                 description="Highest page assemble time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
 
             self.page_assemble_median_hist = Histogram(
                 "dcls_page_assemble_median",
                 description="Median page assemble time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
             #-----
             self.doc_assemble_hist = Histogram(
                 "dcls_doc_assemble",
                 description="Document assemble time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
             #-----
             self.reading_order_hist = Histogram(
                 "dcls_reading_order",
                 description="Reading order time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
             #-----
             self.doc_enrich_hist = Histogram(
                 "dcls_doc_enrich",
                 description="Document enrichment time in seconds",
-                boundaries=[hist_min, hist_max],
+                boundaries=timings_hist_buckets,
                 tag_keys=("tenant_id",),
             )
             #-----
@@ -775,56 +782,53 @@ class DoclingProcessorConverterDeployment:
                 tag_keys=("tenant_id",),
             )
             #-----
-            self.num_pages_hist = Histogram(
+            self.num_pages_hist = Counter(
                 "dcls_num_pages",
                 description="Number of pages in converted document",
-                boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
-            self.pictures_hist = Histogram(
+            self.pictures_hist = Counter(
                 "dcls_pictures",
                 description="Number of pictures in converted document",
-                boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
-            self.tables_hist = Histogram(
+            self.tables_hist = Counter(
                 "dcls_tables",
                 description="Number of tables in converted document",
-                boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
-            self.key_value_items_hist = Histogram(
+            self.key_value_items_hist = Counter(
                 "dcls_key_value_items",
                 description="Number of key value items in converted document",
-                boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
-            self.form_items_hist = Histogram(
+            self.form_items_hist = Counter(
                 "dcls_form_items",
                 description="Number of form items in converted document",
-                boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
-            self.texts_hist = Histogram(
+            self.texts_hist = Counter(
                 "dcls_texts",
                 description="Number of text items in converted document",
-                boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
             #-----
-            self.groups_hist = Histogram(
+            self.groups_hist = Counter(
                 "dcls_groups",
                 description="Number of group items in converted document",
-                boundaries=[0.01, 10000000],
                 tag_keys=("tenant_id",),
             )
 
     def emit_metrics(self, metrics: list, tenant_id: str):
+        _log.warning(
+                    "Emitting replics, total number records %s",
+                    len(metrics)
+                )
         for item in metrics:
             if 'reference' in item:
                 metric_list = item["metrics"]
@@ -920,25 +924,25 @@ class DoclingProcessorConverterDeployment:
                         self.doc_type_other_counter.inc()
                 if 'num_pages' in document_stats:
                     self.num_pages_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.num_pages_hist.observe(document_stats["num_pages"])
+                    self.num_pages_hist.inc(document_stats["num_pages"])
                 if 'pictures' in document_stats:
                     self.pictures_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.pictures_hist.observe(document_stats["pictures"])
+                    self.pictures_hist.inc(document_stats["pictures"])
                 if 'tables' in document_stats:
                     self.tables_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.tables_hist.observe(document_stats["tables"])
+                    self.tables_hist.inc(document_stats["tables"])
                 if 'key_value_items' in document_stats:
                     self.key_value_items_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.key_value_items_hist.observe(document_stats["key_value_items"])
+                    self.key_value_items_hist.inc(document_stats["key_value_items"])
                 if 'form_items' in document_stats:
                     self.form_items_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.form_items_hist.observe(document_stats["form_items"])
+                    self.form_items_hist.inc(document_stats["form_items"])
                 if 'texts' in document_stats:
                     self.texts_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.texts_hist.observe(document_stats["texts"])
+                    self.texts_hist.inc(document_stats["texts"])
                 if 'groups' in document_stats:
                     self.groups_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.groups_hist.observe(document_stats["groups"])
+                    self.groups_hist.inc(document_stats["groups"])
 
                 conv_status = record["status"]
                 if conv_status == "success":
