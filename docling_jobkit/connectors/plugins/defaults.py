@@ -33,6 +33,9 @@ def source_connectors():
 
 
 def target_connectors():
+    from docling_jobkit.connectors.astradb_target_processor import (
+        AstraDBTargetProcessor,
+    )
     from docling_jobkit.connectors.google_drive_target_processor import (
         GoogleDriveTargetProcessor,
     )
@@ -50,5 +53,6 @@ def target_connectors():
             LocalPathTargetProcessor,
             HttpPutTargetProcessor,
             GoogleDriveTargetProcessor,
+            AstraDBTargetProcessor,
         ]
     }

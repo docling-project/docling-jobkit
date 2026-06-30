@@ -76,6 +76,9 @@ gdrive = [
     "google-api-python-client>=2.183.0",
     "google-auth-oauthlib>=1.2.2",
 ]
+astradb = [
+    "astrapy>=2.0.0,<3.0.0",
+]
 
 [dependency-groups]
 dev = [

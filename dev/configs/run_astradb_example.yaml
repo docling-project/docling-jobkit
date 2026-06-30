@@ -1,0 +1,15 @@
+options:
+  do_ocr: false
+  to_formats:
+    - json
+
+sources:
+  - kind: local_path
+    path: input_documents/sample.pdf
+
+target:
+  kind: astradb
+  api_endpoint: "https://{xxx}.apps.astra.datastax.com"
+  token: "AstraCS:{xxx}"
+  keyspace: "default_keyspace"
+  collection_name: "example_collection"
