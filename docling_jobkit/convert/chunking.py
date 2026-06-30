@@ -231,7 +231,7 @@ class DocumentChunkerManager:
 
             # Store additional metadata
             if doc_chunk.meta.origin:
-                metadata["origin"] = doc_chunk.meta.origin
+                metadata["origin"] = doc_chunk.meta.origin.model_dump(mode="json")
 
             metadata["has_image"] = any(
                 item.self_ref.startswith("#/pictures/")

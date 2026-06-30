@@ -29,6 +29,7 @@ from docling_jobkit.datamodel.task_sources import (
 from docling_jobkit.datamodel.task_targets import (
     GoogleDriveTarget,
     LocalPathTarget,
+    AstraDBTarget
 )
 
 console = Console()
@@ -52,7 +53,7 @@ JobTaskSource = Annotated[
 ]
 
 JobTaskTarget = Annotated[
-    ZipTarget | LocalPathTarget | S3Target | GoogleDriveTarget,
+    ZipTarget | LocalPathTarget | S3Target | GoogleDriveTarget | AstraDBTarget,
     Field(discriminator="kind"),
 ]
 
