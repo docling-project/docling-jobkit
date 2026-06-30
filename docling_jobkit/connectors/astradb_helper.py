@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 
 from docling_jobkit.datamodel.astradb_coords import AstraDBCoordinates
+from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
 
 _BATCH_SIZE = 20
 
@@ -44,7 +45,7 @@ def build_chunk_records(raw: bytes, source_name: str) -> list[dict]:
 
     # TODO: add chunking_options on AstraDBCoordinates
     options = HybridChunkerOptions()
-    chunks = list(
+    chunks: list[ChunkedDocumentResultItem] = list(
         DocumentChunkerManager().chunk_document(
             document=doc,
             # filename is used only for the filename field on each chunk item.
@@ -87,7 +88,7 @@ def insert_records(collection, records: list[dict], source_name: str) -> None:
     if not records:
         return
 
-    total_batches = (len(records) + _BATCH_SIZE - 1 ) // _BATCH_SIZE
+    total_batches = (len(records) + _BATCH_SIZE - 1) // _BATCH_SIZE
     for i in range(0, len(records), _BATCH_SIZE):
         batch = records[i : i + _BATCH_SIZE]
         collection.insert_many(batch, ordered=False)
@@ -99,6 +100,4 @@ def insert_records(collection, records: list[dict], source_name: str) -> None:
             source_name,
         )
 
-    logging.info(
-        "AstraDB: inserted %d chunks for '%s'", len(records), source_name
-    )
+    logging.info("AstraDB: inserted %d chunks for '%s'", len(records), source_name)

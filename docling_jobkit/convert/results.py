@@ -526,8 +526,9 @@ def _upload_document_to_storage_target(
         export_doctags=export_doctags,
         image_export_mode=image_export_mode,
         md_page_break_placeholder=md_page_break_placeholder,
-        target_filename_fn=lambda source,
-        artifact_filename: f"{source.source_key}/{artifact_filename}",
+        target_filename_fn=lambda source, artifact_filename: (
+            f"{source.source_key}/{artifact_filename}"
+        ),
     )
 
 
@@ -631,27 +632,30 @@ def _process_remote_exportable_results(
                     callback_invoker=callback_invoker,
                     debug_error_details=debug_error_details,
                     callback_mode=callback_mode,
-                    upload_document=lambda _source: _upload_document_as_presigned_artifact(
-                        task=task,
-                        exportable_document=exportable_document,
-                        response_index=idx,
-                        output_dir=output_dir,
-                        target_processor=target_processor,
-                        export_json=export_json,
-                        export_html=export_html,
-                        export_md=export_md,
-                        export_txt=export_txt,
-                        export_doctags=export_doctags,
-                        image_export_mode=image_export_mode,
-                        md_page_break_placeholder=md_page_break_placeholder,
+                    upload_document=lambda _source: (
+                        _upload_document_as_presigned_artifact(
+                            task=task,
+                            exportable_document=exportable_document,
+                            response_index=idx,
+                            output_dir=output_dir,
+                            target_processor=target_processor,
+                            export_json=export_json,
+                            export_html=export_html,
+                            export_md=export_md,
+                            export_txt=export_txt,
+                            export_doctags=export_doctags,
+                            image_export_mode=image_export_mode,
+                            md_page_break_placeholder=md_page_break_placeholder,
+                        )
                     ),
-                    build_failure_result=lambda failed_document,
-                    source: target_processor.build_document_artifact_item(
-                        source=source,
-                        filename=failed_document.file.name,
-                        status=failed_document.status,
-                        errors=failed_document.errors,
-                        timings=failed_document.timings,
+                    build_failure_result=lambda failed_document, source: (
+                        target_processor.build_document_artifact_item(
+                            source=source,
+                            filename=failed_document.file.name,
+                            status=failed_document.status,
+                            errors=failed_document.errors,
+                            timings=failed_document.timings,
+                        )
                     ),
                 )
                 processed_docs.append(processed_doc)
