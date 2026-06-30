@@ -27,9 +27,9 @@ from docling_jobkit.datamodel.task_sources import (
     TaskLocalPathSource,
 )
 from docling_jobkit.datamodel.task_targets import (
+    AstraDBTarget,
     GoogleDriveTarget,
     LocalPathTarget,
-    AstraDBTarget
 )
 
 console = Console()
