@@ -551,6 +551,9 @@ class DoclingProcessorConverterDeployment:
         self.memory_warnings = 0
         self._chunker_manager: DocumentChunkerManager | None = None
 
+        _log.warning(
+                    "---==== Checking if metric generation is enabled ====---"
+                )
         ## ------------ metrics ---------------
         if self.config.generate_metrics:
             _log.warning(
