@@ -557,6 +557,12 @@ def _process_remote_document(
         try:
             upload_result = upload_document(source)
         except Exception as exc:
+            logging.error(
+                "Upload failed for '%s': %s",
+                source.source_key,
+                exc,
+                exc_info=True,
+            )
             final_document = _build_failed_exportable_document(
                 exportable_document,
                 exc,
