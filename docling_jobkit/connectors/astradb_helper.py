@@ -90,7 +90,7 @@ def insert_records(collection, records: list[dict], source_name: str) -> None:
     """Upsert records into AstraDB, _BATCH_SIZE at a time.
 
     Optimistically attempts insert_many first. On duplicate _id conflicts,
-    falls back to find_one_and_replace (upsert=True) for only the records
+    falls back to update_one (upsert=True) for only the records
     that failed, leaving new records inserted in bulk.
     """
     if not records:
@@ -105,9 +105,9 @@ def insert_records(collection, records: list[dict], source_name: str) -> None:
             inserted = set(exc.inserted_ids)
             for record in batch:
                 if record["_id"] not in inserted:
-                    collection.find_one_and_replace(
+                    collection.update_one(
                         {"_id": record["_id"]},
-                        record,
+                        {"$set": {k: v for k, v in record.items() if k != "_id"}}, # can't update stable-id
                         upsert=True,
                     )
         logging.debug(
