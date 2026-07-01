@@ -1,7 +1,9 @@
 import logging
 import multiprocessing as mp
 import queue
+import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
@@ -33,8 +35,11 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
 )
+from docling_jobkit.convert.results import process_exportable_results
 from docling_jobkit.convert.results_processor import ResultsProcessor
 from docling_jobkit.datamodel.dynamic_unions import build_job_config_model
+from docling_jobkit.datamodel.exportable_document import ExportableDocument
+from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_sources import (
     TaskGoogleDriveSource,
     TaskLocalPathSource,
@@ -324,39 +329,61 @@ def process_batch(
         )
         manager = DoclingConverterManager(config=cm_config)
 
-        # Process documents in this batch using factories
-        with get_target_processor(
-            target, allow_external_plugins=allow_external_plugins
-        ) as target_processor:
-            result_processor = ResultsProcessor(
-                target_processor=target_processor,
-                to_formats=[v.value for v in options.to_formats],
-                generate_page_images=options.include_page_images,
-                generate_picture_images=options.include_images,
+        # Fetch documents lazily from the chunk refs (one in flight at a time)
+        with open_chunk_sources(
+            chunk,
+            max_file_size=manager.config.max_file_size,
+            allow_external_plugins=allow_external_plugins,
+        ) as (sources, headers):
+            conv_results = manager.convert_documents(
+                sources=sources,
+                options=options,
+                headers=headers,
             )
 
-            # Fetch documents lazily from the chunk refs (one in flight at a time)
-            with open_chunk_sources(
-                chunk,
-                max_file_size=manager.config.max_file_size,
-                allow_external_plugins=allow_external_plugins,
-            ) as (sources, headers):
-                for item in result_processor.process_documents(
-                    manager.convert_documents(
-                        sources=sources,
-                        options=options,
-                        headers=headers,
+            if isinstance(target, AstraDBTarget):
+                exportable_documents = (
+                    ExportableDocument.from_conversion_result(
+                        conv_res, source_index=idx
                     )
-                ):
-                    if "SUCCESS" in item:
-                        num_succeeded += 1
-                    else:
-                        num_failed += 1
-                        failed_documents.append(item)
-
-                    # Send progress update after each document
-                    if progress_queue:
+                    for idx, conv_res in enumerate(conv_results)
+                )
+                task = Task(
+                    task_id=str(uuid.uuid4()),
+                    sources=[],
+                    target=target,
+                    convert_options=options,
+                )
+                with tempfile.TemporaryDirectory(prefix="docling_astradb_") as tmp:
+                    result = process_exportable_results(
+                        task=task,
+                        exportable_documents=exportable_documents,
+                        work_dir=Path(tmp),
+                    )
+                num_succeeded += result.num_succeeded
+                num_failed += result.num_failed
+                if progress_queue:
+                    for _ in range(result.num_succeeded + result.num_failed):
                         progress_queue.put("document_completed")
+            else:
+                with get_target_processor(
+                    target, allow_external_plugins=allow_external_plugins
+                ) as target_processor:
+                    result_processor = ResultsProcessor(
+                        target_processor=target_processor,
+                        to_formats=[v.value for v in options.to_formats],
+                        generate_page_images=options.include_page_images,
+                        generate_picture_images=options.include_images,
+                    )
+                    for item in result_processor.process_documents(conv_results):
+                        if "SUCCESS" in item:
+                            num_succeeded += 1
+                        else:
+                            num_failed += 1
+                            failed_documents.append(item)
+
+                        if progress_queue:
+                            progress_queue.put("document_completed")
 
         processing_time = time.time() - start_time
 
