@@ -1,5 +1,8 @@
 import logging
 
+from astrapy import Collection
+from astrapy.info import CollectionDefinition
+from astrapy.constants import VectorMetric
 from docling_jobkit.datamodel.astradb_coords import AstraDBCoordinates
 from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
 from sentence_transformers import SentenceTransformer
@@ -9,7 +12,11 @@ from docling_jobkit.convert.embedding import EmbeddingError, generate_text_embed
 _BATCH_SIZE = 20
 
 
-def get_collection(coords: AstraDBCoordinates):
+def get_collection(coords: AstraDBCoordinates) -> Collection:
+    """
+    fetch the collection from AstraDB to save the document chunks to
+    If the specified collection doesn't exist, it will create the collection on AstraDB
+    """
     from astrapy import DataAPIClient
 
     client = DataAPIClient(token=coords.token.get_secret_value())
@@ -17,8 +24,18 @@ def get_collection(coords: AstraDBCoordinates):
         str(coords.api_endpoint),
         keyspace=coords.keyspace,
     )
-    # create_collection may be better
-    collection = db.get_collection(coords.collection_name)
+
+    # idempotent, if collection exists it will just return status ok
+    collection = db.create_collection(
+        coords.collection_name,
+        definition=(
+            CollectionDefinition.builder()
+            .with_vector_dimension(768)
+            .with_vector_metric(VectorMetric.COSINE)
+            .build()
+        ),
+    )
+
     logging.info(
         "AstraDB: ready — collection '%s', keyspace '%s'",
         coords.collection_name,
