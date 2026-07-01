@@ -1,5 +1,7 @@
 import logging
 
+from astrapy.exceptions import CollectionInsertManyException
+
 from astrapy import Collection
 from astrapy.info import CollectionDefinition
 from astrapy.constants import VectorMetric
@@ -9,7 +11,7 @@ from sentence_transformers import SentenceTransformer
 
 from docling_jobkit.convert.embedding import EmbeddingError, generate_text_embedding
 
-_BATCH_SIZE = 20
+_BATCH_SIZE = 20 # max astra can do in one insert_many
 
 
 def get_collection(coords: AstraDBCoordinates) -> Collection:
@@ -85,20 +87,35 @@ def build_records_from_chunks(
 
 
 def insert_records(collection, records: list[dict], source_name: str) -> None:
-    """Batch-insert records into AstraDB, _BATCH_SIZE at a time."""
+    """Upsert records into AstraDB, _BATCH_SIZE at a time.
+
+    Optimistically attempts insert_many first. On duplicate _id conflicts,
+    falls back to find_one_and_replace (upsert=True) for only the records
+    that failed, leaving new records inserted in bulk.
+    """
     if not records:
         return
 
     total_batches = (len(records) + _BATCH_SIZE - 1) // _BATCH_SIZE
     for i in range(0, len(records), _BATCH_SIZE):
         batch = records[i : i + _BATCH_SIZE]
-        collection.insert_many(batch, ordered=False)
+        try:
+            collection.insert_many(batch, ordered=False)
+        except CollectionInsertManyException as exc:
+            inserted = set(exc.inserted_ids)
+            for record in batch:
+                if record["_id"] not in inserted:
+                    collection.find_one_and_replace(
+                        {"_id": record["_id"]},
+                        record,
+                        upsert=True,
+                    )
         logging.debug(
-            "AstraDB: inserted batch %d/%d (%d records) for '%s'",
+            "AstraDB: upserted batch %d/%d (%d records) for '%s'",
             i // _BATCH_SIZE + 1,
             total_batches,
             len(batch),
             source_name,
         )
 
-    logging.info("AstraDB: inserted %d chunks for '%s'", len(records), source_name)
+    logging.info("AstraDB: upserted %d chunks for '%s'", len(records), source_name)
