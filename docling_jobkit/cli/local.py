@@ -118,7 +118,7 @@ def convert(
     )
     manager = DoclingConverterManager(config=cm_config)
 
-    # Note: Astra specific branch. Need to trigger chunker task from CLI. 
+    # Note: Astra specific branch. Need to trigger chunker task from CLI.
     if isinstance(config.target, AstraDBTarget):
         for source in config.sources:
             with get_source_processor(

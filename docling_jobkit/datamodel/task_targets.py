@@ -11,8 +11,8 @@ from docling.datamodel.service.targets import (
     ZipTarget,
 )
 
-from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
 from docling_jobkit.datamodel.astradb_coords import AstraDBCoordinates
+from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
 
 
 class GoogleDriveTarget(GoogleDriveCoordinates):
@@ -57,6 +57,7 @@ TaskTarget = Annotated[
 ]
 
 __all__ = [
+    "AstraDBTarget",
     "GoogleDriveTarget",
     "InBodyTarget",
     "LocalPathTarget",
@@ -65,5 +66,4 @@ __all__ = [
     "S3Target",
     "TaskTarget",
     "ZipTarget",
-    "AstraDBTarget",
 ]

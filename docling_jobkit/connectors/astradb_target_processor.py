@@ -12,8 +12,13 @@ from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
 class AstraDBTargetProcessor(BaseTargetProcessor):
     def __init__(self, coords: AstraDBCoordinates):
         super().__init__()
-        self._coords = coords
-        self._collection = None
+
+        from typing import Any
+
+        from astrapy import Collection
+
+        self._coords: AstraDBCoordinates = coords
+        self._collection: Collection[Any] | None = None
         self._embedding_model = None
 
     @classmethod
@@ -23,8 +28,9 @@ class AstraDBTargetProcessor(BaseTargetProcessor):
         return (AstraDBTarget,)
 
     def _initialize(self) -> None:
-        from docling_jobkit.connectors.astradb_helper import get_collection
         from sentence_transformers import SentenceTransformer
+
+        from docling_jobkit.connectors.astradb_helper import get_collection
 
         self._collection = get_collection(self._coords)
         self._embedding_model = SentenceTransformer(

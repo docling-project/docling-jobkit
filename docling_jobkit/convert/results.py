@@ -590,7 +590,6 @@ def _process_remote_document(
         _cleanup_document_output_dir(document_dir)
 
 
-
 def _upload_document_to_astradb(
     *,
     exportable_document: ExportableDocument,
@@ -627,7 +626,6 @@ def _upload_document_to_astradb(
         return
 
     target_processor.upload_chunks(chunks, doc_id=doc_id, source_name=source_name)
-
 
 
 def _process_remote_exportable_results(
@@ -860,7 +858,13 @@ def _process_exportable_results_internal(
 
     if isinstance(
         task.target,
-        (PresignedUrlTarget, S3Target, LocalPathTarget, GoogleDriveTarget, AstraDBTarget),
+        (
+            PresignedUrlTarget,
+            S3Target,
+            LocalPathTarget,
+            GoogleDriveTarget,
+            AstraDBTarget,
+        ),
     ):
         return _process_remote_exportable_results(
             task=task,

@@ -1,17 +1,16 @@
 import logging
 
-from astrapy.exceptions import CollectionInsertManyException
-
 from astrapy import Collection
-from astrapy.info import CollectionDefinition
 from astrapy.constants import VectorMetric
-from docling_jobkit.datamodel.astradb_coords import AstraDBCoordinates
-from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
+from astrapy.exceptions import CollectionInsertManyException
+from astrapy.info import CollectionDefinition
 from sentence_transformers import SentenceTransformer
 
 from docling_jobkit.convert.embedding import EmbeddingError, generate_text_embedding
+from docling_jobkit.datamodel.astradb_coords import AstraDBCoordinates
+from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
 
-_BATCH_SIZE = 20 # max astra can do in one insert_many
+_BATCH_SIZE = 20  # max astra can do in one insert_many
 
 
 def get_collection(coords: AstraDBCoordinates) -> Collection:
