@@ -14,6 +14,7 @@ class AstraDBTargetProcessor(BaseTargetProcessor):
         super().__init__()
         self._coords = coords
         self._collection = None
+        self._embedding_model = None
 
     @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
@@ -23,8 +24,12 @@ class AstraDBTargetProcessor(BaseTargetProcessor):
 
     def _initialize(self) -> None:
         from docling_jobkit.connectors.astradb_helper import get_collection
+        from sentence_transformers import SentenceTransformer
 
         self._collection = get_collection(self._coords)
+        self._embedding_model = SentenceTransformer(
+            "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+        )
 
     def _finalize(self) -> None:
         self._collection = None
@@ -41,15 +46,24 @@ class AstraDBTargetProcessor(BaseTargetProcessor):
             insert_records,
         )
 
+        if not self._embedding_model:
+            logging.error("embedding model not initialized")
+            raise
+
         if not chunks:
             logging.warning("AstraDB: no chunks to insert for '%s'", source_name)
             return
 
-        records = build_records_from_chunks(chunks, doc_id=doc_id, source_name=source_name)
+        records = build_records_from_chunks(
+            chunks,
+            doc_id=doc_id,
+            source_name=source_name,
+            emb_model=self._embedding_model,
+        )
         insert_records(self._collection, records, source_name=source_name)
 
-    # TODO: These are dead - leftover from abstract base class. Likely should create new base class for 
-    # different storage types. 
+    # TODO: These are dead - leftover from abstract base class. Likely should create new base class for
+    # different storage types.
 
     def upload_file(
         self,
