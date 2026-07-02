@@ -70,10 +70,6 @@ from docling_jobkit.public_errors import (
 )
 
 if TYPE_CHECKING:
-    from docling_jobkit.connectors.astradb_target_processor import (
-        AstraDBTargetProcessor,
-    )
-    from docling_jobkit.convert.chunking import DocumentChunkerManager
     from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
 
 _log = logging.getLogger(__name__)
@@ -590,44 +586,6 @@ def _process_remote_document(
         _cleanup_document_output_dir(document_dir)
 
 
-def _upload_document_to_astradb(
-    *,
-    exportable_document: ExportableDocument,
-    target_processor: "AstraDBTargetProcessor",
-    chunker_manager: "DocumentChunkerManager",
-    chunking_options: Any,
-) -> None:
-    """Chunk a live ExportableDocument and insert records into AstraDB.
-
-    This is intentionally called before the document reference is released so
-    chunking operates on the in-memory DoclingDocument with no serialisation
-    round-trip.
-    """
-
-    if not _is_exportable_status(exportable_document.status):
-        return
-    if exportable_document.document is None:
-        return
-
-    doc = exportable_document.document
-    source_name = exportable_document.file.name
-    doc_id = str(doc.origin.binary_hash) if doc.origin else source_name
-
-    chunks = list(
-        chunker_manager.chunk_document(
-            document=doc,
-            filename=source_name,
-            options=chunking_options,
-        )
-    )
-
-    if not chunks:
-        _log.warning("AstraDB: no chunks produced for '%s'", source_name)
-        return
-
-    target_processor.upload_chunks(chunks, doc_id=doc_id, source_name=source_name)
-
-
 def _process_remote_exportable_results(
     *,
     task: Task,
@@ -716,17 +674,12 @@ def _process_remote_exportable_results(
 
         task_result: ResultType = PresignedArtifactResult(documents=presigned_documents)
     elif isinstance(task.target, AstraDBTarget):
-        from docling.datamodel.service.chunking import HybridChunkerOptions
-
-        from docling_jobkit.connectors.astradb_target_processor import (
-            AstraDBTargetProcessor,
-        )
-        from docling_jobkit.convert.chunking import DocumentChunkerManager
-
-        chunking_options = task.chunking_options or HybridChunkerOptions()
-        chunker_manager = DocumentChunkerManager()
-
-        with AstraDBTargetProcessor(task.target) as target_processor:
+        # Vector-store targets chunk the live DoclingDocument directly via the
+        # processor's chunk_and_upload method (no file serialisation round-trip).
+        # The processor owns both the chunker and the embedding model.
+        with get_target_processor(
+            task.target, chunking_options=task.chunking_options
+        ) as target_processor:
             for idx, exportable_document in enumerate(exportable_documents):
                 final_document, processed_doc, _ = _process_remote_document(
                     task=task,
@@ -737,11 +690,8 @@ def _process_remote_exportable_results(
                     callback_invoker=callback_invoker,
                     debug_error_details=debug_error_details,
                     callback_mode=callback_mode,
-                    upload_document=lambda _source: _upload_document_to_astradb(
-                        exportable_document=exportable_document,
-                        target_processor=target_processor,
-                        chunker_manager=chunker_manager,
-                        chunking_options=chunking_options,
+                    upload_document=lambda _source: target_processor.chunk_and_upload(
+                        exportable_document
                     ),
                     build_failure_result=lambda _failed_document, _source: None,
                 )
@@ -756,7 +706,7 @@ def _process_remote_exportable_results(
         # Every user-owned storage target is handled identically through the
         # connector factory: the per-source artifact path is computed here and
         # the target processor applies its own prefix/root (S3 key_prefix, local
-        # directory, Drive folder, …) when writing. Adding a new storage
+        # directory, Drive folder, …) when writing. Adding a new file-export
         # connector therefore needs no change in this module.
         with get_target_processor(task.target) as target_processor:
             for idx, exportable_document in enumerate(exportable_documents):

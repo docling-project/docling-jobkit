@@ -3,11 +3,17 @@ from unittest.mock import MagicMock, call, patch
 
 import httpx
 import pytest
-from astrapy.exceptions import DataAPIHttpException, DataAPITimeoutException
+from astrapy.exceptions import (
+    CollectionInsertManyException,
+    DataAPIHttpException,
+    DataAPITimeoutException,
+)
 
 from docling_jobkit.connectors.astradb_helper import (
     _with_exponential_retry,
     build_records_from_chunks,
+    get_collection,
+    insert_records,
 )
 from docling_jobkit.convert.embedding import EmbeddingError
 from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
@@ -109,3 +115,80 @@ def test_exp_backoff_sequence() -> None:
             _with_exponential_retry(fn, "op")
 
     assert mock_sleep.call_args_list == [call(1.0), call(2.0), call(4.0)]
+
+
+# insert_records
+
+
+def test_insert_records_empty_list_is_noop() -> None:
+    """Empty record list should return without touching the collection."""
+    collection = MagicMock()
+    insert_records(collection, [], source_name="doc.pdf")
+    collection.insert_many.assert_not_called()
+    collection.update_one.assert_not_called()
+
+
+def test_insert_records_new_doc_calls_insert_many() -> None:
+    """All-new records: insert_many is called once per batch, update_one never."""
+    collection = MagicMock()
+    records = [{"_id": f"doc:chunk:{i}", "text": f"chunk {i}"} for i in range(3)]
+    insert_records(collection, records, source_name="doc.pdf")
+    collection.insert_many.assert_called_once_with(records, ordered=False)
+    collection.update_one.assert_not_called()
+
+
+def test_insert_records_conflict_falls_back_to_update_one() -> None:
+    """On a duplicate-id conflict, update_one is called only for the failing record."""
+    collection = MagicMock()
+    records = [
+        {"_id": "doc:chunk:0", "text": "a"},
+        {"_id": "doc:chunk:1", "text": "b"},
+    ]
+    # Simulate doc:chunk:0 inserted successfully; doc:chunk:1 conflicted
+    exc = CollectionInsertManyException(
+        inserted_ids=["doc:chunk:0"], exceptions=[MagicMock()]
+    )
+    collection.insert_many.side_effect = exc
+
+    insert_records(collection, records, source_name="doc.pdf")
+
+    collection.update_one.assert_called_once_with(
+        {"_id": "doc:chunk:1"},
+        {"$set": {"text": "b"}},
+        upsert=True,
+    )
+
+
+# get_collection
+
+
+def test_get_collection_uses_token_and_returns_collection() -> None:
+    """get_collection should authenticate with the token and return the collection."""
+    from docling_jobkit.datamodel.astradb_coords import AstraDBCoordinates
+
+    coords = AstraDBCoordinates.model_validate(
+        {
+            "api_endpoint": "https://abc123.apps.astra.datastax.com",
+            "token": "AstraCS:test_token",
+            "keyspace": "test_keyspace",
+            "collection_name": "test_collection",
+        }
+    )
+
+    mock_collection = MagicMock()
+    mock_db = MagicMock()
+    mock_db.create_collection.return_value = mock_collection
+    mock_client = MagicMock()
+    mock_client.get_database.return_value = mock_db
+
+    with patch(
+        "astrapy.DataAPIClient",
+        return_value=mock_client,
+    ):
+        result = get_collection(coords, emb_dim=768)
+
+    mock_client.get_database.assert_called_once_with(
+        str(coords.api_endpoint), keyspace="test_keyspace"
+    )
+    mock_db.create_collection.assert_called_once()
+    assert result is mock_collection
