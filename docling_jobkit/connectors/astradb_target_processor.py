@@ -32,10 +32,15 @@ class AstraDBTargetProcessor(BaseTargetProcessor):
 
         from docling_jobkit.connectors.astradb_helper import get_collection
 
-        self._collection = get_collection(self._coords)
         self._embedding_model = SentenceTransformer(
             "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
         )
+
+        emb_dim = self._embedding_model.get_embedding_dimension()
+        if not emb_dim:
+            raise RuntimeError("Could not determine embedding dimension from model")
+
+        self._collection = get_collection(self._coords, emb_dim)
 
     def _finalize(self) -> None:
         self._collection = None
@@ -54,7 +59,7 @@ class AstraDBTargetProcessor(BaseTargetProcessor):
 
         if not self._embedding_model:
             logging.error("embedding model not initialized")
-            raise
+            raise RuntimeError("Embedding model not initialized")
 
         if not chunks:
             logging.warning("AstraDB: no chunks to insert for '%s'", source_name)
