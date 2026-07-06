@@ -13,3 +13,17 @@ target:
   token: "AstraCS:{xxx}"
   keyspace: "default_keyspace"
   collection_name: "example_collection"
+  embedding_config: 
+    embedding_provider: ollama
+
+    ollama:
+      embedding_model: "nomic-embed-text"
+      endpoint: "http://localhost:11434"
+    openai:
+      embedding_model: ""
+      api_key: ""
+    watsonx:
+      embedding_model: ""
+      api_key: ""
+      endpoint: ""
+      project_id: ""
