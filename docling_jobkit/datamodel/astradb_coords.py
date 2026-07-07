@@ -69,7 +69,10 @@ class WatsonXEmbeddingCoordinates(BaseModel):
     project_id: Annotated[
         str,
         Field(
-            description="WatsonX project ID. Found in your WatsonX.ai project settings.",
+            description=(
+                "WatsonX project ID. Go to dataplatform.cloud.ibm.com -> "
+                "create or open a project -> click on manage tab"
+            ),
         ),
     ]
 
