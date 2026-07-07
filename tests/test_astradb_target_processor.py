@@ -18,6 +18,7 @@ def coords() -> AstraDBCoordinates:
             "token": "AstraCS:test_token",
             "keyspace": "test_keyspace",
             "collection_name": "test_collection",
+            "enable_external_provider": False,
         }
     )
 
@@ -98,6 +99,8 @@ def test_upload_chunks_happy_path(
         doc_id="doc1",
         source_name="doc.pdf",
         emb_model=processor._embedding_model,
+        emb_kwargs=processor._embedding_kwargs,
+        emb_max_tokens=processor._max_tokens,
     )
     mock_insert.assert_called_once_with(
         processor._collection, mock_records, source_name="doc.pdf"
