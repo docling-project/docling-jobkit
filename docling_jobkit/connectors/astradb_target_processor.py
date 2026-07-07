@@ -33,42 +33,60 @@ class AstraDBTargetProcessor(BaseTargetProcessor):
     def _initialize(self) -> None:
         from docling_jobkit.connectors.astradb_helper import get_collection
         from docling_jobkit.convert.chunking import DocumentChunkerManager
-        from docling_jobkit.convert.embedding import generate_text_embedding
 
-        emb_config = self._coords.embedding_config
-        provider = emb_config.embedding_provider
+        # these args are only necessary if the user chooses to use the external embedding provider
+        if self._coords.enable_external_provider:
+            from docling_jobkit.convert.embedding import generate_text_embedding
 
-        if provider == "ollama":
-            self._embedding_model = f"ollama/{emb_config.ollama.embedding_model}"
-            self._embedding_kwargs = {"api_base": emb_config.ollama.endpoint}
-            self._max_tokens = (
-                2000  # ollama specifically has a max_tokens of 2000 instead of 8000
+            if not self._coords.external_provider_config:
+                raise RuntimeError(
+                    "external_provider_config is required when enable_external_provider is true"
+                )
+            external_emb_config = self._coords.external_provider_config
+            provider = external_emb_config.provider
+
+            if provider == "ollama":
+                self._embedding_model = (
+                    f"ollama/{external_emb_config.ollama.embedding_model}"
+                )
+                self._embedding_kwargs = {
+                    "api_base": external_emb_config.ollama.endpoint
+                }
+                self._max_tokens = (
+                    2000  # ollama specifically has a max_tokens of 2000 instead of 8000
+                )
+            elif provider == "openai":
+                self._embedding_model = (
+                    f"openai/{external_emb_config.openai.embedding_model}"
+                )
+                self._embedding_kwargs = {
+                    "api_key": external_emb_config.openai.api_key.get_secret_value()
+                }
+            elif provider == "watsonx":
+                self._embedding_model = (
+                    f"watsonx/{external_emb_config.watsonx.embedding_model}"
+                )
+                self._embedding_kwargs = {
+                    "api_key": external_emb_config.watsonx.api_key.get_secret_value(),
+                    "api_base": external_emb_config.watsonx.endpoint,
+                    "project_id": external_emb_config.watsonx.project_id,
+                }
+
+            if not self._embedding_model:
+                raise RuntimeError("Embedding model was not set")
+
+            emb_dim = len(
+                generate_text_embedding(
+                    self._embedding_model, ["test"], **self._embedding_kwargs
+                )[0]
             )
-        elif provider == "openai":
-            self._embedding_model = f"openai/{emb_config.openai.embedding_model}"
-            self._embedding_kwargs = {
-                "api_key": emb_config.openai.api_key.get_secret_value()
-            }
-        elif provider == "watsonx":
-            self._embedding_model = f"watsonx/{emb_config.watsonx.embedding_model}"
-            self._embedding_kwargs = {
-                "api_key": emb_config.watsonx.api_key.get_secret_value(),
-                "api_base": emb_config.watsonx.endpoint,
-                "project_id": emb_config.watsonx.project_id,
-            }
+            if not emb_dim:
+                raise RuntimeError("Could not determine embedding dimension from model")
 
-        if not self._embedding_model:
-            raise RuntimeError("Embedding model was not set")
+            self._collection = get_collection(self._coords, emb_dim)
+        else:
+            self._collection = get_collection(self._coords)
 
-        emb_dim = len(
-            generate_text_embedding(
-                self._embedding_model, ["test"], **self._embedding_kwargs
-            )[0]
-        )
-        if not emb_dim:
-            raise RuntimeError("Could not determine embedding dimension from model")
-
-        self._collection = get_collection(self._coords, emb_dim)
         self._chunker_manager = DocumentChunkerManager()
 
     def _finalize(self) -> None:
@@ -90,8 +108,8 @@ class AstraDBTargetProcessor(BaseTargetProcessor):
             insert_records,
         )
 
-        if not self._embedding_model:
-            raise RuntimeError("Embedding model not initialized")
+        if not self._collection:
+            raise RuntimeError("Collection not initialized")
 
         if not chunks:
             logging.warning("AstraDB: no chunks to insert for '%s'", source_name)
