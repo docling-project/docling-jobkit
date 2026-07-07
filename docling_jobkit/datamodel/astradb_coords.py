@@ -80,7 +80,10 @@ class WatsonXEmbeddingCoordinates(BaseModel):
         str,
         Field(
             description="Embedding model name for WatsonX provider.",
-            examples=["ibm/slate-30m-english-rtrvr"],
+            examples=[
+                "intfloat/multilingual-e5-large",
+                "ibm/granite-embedding-278m-multilingual",
+            ],
         ),
     ]
 
