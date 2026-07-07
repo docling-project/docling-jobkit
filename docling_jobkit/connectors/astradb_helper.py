@@ -11,7 +11,6 @@ from astrapy.exceptions import (
     DataAPITimeoutException,
 )
 from astrapy.info import CollectionDefinition
-from sentence_transformers import SentenceTransformer
 
 from docling_jobkit.convert.embedding import EmbeddingError, generate_text_embedding
 from docling_jobkit.datamodel.astradb_coords import AstraDBCoordinates
@@ -103,13 +102,17 @@ def build_records_from_chunks(
     chunks: list[ChunkedDocumentResultItem],
     doc_id: str,
     source_name: str,
-    emb_model: SentenceTransformer,
+    emb_model: str,
+    emb_kwargs: dict,
+    emb_max_tokens: int | None = None,
 ) -> list[dict]:
     """Convert pre-built chunk items into AstraDB insertion records."""
     # one batch chunk text embedding call
     texts = [chunk.text for chunk in chunks]
     try:
-        embeddings = generate_text_embedding(emb_model, texts)
+        embeddings = generate_text_embedding(
+            emb_model, texts, emb_max_tokens, **emb_kwargs
+        )
     except EmbeddingError:
         # since embeddings are required before writing to AstraDB, fail entire document
         # instead of inserting chunks with no embeddings
