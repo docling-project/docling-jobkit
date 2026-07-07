@@ -1,38 +1,38 @@
+from unittest.mock import patch
+
 import pytest
-from sentence_transformers import SentenceTransformer
 
-from docling_jobkit.convert.embedding import EmbeddingError, generate_text_embedding
+from docling_jobkit.convert.embedding import (
+    EmbeddingError,
+    _batch_texts,
+    generate_text_embedding,
+)
 
+MODEL = "ollama/nomic-embed-text"
 
-@pytest.fixture(scope="module")
-def emb_model() -> SentenceTransformer:
-    """creates the mbedding model to be used across all tests in this file"""
-    return SentenceTransformer(
-        "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
-    )
-
-
-def test_embeds_single_text(emb_model: SentenceTransformer) -> None:
-    """checks that one input text results in one result and its a float (vector) embedding"""
-    result = generate_text_embedding(emb_model, ["hello world"])
-
-    assert len(result) == 1
-    assert all(isinstance(emb, float) for emb in result[0])
+# Note: With the new external embedding provider, to test embeddings we need a shared openai/watsonx api key
+# or run ollama in testcontainers
 
 
-def test_embeds_multiple_text(emb_model: SentenceTransformer) -> None:
-    """checks that multiple input text results in correct number of (vector) embeddings"""
-    result = generate_text_embedding(emb_model, ["hello world", "goodbye world"])
+def test_batch_texts_splits_oversized_text() -> None:
+    batches = _batch_texts(["hello world"], MODEL, max_tokens=1)
 
-    assert len(result) == 2
-    assert all(isinstance(emb, float) for emb in result[0])
-    assert all(isinstance(emb, float) for emb in result[1])
+    assert len(batches) > 1
+    assert all(len(b) == 1 for b in batches)
 
 
-@pytest.mark.parametrize("bad_input", [[None], [0]])
-def test_raises_embedding_error_on_bad_input(
-    emb_model: SentenceTransformer, bad_input: list[int | None]
-) -> None:
-    """bad inputs should raise an embedding error"""
-    with pytest.raises(EmbeddingError):
-        generate_text_embedding(emb_model, bad_input)
+@pytest.mark.parametrize(argnames="batch_text", argvalues=["hello world", "goodbye"])
+def test_batch_texts_doesnt_split_less_equal(batch_text: str) -> None:
+    """It shouldn't split text into multiple batches if text length is less than or equal to max_tokens"""
+    batches = _batch_texts([batch_text], MODEL, max_tokens=10)
+
+    assert len(batches) == 1
+
+
+def test_raises_embedding_error_on_litellm_failure() -> None:
+    with patch(
+        "docling_jobkit.convert.embedding.litellm.embedding",
+        side_effect=Exception("api down"),
+    ):
+        with pytest.raises(EmbeddingError):
+            generate_text_embedding(MODEL, ["hello"])
