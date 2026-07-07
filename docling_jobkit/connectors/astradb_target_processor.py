@@ -54,6 +54,7 @@ class AstraDBTargetProcessor(BaseTargetProcessor):
             self._embedding_kwargs = {
                 "api_key": emb_config.watsonx.api_key.get_secret_value(),
                 "api_base": emb_config.watsonx.endpoint,
+                "project_id": emb_config.watsonx.project_id,
             }
 
         if not self._embedding_model:
