@@ -19,6 +19,23 @@ def coords() -> AstraDBCoordinates:
             "keyspace": "test_keyspace",
             "collection_name": "test_collection",
             "enable_external_provider": False,
+            "external_provider_config": {
+                "provider": "ollama",
+                "ollama": {
+                    "endpoint": "http://localhost:11434",
+                    "embedding_model": "nomic-embed-text",
+                },
+                "openai": {
+                    "api_key": "sk-test",
+                    "embedding_model": "text-embedding-3-small",
+                },
+                "watsonx": {
+                    "api_key": "wx-test",
+                    "endpoint": "https://us-south.ml.cloud.ibm.com",
+                    "project_id": "proj-id",
+                    "embedding_model": "ibm/granite",
+                },
+            },
         }
     )
 
@@ -168,3 +185,99 @@ def test_chunk_and_upload_delegates_to_upload_chunks(
     mock_upload.assert_called_once_with(
         mock_chunks, doc_id="abc123", source_name="doc.pdf"
     )
+
+
+def test_chunk_and_upload_skips_when_document_is_none(
+    coords: AstraDBCoordinates,
+) -> None:
+    """chunk_and_upload returns early when document is None."""
+    processor = _make_initialized_processor(coords)
+    exportable = MagicMock()
+    exportable.status = ConversionStatus.SUCCESS
+    exportable.document = None
+
+    with patch.object(processor, "upload_chunks") as mock_upload:
+        processor.chunk_and_upload(exportable)
+
+    mock_upload.assert_not_called()
+
+
+def test_chunk_and_upload_skips_when_no_chunks_produced(
+    coords: AstraDBCoordinates,
+) -> None:
+    """chunk_and_upload returns early without calling upload_chunks when chunking yields nothing."""
+    processor = _make_initialized_processor(coords)
+    processor._chunker_manager.chunk_document.return_value = iter([])
+
+    exportable = MagicMock()
+    exportable.status = ConversionStatus.SUCCESS
+    exportable.file.name = "doc.pdf"
+    exportable.document.origin.binary_hash = "abc123"
+
+    with patch.object(processor, "upload_chunks") as mock_upload:
+        processor.chunk_and_upload(exportable)
+
+    mock_upload.assert_not_called()
+
+
+# _initialize
+
+
+def test_initialize_without_external_provider(coords: AstraDBCoordinates) -> None:
+    """_initialize with enable_external_provider=False calls get_collection without emb_dim."""
+    processor = AstraDBTargetProcessor(coords)
+    mock_collection = MagicMock()
+
+    with (
+        patch(
+            "docling_jobkit.connectors.astradb_helper.get_collection",
+            return_value=mock_collection,
+        ) as mock_get_coll,
+        patch("docling_jobkit.convert.chunking.DocumentChunkerManager"),
+    ):
+        processor._initialize()
+
+    mock_get_coll.assert_called_once_with(coords)
+    assert processor._collection is mock_collection
+    assert processor._embedding_model is None
+
+
+def test_initialize_with_external_provider_missing_config_raises() -> None:
+    """When enable_external_provider=True but no external_provider_config, raises RuntimeError."""
+    coords_no_config = AstraDBCoordinates.model_validate(
+        {
+            "api_endpoint": "https://abc123.apps.astra.datastax.com",
+            "token": "AstraCS:test_token",
+            "keyspace": "test_keyspace",
+            "collection_name": "test_collection",
+            "enable_external_provider": True,
+        }
+    )
+    processor = AstraDBTargetProcessor(coords_no_config)
+    with pytest.raises(RuntimeError, match="external_provider_config is required"):
+        processor._initialize()
+
+
+def test_initialize_with_external_provider_ollama(coords: AstraDBCoordinates) -> None:
+    """_initialize with ollama sets the right embedding model, endpoint kwargs, and max_tokens."""
+    coords_enabled = coords.model_copy(update={"enable_external_provider": True})
+    processor = AstraDBTargetProcessor(coords_enabled)
+    mock_collection = MagicMock()
+
+    with (
+        patch(
+            "docling_jobkit.convert.embedding.generate_text_embedding",
+            return_value=[[0.1] * 768],
+        ),
+        patch(
+            "docling_jobkit.connectors.astradb_helper.get_collection",
+            return_value=mock_collection,
+        ),
+        patch("docling_jobkit.convert.chunking.DocumentChunkerManager"),
+    ):
+        processor._initialize()
+
+    assert processor._embedding_model == "ollama/nomic-embed-text"
+    assert processor._embedding_kwargs == {"api_base": "http://localhost:11434"}
+    assert processor._max_tokens == 2000
+    assert processor._collection is mock_collection
