@@ -81,7 +81,7 @@ astradb = [
 ]
 
 embeddings = [
-    "sentence-transformers>=5.0,<6.0",
+    "litellm>=1.91.0",
 ]
 
 [dependency-groups]
