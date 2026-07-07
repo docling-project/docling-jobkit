@@ -19,8 +19,10 @@ class AstraDBTargetProcessor(BaseTargetProcessor):
         self._coords: AstraDBCoordinates = coords
         self._chunking_options = chunking_options
         self._collection: Collection[Any] | None = None
-        self._embedding_model = None
         self._chunker_manager: "DocumentChunkerManager | None" = None
+        self._embedding_model: str | None = None
+        self._embedding_kwargs: dict = {}
+        self._max_tokens: int = 8000
 
     @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
@@ -29,16 +31,39 @@ class AstraDBTargetProcessor(BaseTargetProcessor):
         return (AstraDBTarget,)
 
     def _initialize(self) -> None:
-        from sentence_transformers import SentenceTransformer
-
         from docling_jobkit.connectors.astradb_helper import get_collection
         from docling_jobkit.convert.chunking import DocumentChunkerManager
+        from docling_jobkit.convert.embedding import generate_text_embedding
 
-        self._embedding_model = SentenceTransformer(
-            "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+        emb_config = self._coords.embedding_config
+        provider = emb_config.embedding_provider
+
+        if provider == "ollama":
+            self._embedding_model = f"ollama/{emb_config.ollama.embedding_model}"
+            self._embedding_kwargs = {"api_base": emb_config.ollama.endpoint}
+            self._max_tokens = (
+                2000  # ollama specifically has a max_tokens of 2000 instead of 8000
+            )
+        elif provider == "openai":
+            self._embedding_model = f"openai/{emb_config.openai.embedding_model}"
+            self._embedding_kwargs = {
+                "api_key": emb_config.openai.api_key.get_secret_value()
+            }
+        elif provider == "watsonx":
+            self._embedding_model = f"watsonx/{emb_config.watsonx.embedding_model}"
+            self._embedding_kwargs = {
+                "api_key": emb_config.watsonx.api_key.get_secret_value(),
+                "api_base": emb_config.watsonx.endpoint,
+            }
+
+        if not self._embedding_model:
+            raise RuntimeError("Embedding model was not set")
+
+        emb_dim = len(
+            generate_text_embedding(
+                self._embedding_model, ["test"], **self._embedding_kwargs
+            )[0]
         )
-
-        emb_dim = self._embedding_model.get_embedding_dimension()
         if not emb_dim:
             raise RuntimeError("Could not determine embedding dimension from model")
 
@@ -48,6 +73,9 @@ class AstraDBTargetProcessor(BaseTargetProcessor):
     def _finalize(self) -> None:
         self._collection = None
         self._chunker_manager = None
+        self._embedding_model = None
+        self._embedding_kwargs = {}
+        self._max_tokens = 8000
 
     def upload_chunks(
         self,
@@ -73,6 +101,8 @@ class AstraDBTargetProcessor(BaseTargetProcessor):
             doc_id=doc_id,
             source_name=source_name,
             emb_model=self._embedding_model,
+            emb_kwargs=self._embedding_kwargs,
+            emb_max_tokens=self._max_tokens,
         )
         insert_records(self._collection, records, source_name=source_name)
 
