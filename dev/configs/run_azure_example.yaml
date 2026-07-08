@@ -4,14 +4,16 @@ options:
     - json
 
 sources:
-  - kind: local_path
-    path: "input_documents"
-    pattern: "*.pdf"
-    recursive: false
+  - kind: azure_blob
+    account_name: "storage-account"
+    container: "input"
+    connection_string: "DefaultEndpointsProtocol=https;AccountName=your-account-name;AccountKey=your-account-key;EndpointSuffix=core.windows.net"
+    blob_prefix: "" # empty for all blobs, or remove
+    max_num_elements: 10 # can remove to get all blobs
 
 target:
   kind: azure_blob
   account_name: "storage-account"
-  container: "input"
+  container: "output"
   connection_string: "DefaultEndpointsProtocol=https;AccountName=your-account-name;AccountKey=your-account-key;EndpointSuffix=core.windows.net"
   blob_prefix: "converted/"
