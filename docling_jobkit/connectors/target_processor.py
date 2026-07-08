@@ -1,9 +1,12 @@
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import BinaryIO
+from typing import TYPE_CHECKING, BinaryIO
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
 
 
 class BaseTargetProcessor(AbstractContextManager, ABC):
@@ -73,3 +76,15 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         Upload an in-memory object (bytes or file-like) to the target.
         """
         ...
+
+    def upload_chunks(
+        self,
+        chunks: "list[ChunkedDocumentResultItem]",
+        doc_id: str,
+        source_name: str,
+    ) -> None:
+        """Upload pre-built chunk items to the target.
+
+        File-based targets (S3, local, …) do not store chunks and can leave
+        this as a no-op.  Vector-store targets (AstraDB, …) override it.
+        """

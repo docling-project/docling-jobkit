@@ -44,6 +44,7 @@ def test_builtin_target_connectors_registered():
         "local_path",
         "put",
         "google_drive",
+        "astradb",
     }
 
 

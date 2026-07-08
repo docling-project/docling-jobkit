@@ -11,11 +11,16 @@ from docling.datamodel.service.targets import (
     ZipTarget,
 )
 
+from docling_jobkit.datamodel.astradb_coords import AstraDBCoordinates
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
 
 
 class GoogleDriveTarget(GoogleDriveCoordinates):
     kind: Literal["google_drive"] = "google_drive"
+
+
+class AstraDBTarget(AstraDBCoordinates):
+    kind: Literal["astradb"] = "astradb"
 
 
 class LocalPathTarget(BaseModel):
@@ -46,11 +51,13 @@ TaskTarget = Annotated[
     | PresignedUrlTarget
     | GoogleDriveTarget
     | PutTarget
-    | LocalPathTarget,
+    | LocalPathTarget
+    | AstraDBTarget,
     Field(discriminator="kind"),
 ]
 
 __all__ = [
+    "AstraDBTarget",
     "GoogleDriveTarget",
     "InBodyTarget",
     "LocalPathTarget",

@@ -1,3 +1,5 @@
+import tempfile
+import uuid
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -20,13 +22,20 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
 )
+from docling_jobkit.convert.results import process_exportable_results
 from docling_jobkit.convert.results_processor import ResultsProcessor
 from docling_jobkit.datamodel.dynamic_unions import build_job_config_model
+from docling_jobkit.datamodel.exportable_document import (
+    ExportableDocument,
+    source_to_public_uri,
+)
+from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_sources import (
     TaskGoogleDriveSource,
     TaskLocalPathSource,
 )
 from docling_jobkit.datamodel.task_targets import (
+    AstraDBTarget,
     GoogleDriveTarget,
     LocalPathTarget,
 )
@@ -52,7 +61,7 @@ JobTaskSource = Annotated[
 ]
 
 JobTaskTarget = Annotated[
-    ZipTarget | LocalPathTarget | S3Target | GoogleDriveTarget,
+    ZipTarget | LocalPathTarget | S3Target | GoogleDriveTarget | AstraDBTarget,
     Field(discriminator="kind"),
 ]
 
@@ -109,27 +118,63 @@ def convert(
     )
     manager = DoclingConverterManager(config=cm_config)
 
-    results = []
-    with get_target_processor(
-        config.target, allow_external_plugins=allow_external_plugins
-    ) as target_processor:
-        result_processor = ResultsProcessor(
-            target_processor=target_processor,
-            to_formats=[v.value for v in config.options.to_formats],
-            generate_page_images=config.options.include_page_images,
-            generate_picture_images=config.options.include_images,
-        )
+    # Note: Astra specific branch. Need to trigger chunker task from CLI.
+    if isinstance(config.target, AstraDBTarget):
         for source in config.sources:
             with get_source_processor(
                 source, allow_external_plugins=allow_external_plugins
             ) as source_processor:
-                for item in result_processor.process_documents(
-                    manager.convert_documents(
-                        sources=source_processor.iterate_documents(),
-                        options=config.options,
+                conv_results = manager.convert_documents(
+                    sources=source_processor.iterate_documents(),
+                    options=config.options,
+                )
+                exportable_documents = (
+                    ExportableDocument.from_conversion_result(
+                        conv_res,
+                        source_index=idx,
+                        source_uri=source_to_public_uri(source),
                     )
-                ):
-                    results.append(item)
+                    for idx, conv_res in enumerate(conv_results)
+                )
+                task = Task(
+                    task_id=str(uuid.uuid4()),
+                    sources=[],
+                    target=config.target,
+                    convert_options=config.options,
+                )
+                with tempfile.TemporaryDirectory(prefix="docling_astradb_") as tmp:
+                    result = process_exportable_results(
+                        task=task,
+                        exportable_documents=exportable_documents,
+                        work_dir=Path(tmp),
+                    )
+                console.print(
+                    f"AstraDB: {result.num_succeeded} succeeded, "
+                    f"{result.num_failed} failed"
+                )
+    # should we enforce isinstance for other types here?
+    else:
+        results = []
+        with get_target_processor(
+            config.target, allow_external_plugins=allow_external_plugins
+        ) as target_processor:
+            result_processor = ResultsProcessor(
+                target_processor=target_processor,
+                to_formats=[v.value for v in config.options.to_formats],
+                generate_page_images=config.options.include_page_images,
+                generate_picture_images=config.options.include_images,
+            )
+            for source in config.sources:
+                with get_source_processor(
+                    source, allow_external_plugins=allow_external_plugins
+                ) as source_processor:
+                    for item in result_processor.process_documents(
+                        manager.convert_documents(
+                            sources=source_processor.iterate_documents(),
+                            options=config.options,
+                        )
+                    ):
+                        results.append(item)
 
 
 if __name__ == "__main__":

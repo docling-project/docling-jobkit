@@ -1,0 +1,32 @@
+options:
+  do_ocr: false
+  to_formats:
+    - json
+
+sources:
+  - kind: local_path
+    path: input_documents/sample.pdf
+
+target:
+  kind: astradb
+  api_endpoint: "https://{xxx}.apps.astra.datastax.com"
+  token: "AstraCS:{xxx}"
+  keyspace: "default_keyspace"
+  collection_name: "example_collection"
+
+  enable_external_provider: true
+
+  external_provider_config: 
+    provider: ollama
+
+    ollama:
+      embedding_model: "nomic-embed-text"
+      endpoint: "http://localhost:11434"
+    openai:
+      embedding_model: ""
+      api_key: ""
+    watsonx:
+      embedding_model: ""
+      api_key: ""
+      endpoint: ""
+      project_id: ""
