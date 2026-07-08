@@ -1,0 +1,17 @@
+options:
+  do_ocr: false
+  to_formats:
+    - json
+
+sources:
+  - kind: local_path
+    path: "input_documents"
+    pattern: "*.pdf"
+    recursive: false
+
+target:
+  kind: azure_blob
+  account_name: "storage-account"
+  container: "input"
+  connection_string: "DefaultEndpointsProtocol=https;AccountName=your-account-name;AccountKey=your-account-key;EndpointSuffix=core.windows.net"
+  blob_prefix: "converted/"

@@ -11,7 +11,12 @@ from docling.datamodel.service.targets import (
     ZipTarget,
 )
 
+from docling_jobkit.datamodel.azure_blob_coords import AzureBlobCoordinates
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
+
+
+class AzureBlobTarget(AzureBlobCoordinates):
+    kind: Literal["azure_blob"] = "azure_blob"
 
 
 class GoogleDriveTarget(GoogleDriveCoordinates):
@@ -43,6 +48,7 @@ TaskTarget = Annotated[
     InBodyTarget
     | ZipTarget
     | S3Target
+    | AzureBlobTarget
     | PresignedUrlTarget
     | GoogleDriveTarget
     | PutTarget
@@ -51,6 +57,7 @@ TaskTarget = Annotated[
 ]
 
 __all__ = [
+    "AzureBlobTarget",
     "GoogleDriveTarget",
     "InBodyTarget",
     "LocalPathTarget",

@@ -76,6 +76,9 @@ gdrive = [
     "google-api-python-client>=2.183.0",
     "google-auth-oauthlib>=1.2.2",
 ]
+azure = [
+    "azure-storage-blob>=12.19.0",
+]
 
 [dependency-groups]
 dev = [
