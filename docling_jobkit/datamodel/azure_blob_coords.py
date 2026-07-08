@@ -1,13 +1,9 @@
-"""Azure Blob Storage coordinates for source and target configuration."""
-
 from typing import Annotated
 
 from pydantic import BaseModel, Field
 
 
 class AzureBlobCoordinates(BaseModel):
-    """Azure Blob Storage connection coordinates."""
-
     account_name: Annotated[
         str,
         Field(description="Azure Storage account name"),
