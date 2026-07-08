@@ -13,6 +13,9 @@ even when the ``gdrive`` extra is not installed.
 
 
 def source_connectors():
+    from docling_jobkit.connectors.google_cloud_storage_source_processor import (
+        GoogleCloudStorageSourceProcessor,
+    )
     from docling_jobkit.connectors.google_drive_source_processor import (
         GoogleDriveSourceProcessor,
     )
@@ -28,11 +31,15 @@ def source_connectors():
             S3SourceProcessor,
             LocalPathSourceProcessor,
             GoogleDriveSourceProcessor,
+            GoogleCloudStorageSourceProcessor,
         ]
     }
 
 
 def target_connectors():
+    from docling_jobkit.connectors.google_cloud_storage_target_processor import (
+        GoogleCloudStorageTargetProcessor,
+    )
     from docling_jobkit.connectors.google_drive_target_processor import (
         GoogleDriveTargetProcessor,
     )
@@ -50,5 +57,6 @@ def target_connectors():
             LocalPathTargetProcessor,
             HttpPutTargetProcessor,
             GoogleDriveTargetProcessor,
+            GoogleCloudStorageTargetProcessor,
         ]
     }

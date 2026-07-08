@@ -1,0 +1,14 @@
+options:
+  do_ocr: false
+sources:
+  - kind: google_cloud_storage
+    bucket: my-docling-bucket
+    key_prefix: incoming/docs/
+    project: my-gcp-project                          # optional (billing/ADC project)
+    service_account_key_path: ./dev/gcs/sa-key.json  # optional; omit → ADC / Workload Identity
+target:
+  kind: google_cloud_storage
+  bucket: my-docling-bucket
+  key_prefix: processed/
+  project: my-gcp-project
+  service_account_key_path: ./dev/gcs/sa-key.json
