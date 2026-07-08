@@ -63,7 +63,9 @@ def _with_exponential_retry(fn: Callable[[], T], operation: str) -> T:
     raise last_exc  # type: ignore[misc]
 
 
-def get_collection(coords: AstraDBCoordinates, emb_dim: int) -> Collection:
+def get_collection(
+    coords: AstraDBCoordinates, emb_dim: int | None = None
+) -> Collection:
     """
     fetch the collection from AstraDB to save the document chunks to
     If the specified collection doesn't exist, it will create the collection on AstraDB
@@ -76,16 +78,27 @@ def get_collection(coords: AstraDBCoordinates, emb_dim: int) -> Collection:
         keyspace=coords.keyspace,
     )
 
+    if coords.enable_external_provider:
+        definition = (
+            CollectionDefinition.builder()
+            .with_vector_dimension(emb_dim)
+            .with_vector_metric(VectorMetric.COSINE)
+            .build()
+        )
+    else:
+        # Note: embedding model is hardcoded for now but could all users to toggle this in the
+        # future via config file
+        definition = (
+            CollectionDefinition.builder()
+            .with_vector_service("nvidia", "NV-Embed-QA")
+            .build()
+        )
+
     # idempotent, if collection exists it will just return status ok
     collection = _with_exponential_retry(
         lambda: db.create_collection(
             coords.collection_name,
-            definition=(
-                CollectionDefinition.builder()
-                .with_vector_dimension(emb_dim)
-                .with_vector_metric(VectorMetric.COSINE)
-                .build()
-            ),
+            definition=definition,
         ),
         "create_collection",
     )
@@ -102,43 +115,47 @@ def build_records_from_chunks(
     chunks: list[ChunkedDocumentResultItem],
     doc_id: str,
     source_name: str,
-    emb_model: str,
-    emb_kwargs: dict,
+    emb_model: str | None = None,
+    emb_kwargs: dict | None = None,
     emb_max_tokens: int | None = None,
 ) -> list[dict]:
     """Convert pre-built chunk items into AstraDB insertion records."""
-    # one batch chunk text embedding call
-    texts = [chunk.text for chunk in chunks]
-    try:
-        embeddings = generate_text_embedding(
-            emb_model, texts, emb_max_tokens, **emb_kwargs
-        )
-    except EmbeddingError:
-        # since embeddings are required before writing to AstraDB, fail entire document
-        # instead of inserting chunks with no embeddings
-        logging.exception("AstraDB: embedding failed for '%s'", source_name)
-        raise
+    if emb_model is not None:
+        # one batch chunk text embedding call
+        texts = [chunk.text for chunk in chunks]
+        try:
+            embeddings = generate_text_embedding(
+                emb_model, texts, emb_max_tokens, **(emb_kwargs or {})
+            )
+        except EmbeddingError:
+            # since embeddings are required before writing to AstraDB, fail entire document
+            # instead of inserting chunks with no embeddings
+            logging.exception("AstraDB: embedding failed for '%s'", source_name)
+            raise
 
     records = []
     for i, chunk in enumerate(chunks):
-        records.append(
-            {
-                # TODO: Think more on id generation
-                "_id": f"{doc_id}:chunk:{chunk.chunk_index}",
-                "doc_id": doc_id,
-                "source_name": source_name,
-                "filename": chunk.filename,
-                "chunk_index": chunk.chunk_index,
-                "text": chunk.text,
-                "$vector": embeddings[i],
-                "num_tokens": chunk.num_tokens,
-                "headings": chunk.headings or [],
-                "captions": chunk.captions or [],
-                "page_numbers": chunk.page_numbers or [],
-                "doc_items": chunk.doc_items or [],
-                "metadata": chunk.metadata or {},
-            }
-        )
+        record = {
+            # TODO: Think more on id generation
+            "_id": f"{doc_id}:chunk:{chunk.chunk_index}",
+            "doc_id": doc_id,
+            "source_name": source_name,
+            "filename": chunk.filename,
+            "chunk_index": chunk.chunk_index,
+            "text": chunk.text,
+            "num_tokens": chunk.num_tokens,
+            "headings": chunk.headings or [],
+            "captions": chunk.captions or [],
+            "page_numbers": chunk.page_numbers or [],
+            "doc_items": chunk.doc_items or [],
+            "metadata": chunk.metadata or {},
+        }
+        if emb_model is not None:
+            record["$vector"] = embeddings[i]
+        else:
+            record["$vectorize"] = chunk.text
+        records.append(record)
+
     return records
 
 

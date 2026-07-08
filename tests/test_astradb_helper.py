@@ -64,6 +64,21 @@ def test_build_records_propagates_embedding_error(
             )
 
 
+def test_build_records_uses_vectorize_when_no_emb_model(
+    mock_chunks: list[ChunkedDocumentResultItem],
+) -> None:
+    """When emb_model is None, records use $vectorize instead of $vector and no embedding is called."""
+    with patch(
+        "docling_jobkit.connectors.astradb_helper.generate_text_embedding"
+    ) as mock_embed:
+        records = build_records_from_chunks(mock_chunks, "doc1", "source.pdf")
+
+    mock_embed.assert_not_called()
+    assert "$vectorize" in records[0]
+    assert "$vector" not in records[0]
+    assert records[0]["$vectorize"] == mock_chunks[0].text
+
+
 # exponential backoff test stuff
 
 
@@ -168,30 +183,33 @@ def test_insert_records_conflict_falls_back_to_update_one() -> None:
 
 # get_collection
 
+_BASE_COORDS = {
+    "api_endpoint": "https://abc123.apps.astra.datastax.com",
+    "token": "AstraCS:test_token",
+    "keyspace": "test_keyspace",
+    "collection_name": "test_collection",
+}
 
-def test_get_collection_uses_token_and_returns_collection() -> None:
-    """get_collection should authenticate with the token and return the collection."""
-    from docling_jobkit.datamodel.astradb_coords import AstraDBCoordinates
 
-    coords = AstraDBCoordinates.model_validate(
-        {
-            "api_endpoint": "https://abc123.apps.astra.datastax.com",
-            "token": "AstraCS:test_token",
-            "keyspace": "test_keyspace",
-            "collection_name": "test_collection",
-        }
-    )
-
+def _make_mock_astra_client() -> tuple[MagicMock, MagicMock, MagicMock]:
     mock_collection = MagicMock()
     mock_db = MagicMock()
     mock_db.create_collection.return_value = mock_collection
     mock_client = MagicMock()
     mock_client.get_database.return_value = mock_db
+    return mock_client, mock_db, mock_collection
 
-    with patch(
-        "astrapy.DataAPIClient",
-        return_value=mock_client,
-    ):
+
+def test_get_collection_uses_token_and_returns_collection() -> None:
+    """get_collection authenticates with the token and returns the collection."""
+    from docling_jobkit.datamodel.astradb_coords import AstraDBCoordinates
+
+    coords = AstraDBCoordinates.model_validate(
+        {**_BASE_COORDS, "enable_external_provider": True}
+    )
+    mock_client, mock_db, mock_collection = _make_mock_astra_client()
+
+    with patch("astrapy.DataAPIClient", return_value=mock_client):
         result = get_collection(coords, emb_dim=768)
 
     mock_client.get_database.assert_called_once_with(
@@ -199,3 +217,55 @@ def test_get_collection_uses_token_and_returns_collection() -> None:
     )
     mock_db.create_collection.assert_called_once()
     assert result is mock_collection
+
+
+def test_get_collection_uses_cosine_dim_when_external_enabled() -> None:
+    """When enable_external_provider=True, collection definition uses vector dimension + cosine."""
+    from docling_jobkit.datamodel.astradb_coords import AstraDBCoordinates
+
+    coords = AstraDBCoordinates.model_validate(
+        {**_BASE_COORDS, "enable_external_provider": True}
+    )
+    mock_client, mock_db, _ = _make_mock_astra_client()
+    mock_builder = MagicMock()
+    mock_builder.with_vector_dimension.return_value = mock_builder
+    mock_builder.with_vector_metric.return_value = mock_builder
+    mock_builder.build.return_value = MagicMock()
+
+    with (
+        patch("astrapy.DataAPIClient", return_value=mock_client),
+        patch(
+            "docling_jobkit.connectors.astradb_helper.CollectionDefinition"
+        ) as mock_defn,
+    ):
+        mock_defn.builder.return_value = mock_builder
+        get_collection(coords, emb_dim=768)
+
+    mock_builder.with_vector_dimension.assert_called_once_with(768)
+    mock_builder.with_vector_metric.assert_called_once()
+    mock_builder.with_vector_service.assert_not_called()
+
+
+def test_get_collection_uses_vector_service_when_external_disabled() -> None:
+    """When enable_external_provider=False, collection definition uses nvidia vector service."""
+    from docling_jobkit.datamodel.astradb_coords import AstraDBCoordinates
+
+    coords = AstraDBCoordinates.model_validate(
+        {**_BASE_COORDS, "enable_external_provider": False}
+    )
+    mock_client, mock_db, _ = _make_mock_astra_client()
+    mock_builder = MagicMock()
+    mock_builder.with_vector_service.return_value = mock_builder
+    mock_builder.build.return_value = MagicMock()
+
+    with (
+        patch("astrapy.DataAPIClient", return_value=mock_client),
+        patch(
+            "docling_jobkit.connectors.astradb_helper.CollectionDefinition"
+        ) as mock_defn,
+    ):
+        mock_defn.builder.return_value = mock_builder
+        get_collection(coords)
+
+    mock_builder.with_vector_service.assert_called_once_with("nvidia", "NV-Embed-QA")
+    mock_builder.with_vector_dimension.assert_not_called()

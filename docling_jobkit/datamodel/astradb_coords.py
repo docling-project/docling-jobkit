@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, HttpUrl, SecretStr
+from pydantic import BaseModel, Field, HttpUrl, SecretStr, StrictBool
 
 
 class OllamaEmbeddingCoordinates(BaseModel):
@@ -91,7 +91,7 @@ class WatsonXEmbeddingCoordinates(BaseModel):
 class EmbeddingConfig(BaseModel):
     """Embedding provider selection and per-provider configuration."""
 
-    embedding_provider: Annotated[
+    provider: Annotated[
         Literal["ollama", "openai", "watsonx"],
         Field(description="Embedding provider to use."),
     ]
@@ -153,9 +153,21 @@ class AstraDBCoordinates(BaseModel):
         ),
     ]
 
-    embedding_config: Annotated[
-        EmbeddingConfig,
+    enable_external_provider: Annotated[
+        StrictBool,
         Field(
-            description="Embedding provider selection and configuration.",
+            description=(
+                "boolean toggle to enable or disable external embedding provider support"
+                "If disabled, uses astradb embedded embeddings"
+                "If enabled uses the external embedding provider defined in the config file"
+            )
         ),
     ]
+
+    external_provider_config: Annotated[
+        EmbeddingConfig | None,
+        Field(
+            default=None,
+            description="External embedding provider selection and configuration. Required when enable_external_provider is true.",
+        ),
+    ] = None
