@@ -1,5 +1,3 @@
-"""Azure Blob Storage source processor."""
-
 import logging
 from datetime import datetime
 from io import BytesIO
@@ -21,6 +19,7 @@ from docling_jobkit.convert.materialization import (
     normalize_max_file_size,
 )
 from docling_jobkit.datamodel.azure_blob_coords import AzureBlobCoordinates
+from docling_jobkit.datamodel.task_sources import TaskAzureBlobSource
 
 _log = logging.getLogger(__name__)
 
@@ -43,8 +42,6 @@ class AzureBlobSourceProcessor(
         # Note: Using TaskAzureBlobSource (not AzureBlobSourceRequest) to follow
         # the naming pattern for connectors defined in docling-jobkit (Google Drive, Local Path)
         # S3 has S3SourceRequest defined in docling core library. No azure equivalent.
-
-        from docling_jobkit.datamodel.task_sources import TaskAzureBlobSource
 
         return (TaskAzureBlobSource,)
 

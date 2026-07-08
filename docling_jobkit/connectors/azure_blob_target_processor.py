@@ -1,5 +1,3 @@
-"""Azure Blob Storage target processor."""
-
 import logging
 from pathlib import Path
 from typing import BinaryIO
@@ -13,6 +11,7 @@ from docling_jobkit.connectors.azure_blob_upload_support import (
 )
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.datamodel.azure_blob_coords import AzureBlobCoordinates
+from docling_jobkit.datamodel.task_targets import AzureBlobTarget
 
 _log = logging.getLogger(__name__)
 
@@ -24,8 +23,6 @@ class AzureBlobTargetProcessor(BaseTargetProcessor):
 
     @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
-        from docling_jobkit.datamodel.task_targets import AzureBlobTarget
-
         return (AzureBlobTarget,)
 
     def _initialize(self):

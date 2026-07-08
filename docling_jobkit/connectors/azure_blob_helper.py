@@ -1,12 +1,8 @@
-"""Azure Blob Storage connection management and utilities."""
-
 import logging
 
 from azure.storage.blob import BlobServiceClient, ContainerClient
 
 from docling_jobkit.datamodel.azure_blob_coords import AzureBlobCoordinates
-
-_log = logging.getLogger(__name__)
 
 # Suppress verbose Azure SDK HTTP logging
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(

@@ -1,5 +1,3 @@
-"""Unit tests for Azure Blob Storage target processor."""
-
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 

@@ -1,5 +1,3 @@
-"""Unit tests for Azure Blob Storage source processor."""
-
 from datetime import datetime, timezone
 from io import BytesIO
 from unittest.mock import MagicMock
