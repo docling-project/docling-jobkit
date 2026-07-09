@@ -26,9 +26,15 @@ class GoogleCloudStorageTargetProcessor(BaseTargetProcessor):
     def _finalize(self):
         self._client.close()
 
+    def _build_full_key(self, target_filename: str) -> str:
+        return (
+            f"{self._coords.key_prefix}{target_filename}"
+            if self._coords.key_prefix
+            else target_filename
+        )
+
     def build_artifact_uri(self, target_filename: str) -> str:
-        # TODO: return f"gs://{bucket}/{key_prefix}{target_filename}" for source lineage
-        raise NotImplementedError
+        return f"gs://{self._coords.bucket}/{self._build_full_key(target_filename)}"
 
     def upload_file(
         self,
@@ -39,8 +45,11 @@ class GoogleCloudStorageTargetProcessor(BaseTargetProcessor):
         """
         Upload a local file from disk to Google Cloud Storage.
         """
-        # TODO: call upload_file from helper
-        raise NotImplementedError
+        blob = self._client.bucket(self._coords.bucket).blob(
+            self._build_full_key(target_filename)
+        )
+
+        blob.upload_from_filename(str(filename), content_type=content_type)
 
     def upload_object(
         self,
@@ -51,5 +60,11 @@ class GoogleCloudStorageTargetProcessor(BaseTargetProcessor):
         """
         Upload an in-memory object (bytes or file-like) to Google Cloud Storage.
         """
-        # TODO: normalize obj to a file-like stream, then call upload_file from helper
-        raise NotImplementedError
+        blob = self._client.bucket(self._coords.bucket).blob(
+            self._build_full_key(target_filename)
+        )
+
+        if isinstance(obj, (str, bytes)):
+            blob.upload_from_string(obj, content_type=content_type)
+        else:
+            blob.upload_from_file(obj, content_type=content_type)
