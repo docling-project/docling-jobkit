@@ -33,7 +33,12 @@ class GoogleCloudStorageCoordinates(BaseModel):
         Optional[StrictStr],
         Field(
             default=None,
-            description="Path to a service account JSON key file. Optional; omit → ADC / Workload Identity.",
+            description=(
+                "Path to a service account JSON key file. Optional; omit to use "
+                "Application Default Credentials / Workload Identity (e.g. on GKE "
+                "or Cloud Run). To create a key: gcp console -> IAM & Admin -> "
+                "service accounts -> create new service account -> keys -> json"
+            ),
             examples=["./dev/gcs/sa-key.json"],
         ),
     ] = None
