@@ -351,8 +351,8 @@ def test_presigned_callbacks_emit_document_completed_after_uploads(
     )
 
     callback_invoker = MagicMock()
-    callback_invoker.invoke_callbacks_async.side_effect = (
-        lambda **kwargs: events.append(("callback", kwargs["progress"]))
+    callback_invoker.invoke_callbacks_async.side_effect = lambda **kwargs: (
+        events.append(("callback", kwargs["progress"]))
     )
 
     process_exportable_results(
