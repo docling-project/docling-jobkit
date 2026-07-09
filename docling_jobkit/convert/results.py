@@ -228,6 +228,7 @@ def _export_document_as_content(
     export_md: bool,
     export_txt: bool,
     export_doctags: bool,
+    export_doclang: bool,
     image_mode: ImageRefMode,
     md_page_break_placeholder: str,
 ) -> ExportDocumentResponse:
@@ -258,6 +259,8 @@ def _export_document_as_content(
             )
         if export_doctags:
             document.doctags_content = new_doc.export_to_doctags()
+        if export_doclang:
+            document.doclang_content = new_doc.export_to_doclang()
 
     return document
 
@@ -307,6 +310,8 @@ def _export_documents_as_files(
     export_md: bool,
     export_txt: bool,
     export_doctags: bool,
+    export_doclang: bool,
+    export_dclx: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
 ):
@@ -322,6 +327,8 @@ def _export_documents_as_files(
             export_md=export_md,
             export_txt=export_txt,
             export_doctags=export_doctags,
+            export_doclang=export_doclang,
+            export_dclx=export_dclx,
             image_export_mode=image_export_mode,
             md_page_break_placeholder=md_page_break_placeholder,
             bundle_resources=False,
@@ -413,6 +420,8 @@ def _upload_document_as_presigned_artifact(
     export_md: bool,
     export_txt: bool,
     export_doctags: bool,
+    export_doclang: bool,
+    export_dclx: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
 ) -> DocumentArtifactItem:
@@ -426,6 +435,8 @@ def _upload_document_as_presigned_artifact(
         export_md=export_md,
         export_txt=export_txt,
         export_doctags=export_doctags,
+        export_doclang=export_doclang,
+        export_dclx=export_dclx,
         image_export_mode=image_export_mode,
         md_page_break_placeholder=md_page_break_placeholder,
         bundle_resources=True,
@@ -460,6 +471,8 @@ def _upload_document_via_processor(
     export_md: bool,
     export_txt: bool,
     export_doctags: bool,
+    export_doclang: bool,
+    export_dclx: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
     target_filename_fn: Callable[[SourceIdentity, str], str] | None = None,
@@ -482,6 +495,8 @@ def _upload_document_via_processor(
         export_md=export_md,
         export_txt=export_txt,
         export_doctags=export_doctags,
+        export_doclang=export_doclang,
+        export_dclx=export_dclx,
         image_export_mode=image_export_mode,
         md_page_break_placeholder=md_page_break_placeholder,
         target_filename_fn=(
@@ -504,6 +519,8 @@ def _upload_document_to_storage_target(
     export_md: bool,
     export_txt: bool,
     export_doctags: bool,
+    export_doclang: bool,
+    export_dclx: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
 ) -> None:
@@ -524,6 +541,8 @@ def _upload_document_to_storage_target(
         export_md=export_md,
         export_txt=export_txt,
         export_doctags=export_doctags,
+        export_doclang=export_doclang,
+        export_dclx=export_dclx,
         image_export_mode=image_export_mode,
         md_page_break_placeholder=md_page_break_placeholder,
         target_filename_fn=lambda source, artifact_filename: (
@@ -594,6 +613,8 @@ def _process_remote_exportable_results(
     export_md: bool,
     export_txt: bool,
     export_doctags: bool,
+    export_doclang: bool,
+    export_dclx: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
     start_time: float,
@@ -644,6 +665,8 @@ def _process_remote_exportable_results(
                             export_md=export_md,
                             export_txt=export_txt,
                             export_doctags=export_doctags,
+                            export_doclang=export_doclang,
+                            export_dclx=export_dclx,
                             image_export_mode=image_export_mode,
                             md_page_break_placeholder=md_page_break_placeholder,
                         )
@@ -694,6 +717,8 @@ def _process_remote_exportable_results(
                         export_md=export_md,
                         export_txt=export_txt,
                         export_doctags=export_doctags,
+                        export_doclang=export_doclang,
+                        export_dclx=export_dclx,
                         image_export_mode=image_export_mode,
                         md_page_break_placeholder=md_page_break_placeholder,
                     ),
@@ -769,6 +794,8 @@ def _process_exportable_results_internal(
     export_md = OutputFormat.MARKDOWN in conversion_options.to_formats
     export_txt = OutputFormat.TEXT in conversion_options.to_formats
     export_doctags = OutputFormat.DOCTAGS in conversion_options.to_formats
+    export_doclang = OutputFormat.DOCLANG in conversion_options.to_formats
+    export_dclx = OutputFormat.DCLX in conversion_options.to_formats
 
     if isinstance(
         task.target,
@@ -788,6 +815,8 @@ def _process_exportable_results_internal(
             export_md=export_md,
             export_txt=export_txt,
             export_doctags=export_doctags,
+            export_doclang=export_doclang,
+            export_dclx=export_dclx,
             image_export_mode=conversion_options.image_export_mode,
             md_page_break_placeholder=conversion_options.md_page_break_placeholder,
             start_time=start_time,
@@ -827,6 +856,7 @@ def _process_exportable_results_internal(
             export_md=export_md,
             export_txt=export_txt,
             export_doctags=export_doctags,
+            export_doclang=export_doclang,
             image_mode=conversion_options.image_export_mode,
             md_page_break_placeholder=conversion_options.md_page_break_placeholder,
         )
@@ -849,6 +879,8 @@ def _process_exportable_results_internal(
             export_md=export_md,
             export_txt=export_txt,
             export_doctags=export_doctags,
+            export_doclang=export_doclang,
+            export_dclx=export_dclx,
             image_export_mode=conversion_options.image_export_mode,
             md_page_break_placeholder=conversion_options.md_page_break_placeholder,
         )

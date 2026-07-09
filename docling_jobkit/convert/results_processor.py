@@ -164,6 +164,33 @@ class ResultsProcessor:
                                 target_filename=self._target_key(target_key),
                                 content_type="text/plain",
                             )
+                        if self.to_formats and "doclang" in self.to_formats:
+                            # Export Docling document format to DocLang XML:
+                            target_key = f"doclang/{name_without_ext}.dclg.xml"
+
+                            data = conv_res.document.export_to_doclang() + "\n"
+                            self._target_processor.upload_object(
+                                obj=data,
+                                target_filename=self._target_key(target_key),
+                                content_type="application/xml",
+                            )
+                        if self.to_formats and "dclx" in self.to_formats:
+                            # Export Docling document format to DCLX archive:
+                            import tempfile as _tempfile
+
+                            with _tempfile.NamedTemporaryFile(
+                                suffix=".dclx", dir=temp_dir, delete=False
+                            ) as _tmp:
+                                dclx_path = Path(_tmp.name)
+                            conv_res.document.save_as_doclang_archive(
+                                filename=dclx_path
+                            )
+                            target_key = f"dclx/{name_without_ext}.dclx"
+                            self._target_processor.upload_file(
+                                filename=dclx_path,
+                                target_filename=self._target_key(target_key),
+                                content_type="application/zip",
+                            )
                         if self.export_parquet_file:
                             logging.info("saving document info in dataframe...")
                             # Save Docling parquet info into DataFrame:
