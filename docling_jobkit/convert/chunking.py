@@ -459,6 +459,7 @@ def process_chunkable_results(
                     export_html=False,
                     export_md=False,
                     export_txt=False,
+                    export_doclang=False,
                     image_mode=conversion_options.image_export_mode,
                     md_page_break_placeholder=conversion_options.md_page_break_placeholder,
                 )

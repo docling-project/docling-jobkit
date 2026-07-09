@@ -49,6 +49,8 @@ def _materialize_document_exports(
     export_md: bool,
     export_txt: bool,
     export_doctags: bool,
+    export_doclang: bool,
+    export_dclx: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
     bundle_resources: bool,
@@ -151,6 +153,34 @@ def _materialize_document_exports(
             )
         )
 
+    if export_doclang:
+        fname = output_dir / f"{doc_filename}.dclg"
+        _log.info(f"writing DocLang output to {fname}")
+        fname.write_text(
+            exportable_document.document.export_to_doclang() + "\n", encoding="utf-8"
+        )
+        generated.append(
+            _ExportedArtifactFile(
+                artifact_type="doclang",
+                path=fname,
+                target_filename=fname.name,
+                mime_type="application/xml",
+            )
+        )
+
+    if export_dclx:
+        fname = output_dir / f"{doc_filename}.dclx"
+        _log.info(f"writing DCLX archive output to {fname}")
+        exportable_document.document.save_as_doclang_archive(filename=fname)
+        generated.append(
+            _ExportedArtifactFile(
+                artifact_type="dclx",
+                path=fname,
+                target_filename=fname.name,
+                mime_type="application/zip",
+            )
+        )
+
     artifacts_path = output_dir / artifacts_dir
     if bundle_resources and artifacts_path.exists() and any(artifacts_path.iterdir()):
         bundle_path = output_dir / f"{doc_filename}_bundle.zip"
@@ -191,6 +221,8 @@ def _upload_exportable_document(
     export_md: bool,
     export_txt: bool,
     export_doctags: bool,
+    export_doclang: bool,
+    export_dclx: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
     target_filename_fn: Callable[[str], str],
@@ -211,6 +243,8 @@ def _upload_exportable_document(
         export_md=export_md,
         export_txt=export_txt,
         export_doctags=export_doctags,
+        export_doclang=export_doclang,
+        export_dclx=export_dclx,
         image_export_mode=image_export_mode,
         md_page_break_placeholder=md_page_break_placeholder,
         bundle_resources=bundle_resources,
@@ -245,6 +279,8 @@ def export_documents_to_target(
     export_md: bool,
     export_txt: bool,
     export_doctags: bool,
+    export_doclang: bool,
+    export_dclx: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
     target_filename_fn: Callable[[ExportableDocument, str], str],
@@ -284,6 +320,8 @@ def export_documents_to_target(
                 export_md=export_md,
                 export_txt=export_txt,
                 export_doctags=export_doctags,
+                export_doclang=export_doclang,
+                export_dclx=export_dclx,
                 image_export_mode=image_export_mode,
                 md_page_break_placeholder=md_page_break_placeholder,
                 target_filename_fn=_document_target_filename,
