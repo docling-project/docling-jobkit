@@ -65,6 +65,13 @@ class GoogleCloudStorageSourceProcessor(
                 name=blob.name, size=blob.size, last_modified=blob.updated
             )
 
+        if yielded == 0:
+            _log.warning(
+                "No objects matched gs://%s/%s - nothing to process.",
+                self._coords.bucket,
+                self._coords.key_prefix,
+            )
+
     @override
     def _make_document_ref(
         self, identifier: GoogleCloudStorageFileIdentifier, source_index: int

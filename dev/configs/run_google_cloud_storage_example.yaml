@@ -4,8 +4,8 @@ sources:
   - kind: google_cloud_storage
     bucket: your-bucket-name
     key_prefix: source/
-    project: my-gcp-project                          # optional (billing/ADC project)
-    max_num_elements: 1                                # optional, no limit default
+    project: my-gcp-project                             # optional (billing/ADC project)
+    max_num_elements: 1                                 # optional, no limit default
     service_account_key_path: ./dev/gcs/service_account_key.json 
 target:
   kind: google_cloud_storage
