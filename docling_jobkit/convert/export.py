@@ -154,7 +154,7 @@ def _materialize_document_exports(
         )
 
     if export_doclang:
-        fname = output_dir / f"{doc_filename}.dclg.xml"
+        fname = output_dir / f"{doc_filename}.dclg"
         _log.info(f"writing DocLang output to {fname}")
         fname.write_text(
             exportable_document.document.export_to_doclang() + "\n", encoding="utf-8"

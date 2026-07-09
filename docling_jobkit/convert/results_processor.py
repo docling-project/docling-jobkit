@@ -166,7 +166,7 @@ class ResultsProcessor:
                             )
                         if self.to_formats and "doclang" in self.to_formats:
                             # Export Docling document format to DocLang XML:
-                            target_key = f"doclang/{name_without_ext}.dclg.xml"
+                            target_key = f"doclang/{name_without_ext}.dclg"
 
                             data = conv_res.document.export_to_doclang() + "\n"
                             self._target_processor.upload_object(
