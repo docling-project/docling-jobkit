@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from pydantic import BaseModel
 
+from docling_jobkit.connectors.google_cloud_storage_helper import get_client
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     SourceDocumentRef,
@@ -37,11 +38,10 @@ class GoogleCloudStorageSourceProcessor(
         return (TaskGoogleCloudStorageSource,)
 
     def _initialize(self):
-        # TODO: build the client via get_client(self._coords)
-        raise NotImplementedError
+        self._client = get_client(self._coords)
 
     def _finalize(self):
-        return
+        self._client.close()
 
     def _fetch_documents(
         self, *, max_file_size: int | None = None

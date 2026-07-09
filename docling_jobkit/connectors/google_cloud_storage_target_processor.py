@@ -3,6 +3,7 @@ from typing import BinaryIO
 
 from pydantic import BaseModel
 
+from docling_jobkit.connectors.google_cloud_storage_helper import get_client
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.datamodel.google_cloud_storage_coords import (
     GoogleCloudStorageCoordinates,
@@ -20,12 +21,10 @@ class GoogleCloudStorageTargetProcessor(BaseTargetProcessor):
         return (GoogleCloudStorageTarget,)
 
     def _initialize(self):
-        # TODO: build the client via get_client(self._coords) and store on self._client
-        raise NotImplementedError
+        self._client = get_client(self._coords)
 
     def _finalize(self):
-        # TODO: Need to close http client
-        raise NotImplementedError
+        self._client.close()
 
     def build_artifact_uri(self, target_filename: str) -> str:
         # TODO: return f"gs://{bucket}/{key_prefix}{target_filename}" for source lineage
