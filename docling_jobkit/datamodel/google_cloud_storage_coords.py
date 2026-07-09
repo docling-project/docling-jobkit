@@ -20,6 +20,18 @@ class GoogleCloudStorageCoordinates(BaseModel):
         ),
     ] = ""
 
+    max_num_elements: Annotated[
+        Optional[int],
+        Field(
+            default=None,
+            description=(
+                "Maximum number of GCS objects to iterate for this source"
+                "Optional, defaults to no limit"
+            ),
+            ge=1,
+        ),
+    ]
+
     project: Annotated[
         Optional[StrictStr],
         Field(
