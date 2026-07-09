@@ -3,8 +3,9 @@ from typing import Literal
 
 from docling.datamodel.service.sources import S3Coordinates
 
-# TODO: add "doclang" once batch artifact typing supports it end-to-end.
-ArtifactType = Literal["json", "html", "markdown", "text", "doctags", "resource_bundle"]
+ArtifactType = Literal[
+    "json", "html", "markdown", "text", "doctags", "doclang", "dclx", "resource_bundle"
+]
 
 
 def hash_path_component(value: str) -> str:
