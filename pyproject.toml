@@ -218,6 +218,7 @@ module = [
     "mlx_vlm.*",
     "googleapiclient.*",
     "google_auth_oauthlib.*",
+    "google.*",
     "ray.*",
     "codeflare_sdk.*",
 ]
