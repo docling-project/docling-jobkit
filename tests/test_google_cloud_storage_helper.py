@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from google.cloud import storage
 
@@ -9,22 +9,31 @@ from docling_jobkit.datamodel.google_cloud_storage_coords import (
 
 
 def test_get_client_uses_service_account_key_when_provided() -> None:
-    coords = GoogleCloudStorageCoordinates(
+    sa_key = MagicMock()
+    sa_key.model_dump.return_value = {
+        "project_id": "my-project",
+        "private_key": "fake-key",
+    }
+
+    coords = GoogleCloudStorageCoordinates.model_construct(
         bucket="my-bucket",
         project="my-project",
-        service_account_key_path="/tmp/sa-key.json",
+        service_account_key=sa_key,
     )
 
-    with patch.object(storage.Client, "from_service_account_json") as mock_from_json:
+    with patch.object(storage.Client, "from_service_account_info") as mock_from_info:
         client = get_client(coords)
 
-    mock_from_json.assert_called_once_with("/tmp/sa-key.json", project="my-project")
-    assert client is mock_from_json.return_value
+    mock_from_info.assert_called_once_with(
+        {"project_id": "my-project", "private_key": "fake-key"}, project="my-project"
+    )
+    assert client is mock_from_info.return_value
 
 
 def test_get_client_falls_back_to_adc_without_key() -> None:
-    # No key path → Application Default Credentials / Workload Identity.
-    coords = GoogleCloudStorageCoordinates(bucket="my-bucket", project="my-project")
+    coords = GoogleCloudStorageCoordinates.model_construct(
+        bucket="my-bucket", project="my-project"
+    )
 
     with patch.object(storage, "Client") as mock_client:
         client = get_client(coords)
