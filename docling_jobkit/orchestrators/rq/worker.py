@@ -1,11 +1,12 @@
 import base64
+import itertools
 import logging
 import shutil
 import tempfile
 import threading
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Callable, ContextManager, Optional, Union
+from typing import Any, Callable, ContextManager, NamedTuple, Optional, Union
 
 import msgpack
 import redis as sync_redis
@@ -16,10 +17,15 @@ from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordina
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.convert.chunking import process_chunkable_results
+from docling_jobkit.convert.http_retry import (
+    build_http_failure_document,
+    fetch_http_source_with_retry,
+)
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
 )
+from docling_jobkit.convert.materialization import MaterializationError
 from docling_jobkit.convert.results import process_exportable_results
 from docling_jobkit.convert.source_expansion import expand_task_sources
 from docling_jobkit.datamodel.exportable_document import (
@@ -53,19 +59,50 @@ def _null_phase_cm(_: str) -> ContextManager[Any]:
     return nullcontext()
 
 
+class _PreparedSources(NamedTuple):
+    convert_sources: list[Union[str, DocumentStream]]
+    headers: Optional[dict[str, Any]]
+    source_info: list[dict[str, str]]
+    # task.sources index for each convert_sources entry (S3 expands to several).
+    source_indices: list[int]
+    # Document-level FAILUREs for HTTP sources that could not be fetched.
+    materialization_failures: list[ExportableDocument]
+
+
 def _prepare_convert_sources(
     task: Task,
     *,
     max_file_size: int | None = None,
+    max_task_retries: int = 0,
+    retry_delay: float = 0.0,
     on_source_prepared: Optional[_SourcePreparedHook] = None,
-) -> tuple[
-    list[Union[str, DocumentStream]],
-    Optional[dict[str, Any]],
-    list[dict[str, str]],
-]:
-    convert_sources, headers = expand_task_sources(
+) -> _PreparedSources:
+    # Fetch HTTP sources here rather than in the converter, so transient failures
+    # can be retried and unfetchable sources recorded as document-level failures.
+    source_index_by_id = {id(source): idx for idx, source in enumerate(task.sources)}
+    materialization_failures: list[ExportableDocument] = []
+
+    def _materialize(source: HttpSource) -> Optional[DocumentStream]:
+        try:
+            return fetch_http_source_with_retry(
+                source,
+                max_file_size=max_file_size,
+                max_retries=max_task_retries,
+                retry_delay=retry_delay,
+                task_id=task.task_id,
+            )
+        except MaterializationError as exc:
+            materialization_failures.append(
+                build_http_failure_document(
+                    source, exc, source_index=source_index_by_id[id(source)]
+                )
+            )
+            return None
+
+    convert_sources, headers, source_indices = expand_task_sources(
         task,
         max_file_size=max_file_size,
+        http_materializer=_materialize,
     )
     source_info: list[dict[str, str]] = []
 
@@ -91,7 +128,13 @@ def _prepare_convert_sources(
         if on_source_prepared:
             on_source_prepared(idx, source, info, raw_bytes)
 
-    return convert_sources, headers, source_info
+    return _PreparedSources(
+        convert_sources=convert_sources,
+        headers=headers,
+        source_info=source_info,
+        source_indices=source_indices,
+        materialization_failures=materialization_failures,
+    )
 
 
 def _run_docling_task(
@@ -132,15 +175,20 @@ def _run_docling_task(
             raise RuntimeError("No converter")
 
         with phase_cm("prepare_sources"):
-            convert_sources, headers, source_info = _prepare_convert_sources(
+            prepared = _prepare_convert_sources(
                 task,
                 max_file_size=conversion_manager.config.max_file_size,
+                max_task_retries=orchestrator_config.max_task_retries,
+                retry_delay=orchestrator_config.retry_delay,
                 on_source_prepared=on_source_prepared,
             )
+            convert_sources = prepared.convert_sources
+            headers = prepared.headers
+            source_info = prepared.source_info
             if on_sources_prepared:
                 on_sources_prepared(
                     source_info,
-                    len(convert_sources),
+                    len(convert_sources) + len(prepared.materialization_failures),
                     headers is not None,
                 )
 
@@ -154,17 +202,21 @@ def _run_docling_task(
                 headers=headers,
             )
 
-        exportable_documents = (
+        converted_documents = (
             ExportableDocument.from_conversion_result(
                 conv_res,
-                source_index=idx,
+                source_index=src_idx,
                 source_uri=(
-                    source_to_public_uri(task.sources[idx])
-                    if idx < len(task.sources)
+                    source_to_public_uri(task.sources[src_idx])
+                    if src_idx < len(task.sources)
                     else str(conv_res.input.file)
                 ),
             )
-            for idx, conv_res in enumerate(conv_results)
+            for conv_res, src_idx in zip(conv_results, prepared.source_indices)
+        )
+        # Unfetchable HTTP sources join the converted documents as failures.
+        exportable_documents = itertools.chain(
+            converted_documents, prepared.materialization_failures
         )
 
         processed_results: DoclingTaskResult

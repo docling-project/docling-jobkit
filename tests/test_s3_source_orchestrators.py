@@ -66,7 +66,7 @@ def test_expand_task_sources_materializes_s3(monkeypatch: pytest.MonkeyPatch):
         lambda source: FakeSourceProcessor(),
     )
 
-    convert_sources, headers = expand_task_sources(task)
+    convert_sources, headers, _source_indices = expand_task_sources(task)
 
     assert headers is None
     assert convert_sources == expected_docs
@@ -106,7 +106,9 @@ def test_expand_task_sources_passes_max_file_size_to_source_processor(
         lambda source: FakeSourceProcessor(),
     )
 
-    convert_sources, headers = expand_task_sources(task, max_file_size=123)
+    convert_sources, headers, _source_indices = expand_task_sources(
+        task, max_file_size=123
+    )
 
     assert headers is None
     assert convert_sources == expected_docs
@@ -272,7 +274,7 @@ def test_expand_task_sources_preserves_file_and_headers():
         target=InBodyTarget(),
     )
 
-    convert_sources, headers = expand_task_sources(task)
+    convert_sources, headers, _source_indices = expand_task_sources(task)
 
     assert headers == {"Authorization": "Bearer test-token"}
     assert len(convert_sources) == 2

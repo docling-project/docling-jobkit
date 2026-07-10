@@ -69,7 +69,7 @@ class AsyncLocalWorker:
 
                 # Define a callback function to send progress updates to the client.
                 def run_task() -> DoclingTaskResult:
-                    convert_sources, headers = expand_task_sources(
+                    convert_sources, headers, _source_indices = expand_task_sources(
                         task,
                         max_file_size=cm.config.max_file_size,
                     )

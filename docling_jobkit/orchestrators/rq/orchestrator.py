@@ -60,6 +60,9 @@ class RQOrchestratorConfig(BaseModel):
     debug_error_details: bool = False
     s3_presigned_config: S3PresignedConfig | None = None
     allowed_target_kinds: Optional[set[str]] = None
+    # Retries for transient HTTP source fetch failures (see convert.http_retry).
+    max_task_retries: int = 3
+    retry_delay: float = 5.0
 
     @model_validator(mode="after")
     def resolve_redis_gate_concurrency(self) -> "RQOrchestratorConfig":

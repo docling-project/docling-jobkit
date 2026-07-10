@@ -785,7 +785,7 @@ class DoclingProcessorConverterDeployment:
 
     def _convert_passthrough_task(self, task: Task) -> list[ConversionResult]:
         _validate_no_s3_source_in_passthrough(task)
-        convert_sources, headers = expand_task_sources(
+        convert_sources, headers, _source_indices = expand_task_sources(
             task,
             max_file_size=self.converter_manager_config.max_file_size,
         )
