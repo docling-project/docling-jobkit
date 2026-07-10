@@ -1,0 +1,17 @@
+options:
+  do_ocr: false
+  to_formats:
+    - json
+
+source:
+  kind: filenet
+  base_url: "https://{host}/content-services-graphql"
+  username: "user"
+  api_key: "key"
+  repository_id: "OS1"
+  folder_id: "/my-folder" # folder_id guid works here as well
+  max_num_elements: 10
+
+target:
+  kind: local_path
+  path: "./output_documents"

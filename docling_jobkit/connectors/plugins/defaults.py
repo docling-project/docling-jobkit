@@ -16,6 +16,9 @@ def source_connectors():
     from docling_jobkit.connectors.azure_blob_source_processor import (
         AzureBlobSourceProcessor,
     )
+    from docling_jobkit.connectors.filenet_source_processor import (
+        FileNetSourceProcessor,
+    )
     from docling_jobkit.connectors.google_drive_source_processor import (
         GoogleDriveSourceProcessor,
     )
@@ -32,6 +35,7 @@ def source_connectors():
             AzureBlobSourceProcessor,
             LocalPathSourceProcessor,
             GoogleDriveSourceProcessor,
+            FileNetSourceProcessor,
         ]
     }
 
