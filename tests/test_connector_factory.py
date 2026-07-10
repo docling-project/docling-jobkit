@@ -29,6 +29,7 @@ from docling_jobkit.datamodel.task_targets import GoogleDriveTarget, LocalPathTa
 def test_builtin_source_connectors_registered():
     factory = get_source_connector_factory()
     assert set(factory.registered_kinds) == {
+        "filenet",
         "azure_blob",
         "file",
         "http",

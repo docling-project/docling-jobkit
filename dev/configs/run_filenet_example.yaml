@@ -3,14 +3,15 @@ options:
   to_formats:
     - json
 
-source:
-  kind: filenet
-  base_url: "https://{host}/content-services-graphql"
-  username: "user"
-  api_key: "key"
-  repository_id: "OS1"
-  folder_id: "/my-folder" # folder_id guid works here as well
-  max_num_elements: 10
+sources:
+  - kind: filenet
+    base_url: "https://{host}/content-services-graphql"
+    username: "user"
+    api_key: "key"
+    repository_id: "OS1"
+    folder_id: "/my-folder" # optional, will grab all files from folder. folder_id guid works here as well
+    document_id: "{doc-id}" # optional, will override folder_id for to grab just one file
+    max_num_elements: 10
 
 target:
   kind: local_path
