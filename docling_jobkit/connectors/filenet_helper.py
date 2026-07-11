@@ -48,6 +48,28 @@ def _execute_graphql_query(
     return payload.get("data", {})
 
 
+def check_connection(coords: FileNetCoordinates, auth_header: str) -> None:
+    """Verify connectivity, credentials, and repository before processing (fail fast)"""
+    query = """
+    query ($repo: String!) {
+        documents(
+            repositoryIdentifier: $repo
+            pageSize: 1
+        ) {
+            pageInfo {
+                totalCount
+            }
+        }
+    }
+    """
+
+    graphql_url = f"{coords.base_url.rstrip('/')}/graphql"
+
+    _execute_graphql_query(
+        graphql_url, auth_header, query, {"repo": coords.repository_id}
+    )
+
+
 def list_repository_documents(
     coords: FileNetCoordinates,
     auth_header: str,

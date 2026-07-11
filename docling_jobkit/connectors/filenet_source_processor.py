@@ -7,6 +7,7 @@ from typing_extensions import override
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.filenet_helper import (
+    check_connection,
     download_document,
     get_document_metadata,
     get_filenet_auth_header,
@@ -54,6 +55,8 @@ class FileNetSourceProcessor(
             self._coords.api_key.get_secret_value(),
         )
         self._graphql_url = f"{self._coords.base_url.rstrip('/')}/graphql"
+
+        check_connection(self._coords, self._auth_header)
         _log.info(
             "Connected to FileNet: %s (repository: %s)",
             self._coords.base_url,
