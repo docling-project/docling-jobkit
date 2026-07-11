@@ -48,6 +48,43 @@ def _execute_graphql_query(
     return payload.get("data", {})
 
 
+def _paginate_documents(
+    graphql_url: str,
+    auth_header: str,
+    first_set: dict,  # a DocumentSet: {documents, pageInfo}
+) -> Iterator[dict]:
+    """Yield documents from a DocumentSet, paginating via pageInfo.token + moreDocuments."""
+    page = 1
+    current = first_set
+
+    while True:
+        for doc in current.get("documents", []):
+            yield doc
+
+        token = (current.get("pageInfo") or {}).get("token")
+        if not token:
+            return
+
+        page += 1
+        query = """
+        query ($token: String!) {
+            moreDocuments(token: $token) {
+                documents {
+                    id
+                    name
+                }
+                pageInfo {
+                    token
+                }
+            }
+        }
+        """
+
+        data = _execute_graphql_query(graphql_url, auth_header, query, {"token": token})
+
+        current = data.get("moreDocuments", {})
+
+
 def check_connection(coords: FileNetCoordinates, auth_header: str) -> None:
     """Verify connectivity, credentials, and repository before processing (fail fast)"""
     query = """
@@ -56,6 +93,9 @@ def check_connection(coords: FileNetCoordinates, auth_header: str) -> None:
             repositoryIdentifier: $repo
             pageSize: 1
         ) {
+            documents {
+                id
+            }
             pageInfo {
                 totalCount
             }
@@ -75,7 +115,7 @@ def list_repository_documents(
     auth_header: str,
     page_size: int = 1000,
 ) -> Iterator[dict]:
-    """List all documents in a FileNet repository."""
+    """List all documents in a FileNet repository, paginating across all pages."""
     query = """
     query ($repo: String!, $pageSize: Int) {
       documents(
@@ -85,6 +125,9 @@ def list_repository_documents(
         documents {
           id
           name
+        }
+        pageInfo {
+            token
         }
       }
     }
@@ -102,15 +145,16 @@ def list_repository_documents(
         },
     )
 
-    documents = data.get("documents", {}).get("documents", [])
+    doc_count = 0
+    for doc in _paginate_documents(graphql_url, auth_header, data.get("documents", {})):
+        doc_count += 1
+        yield doc
+
     _log.info(
         "Listed %d documents from repository %s",
-        len(documents),
+        doc_count,
         coords.repository_id,
     )
-
-    for doc in documents:
-        yield doc
 
 
 def list_folder_documents(
@@ -118,7 +162,7 @@ def list_folder_documents(
     auth_header: str,
     folder_id: str,
 ) -> Iterator[dict]:
-    """List all documents in a specific FileNet folder."""
+    """List all documents in a specific FileNet folder, paginating across all pages"""
     query = """
     query ($repo: String!, $folder: String!) {
       folder(
@@ -130,6 +174,9 @@ def list_folder_documents(
           documents {
             id
             name
+          }
+          pageInfo {
+            token
           }
         }
       }
@@ -148,18 +195,19 @@ def list_folder_documents(
         },
     )
 
-    folder_data = data.get("folder", {})
-    documents = folder_data.get("containedDocuments", {}).get("documents", [])
+    contained = data.get("folder", {}).get("containedDocuments", {})
+
+    doc_count = 0
+    for doc in _paginate_documents(graphql_url, auth_header, contained):
+        doc_count += 1
+        yield doc
 
     _log.info(
         "Listed %d documents from folder %s in repository %s",
-        len(documents),
+        doc_count,
         folder_id,
         coords.repository_id,
     )
-
-    for doc in documents:
-        yield doc
 
 
 def get_document_metadata(
