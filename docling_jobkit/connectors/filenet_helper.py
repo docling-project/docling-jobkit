@@ -1,14 +1,61 @@
 import base64
 import json
 import logging
+import time
 from io import BytesIO
-from typing import Iterator
+from typing import Callable, Iterator, TypeVar
 
 import requests
 
 from docling_jobkit.datamodel.filenet_coords import FileNetCoordinates
 
 _log = logging.getLogger(__name__)
+
+_MAX_RETRIES = 3
+_BACKOFF_BASE_S = 0.5
+_RETRYABLE_4XX_STATUS = {429}
+
+T = TypeVar("T")
+
+
+# I dont think we need to add jitter/randomness for the cli case but maybe for distributed version
+# TODO: add logic to extract Retry-After header sent in http header by external api on 429 telling us
+# after how much time the rate limit will be dropped and we are good to retry
+def _with_exponential_retry(fn: Callable[[], T], operation: str) -> T:
+    """helper for exponential retries on transient errors"""
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            result = fn()
+            if isinstance(result, requests.Response):
+                result.raise_for_status()
+
+            return result
+        except (requests.Timeout, requests.ConnectionError):
+            if attempt == _MAX_RETRIES:
+                raise
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            # 4xx are permanent (except 429) so we bail immediately
+            if (
+                status is not None
+                and status < 500
+                and status not in _RETRYABLE_4XX_STATUS
+            ):
+                raise
+            if attempt == _MAX_RETRIES:
+                raise
+
+        wait = _BACKOFF_BASE_S * (2**attempt)
+        logging.warning(
+            "FileNet: %s transient error, retry %d/%d in %.1fs",
+            operation,
+            attempt + 1,
+            _MAX_RETRIES,
+            wait,
+        )
+        time.sleep(wait)
+
+    raise AssertionError("unreachable")
 
 
 def get_filenet_auth_header(username: str, api_key: str) -> str:
@@ -24,20 +71,22 @@ def _execute_graphql_query(
     variables: dict | None = None,
 ) -> dict:
     """Execute a GraphQL query against FileNet API."""
-    response = requests.post(
-        graphql_url,
-        headers={
-            "Authorization": auth_header,
-            "Content-Type": "application/json",
-        },
-        json={
-            "query": query,
-            "variables": variables or {},
-        },
-        timeout=30,
+    response = _with_exponential_retry(
+        lambda: requests.post(
+            graphql_url,
+            headers={
+                "Authorization": auth_header,
+                "Content-Type": "application/json",
+            },
+            json={
+                "query": query,
+                "variables": variables or {},
+            },
+            timeout=30,
+        ),
+        "GraphQL query",
     )
 
-    response.raise_for_status()
     payload = response.json()
 
     if "errors" in payload:
@@ -284,16 +333,17 @@ def download_document(
 
     _log.debug("Downloading from: %s", full_url)
 
-    response = requests.get(
-        full_url,
-        headers={
-            "Authorization": auth_header,
-        },
-        stream=True,
-        timeout=300,
+    response = _with_exponential_retry(
+        lambda: requests.get(
+            full_url,
+            headers={
+                "Authorization": auth_header,
+            },
+            stream=True,
+            timeout=300,
+        ),
+        "document download",
     )
-
-    response.raise_for_status()
 
     buffer = BytesIO()
     for chunk in response.iter_content(chunk_size=1024 * 1024):
