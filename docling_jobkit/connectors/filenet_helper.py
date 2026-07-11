@@ -195,15 +195,18 @@ def list_repository_documents(
     )
 
     doc_count = 0
-    for doc in _paginate_documents(graphql_url, auth_header, data.get("documents", {})):
-        doc_count += 1
-        yield doc
-
-    _log.info(
-        "Listed %d documents from repository %s",
-        doc_count,
-        coords.repository_id,
-    )
+    try:
+        for doc in _paginate_documents(
+            graphql_url, auth_header, data.get("documents", {})
+        ):
+            doc_count += 1
+            yield doc
+    finally:
+        _log.info(
+            "Listed %d documents from repository %s",
+            doc_count,
+            coords.repository_id,
+        )
 
 
 def list_folder_documents(
@@ -247,16 +250,17 @@ def list_folder_documents(
     contained = data.get("folder", {}).get("containedDocuments", {})
 
     doc_count = 0
-    for doc in _paginate_documents(graphql_url, auth_header, contained):
-        doc_count += 1
-        yield doc
-
-    _log.info(
-        "Listed %d documents from folder %s in repository %s",
-        doc_count,
-        folder_id,
-        coords.repository_id,
-    )
+    try:
+        for doc in _paginate_documents(graphql_url, auth_header, contained):
+            doc_count += 1
+            yield doc
+    finally:
+        _log.info(
+            "Listed %d documents from folder %s in repository %s",
+            doc_count,
+            folder_id,
+            coords.repository_id,
+        )
 
 
 def get_document_metadata(
