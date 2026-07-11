@@ -9,9 +9,12 @@ from docling_jobkit.connectors.filenet_source_processor import FileNetSourceProc
 
 def test_initialize_does_not_log_connected_on_probe_failure(caplog) -> None:
     processor = FileNetSourceProcessor(MagicMock())
-    with patch("requests.post", side_effect=requests.ConnectionError("DNS failure")):
-        with pytest.raises(requests.ConnectionError):
-            processor._initialize()
+    with patch("docling_jobkit.connectors.filenet_helper.time.sleep"):
+        with patch(
+            "requests.post", side_effect=requests.ConnectionError("DNS failure")
+        ):
+            with pytest.raises(requests.ConnectionError):
+                processor._initialize()
 
     assert "Connected to FileNet" not in caplog.text
 
