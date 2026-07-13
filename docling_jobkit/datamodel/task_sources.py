@@ -10,6 +10,9 @@ from docling.datamodel.service.requests import (
 )
 
 from docling_jobkit.datamodel.azure_blob_coords import AzureBlobCoordinates
+from docling_jobkit.datamodel.google_cloud_storage_coords import (
+    GoogleCloudStorageCoordinates,
+)
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
 
 
@@ -19,6 +22,10 @@ class TaskAzureBlobSource(AzureBlobCoordinates):
 
 class TaskGoogleDriveSource(GoogleDriveCoordinates):
     kind: Literal["google_drive"] = "google_drive"
+
+
+class TaskGoogleCloudStorageSource(GoogleCloudStorageCoordinates):
+    kind: Literal["google_cloud_storage"] = "google_cloud_storage"
 
 
 class TaskLocalPathSource(BaseModel):
@@ -77,12 +84,14 @@ TaskSource = Annotated[
     | S3SourceRequest
     | TaskAzureBlobSource
     | TaskGoogleDriveSource
+    | TaskGoogleCloudStorageSource
     | TaskLocalPathSource,
     Field(discriminator="kind"),
 ]
 
 __all__ = [
     "TaskAzureBlobSource",
+    "TaskGoogleCloudStorageSource",
     "TaskGoogleDriveSource",
     "TaskLocalPathSource",
     "TaskSource",
