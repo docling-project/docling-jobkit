@@ -555,7 +555,11 @@ class DoclingProcessorConverterDeployment:
                     "---==== Checking if metric generation is enabled ====---"
                 )
         ## ------------ metrics ---------------
-        if self.config.generate_metrics:
+        # DON'T instantiate metrics here yet
+        self._metrics_initialized = False
+
+    def init_metrics(self):
+        if not self._metrics_initialized:
             _log.warning(
                     "Setting up metric generation"
                 )
@@ -826,6 +830,7 @@ class DoclingProcessorConverterDeployment:
                 description="Number of group items in converted document",
                 tag_keys=("tenant_id",),
             )
+            self._metrics_initialized = True
 
     def emit_metrics(self, metrics: list, tenant_id: str):
         _log.warning(
@@ -964,6 +969,10 @@ class DoclingProcessorConverterDeployment:
     ) -> ConverterTaskResult | ConverterFailureResult | ObjectRef:
         if self.config.enable_oom_protection and PSUTIL_AVAILABLE:
             await self._check_memory()
+        
+        # metrics lazy init
+        if self.config.generate_metrics:
+            self.init_metrics()
 
         if isinstance(request, PassthroughTaskRequest):
             request_start = time.monotonic()
