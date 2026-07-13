@@ -292,6 +292,154 @@ class TestOptionsParsingPreset:
         assert options is not None
 
 
+def _raw_engine_options() -> dict:
+    return {
+        "engine_type": "api",
+        "url": "http://localhost:8000/v1/chat/completions",
+        "params": {"model": "some-model"},
+    }
+
+
+def _raw_model_spec() -> dict:
+    return {
+        "name": "some-model",
+        "default_repo_id": "some-model",
+        "prompt": "Describe this image.",
+        "response_format": "plaintext",
+    }
+
+
+class TestCustomPresetByNameOptionsParsing:
+    """Custom presets registered by name arrive as raw dicts and must be
+    validated into their options model, not returned as-is (#191)."""
+
+    def test_picture_description_custom_preset_by_name(self):
+        """Custom picture_description preset resolves to a validated options object."""
+        from docling.datamodel.pipeline_options import (
+            PictureDescriptionVlmEngineOptions,
+        )
+
+        config = DoclingConverterManagerConfig(
+            custom_picture_description_presets={
+                "my_preset": {
+                    "picture_area_threshold": 0.0,
+                    "engine_options": _raw_engine_options(),
+                    "model_spec": _raw_model_spec(),
+                    "prompt": "Describe this image.",
+                }
+            },
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(picture_description_preset="my_preset")
+        options = manager._parse_picture_description_options(request)
+
+        assert isinstance(options, PictureDescriptionVlmEngineOptions)
+
+    def test_picture_description_custom_preset_area_threshold_assignable(self):
+        """Reproduces #191: assigning picture_area_threshold must not raise
+        AttributeError on a dict."""
+        config = DoclingConverterManagerConfig(
+            default_picture_description_preset="my_preset",
+            custom_picture_description_presets={
+                "my_preset": {
+                    "picture_area_threshold": 0.0,
+                    "engine_options": _raw_engine_options(),
+                    "model_spec": _raw_model_spec(),
+                    "prompt": "Describe this image.",
+                }
+            },
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(
+            picture_description_preset="my_preset",
+            picture_description_area_threshold=0.2,
+        )
+        pipeline_options = manager._parse_standard_pdf_opts(request, None)
+
+        assert (
+            pipeline_options.picture_description_options.picture_area_threshold == 0.2
+        )
+
+    def test_code_formula_custom_preset_by_name(self):
+        """Custom code_formula preset resolves to a validated options object."""
+        from docling.datamodel.pipeline_options import CodeFormulaVlmOptions
+
+        config = DoclingConverterManagerConfig(
+            custom_code_formula_presets={
+                "my_preset": {
+                    "engine_options": _raw_engine_options(),
+                    "model_spec": _raw_model_spec(),
+                }
+            },
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(code_formula_preset="my_preset")
+        options = manager._parse_code_formula_options(request)
+
+        assert isinstance(options, CodeFormulaVlmOptions)
+
+    def test_vlm_custom_preset_by_name(self):
+        """Non-regression: VLM custom preset by name already worked and must keep working."""
+        from docling.datamodel.pipeline_options import VlmConvertOptions
+
+        config = DoclingConverterManagerConfig(
+            custom_vlm_presets={
+                "my_preset": {
+                    "engine_options": _raw_engine_options(),
+                    "model_spec": {**_raw_model_spec(), "response_format": "doctags"},
+                }
+            },
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(vlm_pipeline_preset="my_preset")
+        options = manager._parse_vlm_options(request)
+
+        assert isinstance(options, VlmConvertOptions)
+
+    def test_picture_description_custom_preset_engine_not_allowed(self):
+        """Engine allowlist must still apply once the dict is validated."""
+        config = DoclingConverterManagerConfig(
+            allowed_picture_description_engines=["mlx"],
+            custom_picture_description_presets={
+                "my_preset": {
+                    "engine_options": _raw_engine_options(),
+                    "model_spec": _raw_model_spec(),
+                }
+            },
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(picture_description_preset="my_preset")
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._parse_picture_description_options(request)
+
+    def test_picture_description_custom_config_non_regression(self):
+        """picture_description_custom_config (not by-name preset) must keep working."""
+        from docling.datamodel.pipeline_options import (
+            PictureDescriptionVlmEngineOptions,
+        )
+
+        config = DoclingConverterManagerConfig(
+            allow_custom_picture_description_config=True,
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(
+            picture_description_custom_config={
+                "engine_options": _raw_engine_options(),
+                "model_spec": _raw_model_spec(),
+                "prompt": "Describe this image.",
+            }
+        )
+        options = manager._parse_picture_description_options(request)
+
+        assert isinstance(options, PictureDescriptionVlmEngineOptions)
+
+
 class TestOptionsParsingCustomConfig:
     """Test options parsing from custom configs."""
 
