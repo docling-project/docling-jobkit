@@ -53,6 +53,9 @@ def install_dynamic_unions(allow_external_plugins: bool = False) -> None:
     from pydantic import Field
 
     from docling.datamodel.service.targets import (
+        AzureBlobTarget,
+        GoogleCloudStorageTarget,
+        GoogleDriveTarget,
         InBodyTarget,
         PresignedUrlTarget,
         PutTarget,
@@ -62,14 +65,20 @@ def install_dynamic_unions(allow_external_plugins: bool = False) -> None:
 
     from docling_jobkit.datamodel.task import Task
     from docling_jobkit.datamodel.task_targets import (
-        GoogleDriveTarget,
         LocalPathTarget,
     )
 
     factory = get_target_connector_factory(allow_external_plugins)
     # Service-only targets are never registered as connectors but must stay valid.
     service_only = (InBodyTarget, ZipTarget, PresignedUrlTarget)
-    builtin = (S3Target, PutTarget, LocalPathTarget, GoogleDriveTarget)
+    builtin = (
+        S3Target,
+        AzureBlobTarget,
+        GoogleCloudStorageTarget,
+        GoogleDriveTarget,
+        PutTarget,
+        LocalPathTarget,
+    )
     external = tuple(
         t
         for t in factory.registered_config_types

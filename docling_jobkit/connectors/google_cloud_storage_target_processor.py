@@ -6,10 +6,10 @@ from pydantic import BaseModel
 from docling.datamodel.service.sources import (
     GoogleCloudStorageCoordinates,
 )
+from docling.datamodel.service.targets import GoogleCloudStorageTarget
 
 from docling_jobkit.connectors.google_cloud_storage_helper import get_client
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
-from docling_jobkit.datamodel.task_targets import GoogleCloudStorageTarget
 
 
 class GoogleCloudStorageTargetProcessor(BaseTargetProcessor):

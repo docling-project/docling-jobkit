@@ -5,6 +5,7 @@ from typing import BinaryIO
 from pydantic import BaseModel
 
 from docling.datamodel.service.sources import AzureBlobCoordinates
+from docling.datamodel.service.targets import AzureBlobTarget
 
 from docling_jobkit.connectors.azure_blob_helper import get_azure_blob_connection
 from docling_jobkit.connectors.azure_blob_upload_support import (
@@ -12,7 +13,6 @@ from docling_jobkit.connectors.azure_blob_upload_support import (
     upload_azure_blob_object,
 )
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
-from docling_jobkit.datamodel.task_targets import AzureBlobTarget
 
 _log = logging.getLogger(__name__)
 

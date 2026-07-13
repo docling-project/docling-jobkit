@@ -18,11 +18,17 @@ from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
-from docling.datamodel.service.targets import S3Target
+from docling.datamodel.service.sources import FileSource, HttpSource
+from docling.datamodel.service.targets import (
+    AzureBlobTarget,
+    GoogleCloudStorageTarget,
+    GoogleDriveTarget,
+    S3Target,
+)
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.convert.manager import DoclingConverterManager
+from docling_jobkit.convert.source_expansion import _EXPANDABLE_SOURCE_TYPES
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult, TaskOutcome
 from docling_jobkit.datamodel.stored_outcome import (
@@ -51,16 +57,26 @@ from docling_jobkit.orchestrators.ray.serve_deployment import (
 _log = logging.getLogger(__name__)
 
 
-def _validate_s3_source_targets(
+_STORAGE_TARGET_TYPES = (
+    S3Target,
+    AzureBlobTarget,
+    GoogleCloudStorageTarget,
+    GoogleDriveTarget,
+)
+
+
+def _validate_expandable_source_targets(
     sources: list[TaskSource], target: TaskTarget, task_type: TaskType
 ) -> None:
-    has_s3_source = any(isinstance(source, S3Coordinates) for source in sources)
-    if not has_s3_source:
+    has_expandable_source = any(
+        isinstance(source, _EXPANDABLE_SOURCE_TYPES) for source in sources
+    )
+    if not has_expandable_source:
         return
 
-    if task_type != TaskType.CONVERT or not isinstance(target, S3Target):
+    if task_type != TaskType.CONVERT or not isinstance(target, _STORAGE_TARGET_TYPES):
         raise ValueError(
-            "Tasks containing an S3Coordinates source require an S3Target."
+            "Tasks containing an expandable storage source require a storage target."
         )
 
 
@@ -646,7 +662,7 @@ class RayOrchestrator(BaseOrchestrator):
             task_id = str(uuid.uuid4())
             chunking_export_options = chunking_export_options or ChunkingExportOptions()
 
-            _validate_s3_source_targets(sources, target, task_type)
+            _validate_expandable_source_targets(sources, target, task_type)
 
             # Convert DocumentStream sources to FileSource for JSON serialization
             ray_sources: list[TaskSource] = []
@@ -656,7 +672,9 @@ class RayOrchestrator(BaseOrchestrator):
                     ray_sources.append(
                         FileSource(filename=source.name, base64_string=encoded_doc)
                     )
-                elif isinstance(source, (HttpSource, FileSource, S3Coordinates)):
+                elif isinstance(
+                    source, (HttpSource, FileSource, *_EXPANDABLE_SOURCE_TYPES)
+                ):
                     ray_sources.append(source)
 
             task = Task(

@@ -21,10 +21,11 @@ from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.sources import FileSource, HttpSource
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
 from docling_jobkit.config.target_config import S3PresignedConfig
+from docling_jobkit.convert.source_expansion import _EXPANDABLE_SOURCE_TYPES
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
@@ -171,14 +172,16 @@ class RQOrchestrator(BaseOrchestrator):
                     stacklevel=2,
                 )
             task_id = str(uuid.uuid4())
-            rq_sources: list[HttpSource | FileSource | S3Coordinates] = []
+            rq_sources: list[TaskSource] = []
             for source in sources:
                 if isinstance(source, DocumentStream):
                     encoded_doc = base64.b64encode(source.stream.read()).decode()
                     rq_sources.append(
                         FileSource(filename=source.name, base64_string=encoded_doc)
                     )
-                elif isinstance(source, (HttpSource, FileSource, S3Coordinates)):
+                elif isinstance(
+                    source, (HttpSource, FileSource, *_EXPANDABLE_SOURCE_TYPES)
+                ):
                     rq_sources.append(source)
             chunking_export_options = chunking_export_options or ChunkingExportOptions()
             task = Task(

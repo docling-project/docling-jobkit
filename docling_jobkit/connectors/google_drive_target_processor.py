@@ -5,9 +5,9 @@ from typing import BinaryIO
 from pydantic import BaseModel
 
 from docling.datamodel.service.sources import GoogleDriveCoordinates
+from docling.datamodel.service.targets import GoogleDriveTarget
 
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
-from docling_jobkit.datamodel.task_targets import GoogleDriveTarget
 
 
 class GoogleDriveTargetProcessor(BaseTargetProcessor):

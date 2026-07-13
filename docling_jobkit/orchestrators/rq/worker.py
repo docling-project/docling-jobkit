@@ -12,7 +12,14 @@ import redis as sync_redis
 from rq import SimpleWorker, get_current_job
 
 from docling.datamodel.base_models import DocumentStream
-from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.sources import (
+    AzureBlobCoordinates,
+    FileSource,
+    GoogleCloudStorageCoordinates,
+    GoogleDriveCoordinates,
+    HttpSource,
+    S3Coordinates,
+)
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.convert.chunking import process_chunkable_results
@@ -83,6 +90,24 @@ def _prepare_convert_sources(
                 "type": "S3Coordinates",
                 "bucket": source.bucket,
                 "key_prefix": source.key_prefix,
+            }
+        elif isinstance(source, AzureBlobCoordinates):
+            info = {
+                "type": "AzureBlobCoordinates",
+                "account_name": source.account_name,
+                "container": source.container,
+                "blob_prefix": source.blob_prefix,
+            }
+        elif isinstance(source, GoogleCloudStorageCoordinates):
+            info = {
+                "type": "GoogleCloudStorageCoordinates",
+                "bucket": source.bucket,
+                "key_prefix": source.key_prefix,
+            }
+        elif isinstance(source, GoogleDriveCoordinates):
+            info = {
+                "type": "GoogleDriveCoordinates",
+                "path_id": source.path_id,
             }
         else:
             raise RuntimeError(f"Unsupported runtime task source: {type(source)!r}")

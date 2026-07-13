@@ -237,7 +237,13 @@ def test_validate_target_allowlist():
 
     # None allowlist allows everything
     orch.allowed_target_kinds = None
-    orch._validate_target(GoogleDriveTarget(token="t", path_id="x"))
+    orch._validate_target(
+        GoogleDriveTarget(
+            path_id="x",
+            refresh_token="refresh-token",
+            credentials_path="/tmp/client-secret.json",
+        )
+    )
 
 
 def test_factory_caches_are_isolated_by_flag():
