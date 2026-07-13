@@ -76,6 +76,9 @@ gdrive = [
     "google-api-python-client>=2.183.0",
     "google-auth-oauthlib>=1.2.2",
 ]
+gcloudstorage = [
+    "google-cloud-storage>=2.10.0",
+]
 azure = [
     "azure-storage-blob>=12.19.0",
 ]
@@ -218,6 +221,7 @@ module = [
     "mlx_vlm.*",
     "googleapiclient.*",
     "google_auth_oauthlib.*",
+    "google.*",
     "ray.*",
     "codeflare_sdk.*",
 ]

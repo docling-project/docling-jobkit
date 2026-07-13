@@ -23,10 +23,12 @@ from docling_jobkit.convert.manager import (
 from docling_jobkit.convert.results_processor import ResultsProcessor
 from docling_jobkit.datamodel.dynamic_unions import build_job_config_model
 from docling_jobkit.datamodel.task_sources import (
+    TaskGoogleCloudStorageSource,
     TaskGoogleDriveSource,
     TaskLocalPathSource,
 )
 from docling_jobkit.datamodel.task_targets import (
+    GoogleCloudStorageTarget,
     GoogleDriveTarget,
     LocalPathTarget,
 )
@@ -47,12 +49,17 @@ JobTaskSource = Annotated[
     | HttpSourceRequest
     | TaskLocalPathSource
     | S3SourceRequest
-    | TaskGoogleDriveSource,
+    | TaskGoogleDriveSource
+    | TaskGoogleCloudStorageSource,
     Field(discriminator="kind"),
 ]
 
 JobTaskTarget = Annotated[
-    ZipTarget | LocalPathTarget | S3Target | GoogleDriveTarget,
+    ZipTarget
+    | LocalPathTarget
+    | S3Target
+    | GoogleDriveTarget
+    | GoogleCloudStorageTarget,
     Field(discriminator="kind"),
 ]
 
