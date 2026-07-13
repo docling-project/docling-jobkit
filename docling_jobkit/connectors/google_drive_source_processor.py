@@ -12,11 +12,12 @@ if TYPE_CHECKING:
 
 from pydantic import BaseModel
 
+from docling.datamodel.service.sources import GoogleDriveCoordinates
+
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     SourceDocumentRef,
 )
-from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
 from docling_jobkit.datamodel.task_sources import TaskGoogleDriveSource
 
 

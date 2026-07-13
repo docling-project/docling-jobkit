@@ -3,7 +3,7 @@ from datetime import datetime
 from google.cloud import storage
 from pydantic import BaseModel, SecretStr
 
-from docling_jobkit.datamodel.google_cloud_storage_coords import (
+from docling.datamodel.service.sources import (
     GoogleCloudStorageCoordinates,
 )
 

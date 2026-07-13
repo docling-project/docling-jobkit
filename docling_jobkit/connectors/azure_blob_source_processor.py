@@ -7,6 +7,7 @@ from azure.core.exceptions import ResourceNotFoundError, ServiceRequestError
 from pydantic import BaseModel
 from typing_extensions import override
 
+from docling.datamodel.service.sources import AzureBlobCoordinates
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.azure_blob_helper import get_azure_blob_connection
@@ -18,7 +19,6 @@ from docling_jobkit.convert.materialization import (
     SourceLimitExceededError,
     normalize_max_file_size,
 )
-from docling_jobkit.datamodel.azure_blob_coords import AzureBlobCoordinates
 from docling_jobkit.datamodel.task_sources import TaskAzureBlobSource
 
 _log = logging.getLogger(__name__)

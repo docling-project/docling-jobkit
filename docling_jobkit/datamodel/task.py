@@ -9,7 +9,14 @@ from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.responses import PublicFailureInfo
-from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.sources import (
+    AzureBlobCoordinates,
+    FileSource,
+    GoogleCloudStorageCoordinates,
+    GoogleDriveCoordinates,
+    HttpSource,
+    S3Coordinates,
+)
 from docling.datamodel.service.targets import InBodyTarget
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
@@ -20,7 +27,15 @@ from docling_jobkit.datamodel.chunking import (
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.datamodel.task_targets import TaskTarget
 
-TaskSource = Union[HttpSource, FileSource, DocumentStream, S3Coordinates]
+TaskSource = Union[
+    HttpSource,
+    FileSource,
+    DocumentStream,
+    S3Coordinates,
+    AzureBlobCoordinates,
+    GoogleCloudStorageCoordinates,
+    GoogleDriveCoordinates,
+]
 
 
 class Task(BaseModel):

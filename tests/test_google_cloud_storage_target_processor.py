@@ -3,11 +3,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from docling.datamodel.service.sources import (
+    GoogleCloudStorageCoordinates,
+)
+
 from docling_jobkit.connectors.google_cloud_storage_target_processor import (
     GoogleCloudStorageTargetProcessor,
-)
-from docling_jobkit.datamodel.google_cloud_storage_coords import (
-    GoogleCloudStorageCoordinates,
 )
 
 

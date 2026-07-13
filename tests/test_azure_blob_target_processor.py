@@ -3,10 +3,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from docling.datamodel.service.sources import AzureBlobCoordinates
+
 from docling_jobkit.connectors.azure_blob_target_processor import (
     AzureBlobTargetProcessor,
 )
-from docling_jobkit.datamodel.azure_blob_coords import AzureBlobCoordinates
 
 
 @pytest.fixture

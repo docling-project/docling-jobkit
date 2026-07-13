@@ -106,7 +106,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-# docling-slim = { git = "https://github.com/docling-project/docling/", rev = "main" }
+docling-slim = { git = "https://github.com/docling-project/docling/", branch = "cau/move-connector-types-gcs-gd-azure" }
 # docling-slim = { path = "../docling", editable = true }
 
 

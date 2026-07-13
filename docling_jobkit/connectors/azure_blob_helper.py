@@ -2,7 +2,7 @@ import logging
 
 from azure.storage.blob import BlobServiceClient, ContainerClient
 
-from docling_jobkit.datamodel.azure_blob_coords import AzureBlobCoordinates
+from docling.datamodel.service.sources import AzureBlobCoordinates
 
 # Suppress verbose Azure SDK HTTP logging
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(

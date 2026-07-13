@@ -9,6 +9,9 @@ from pydantic import BaseModel
 from typing_extensions import override
 
 from docling.datamodel.base_models import DocumentStream
+from docling.datamodel.service.sources import (
+    GoogleCloudStorageCoordinates,
+)
 
 from docling_jobkit.connectors.google_cloud_storage_helper import (
     GoogleCloudStorageFileIdentifier,
@@ -21,9 +24,6 @@ from docling_jobkit.connectors.source_processor import (
 from docling_jobkit.convert.materialization import (
     SourceLimitExceededError,
     normalize_max_file_size,
-)
-from docling_jobkit.datamodel.google_cloud_storage_coords import (
-    GoogleCloudStorageCoordinates,
 )
 from docling_jobkit.datamodel.task_sources import TaskGoogleCloudStorageSource
 

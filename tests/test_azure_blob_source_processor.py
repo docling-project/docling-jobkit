@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from azure.core.exceptions import ResourceNotFoundError
 
+from docling.datamodel.service.sources import AzureBlobCoordinates
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.azure_blob_source_processor import (
@@ -12,7 +13,6 @@ from docling_jobkit.connectors.azure_blob_source_processor import (
     AzureBlobSourceProcessor,
 )
 from docling_jobkit.convert.materialization import SourceLimitExceededError
-from docling_jobkit.datamodel.azure_blob_coords import AzureBlobCoordinates
 
 
 @pytest.fixture

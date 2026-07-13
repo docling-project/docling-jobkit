@@ -12,7 +12,7 @@ from googleapiclient.discovery import Resource, build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
 from pydantic import BaseModel
 
-from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
+from docling.datamodel.service.sources import GoogleDriveCoordinates
 
 
 class GoogleDriveFileIdentifier(BaseModel):
