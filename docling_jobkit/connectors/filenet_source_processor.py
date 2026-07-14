@@ -2,7 +2,6 @@ import logging
 from typing import Iterator
 
 from pydantic import BaseModel
-from typing_extensions import override
 
 from docling_core.types.io import DocumentStream
 
@@ -16,7 +15,6 @@ from docling_jobkit.connectors.filenet_helper import (
 )
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
-    SourceDocumentRef,
 )
 from docling_jobkit.convert.materialization import (
     SourceLimitExceededError,
@@ -121,20 +119,29 @@ class FileNetSourceProcessor(
             )
 
     def _count_documents(self) -> int:
-        # TODO: Implement document counting
-        raise NotImplementedError("Document counting not yet implemented")
+        """Count total documents by consuming the iterator."""
+        max_elements = self._coords.max_num_elements
 
-    @override
-    def _make_document_ref(
-        self, identifier: FileNetFileIdentifier, source_index: int
-    ) -> SourceDocumentRef[FileNetFileIdentifier]:
-        # TODO: Construct proper source_uri
-        return SourceDocumentRef(
-            id=identifier,
-            source_index=source_index,
-            source_uri=f"filenet://{self._coords.repository_id}/{identifier.name}",
-            filename=identifier.name,
-        )
+        if self._coords.folder_id:
+            docs = list_folder_documents(
+                self._coords, self._auth_header, self._coords.folder_id
+            )
+        else:
+            docs = list_repository_documents(
+                self._coords,
+                self._auth_header,
+            )
+
+        if max_elements is None:
+            return sum(1 for _ in docs)
+
+        # Count up to max_elements
+        count = 0
+        for _ in docs:
+            count += 1
+            if count >= max_elements:
+                break
+        return count
 
     def _fetch_document_by_id(
         self,
