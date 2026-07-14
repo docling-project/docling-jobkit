@@ -572,6 +572,12 @@ class DoclingProcessorConverterDeployment:
                 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 12.5, 15.0, 17.5, 20.0, 25.0, 30.0
             ]
 
+            self.metric_emission_counter = Counter(
+                "dcls_metrics_emitted",
+                description="Number of attemps to emmit metrics",
+                tag_keys=("tenant_id",),
+            )
+
             self.success_counter = Counter(
                 "dcls_conversion_success",
                 description="Number of successeful conversions",
@@ -834,9 +840,11 @@ class DoclingProcessorConverterDeployment:
 
     def emit_metrics(self, metrics: list, tenant_id: str):
         _log.warning(
-                    "Emitting replics, total number records %s",
+                    "Emitting metrics, total number of records %s",
                     len(metrics)
                 )
+        self.metric_emission_counter.set_default_tags({"tenant_id": tenant_id})
+        self.metric_emission_counter.inc()
         for item in metrics:
             if 'reference' in item:
                 metric_list = item["metrics"]
