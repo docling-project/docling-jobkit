@@ -3,14 +3,12 @@ from datetime import datetime
 from io import BytesIO
 from typing import Iterator
 
-from azure.core.exceptions import ResourceNotFoundError, ServiceRequestError
 from pydantic import BaseModel
 from typing_extensions import override
 
 from docling.datamodel.service.sources import AzureBlobCoordinates
 from docling_core.types.io import DocumentStream
 
-from docling_jobkit.connectors.azure_blob_helper import get_azure_blob_connection
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     SourceDocumentRef,
@@ -46,6 +44,10 @@ class AzureBlobSourceProcessor(
         return (TaskAzureBlobSource,)
 
     def _initialize(self):
+        from docling_jobkit.connectors.azure_blob_helper import (
+            get_azure_blob_connection,
+        )
+
         self._service_client, self._container_client = get_azure_blob_connection(
             self._coords
         )
@@ -117,6 +119,8 @@ class AzureBlobSourceProcessor(
             self._coords.container,
             identifier.name,
         )
+        from azure.core.exceptions import ResourceNotFoundError, ServiceRequestError
+
         buffer = BytesIO()
         try:
             blob_client = self._container_client.get_blob_client(identifier.name)

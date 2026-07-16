@@ -7,11 +7,6 @@ from pydantic import BaseModel
 from docling.datamodel.service.sources import AzureBlobCoordinates
 from docling.datamodel.service.targets import AzureBlobTarget
 
-from docling_jobkit.connectors.azure_blob_helper import get_azure_blob_connection
-from docling_jobkit.connectors.azure_blob_upload_support import (
-    upload_azure_blob_file,
-    upload_azure_blob_object,
-)
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 
 _log = logging.getLogger(__name__)
@@ -27,6 +22,10 @@ class AzureBlobTargetProcessor(BaseTargetProcessor):
         return (AzureBlobTarget,)
 
     def _initialize(self):
+        from docling_jobkit.connectors.azure_blob_helper import (
+            get_azure_blob_connection,
+        )
+
         self._service_client, self._container_client = get_azure_blob_connection(
             self._coords
         )
@@ -54,6 +53,10 @@ class AzureBlobTargetProcessor(BaseTargetProcessor):
         content_type: str,
     ) -> None:
         """Upload a local file from disk into Azure Blob Storage."""
+        from docling_jobkit.connectors.azure_blob_upload_support import (
+            upload_azure_blob_file,
+        )
+
         full_name = self._build_full_blob_name(target_filename)
         blob_client = self._container_client.get_blob_client(full_name)
         _log.info(
@@ -75,6 +78,10 @@ class AzureBlobTargetProcessor(BaseTargetProcessor):
         content_type: str,
     ) -> None:
         """Upload an in-memory object into Azure Blob Storage."""
+        from docling_jobkit.connectors.azure_blob_upload_support import (
+            upload_azure_blob_object,
+        )
+
         full_name = self._build_full_blob_name(target_filename)
         blob_client = self._container_client.get_blob_client(full_name)
         _log.info(

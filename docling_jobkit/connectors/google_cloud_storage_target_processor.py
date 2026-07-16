@@ -8,7 +8,6 @@ from docling.datamodel.service.sources import (
 )
 from docling.datamodel.service.targets import GoogleCloudStorageTarget
 
-from docling_jobkit.connectors.google_cloud_storage_helper import get_client
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 
 
@@ -22,6 +21,8 @@ class GoogleCloudStorageTargetProcessor(BaseTargetProcessor):
         return (GoogleCloudStorageTarget,)
 
     def _initialize(self):
+        from docling_jobkit.connectors.google_cloud_storage_helper import get_client
+
         self._client = get_client(self._coords)
 
     def _finalize(self):
