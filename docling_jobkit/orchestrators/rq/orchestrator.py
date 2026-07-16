@@ -35,6 +35,7 @@ from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
     TaskNotFoundError,
 )
+from docling_jobkit.orchestrators.serialization import dump_model_with_secrets
 
 _log = logging.getLogger(__name__)
 
@@ -195,7 +196,7 @@ class RQOrchestrator(BaseOrchestrator):
                 callbacks=callbacks or [],
                 metadata=metadata or {},
             )
-            task_data = task.model_dump(mode="json", serialize_as_any=True)
+            task_data = dump_model_with_secrets(task, serialize_as_any=True)
             self._rq_queue.enqueue(
                 self._rq_job_function,
                 kwargs={"task_data": task_data},

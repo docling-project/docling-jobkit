@@ -34,7 +34,10 @@ from docling_jobkit.orchestrators.ray.models import (
     TenantStats,
     TenantTaskCounters,
 )
-from docling_jobkit.orchestrators.serialization import make_msgpack_safe
+from docling_jobkit.orchestrators.serialization import (
+    dump_model_with_secrets,
+    make_msgpack_safe,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -249,7 +252,7 @@ class RedisStateManager:
 
         queue_key = f"tenant:{tenant_id}:tasks"
         task_counters_key = f"tenant:{tenant_id}:task_counters"
-        task_json = task.model_dump_json()
+        task_json = json.dumps(dump_model_with_secrets(task))
 
         # Push the task and bump the monotonic enqueued counter atomically so the
         # counter can never drift from the queue contents.
