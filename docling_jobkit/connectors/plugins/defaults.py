@@ -6,9 +6,10 @@ Registered under the ``docling_jobkit`` setuptools entry-point group (see
 
 Imports are deferred into the functions so that merely loading this module (which
 happens for every entry-point scan) stays cheap and never pulls optional, heavy
-SDKs at import time. The Google Drive connectors only import their google
-dependencies inside their methods, so listing the classes here is import-safe
-even when the ``gdrive`` extra is not installed.
+SDKs at import time. Every connector module keeps its optional SDK imports
+(azure, gcloudstorage, gdrive) inside the methods that use them, so importing the
+processor classes here is safe even when those extras are not installed; the
+extra is only required when a connector is actually instantiated and used.
 """
 
 

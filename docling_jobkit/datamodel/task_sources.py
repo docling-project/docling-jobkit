@@ -4,28 +4,19 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field
 
 from docling.datamodel.service.requests import (
+    AzureBlobSourceRequest,
     FileSourceRequest,
+    GoogleCloudStorageSourceRequest,
+    GoogleDriveSourceRequest,
     HttpSourceRequest,
     S3SourceRequest,
 )
 
-from docling_jobkit.datamodel.azure_blob_coords import AzureBlobCoordinates
-from docling_jobkit.datamodel.google_cloud_storage_coords import (
-    GoogleCloudStorageCoordinates,
-)
-from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
-
-
-class TaskAzureBlobSource(AzureBlobCoordinates):
-    kind: Literal["azure_blob"] = "azure_blob"
-
-
-class TaskGoogleDriveSource(GoogleDriveCoordinates):
-    kind: Literal["google_drive"] = "google_drive"
-
-
-class TaskGoogleCloudStorageSource(GoogleCloudStorageCoordinates):
-    kind: Literal["google_cloud_storage"] = "google_cloud_storage"
+# These kind-tagged source wrappers now live in docling; kept here as aliases so
+# the jobkit-facing names and the TaskSource union stay stable.
+TaskAzureBlobSource = AzureBlobSourceRequest
+TaskGoogleDriveSource = GoogleDriveSourceRequest
+TaskGoogleCloudStorageSource = GoogleCloudStorageSourceRequest
 
 
 class TaskLocalPathSource(BaseModel):

@@ -4,30 +4,15 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field
 
 from docling.datamodel.service.targets import (
+    AzureBlobTarget,
+    GoogleCloudStorageTarget,
+    GoogleDriveTarget,
     InBodyTarget,
     PresignedUrlTarget,
     PutTarget,
     S3Target,
     ZipTarget,
 )
-
-from docling_jobkit.datamodel.azure_blob_coords import AzureBlobCoordinates
-from docling_jobkit.datamodel.google_cloud_storage_coords import (
-    GoogleCloudStorageCoordinates,
-)
-from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
-
-
-class AzureBlobTarget(AzureBlobCoordinates):
-    kind: Literal["azure_blob"] = "azure_blob"
-
-
-class GoogleDriveTarget(GoogleDriveCoordinates):
-    kind: Literal["google_drive"] = "google_drive"
-
-
-class GoogleCloudStorageTarget(GoogleCloudStorageCoordinates):
-    kind: Literal["google_cloud_storage"] = "google_cloud_storage"
 
 
 class LocalPathTarget(BaseModel):

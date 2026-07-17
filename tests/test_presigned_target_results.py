@@ -10,7 +10,12 @@ import pytest
 from docling.datamodel.base_models import ConversionStatus, OutputFormat
 from docling.datamodel.service.callbacks import CallbackSpec, ProgressKind
 from docling.datamodel.service.sources import FileSource, HttpSource
-from docling.datamodel.service.targets import PresignedUrlTarget, S3Target
+from docling.datamodel.service.targets import (
+    AzureBlobTarget,
+    GoogleCloudStorageTarget,
+    PresignedUrlTarget,
+    S3Target,
+)
 from docling_core.types.doc import ImageRefMode
 from docling_core.types.doc.document import DoclingDocument
 
@@ -70,6 +75,77 @@ class _FakeDoc(DoclingDocument):
     def export_to_markdown(self, image_mode=ImageRefMode.PLACEHOLDER, **_kwargs):
         self.__class__.markdown_image_modes.append(image_mode)
         return "converted markdown"
+
+
+class _FakeAzureBlobClient:
+    def __init__(self, name: str):
+        self.name = name
+
+
+class _FakeAzureContainerClient:
+    def __init__(self):
+        self.uploads: list[dict[str, object]] = []
+
+    def get_blob_client(self, name: str) -> _FakeAzureBlobClient:
+        return _FakeAzureBlobClient(name)
+
+
+class _FakeAzureServiceClient:
+    def close(self) -> None:
+        return None
+
+
+class _FakeGcsBlob:
+    def __init__(self, uploads: list[dict[str, object]], key: str):
+        self._uploads = uploads
+        self._key = key
+
+    def upload_from_filename(self, filename: str, content_type: str) -> None:
+        self._uploads.append(
+            {
+                "key": self._key,
+                "content": Path(filename).read_bytes(),
+                "content_type": content_type,
+            }
+        )
+
+    def upload_from_string(self, obj, content_type: str) -> None:
+        if isinstance(obj, str):
+            content = obj.encode("utf-8")
+        else:
+            content = obj
+        self._uploads.append(
+            {"key": self._key, "content": content, "content_type": content_type}
+        )
+
+    def upload_from_file(self, obj, content_type: str) -> None:
+        self._uploads.append(
+            {
+                "key": self._key,
+                "content": obj.read(),
+                "content_type": content_type,
+            }
+        )
+
+
+class _FakeGcsBucket:
+    def __init__(self, uploads: list[dict[str, object]]):
+        self._uploads = uploads
+
+    def blob(self, key: str) -> _FakeGcsBlob:
+        return _FakeGcsBlob(self._uploads, key)
+
+
+class _FakeGcsClient:
+    def __init__(self):
+        self.uploads: list[dict[str, object]] = []
+
+    def bucket(self, name: str) -> _FakeGcsBucket:
+        del name
+        return _FakeGcsBucket(self.uploads)
+
+    def close(self) -> None:
+        return None
 
 
 def _make_exportable_document(
@@ -331,6 +407,89 @@ def test_process_exportable_results_returns_remote_target_result_for_s3_target(
     assert all(f"{_short_hash('paper.pdf')}/" in str(key) for key in uploaded_keys)
     assert any(str(key).endswith("/paper.json") for key in uploaded_keys)
     assert any(str(key).endswith("/paper_bundle.zip") for key in uploaded_keys)
+
+
+def test_process_exportable_results_returns_remote_target_result_for_azure_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    service_client = _FakeAzureServiceClient()
+    container_client = _FakeAzureContainerClient()
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.azure_blob_helper.get_azure_blob_connection",
+        lambda _coords: (service_client, container_client),
+    )
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.azure_blob_upload_support.upload_azure_blob_file",
+        lambda blob_client, filename, content_type: container_client.uploads.append(
+            {
+                "key": blob_client.name,
+                "content": Path(filename).read_bytes(),
+                "content_type": content_type,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.azure_blob_upload_support.upload_azure_blob_object",
+        lambda blob_client, obj, content_type: container_client.uploads.append(
+            {
+                "key": blob_client.name,
+                "content": obj if isinstance(obj, bytes) else obj.read(),
+                "content_type": content_type,
+            }
+        ),
+    )
+    task = _make_task().model_copy(
+        update={
+            "target": AzureBlobTarget(
+                account_name="acct",
+                container="converted-docs",
+                connection_string="UseDevelopmentStorage=true",
+                blob_prefix="converted/",
+            )
+        }
+    )
+
+    task_result = process_exportable_results(
+        task=task,
+        exportable_documents=[_make_exportable_document()],
+        work_dir=tmp_path,
+    )
+
+    assert isinstance(task_result.result, RemoteTargetResult)
+    uploaded_keys = [item["key"] for item in container_client.uploads]
+    assert len(uploaded_keys) == 2
+    assert all(str(key).startswith("converted/") for key in uploaded_keys)
+
+
+def test_process_exportable_results_returns_remote_target_result_for_gcs_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_client = _FakeGcsClient()
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.google_cloud_storage_helper.get_client",
+        lambda _coords: fake_client,
+    )
+    task = _make_task().model_copy(
+        update={
+            "target": GoogleCloudStorageTarget(
+                bucket="converted-docs",
+                key_prefix="converted/",
+            )
+        }
+    )
+
+    task_result = process_exportable_results(
+        task=task,
+        exportable_documents=[_make_exportable_document()],
+        work_dir=tmp_path,
+    )
+
+    assert isinstance(task_result.result, RemoteTargetResult)
+    uploaded_keys = [item["key"] for item in fake_client.uploads]
+    assert len(uploaded_keys) == 2
+    assert all(str(key).startswith("converted/") for key in uploaded_keys)
 
 
 def test_presigned_callbacks_emit_document_completed_after_uploads(

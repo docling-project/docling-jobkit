@@ -3,16 +3,17 @@ from io import BytesIO
 from unittest.mock import MagicMock
 
 import pytest
-from azure.core.exceptions import ResourceNotFoundError
+from azure.core.exceptions import ClientAuthenticationError, ResourceNotFoundError
 
+from docling.datamodel.service.sources import AzureBlobCoordinates
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.azure_blob_source_processor import (
     AzureBlobFileIdentifier,
     AzureBlobSourceProcessor,
 )
+from docling_jobkit.connectors.errors import SourceConnectorAuthenticationError
 from docling_jobkit.convert.materialization import SourceLimitExceededError
-from docling_jobkit.datamodel.azure_blob_coords import AzureBlobCoordinates
 
 
 @pytest.fixture
@@ -171,6 +172,19 @@ def test_azure_blob_fetch_logs_and_reraises_error(azure_coords, caplog):
         and azure_coords.container in record.message
         for record in caplog.records
     )
+
+
+def test_azure_blob_authentication_error_is_client_actionable(azure_coords):
+    processor = AzureBlobSourceProcessor(azure_coords)
+    processor._container_client = MagicMock()
+    processor._container_client.list_blobs.side_effect = ClientAuthenticationError(
+        "invalid credentials"
+    )
+
+    with pytest.raises(
+        SourceConnectorAuthenticationError, match="Azure Blob Storage authentication"
+    ):
+        list(processor._list_document_ids())
 
 
 def test_azure_blob_list_with_prefix(azure_coords):
