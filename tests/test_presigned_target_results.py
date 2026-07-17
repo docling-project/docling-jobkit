@@ -416,11 +416,11 @@ def test_process_exportable_results_returns_remote_target_result_for_azure_targe
     service_client = _FakeAzureServiceClient()
     container_client = _FakeAzureContainerClient()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.azure_blob_target_processor.get_azure_blob_connection",
+        "docling_jobkit.connectors.azure_blob_helper.get_azure_blob_connection",
         lambda _coords: (service_client, container_client),
     )
     monkeypatch.setattr(
-        "docling_jobkit.connectors.azure_blob_target_processor.upload_azure_blob_file",
+        "docling_jobkit.connectors.azure_blob_upload_support.upload_azure_blob_file",
         lambda blob_client, filename, content_type: container_client.uploads.append(
             {
                 "key": blob_client.name,
@@ -430,7 +430,7 @@ def test_process_exportable_results_returns_remote_target_result_for_azure_targe
         ),
     )
     monkeypatch.setattr(
-        "docling_jobkit.connectors.azure_blob_target_processor.upload_azure_blob_object",
+        "docling_jobkit.connectors.azure_blob_upload_support.upload_azure_blob_object",
         lambda blob_client, obj, content_type: container_client.uploads.append(
             {
                 "key": blob_client.name,
@@ -468,7 +468,7 @@ def test_process_exportable_results_returns_remote_target_result_for_gcs_target(
 ):
     fake_client = _FakeGcsClient()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.google_cloud_storage_target_processor.get_client",
+        "docling_jobkit.connectors.google_cloud_storage_helper.get_client",
         lambda _coords: fake_client,
     )
     task = _make_task().model_copy(
