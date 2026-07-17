@@ -29,9 +29,15 @@ from docling.datamodel.service.targets import (
 )
 from docling_core.types.doc import ImageRefMode
 
-from docling_jobkit.config.target_config import S3PresignedConfig
+from docling_jobkit.config.target_config import (
+    AzurePresignedConfig,
+    PresignedConfig,
+)
 from docling_jobkit.connectors.artifact_paths import (
     hash_path_component,
+)
+from docling_jobkit.connectors.azure_blob_presigned_target_processor import (
+    AzureBlobPresignedTargetProcessor,
 )
 from docling_jobkit.connectors.s3_presigned_target_processor import (
     S3PresignedTargetProcessor,
@@ -422,7 +428,7 @@ def _upload_document_as_presigned_artifact(
     exportable_document: ExportableDocument,
     response_index: int,
     output_dir: Path,
-    target_processor: S3PresignedTargetProcessor,
+    target_processor: (S3PresignedTargetProcessor | AzureBlobPresignedTargetProcessor),
     export_json: bool,
     export_html: bool,
     export_md: bool,
@@ -611,7 +617,7 @@ def _process_remote_exportable_results(
     task: Task,
     exportable_documents: Iterable[ExportableDocument],
     work_dir: Path,
-    s3_presigned_config: S3PresignedConfig | None,
+    presigned_config: PresignedConfig | None,
     callback_invoker: Optional["CallbackInvoker"],
     debug_error_details: bool,
     total_docs: int,
@@ -644,13 +650,18 @@ def _process_remote_exportable_results(
             num_failed += 1
 
     if isinstance(task.target, PresignedUrlTarget):
-        if s3_presigned_config is None:
+        if presigned_config is None:
             raise ValueError(
-                "PresignedUrlTarget requires s3_presigned_config in orchestrator config"
+                "PresignedUrlTarget requires presigned_config in orchestrator config"
             )
 
+        target_processor = (
+            AzureBlobPresignedTargetProcessor(presigned_config, task)
+            if isinstance(presigned_config, AzurePresignedConfig)
+            else S3PresignedTargetProcessor(presigned_config, task)
+        )
         presigned_documents: list[DocumentArtifactItem] = []
-        with S3PresignedTargetProcessor(s3_presigned_config, task) as target_processor:
+        with target_processor:
             for idx, exportable_document in enumerate(exportable_documents):
                 final_document, processed_doc, artifact_item = _process_remote_document(
                     task=task,
@@ -772,7 +783,7 @@ def _process_exportable_results_internal(
     task: Task,
     exportable_documents: Iterable[ExportableDocument],
     work_dir: Path,
-    s3_presigned_config: S3PresignedConfig | None = None,
+    presigned_config: PresignedConfig | None = None,
     callback_invoker: Optional["CallbackInvoker"] = None,
     debug_error_details: bool = False,
     expected_doc_count: Optional[int] = None,
@@ -813,7 +824,7 @@ def _process_exportable_results_internal(
             task=task,
             exportable_documents=exportable_documents,
             work_dir=work_dir,
-            s3_presigned_config=s3_presigned_config,
+            presigned_config=presigned_config,
             callback_invoker=callback_invoker,
             debug_error_details=debug_error_details,
             total_docs=total_docs,
@@ -945,7 +956,7 @@ def process_exportable_results(
     task: Task,
     exportable_documents: Iterable[ExportableDocument],
     work_dir: Path,
-    s3_presigned_config: S3PresignedConfig | None = None,
+    presigned_config: PresignedConfig | None = None,
     callback_invoker: Optional["CallbackInvoker"] = None,
     debug_error_details: bool = False,
     expected_doc_count: Optional[int] = None,
@@ -956,7 +967,7 @@ def process_exportable_results(
         task=task,
         exportable_documents=exportable_documents,
         work_dir=work_dir,
-        s3_presigned_config=s3_presigned_config,
+        presigned_config=presigned_config,
         callback_invoker=callback_invoker,
         debug_error_details=debug_error_details,
         expected_doc_count=expected_doc_count,

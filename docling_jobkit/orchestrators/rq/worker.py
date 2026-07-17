@@ -200,7 +200,7 @@ def _run_docling_task(
                         task=task,
                         exportable_documents=exportable_documents,
                         work_dir=workdir,
-                        s3_presigned_config=orchestrator_config.s3_presigned_config,
+                        presigned_config=orchestrator_config.presigned_config,
                         callback_invoker=callback_invoker,
                         debug_error_details=orchestrator_config.debug_error_details,
                     )

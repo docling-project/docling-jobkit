@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO
 
 from docling_jobkit.config.target_config import S3PresignedConfig
-from docling_jobkit.connectors.artifact_paths import hash_path_component
+from docling_jobkit.connectors.artifact_paths import build_task_scoped_key
 from docling_jobkit.datamodel.task import Task
 
 
@@ -69,28 +68,13 @@ def build_task_scoped_s3_key(
     # includes the managed prefix/tenant/date/task structure before the per-source
     # hash. The storage prefix is injected by docling-serve onto
     # config.s3_coords.key_prefix when the orchestrator is constructed.
-    source_key = hash_path_component(source_uri)
-    date_partition = datetime.now(timezone.utc).strftime(config.date_partition_format)
-
-    path_parts: list[str] = []
-    key_prefix = config.s3_coords.key_prefix.strip("/")
-    if key_prefix:
-        path_parts.append(key_prefix)
-
-    tenant_id = task.metadata.get("tenant_id") or "default"
-    path_parts.append(_sanitize_path_component(str(tenant_id)))
-
-    if date_partition:
-        path_parts.append(date_partition)
-
-    path_parts.append(_sanitize_path_component(task.task_id))
-    path_parts.extend(
-        [
-            source_key,
-            _sanitize_path_component(artifact_filename),
-        ]
+    return build_task_scoped_key(
+        key_prefix=config.s3_coords.key_prefix,
+        date_partition_format=config.date_partition_format,
+        task=task,
+        source_uri=source_uri,
+        artifact_filename=artifact_filename,
     )
-    return "/".join(path_parts)
 
 
 def _build_extra_args(
@@ -102,7 +86,3 @@ def _build_extra_args(
     if metadata:
         extra_args["Metadata"] = metadata
     return extra_args
-
-
-def _sanitize_path_component(value: str) -> str:
-    return value.replace("\\", "_").replace("/", "_")

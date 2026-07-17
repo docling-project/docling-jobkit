@@ -99,7 +99,7 @@ class AsyncLocalWorker:
                             task=task,
                             exportable_documents=exportable_documents,
                             work_dir=workdir,
-                            s3_presigned_config=self.orchestrator.config.s3_presigned_config,
+                            presigned_config=self.orchestrator.config.presigned_config,
                             callback_invoker=callback_invoker,
                         )
                     elif task.task_type == TaskType.CHUNK:
