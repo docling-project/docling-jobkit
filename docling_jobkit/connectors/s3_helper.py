@@ -7,6 +7,13 @@ from urllib.parse import urlunsplit
 
 from boto3.session import Session
 from botocore.config import Config
+from botocore.exceptions import (
+    ClientError,
+    CredentialRetrievalError,
+    NoCredentialsError,
+    PartialCredentialsError,
+    ProfileNotFound,
+)
 
 if TYPE_CHECKING:
     from mypy_boto3_s3 import S3Client
@@ -40,6 +47,36 @@ classifier_labels = [
     "signature",
     "stamp",
 ]
+
+_S3_AUTH_ERROR_CODES = {
+    "AccessDenied",
+    "AccessDeniedException",
+    "AuthFailure",
+    "ExpiredToken",
+    "ExpiredTokenException",
+    "InvalidAccessKeyId",
+    "InvalidClientTokenId",
+    "InvalidToken",
+    "SignatureDoesNotMatch",
+    "TokenRefreshRequired",
+    "UnrecognizedClientException",
+}
+
+
+def is_s3_authentication_error(exc: BaseException) -> bool:
+    if isinstance(
+        exc,
+        (
+            CredentialRetrievalError,
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+        ),
+    ):
+        return True
+    if not isinstance(exc, ClientError):
+        return False
+    return exc.response.get("Error", {}).get("Code") in _S3_AUTH_ERROR_CODES
 
 
 def get_s3_connection(coords: S3Coordinates):

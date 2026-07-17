@@ -7,9 +7,18 @@ from pydantic import BaseModel
 from docling.datamodel.service.sources import AzureBlobCoordinates
 from docling.datamodel.service.targets import AzureBlobTarget
 
+from docling_jobkit.connectors.errors import map_connector_authentication_errors
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 
 _log = logging.getLogger(__name__)
+
+
+def _is_authentication_error(exc: BaseException) -> bool:
+    from docling_jobkit.connectors.azure_blob_helper import (
+        is_azure_blob_authentication_error,
+    )
+
+    return is_azure_blob_authentication_error(exc)
 
 
 class AzureBlobTargetProcessor(BaseTargetProcessor):
@@ -21,6 +30,7 @@ class AzureBlobTargetProcessor(BaseTargetProcessor):
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
         return (AzureBlobTarget,)
 
+    @map_connector_authentication_errors("Azure Blob Storage", _is_authentication_error)
     def _initialize(self):
         from docling_jobkit.connectors.azure_blob_helper import (
             get_azure_blob_connection,
@@ -46,6 +56,7 @@ class AzureBlobTargetProcessor(BaseTargetProcessor):
             f"azure://{self._coords.account_name}/{self._coords.container}/{full_name}"
         )
 
+    @map_connector_authentication_errors("Azure Blob Storage", _is_authentication_error)
     def upload_file(
         self,
         filename: str | Path,
@@ -71,6 +82,7 @@ class AzureBlobTargetProcessor(BaseTargetProcessor):
             content_type=content_type,
         )
 
+    @map_connector_authentication_errors("Azure Blob Storage", _is_authentication_error)
     def upload_object(
         self,
         obj: str | bytes | BinaryIO,

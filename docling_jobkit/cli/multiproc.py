@@ -34,6 +34,7 @@ from docling.datamodel.service.targets import (
     ZipTarget,
 )
 
+from docling_jobkit.connectors.auth_context import allow_interactive_auth
 from docling_jobkit.connectors.source_processor import DocumentChunk
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
@@ -121,6 +122,7 @@ def _load_config(config_file: Path, allow_external_plugins: bool = False) -> Job
         raise typer.Exit(1)
 
 
+@allow_interactive_auth()
 def _process_source(
     source: JobTaskSource,
     source_idx: int,
@@ -279,6 +281,7 @@ def _display_summary(
         raise typer.Exit(1)
 
 
+@allow_interactive_auth()
 def process_batch(
     chunk: DocumentChunk,
     target: JobTaskTarget,

@@ -2,12 +2,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from azure.core.exceptions import ClientAuthenticationError
 
 from docling.datamodel.service.sources import AzureBlobCoordinates
 
 from docling_jobkit.connectors.azure_blob_target_processor import (
     AzureBlobTargetProcessor,
 )
+from docling_jobkit.connectors.errors import ConnectorAuthenticationError
 
 
 @pytest.fixture
@@ -131,3 +133,21 @@ def test_azure_blob_upload_object_with_prefix(azure_coords):
         processor._container_client.get_blob_client.assert_called_once_with(
             "converted/output/test.txt"
         )
+
+
+def test_azure_blob_target_authentication_error_is_client_actionable(azure_coords):
+    processor = AzureBlobTargetProcessor(azure_coords)
+    processor._container_client = MagicMock()
+
+    with (
+        patch(
+            "docling_jobkit.connectors.azure_blob_upload_support."
+            "upload_azure_blob_object",
+            side_effect=ClientAuthenticationError("invalid credentials"),
+        ),
+        pytest.raises(
+            ConnectorAuthenticationError,
+            match="Azure Blob Storage authentication",
+        ),
+    ):
+        processor.upload_object(b"data", "out.json", "application/json")

@@ -2,11 +2,13 @@ from io import BytesIO
 from unittest.mock import MagicMock
 
 import pytest
+from google.api_core.exceptions import Forbidden
 
 from docling.datamodel.service.sources import (
     GoogleCloudStorageCoordinates,
 )
 
+from docling_jobkit.connectors.errors import ConnectorAuthenticationError
 from docling_jobkit.connectors.google_cloud_storage_target_processor import (
     GoogleCloudStorageTargetProcessor,
 )
@@ -94,3 +96,16 @@ def test_upload_object_filelike_uses_upload_from_file(coords):
         stream, content_type="application/json"
     )
     blob.upload_from_string.assert_not_called()
+
+
+def test_gcs_target_authentication_error_is_client_actionable(coords):
+    processor = GoogleCloudStorageTargetProcessor(coords)
+    processor._client = MagicMock()
+    blob = processor._client.bucket.return_value.blob.return_value
+    blob.upload_from_string.side_effect = Forbidden("denied")
+
+    with pytest.raises(
+        ConnectorAuthenticationError,
+        match="Google Cloud Storage authentication",
+    ):
+        processor.upload_object(b"data", "out.json", "application/json")

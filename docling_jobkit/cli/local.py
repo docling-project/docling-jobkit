@@ -23,6 +23,7 @@ from docling.datamodel.service.targets import (
     ZipTarget,
 )
 
+from docling_jobkit.connectors.auth_context import allow_interactive_auth
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.convert.manager import (
@@ -76,6 +77,7 @@ class JobConfig(BaseModel):
 
 
 @app.command(no_args_is_help=True)
+@allow_interactive_auth()
 def convert(
     config_file: Annotated[
         Path,

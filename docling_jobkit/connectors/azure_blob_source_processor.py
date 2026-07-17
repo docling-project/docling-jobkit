@@ -9,6 +9,7 @@ from typing_extensions import override
 from docling.datamodel.service.sources import AzureBlobCoordinates
 from docling_core.types.io import DocumentStream
 
+from docling_jobkit.connectors.errors import map_connector_authentication_errors
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     SourceDocumentRef,
@@ -20,6 +21,14 @@ from docling_jobkit.convert.materialization import (
 from docling_jobkit.datamodel.task_sources import TaskAzureBlobSource
 
 _log = logging.getLogger(__name__)
+
+
+def _is_authentication_error(exc: BaseException) -> bool:
+    from docling_jobkit.connectors.azure_blob_helper import (
+        is_azure_blob_authentication_error,
+    )
+
+    return is_azure_blob_authentication_error(exc)
 
 
 class AzureBlobFileIdentifier(BaseModel):
@@ -43,6 +52,9 @@ class AzureBlobSourceProcessor(
 
         return (TaskAzureBlobSource,)
 
+    @map_connector_authentication_errors(
+        "Azure Blob Storage", _is_authentication_error, source=True
+    )
     def _initialize(self):
         from docling_jobkit.connectors.azure_blob_helper import (
             get_azure_blob_connection,
@@ -60,6 +72,9 @@ class AzureBlobSourceProcessor(
     def _finalize(self):
         self._service_client.close()
 
+    @map_connector_authentication_errors(
+        "Azure Blob Storage", _is_authentication_error, source=True
+    )
     def _list_document_ids(self) -> Iterator[AzureBlobFileIdentifier]:
         yielded = 0
         max_num_elements = self._coords.max_num_elements
@@ -77,6 +92,9 @@ class AzureBlobSourceProcessor(
                 last_modified=blob.last_modified,
             )
 
+    @map_connector_authentication_errors(
+        "Azure Blob Storage", _is_authentication_error, source=True
+    )
     def _count_documents(self) -> int:
         total = 0
         max_num_elements = self._coords.max_num_elements
@@ -101,6 +119,9 @@ class AzureBlobSourceProcessor(
             filename=identifier.name,
         )
 
+    @map_connector_authentication_errors(
+        "Azure Blob Storage", _is_authentication_error, source=True
+    )
     def _fetch_document_by_id(
         self,
         identifier: AzureBlobFileIdentifier,

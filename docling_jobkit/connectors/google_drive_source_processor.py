@@ -14,6 +14,10 @@ from pydantic import BaseModel
 
 from docling.datamodel.service.sources import GoogleDriveCoordinates
 
+from docling_jobkit.connectors.errors import (
+    ConnectorAuthenticationError,
+    SourceConnectorAuthenticationError,
+)
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     SourceDocumentRef,
@@ -35,7 +39,10 @@ class GoogleDriveSourceProcessor(
     def _initialize(self):
         from docling_jobkit.connectors.google_drive_helper import get_service
 
-        self._service = get_service(self._coords)
+        try:
+            self._service = get_service(self._coords)
+        except ConnectorAuthenticationError as exc:
+            raise SourceConnectorAuthenticationError(str(exc)) from exc
 
     def _finalize(self):
         return

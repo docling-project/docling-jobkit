@@ -14,6 +14,9 @@ from pydantic import BaseModel
 
 from docling.datamodel.service.sources import GoogleDriveCoordinates
 
+from docling_jobkit.connectors.auth_context import is_interactive_auth_allowed
+from docling_jobkit.connectors.errors import ConnectorAuthenticationError
+
 
 class GoogleDriveFileIdentifier(BaseModel):
     id: str
@@ -47,12 +50,18 @@ def get_service(coords: GoogleDriveCoordinates) -> Resource:
     """
     SCOPES = ["https://www.googleapis.com/auth/drive"]
     creds = None
+    refresh_error: Exception | None = None
 
     # 1) Stored token
     if coords.token_path and Path(coords.token_path).exists():
-        creds = Credentials.from_authorized_user_file(coords.token_path, SCOPES)
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+        try:
+            creds = Credentials.from_authorized_user_file(coords.token_path, SCOPES)
+            if creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+        except Exception as e:
+            logging.warning("Stored token refresh failed: %s", e)
+            creds = None
+            refresh_error = e
 
     # 2) Refresh token
     if (not creds or not creds.valid) and coords.refresh_token:
@@ -70,9 +79,19 @@ def get_service(coords: GoogleDriveCoordinates) -> Resource:
         except Exception as e:
             logging.warning("Refresh failed: %s", e)
             creds = None
+            refresh_error = e
 
     # 3) OAuth flow
     if not creds or not creds.valid:
+        if not is_interactive_auth_allowed():
+            error = ConnectorAuthenticationError(
+                "Google Drive authentication failed; re-authorize and supply "
+                "valid credentials."
+            )
+            if refresh_error:
+                raise error from refresh_error
+            raise error
+
         if coords.credentials:
             cfg = coords.credentials.model_dump(mode="json", exclude_none=True)
             cfg["client_secret"] = coords.credentials.client_secret.get_secret_value()
