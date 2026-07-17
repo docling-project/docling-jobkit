@@ -24,7 +24,7 @@ from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.sources import FileSource, HttpSource
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
-from docling_jobkit.config.target_config import S3PresignedConfig
+from docling_jobkit.config.target_config import PresignedConfig
 from docling_jobkit.convert.source_expansion import _EXPANDABLE_SOURCE_TYPES
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
@@ -60,7 +60,7 @@ class RQOrchestratorConfig(BaseModel):
     zombie_reaper_max_age: float = 3600.0
     result_removal_delay: int = 300  # seconds until result key expires after fetch
     debug_error_details: bool = False
-    s3_presigned_config: S3PresignedConfig | None = None
+    presigned_config: PresignedConfig | None = None
     allowed_target_kinds: Optional[set[str]] = None
 
     @model_validator(mode="after")
