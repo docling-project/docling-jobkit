@@ -6,15 +6,19 @@ Registered under the ``docling_jobkit`` setuptools entry-point group (see
 
 Imports are deferred into the functions so that merely loading this module (which
 happens for every entry-point scan) stays cheap and never pulls optional, heavy
-SDKs at import time. The Google Drive connectors only import their google
-dependencies inside their methods, so listing the classes here is import-safe
-even when the ``gdrive`` extra is not installed.
+SDKs at import time. Every connector module keeps its optional SDK imports
+(azure, gcloudstorage, gdrive) inside the methods that use them, so importing the
+processor classes here is safe even when those extras are not installed; the
+extra is only required when a connector is actually instantiated and used.
 """
 
 
 def source_connectors():
     from docling_jobkit.connectors.azure_blob_source_processor import (
         AzureBlobSourceProcessor,
+    )
+    from docling_jobkit.connectors.google_cloud_storage_source_processor import (
+        GoogleCloudStorageSourceProcessor,
     )
     from docling_jobkit.connectors.google_drive_source_processor import (
         GoogleDriveSourceProcessor,
@@ -32,6 +36,7 @@ def source_connectors():
             AzureBlobSourceProcessor,
             LocalPathSourceProcessor,
             GoogleDriveSourceProcessor,
+            GoogleCloudStorageSourceProcessor,
         ]
     }
 
@@ -39,6 +44,9 @@ def source_connectors():
 def target_connectors():
     from docling_jobkit.connectors.azure_blob_target_processor import (
         AzureBlobTargetProcessor,
+    )
+    from docling_jobkit.connectors.google_cloud_storage_target_processor import (
+        GoogleCloudStorageTargetProcessor,
     )
     from docling_jobkit.connectors.google_drive_target_processor import (
         GoogleDriveTargetProcessor,
@@ -58,5 +66,6 @@ def target_connectors():
             LocalPathTargetProcessor,
             HttpPutTargetProcessor,
             GoogleDriveTargetProcessor,
+            GoogleCloudStorageTargetProcessor,
         ]
     }

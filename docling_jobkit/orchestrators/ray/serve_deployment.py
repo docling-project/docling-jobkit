@@ -30,7 +30,13 @@ from docling.datamodel.service.callbacks import (
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.responses import FailurePhase, PublicFailureInfo
 from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
-from docling.datamodel.service.targets import PresignedUrlTarget, S3Target
+from docling.datamodel.service.targets import (
+    AzureBlobTarget,
+    GoogleCloudStorageTarget,
+    GoogleDriveTarget,
+    PresignedUrlTarget,
+    S3Target,
+)
 from docling.datamodel.service.tasks import TaskType
 from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
@@ -111,6 +117,12 @@ from docling_jobkit.public_errors import (
 _log = logging.getLogger(__name__)
 
 _SOURCE_CHUNK_CALLBACK_MODE = CallbackMode.CHILD_ONLY
+_REMOTE_STORAGE_TARGET_TYPES = (
+    S3Target,
+    AzureBlobTarget,
+    GoogleCloudStorageTarget,
+    GoogleDriveTarget,
+)
 
 # Back-off between retries when a coordinator is fully starved of converter units
 # (the tenant's whole budget is held by its own sibling tasks and nothing is in
@@ -177,7 +189,7 @@ def _to_exportable_documents_from_chunk(
 def _is_s3_fanout_task(task: Task) -> bool:
     return (
         task.task_type == TaskType.CONVERT
-        and isinstance(task.target, (PresignedUrlTarget, S3Target))
+        and isinstance(task.target, (PresignedUrlTarget, *_REMOTE_STORAGE_TARGET_TYPES))
         and len(task.sources) > 0
         and any(isinstance(source, S3Coordinates) for source in task.sources)
     )
@@ -396,7 +408,7 @@ def _build_materialization_failure_result(
                 )
             ]
         )
-    elif isinstance(task.target, S3Target):
+    elif isinstance(task.target, _REMOTE_STORAGE_TARGET_TYPES):
         result = RemoteTargetResult()
     else:
         result = ExportResult(

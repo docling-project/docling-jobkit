@@ -14,6 +14,10 @@ from docling.datamodel.service.responses import (
     PublicFailureInfo,
 )
 
+from docling_jobkit.connectors.errors import (
+    ConnectorAuthenticationError,
+    SourceConnectorAuthenticationError,
+)
 from docling_jobkit.convert.materialization import (
     MaterializationLimitExceededError,
     SourceLimitExceededError,
@@ -55,6 +59,9 @@ def _unwrap_failure_exception(exc: BaseException) -> BaseException:
         if obj_id in seen:
             return current
         seen.add(obj_id)
+
+        if isinstance(current, (ConnectorAuthenticationError, TargetWriteError)):
+            return current
 
         cause = current.__cause__
         if isinstance(cause, BaseException):
@@ -119,6 +126,12 @@ def classify_public_task_failure(
         phase = FailurePhase.SOURCE_ENUMERATION
         retryable = False
         message = exception_text
+    elif isinstance(root_exc, ConnectorAuthenticationError):
+        category = FailureCategory.POLICY
+        if isinstance(root_exc, SourceConnectorAuthenticationError):
+            phase = FailurePhase.SOURCE_ENUMERATION
+        retryable = False
+        message = exception_text
     elif isinstance(root_exc, httpx.HTTPStatusError):
         # httpx fetched the source but the upstream HTTP status is not usable.
         merged_details = {**merged_details, **_safe_details(source_kind="http")}
@@ -173,6 +186,7 @@ def build_public_task_error(exc: BaseException) -> str:
         isinstance(root_exc, httpx.HTTPStatusError)
         or isinstance(root_exc, RequestsHTTPError)
         or isinstance(root_exc, SourceLimitExceededError)
+        or isinstance(root_exc, ConnectorAuthenticationError)
     ):
         return _exception_text(root_exc)
     return INTERNAL_TASK_ERROR_MESSAGE

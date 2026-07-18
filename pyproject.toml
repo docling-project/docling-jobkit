@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "docling-jobkit"
-version = "2.0.0"  # DO NOT EDIT, updated automatically
+version = "2.1.0"  # DO NOT EDIT, updated automatically
 description = "Running a distributed job processing documents with Docling."
 readme = "README.md"
 license = "MIT"
@@ -42,7 +42,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "docling-slim[standard]>=2.110.0,<3.0.0",
+    "docling-slim[standard]>=2.113.0,<3.0.0",
     "pydantic~=2.10",
     "pydantic-settings~=2.4",
     "boto3~=1.35",
@@ -76,6 +76,9 @@ gdrive = [
     "google-api-python-client>=2.183.0",
     "google-auth-oauthlib>=1.2.2",
 ]
+gcloudstorage = [
+    "google-cloud-storage>=2.10.0",
+]
 azure = [
     "azure-storage-blob>=12.19.0",
 ]
@@ -103,7 +106,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-# docling-slim = { git = "https://github.com/docling-project/docling/", rev = "main" }
+# docling-slim = { git = "https://github.com/docling-project/docling/", branch = "main" }
 # docling-slim = { path = "../docling", editable = true }
 
 
@@ -218,6 +221,7 @@ module = [
     "mlx_vlm.*",
     "googleapiclient.*",
     "google_auth_oauthlib.*",
+    "google.*",
     "ray.*",
     "codeflare_sdk.*",
 ]

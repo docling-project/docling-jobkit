@@ -31,6 +31,7 @@ def test_builtin_source_connectors_registered():
     assert set(factory.registered_kinds) == {
         "azure_blob",
         "file",
+        "google_cloud_storage",
         "http",
         "s3",
         "local_path",
@@ -42,6 +43,7 @@ def test_builtin_target_connectors_registered():
     factory = get_target_connector_factory()
     assert set(factory.registered_kinds) == {
         "azure_blob",
+        "google_cloud_storage",
         "s3",
         "local_path",
         "put",
@@ -235,7 +237,13 @@ def test_validate_target_allowlist():
 
     # None allowlist allows everything
     orch.allowed_target_kinds = None
-    orch._validate_target(GoogleDriveTarget(token="t", path_id="x"))
+    orch._validate_target(
+        GoogleDriveTarget(
+            path_id="x",
+            refresh_token="refresh-token",
+            credentials_path="/tmp/client-secret.json",
+        )
+    )
 
 
 def test_factory_caches_are_isolated_by_flag():
