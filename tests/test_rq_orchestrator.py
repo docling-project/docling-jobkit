@@ -154,24 +154,25 @@ def test_prepare_convert_sources_threads_max_file_size(monkeypatch: pytest.Monke
     )
     captured: list[int | None] = []
 
-    def _fake_expand(task_arg, *, max_file_size=None):
+    def _fake_expand(task_arg, *, max_file_size=None, http_materializer=None):
         assert task_arg is task
         captured.append(max_file_size)
-        return ([], None)
+        return ([], None, [])
 
     monkeypatch.setattr(
         "docling_jobkit.orchestrators.rq.worker.expand_task_sources",
         _fake_expand,
     )
 
-    convert_sources, headers, source_info = _prepare_convert_sources(
+    prepared = _prepare_convert_sources(
         task,
         max_file_size=123,
     )
 
-    assert convert_sources == []
-    assert headers is None
-    assert source_info == [{"type": "FileSource", "filename": "doc.pdf"}]
+    assert prepared.convert_sources == []
+    assert prepared.headers is None
+    assert prepared.source_info == [{"type": "FileSource", "filename": "doc.pdf"}]
+    assert prepared.materialization_failures == []
     assert captured == [123]
 
 
