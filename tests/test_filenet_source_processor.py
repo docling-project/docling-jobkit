@@ -63,23 +63,23 @@ def test_filenet_list_respects_max_num_elements(filenet_coords):
     processor._graphql_url = "https://test.com/graphql"
 
     mock_folder_docs = [
-        {"id": "{DOC-1}", "name": "doc1.pdf"},
-        {"id": "{DOC-2}", "name": "doc2.pdf"},
-        {"id": "{DOC-3}", "name": "doc3.pdf"},
-    ]
-
-    mock_metadata_responses = [
         {
             "id": "{DOC-1}",
             "name": "doc1.pdf",
             "contentSize": 1000,
-            "downloadUrl": "/content?id={DOC-1}",
+            "contentElements": [{"downloadUrl": "/content?id={DOC-1}"}],
         },
         {
             "id": "{DOC-2}",
             "name": "doc2.pdf",
             "contentSize": 2000,
-            "downloadUrl": "/content?id={DOC-2}",
+            "contentElements": [{"downloadUrl": "/content?id={DOC-2}"}],
+        },
+        {
+            "id": "{DOC-3}",
+            "name": "doc3.pdf",
+            "contentSize": 3000,
+            "contentElements": [{"downloadUrl": "/content?id={DOC-3}"}],
         },
     ]
 
@@ -87,11 +87,7 @@ def test_filenet_list_respects_max_num_elements(filenet_coords):
         "docling_jobkit.connectors.filenet_source_processor.list_folder_documents",
         return_value=iter(mock_folder_docs),
     ):
-        with patch(
-            "docling_jobkit.connectors.filenet_source_processor.get_document_metadata",
-            side_effect=mock_metadata_responses,
-        ):
-            doc_ids = list(processor._list_document_ids())
+        doc_ids = list(processor._list_document_ids())
 
     assert len(doc_ids) == 2
     assert [doc.name for doc in doc_ids] == ["doc1.pdf", "doc2.pdf"]
@@ -125,23 +121,23 @@ def test_filenet_iterate_documents_respects_max_num_elements(filenet_coords):
     processor._graphql_url = "https://test.com/graphql"
 
     mock_folder_docs = [
-        {"id": "{DOC-1}", "name": "doc1.pdf"},
-        {"id": "{DOC-2}", "name": "doc2.pdf"},
-        {"id": "{DOC-3}", "name": "doc3.pdf"},
-    ]
-
-    mock_metadata_responses = [
         {
             "id": "{DOC-1}",
             "name": "doc1.pdf",
             "contentSize": 1000,
-            "downloadUrl": "/content?id={DOC-1}",
+            "contentElements": [{"downloadUrl": "/content?id={DOC-1}"}],
         },
         {
             "id": "{DOC-2}",
             "name": "doc2.pdf",
             "contentSize": 2000,
-            "downloadUrl": "/content?id={DOC-2}",
+            "contentElements": [{"downloadUrl": "/content?id={DOC-2}"}],
+        },
+        {
+            "id": "{DOC-3}",
+            "name": "doc3.pdf",
+            "contentSize": 3000,
+            "contentElements": [{"downloadUrl": "/content?id={DOC-3}"}],
         },
     ]
 
@@ -149,18 +145,14 @@ def test_filenet_iterate_documents_respects_max_num_elements(filenet_coords):
         "docling_jobkit.connectors.filenet_source_processor.list_folder_documents",
         return_value=iter(mock_folder_docs),
     ):
-        with patch(
-            "docling_jobkit.connectors.filenet_source_processor.get_document_metadata",
-            side_effect=mock_metadata_responses,
-        ):
-            processor._fetch_document_by_id = MagicMock(
-                side_effect=lambda identifier, *, max_file_size=None: DocumentStream(
-                    name=identifier.name,
-                    stream=BytesIO(b"content"),
-                )
+        processor._fetch_document_by_id = MagicMock(
+            side_effect=lambda identifier, *, max_file_size=None: DocumentStream(
+                name=identifier.name,
+                stream=BytesIO(b"content"),
             )
+        )
 
-            docs = list(processor.iterate_documents())
+        docs = list(processor.iterate_documents())
 
     assert len(docs) == 2
     assert [doc.name for doc in docs] == ["doc1.pdf", "doc2.pdf"]
