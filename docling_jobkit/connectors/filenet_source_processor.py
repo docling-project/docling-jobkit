@@ -103,19 +103,30 @@ class FileNetSourceProcessor(
             if max_elements is not None and yielded >= max_elements:
                 return
 
-            metadata = get_document_metadata(
-                self._coords,
-                self._auth_header,
-                doc["id"],
-            )
+            # Get metadata from consolidated response, less graphql queries
+            content_elements = doc.get("contentElements", [])
+            if not content_elements:
+                _log.warning(
+                    "Document %s has no content elements, skipping",
+                    doc.get("id"),
+                )
+                continue
+
+            download_url = content_elements[0].get("downloadUrl")
+            if not download_url:
+                _log.warning(
+                    "Document %s has no download URL, skipping",
+                    doc.get("id"),
+                )
+                continue
 
             yielded += 1
             yield FileNetFileIdentifier(
-                id=metadata["id"],
-                name=metadata["name"],
-                size=metadata["contentSize"],
-                mime_type=metadata.get("mimeType"),
-                download_url=metadata["downloadUrl"],
+                id=doc["id"],
+                name=doc["name"],
+                size=int(doc.get("contentSize", 0)),
+                mime_type=doc.get("mimeType"),
+                download_url=download_url,
             )
 
     def _count_documents(self) -> int:

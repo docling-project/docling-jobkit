@@ -224,6 +224,7 @@ module = [
     "google.*",
     "ray.*",
     "codeflare_sdk.*",
+    "azure.*",
 ]
 ignore_missing_imports = true
 

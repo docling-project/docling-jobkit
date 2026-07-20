@@ -1,4 +1,5 @@
 import base64
+import html
 import json
 import logging
 import time
@@ -121,6 +122,17 @@ def _paginate_documents(
                 documents {
                     id
                     name
+                    mimeType
+                    contentSize
+                    contentElements {
+                        contentType
+                        elementSequenceNumber
+                        ... on ContentTransfer {
+                            contentSize
+                            retrievalName
+                            downloadUrl
+                        }
+                    }
                 }
                 pageInfo {
                     token
@@ -174,6 +186,17 @@ def list_repository_documents(
         documents {
           id
           name
+          mimeType
+          contentSize
+          contentElements {
+            contentType
+            elementSequenceNumber
+            ... on ContentTransfer {
+              contentSize
+              retrievalName
+              downloadUrl
+            }
+          }
         }
         pageInfo {
             token
@@ -194,19 +217,8 @@ def list_repository_documents(
         },
     )
 
-    doc_count = 0
-    try:
-        for doc in _paginate_documents(
-            graphql_url, auth_header, data.get("documents", {})
-        ):
-            doc_count += 1
-            yield doc
-    finally:
-        _log.info(
-            "Listed %d documents from repository %s",
-            doc_count,
-            coords.repository_id,
-        )
+    for doc in _paginate_documents(graphql_url, auth_header, data.get("documents", {})):
+        yield doc
 
 
 def list_folder_documents(
@@ -226,6 +238,17 @@ def list_folder_documents(
           documents {
             id
             name
+            mimeType
+            contentSize
+            contentElements {
+              contentType
+              elementSequenceNumber
+              ... on ContentTransfer {
+                contentSize
+                retrievalName
+                downloadUrl
+              }
+            }
           }
           pageInfo {
             token
@@ -249,18 +272,8 @@ def list_folder_documents(
 
     contained = data.get("folder", {}).get("containedDocuments", {})
 
-    doc_count = 0
-    try:
-        for doc in _paginate_documents(graphql_url, auth_header, contained):
-            doc_count += 1
-            yield doc
-    finally:
-        _log.info(
-            "Listed %d documents from folder %s in repository %s",
-            doc_count,
-            folder_id,
-            coords.repository_id,
-        )
+    for doc in _paginate_documents(graphql_url, auth_header, contained):
+        yield doc
 
 
 def get_document_metadata(
@@ -332,7 +345,8 @@ def download_document(
         auth_header: Authorization header
         download_url: Relative download URL from metadata (e.g., '/content?...')
     """
-    clean_url = download_url.replace("&amp;", "&")
+    clean_url = html.unescape(download_url)
+
     full_url = f"{base_url.rstrip('/')}{clean_url}"
 
     _log.debug("Downloading from: %s", full_url)
