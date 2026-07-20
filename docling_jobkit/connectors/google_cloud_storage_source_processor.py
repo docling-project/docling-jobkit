@@ -2,18 +2,17 @@ from __future__ import annotations
 
 import logging
 from io import BytesIO
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
-from google.api_core.exceptions import GoogleAPICallError
 from pydantic import BaseModel
 from typing_extensions import override
 
 from docling.datamodel.base_models import DocumentStream
-
-from docling_jobkit.connectors.google_cloud_storage_helper import (
-    GoogleCloudStorageFileIdentifier,
-    get_client,
+from docling.datamodel.service.sources import (
+    GoogleCloudStorageCoordinates,
 )
+
+from docling_jobkit.connectors.errors import map_connector_authentication_errors
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     SourceDocumentRef,
@@ -22,12 +21,22 @@ from docling_jobkit.convert.materialization import (
     SourceLimitExceededError,
     normalize_max_file_size,
 )
-from docling_jobkit.datamodel.google_cloud_storage_coords import (
-    GoogleCloudStorageCoordinates,
-)
 from docling_jobkit.datamodel.task_sources import TaskGoogleCloudStorageSource
 
+if TYPE_CHECKING:
+    from docling_jobkit.connectors.google_cloud_storage_helper import (
+        GoogleCloudStorageFileIdentifier,
+    )
+
 _log = logging.getLogger(__name__)
+
+
+def _is_authentication_error(exc: BaseException) -> bool:
+    from docling_jobkit.connectors.google_cloud_storage_helper import (
+        is_google_cloud_storage_authentication_error,
+    )
+
+    return is_google_cloud_storage_authentication_error(exc)
 
 
 class GoogleCloudStorageSourceProcessor(
@@ -43,13 +52,25 @@ class GoogleCloudStorageSourceProcessor(
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
         return (TaskGoogleCloudStorageSource,)
 
+    @map_connector_authentication_errors(
+        "Google Cloud Storage", _is_authentication_error, source=True
+    )
     def _initialize(self):
+        from docling_jobkit.connectors.google_cloud_storage_helper import get_client
+
         self._client = get_client(self._coords)
 
     def _finalize(self):
         self._client.close()
 
+    @map_connector_authentication_errors(
+        "Google Cloud Storage", _is_authentication_error, source=True
+    )
     def _list_document_ids(self) -> Iterator[GoogleCloudStorageFileIdentifier]:
+        from docling_jobkit.connectors.google_cloud_storage_helper import (
+            GoogleCloudStorageFileIdentifier,
+        )
+
         yielded = 0
         max_num = self._coords.max_num_elements
         for blob in self._client.list_blobs(
@@ -86,6 +107,9 @@ class GoogleCloudStorageSourceProcessor(
 
     # ----------------- Document fetch -----------------
 
+    @map_connector_authentication_errors(
+        "Google Cloud Storage", _is_authentication_error, source=True
+    )
     def _fetch_document_by_id(
         self,
         identifier: GoogleCloudStorageFileIdentifier,
@@ -97,6 +121,8 @@ class GoogleCloudStorageSourceProcessor(
             raise SourceLimitExceededError(
                 f"Source '{identifier.name}' exceeds max_file_size={limit} bytes"
             )
+
+        from google.api_core.exceptions import GoogleAPICallError
 
         buffer = BytesIO()
         try:

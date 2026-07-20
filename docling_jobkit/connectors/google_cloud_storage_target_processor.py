@@ -3,12 +3,21 @@ from typing import BinaryIO
 
 from pydantic import BaseModel
 
-from docling_jobkit.connectors.google_cloud_storage_helper import get_client
-from docling_jobkit.connectors.target_processor import BaseTargetProcessor
-from docling_jobkit.datamodel.google_cloud_storage_coords import (
+from docling.datamodel.service.sources import (
     GoogleCloudStorageCoordinates,
 )
-from docling_jobkit.datamodel.task_targets import GoogleCloudStorageTarget
+from docling.datamodel.service.targets import GoogleCloudStorageTarget
+
+from docling_jobkit.connectors.errors import map_connector_authentication_errors
+from docling_jobkit.connectors.target_processor import BaseTargetProcessor
+
+
+def _is_authentication_error(exc: BaseException) -> bool:
+    from docling_jobkit.connectors.google_cloud_storage_helper import (
+        is_google_cloud_storage_authentication_error,
+    )
+
+    return is_google_cloud_storage_authentication_error(exc)
 
 
 class GoogleCloudStorageTargetProcessor(BaseTargetProcessor):
@@ -20,7 +29,12 @@ class GoogleCloudStorageTargetProcessor(BaseTargetProcessor):
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
         return (GoogleCloudStorageTarget,)
 
+    @map_connector_authentication_errors(
+        "Google Cloud Storage", _is_authentication_error
+    )
     def _initialize(self):
+        from docling_jobkit.connectors.google_cloud_storage_helper import get_client
+
         self._client = get_client(self._coords)
 
     def _finalize(self):
@@ -36,6 +50,9 @@ class GoogleCloudStorageTargetProcessor(BaseTargetProcessor):
     def build_artifact_uri(self, target_filename: str) -> str:
         return f"gs://{self._coords.bucket}/{self._build_full_key(target_filename)}"
 
+    @map_connector_authentication_errors(
+        "Google Cloud Storage", _is_authentication_error
+    )
     def upload_file(
         self,
         filename: str | Path,
@@ -51,6 +68,9 @@ class GoogleCloudStorageTargetProcessor(BaseTargetProcessor):
 
         blob.upload_from_filename(str(filename), content_type=content_type)
 
+    @map_connector_authentication_errors(
+        "Google Cloud Storage", _is_authentication_error
+    )
     def upload_object(
         self,
         obj: str | bytes | BinaryIO,

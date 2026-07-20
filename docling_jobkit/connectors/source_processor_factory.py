@@ -1,11 +1,15 @@
-from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.sources import (
+    AzureBlobCoordinates,
+    FileSource,
+    GoogleCloudStorageCoordinates,
+    GoogleDriveCoordinates,
+    HttpSource,
+    S3Coordinates,
+)
 
 from docling_jobkit.connectors.connector_factory import get_source_connector_factory
 from docling_jobkit.connectors.source_processor import BaseSourceProcessor
-from docling_jobkit.datamodel.task_sources import (
-    TaskGoogleDriveSource,
-    TaskLocalPathSource,
-)
+from docling_jobkit.datamodel.task_sources import TaskLocalPathSource
 
 
 def get_source_processor(
@@ -13,7 +17,9 @@ def get_source_processor(
         FileSource
         | HttpSource
         | S3Coordinates
-        | TaskGoogleDriveSource
+        | AzureBlobCoordinates
+        | GoogleCloudStorageCoordinates
+        | GoogleDriveCoordinates
         | TaskLocalPathSource
     ),
     *,

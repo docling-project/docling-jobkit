@@ -8,12 +8,22 @@ from rich.console import Console
 
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.requests import (
+    AzureBlobSourceRequest,
     FileSourceRequest,
+    GoogleCloudStorageSourceRequest,
+    GoogleDriveSourceRequest,
     HttpSourceRequest,
     S3SourceRequest,
 )
-from docling.datamodel.service.targets import S3Target, ZipTarget
+from docling.datamodel.service.targets import (
+    AzureBlobTarget,
+    GoogleCloudStorageTarget,
+    GoogleDriveTarget,
+    S3Target,
+    ZipTarget,
+)
 
+from docling_jobkit.connectors.auth_context import allow_interactive_auth
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.convert.manager import (
@@ -23,15 +33,9 @@ from docling_jobkit.convert.manager import (
 from docling_jobkit.convert.results_processor import ResultsProcessor
 from docling_jobkit.datamodel.dynamic_unions import build_job_config_model
 from docling_jobkit.datamodel.task_sources import (
-    TaskGoogleCloudStorageSource,
-    TaskGoogleDriveSource,
     TaskLocalPathSource,
 )
-from docling_jobkit.datamodel.task_targets import (
-    GoogleCloudStorageTarget,
-    GoogleDriveTarget,
-    LocalPathTarget,
-)
+from docling_jobkit.datamodel.task_targets import LocalPathTarget
 
 console = Console()
 err_console = Console(stderr=True)
@@ -49,8 +53,9 @@ JobTaskSource = Annotated[
     | HttpSourceRequest
     | TaskLocalPathSource
     | S3SourceRequest
-    | TaskGoogleDriveSource
-    | TaskGoogleCloudStorageSource,
+    | AzureBlobSourceRequest
+    | GoogleDriveSourceRequest
+    | GoogleCloudStorageSourceRequest,
     Field(discriminator="kind"),
 ]
 
@@ -58,6 +63,7 @@ JobTaskTarget = Annotated[
     ZipTarget
     | LocalPathTarget
     | S3Target
+    | AzureBlobTarget
     | GoogleDriveTarget
     | GoogleCloudStorageTarget,
     Field(discriminator="kind"),
@@ -71,6 +77,7 @@ class JobConfig(BaseModel):
 
 
 @app.command(no_args_is_help=True)
+@allow_interactive_auth()
 def convert(
     config_file: Annotated[
         Path,
