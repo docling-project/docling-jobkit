@@ -2,6 +2,7 @@ import logging
 from typing import Iterator
 
 from pydantic import BaseModel
+from typing_extensions import override
 
 from docling_core.types.io import DocumentStream
 
@@ -15,6 +16,7 @@ from docling_jobkit.connectors.filenet_helper import (
 )
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
+    SourceDocumentRef,
 )
 from docling_jobkit.convert.materialization import (
     SourceLimitExceededError,
@@ -153,6 +155,17 @@ class FileNetSourceProcessor(
             if count >= max_elements:
                 break
         return count
+
+    @override
+    def _make_document_ref(
+        self, identifier: FileNetFileIdentifier, source_index: int
+    ) -> SourceDocumentRef[FileNetFileIdentifier]:
+        return SourceDocumentRef(
+            id=identifier,
+            source_index=source_index,
+            source_uri=f"filenet://{self._coords.repository_id}/{identifier.id}",
+            filename=identifier.name,
+        )
 
     def _fetch_document_by_id(
         self,

@@ -19,6 +19,16 @@ _RETRYABLE_4XX_STATUS = {429}
 T = TypeVar("T")
 
 
+class FileNetGraphQLError(RuntimeError):
+    """Non-retryable failure reported by the FileNet GraphQL API itself.
+
+    Raised for a 200-OK response whose body carries an ``errors`` payload
+    (FileNet's convention for surfacing bad credentials, missing
+    repository/folder/document identifiers, and permission failures), so it
+    is classified separately from transport-level (HTTP status) errors.
+    """
+
+
 # I dont think we need to add jitter/randomness for the cli case but maybe for distributed version
 # TODO: add logic to extract Retry-After header sent in http header by external api on 429 telling us
 # after how much time the rate limit will be dropped and we are good to retry
@@ -93,7 +103,7 @@ def _execute_graphql_query(
     if "errors" in payload:
         error_msg = json.dumps(payload["errors"], indent=2)
         _log.error("GraphQL query failed: %s", error_msg)
-        raise RuntimeError(f"GraphQL query failed: {error_msg}")
+        raise FileNetGraphQLError(f"GraphQL query failed: {error_msg}")
 
     return payload.get("data", {})
 

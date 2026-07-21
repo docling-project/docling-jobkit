@@ -159,6 +159,25 @@ def test_filenet_iterate_documents_respects_max_num_elements(filenet_coords):
     assert processor._fetch_document_by_id.call_count == 2
 
 
+def test_filenet_make_document_ref_uses_name_not_repr(filenet_coords):
+    processor = FileNetSourceProcessor(filenet_coords)
+
+    identifier = FileNetFileIdentifier(
+        id="{DOC-1}",
+        name="report.pdf",
+        size=1000,
+        mime_type="application/pdf",
+        download_url="/content?id={DOC-1}&token=secret",
+    )
+
+    ref = processor._make_document_ref(identifier, source_index=0)
+
+    assert ref.filename == "report.pdf"
+    assert ref.source_uri == "filenet://test-repo/{DOC-1}"
+    assert "download_url" not in ref.filename
+    assert "secret" not in ref.filename
+
+
 def test_filenet_fetch_rejects_oversized_before_download(filenet_coords):
     processor = FileNetSourceProcessor(filenet_coords)
 
