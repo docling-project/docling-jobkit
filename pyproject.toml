@@ -82,6 +82,9 @@ gcloudstorage = [
 azure = [
     "azure-storage-blob>=12.19.0",
 ]
+kafka = [
+    "confluent-kafka>=2.15.0",
+]
 
 [dependency-groups]
 dev = [
