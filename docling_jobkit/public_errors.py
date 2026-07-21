@@ -18,6 +18,7 @@ from docling_jobkit.connectors.errors import (
     ConnectorAuthenticationError,
     SourceConnectorAuthenticationError,
 )
+from docling_jobkit.connectors.filenet_helper import FileNetGraphQLError
 from docling_jobkit.convert.materialization import (
     MaterializationLimitExceededError,
     SourceLimitExceededError,
@@ -132,6 +133,14 @@ def classify_public_task_failure(
             phase = FailurePhase.SOURCE_ENUMERATION
         retryable = False
         message = exception_text
+    elif isinstance(root_exc, FileNetGraphQLError):
+        # FileNet reports bad credentials, missing repository/folder/document
+        # identifiers, and permission failures as a 200-OK GraphQL errors
+        # payload rather than an HTTP status, so it needs its own branch here.
+        category = FailureCategory.POLICY
+        phase = FailurePhase.SOURCE_ENUMERATION
+        retryable = False
+        message = exception_text
     elif isinstance(root_exc, httpx.HTTPStatusError):
         # httpx fetched the source but the upstream HTTP status is not usable.
         merged_details = {**merged_details, **_safe_details(source_kind="http")}
@@ -187,6 +196,7 @@ def build_public_task_error(exc: BaseException) -> str:
         or isinstance(root_exc, RequestsHTTPError)
         or isinstance(root_exc, SourceLimitExceededError)
         or isinstance(root_exc, ConnectorAuthenticationError)
+        or isinstance(root_exc, FileNetGraphQLError)
     ):
         return _exception_text(root_exc)
     return INTERNAL_TASK_ERROR_MESSAGE
