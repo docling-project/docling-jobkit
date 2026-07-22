@@ -113,6 +113,11 @@ from docling_jobkit.public_errors import (
 
 # metrics
 from ray.util.metrics import Counter, Gauge, Histogram
+import random
+import string
+
+def random_digit_string(length: int) -> str:
+    return ''.join(random.choices(string.digits, k=length))
 
 _log = logging.getLogger(__name__)
 
@@ -560,8 +565,9 @@ class DoclingProcessorConverterDeployment:
 
     def init_metrics(self):
         if not self._metrics_initialized:
+
             _log.warning(
-                    "Setting up metric generation"
+                    f"============ Setting up metric generation"
                 )
 
             docling_settings.debug.profile_pipeline_timings = True
@@ -572,278 +578,324 @@ class DoclingProcessorConverterDeployment:
                 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 12.5, 15.0, 17.5, 20.0, 25.0, 30.0
             ]
 
+
             self.metric_emission_counter = Counter(
                 "dcls_metrics_emitted",
                 description="Number of attemps to emmit metrics",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.metric_emission_counter.set_default_tags({"replica_tag": replica_tag})
 
             self.success_counter = Counter(
                 "dcls_conversion_success",
                 description="Number of successeful conversions",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.success_counter.set_default_tags({"replica_tag": replica_tag})
             
             self.partial_counter = Counter(
                 "dcls_conversion_partial",
                 description="Number of partial conversions",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.partial_counter.set_default_tags({"replica_tag": replica_tag})
 
             self.failed_counter = Counter(
                 "dcls_conversion_failed",
                 description="Number of failed conversions",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.failed_counter.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.pipeline_total_hist = Histogram(
                 "dcls_pipeline_total",
                 description="Total pipeline execution time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.pipeline_total_hist.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.page_parse_low_hist = Histogram(
                 "dcls_page_parse_low",
                 description="Lowest page parse time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.page_parse_low_hist.set_default_tags({"replica_tag": replica_tag})
 
             self.page_parse_high_hist = Histogram(
                 "dcls_page_parse_high",
                 description="Highest page parse time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.page_parse_high_hist.set_default_tags({"replica_tag": replica_tag})
 
             self.page_parse_median_hist = Histogram(
                 "dcls_page_parse_median",
                 description="Median page parse time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.page_parse_median_hist.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.ocr_low_hist = Histogram(
                 "dcls_ocr_low",
                 description="Lowest ocr time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.ocr_low_hist.set_default_tags({"replica_tag": replica_tag})
 
             self.ocr_high_hist = Histogram(
                 "dcls_ocr_high",
                 description="Highest ocr time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.ocr_high_hist.set_default_tags({"replica_tag": replica_tag})
 
             self.ocr_median_hist = Histogram(
                 "dcls_ocr_median",
                 description="Median ocr time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.ocr_median_hist.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.layout_low_hist = Histogram(
                 "dcls_layout_low",
                 description="Lowest layout time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.layout_low_hist.set_default_tags({"replica_tag": replica_tag})
 
             self.layout_high_hist = Histogram(
                 "dcls_layout_high",
                 description="Highest layout time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.layout_high_hist.set_default_tags({"replica_tag": replica_tag})
 
             self.layout_median_hist = Histogram(
                 "dcls_layout_median",
                 description="Median layout time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.layout_median_hist.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.table_structure_low_hist = Histogram(
                 "dcls_table_structure_low",
                 description="Lowest table structure time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.table_structure_low_hist.set_default_tags({"replica_tag": replica_tag})
             
             self.table_structure_high_hist = Histogram(
                 "dcls_table_structure_high",
                 description="Highest table structure time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.table_structure_high_hist.set_default_tags({"replica_tag": replica_tag})
 
             self.table_structure_median_hist = Histogram(
                 "dcls_table_structure_median",
                 description="Median table structure time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.table_structure_median_hist.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.page_assemble_low_hist = Histogram(
                 "dcls_page_assemble_low",
                 description="Lowest page assemble time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.page_assemble_low_hist.set_default_tags({"replica_tag": replica_tag})
 
             self.page_assemble_high_hist = Histogram(
                 "dcls_page_assemble_high",
                 description="Highest page assemble time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.page_assemble_high_hist.set_default_tags({"replica_tag": replica_tag})
 
             self.page_assemble_median_hist = Histogram(
                 "dcls_page_assemble_median",
                 description="Median page assemble time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.page_assemble_median_hist.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.doc_assemble_hist = Histogram(
                 "dcls_doc_assemble",
                 description="Document assemble time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.doc_assemble_hist.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.reading_order_hist = Histogram(
                 "dcls_reading_order",
                 description="Reading order time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.reading_order_hist.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.doc_enrich_hist = Histogram(
                 "dcls_doc_enrich",
                 description="Document enrichment time in seconds",
                 boundaries=timings_hist_buckets,
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.doc_enrich_hist.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.doc_type_pdf_counter = Counter(
                 "dcls_doc_type_pdf",
                 description="Number of pdf documents",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.doc_type_pdf_counter.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.doc_type_docx_counter = Counter(
                 "dcls_doc_type_docx",
                 description="Number of docx documents",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.doc_type_docx_counter.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.doc_type_pptx_counter = Counter(
                 "dcls_doc_type_pptx",
                 description="Number of pptx documents",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.doc_type_pptx_counter.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.doc_type_html_counter = Counter(
                 "dcls_doc_type_html",
                 description="Number of html documents",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.doc_type_html_counter.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.doc_type_image_counter = Counter(
                 "dcls_doc_type_image",
                 description="Number of image documents",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.doc_type_image_counter.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.doc_type_md_counter = Counter(
                 "dcls_doc_type_md",
                 description="Number of md documents",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.doc_type_md_counter.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.doc_type_xlsx_counter = Counter(
                 "dcls_doc_type_xlsx",
                 description="Number of xlsx documents",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.doc_type_xlsx_counter.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.doc_type_xml_counter = Counter(
                 "dcls_doc_type_xml",
                 description="Number of xml documents",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.doc_type_xml_counter.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.doc_type_doclang_counter = Counter(
                 "dcls_doc_type_doclang",
                 description="Number of doclang documents",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.doc_type_doclang_counter.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.doc_type_docling_counter = Counter(
                 "dcls_doc_type_docling",
                 description="Number of docling type documents",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.doc_type_docling_counter.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.doc_type_other_counter = Counter(
                 "dcls_doc_type_other",
                 description="Number of other type documents",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.doc_type_other_counter.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.num_pages_hist = Counter(
                 "dcls_num_pages",
                 description="Number of pages in converted document",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.num_pages_hist.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.pictures_hist = Counter(
                 "dcls_pictures",
                 description="Number of pictures in converted document",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.pictures_hist.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.tables_hist = Counter(
                 "dcls_tables",
                 description="Number of tables in converted document",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.tables_hist.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.key_value_items_hist = Counter(
                 "dcls_key_value_items",
                 description="Number of key value items in converted document",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.key_value_items_hist.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.form_items_hist = Counter(
                 "dcls_form_items",
                 description="Number of form items in converted document",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.form_items_hist.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.texts_hist = Counter(
                 "dcls_texts",
                 description="Number of text items in converted document",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.texts_hist.set_default_tags({"replica_tag": replica_tag})
             #-----
             self.groups_hist = Counter(
                 "dcls_groups",
                 description="Number of group items in converted document",
-                tag_keys=("tenant_id",),
+                tag_keys=("tenant_id", "replica_tag",),
             )
+            #self.groups_hist.set_default_tags({"replica_tag": replica_tag})
+
             self._metrics_initialized = True
 
     def emit_metrics(self, metrics: list, tenant_id: str):
+        replica_tag = serve.get_replica_context().replica_tag
+        if not replica_tag:
+            replica_tag = random_digit_string(12)
         _log.warning(
-                    "Emitting metrics, total number of records %s",
-                    len(metrics)
+                    f"Emitting metrics, total number of records {len(metrics)}, replica tag: {replica_tag}",
+                    
                 )
-        self.metric_emission_counter.set_default_tags({"tenant_id": tenant_id})
+        self.metric_emission_counter.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
         self.metric_emission_counter.inc()
         for item in metrics:
             if 'reference' in item:
@@ -855,120 +907,120 @@ class DoclingProcessorConverterDeployment:
                 document_hash = record["document_hash"]
                 pipeline_stats = record["timings_stats"]
                 if 'pipeline_total' in pipeline_stats:
-                    self.pipeline_total_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.pipeline_total_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.pipeline_total_hist.observe(pipeline_stats["pipeline_total"])
                 if 'page_parse' in pipeline_stats:
-                    self.page_parse_low_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.page_parse_high_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.page_parse_median_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.page_parse_low_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
+                    self.page_parse_high_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
+                    self.page_parse_median_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.page_parse_low_hist.observe(pipeline_stats["page_parse"]["min"])
                     self.page_parse_high_hist.observe(pipeline_stats["page_parse"]["max"])
                     self.page_parse_median_hist.observe(pipeline_stats["page_parse"]["median"])
                 if 'ocr' in pipeline_stats:
-                    self.ocr_low_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.ocr_high_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.ocr_median_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.ocr_low_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
+                    self.ocr_high_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
+                    self.ocr_median_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.ocr_low_hist.observe(pipeline_stats["ocr"]["min"])
                     self.ocr_high_hist.observe(pipeline_stats["ocr"]["max"])
                     self.ocr_median_hist.observe(pipeline_stats["ocr"]["median"])
                 if 'layout' in pipeline_stats:
-                    self.layout_low_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.layout_high_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.layout_median_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.layout_low_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
+                    self.layout_high_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
+                    self.layout_median_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.layout_low_hist.observe(pipeline_stats["layout"]["min"])
                     self.layout_high_hist.observe(pipeline_stats["layout"]["max"])
                     self.layout_median_hist.observe(pipeline_stats["layout"]["median"])
                 if 'table_structure' in pipeline_stats:
-                    self.table_structure_low_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.table_structure_high_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.table_structure_median_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.table_structure_low_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
+                    self.table_structure_high_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
+                    self.table_structure_median_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.table_structure_low_hist.observe(pipeline_stats["table_structure"]["min"])
                     self.table_structure_high_hist.observe(pipeline_stats["table_structure"]["max"])
                     self.table_structure_median_hist.observe(pipeline_stats["table_structure"]["median"])
                 if 'page_assemble' in pipeline_stats:
-                    self.page_assemble_low_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.page_assemble_high_hist.set_default_tags({"tenant_id": tenant_id})
-                    self.page_assemble_median_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.page_assemble_low_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
+                    self.page_assemble_high_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
+                    self.page_assemble_median_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.page_assemble_low_hist.observe(pipeline_stats["page_assemble"]["min"])
                     self.page_assemble_high_hist.observe(pipeline_stats["page_assemble"]["max"])
                     self.page_assemble_median_hist.observe(pipeline_stats["page_assemble"]["median"])
                 if 'doc_assemble' in pipeline_stats:
-                    self.doc_assemble_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.doc_assemble_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.doc_assemble_hist.observe(pipeline_stats["doc_assemble"])
                 if 'reading_order' in pipeline_stats:
-                    self.reading_order_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.reading_order_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.reading_order_hist.observe(pipeline_stats["reading_order"])
                 if 'doc_enrich' in pipeline_stats:
-                    self.doc_enrich_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.doc_enrich_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.doc_enrich_hist.observe(pipeline_stats["doc_enrich"])
 
                 document_stats = record["document_stats"]
                 if 'input_format' in document_stats:
                     doc_type = document_stats["input_format"]
                     if doc_type == InputFormat.PDF :
-                        self.doc_type_pdf_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_pdf_counter.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                         self.doc_type_pdf_counter.inc()
                     elif doc_type == InputFormat.DOCX :
-                        self.doc_type_docx_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_docx_counter.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                         self.doc_type_docx_counter.inc()
                     elif doc_type == InputFormat.PPTX :
-                        self.doc_type_pptx_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_pptx_counter.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                         self.doc_type_pptx_counter.inc()
                     elif doc_type == InputFormat.HTML :
-                        self.doc_type_html_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_html_counter.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                         self.doc_type_html_counter.inc()
                     elif doc_type == InputFormat.IMAGE :
-                        self.doc_type_image_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_image_counter.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                         self.doc_type_image_counter.inc()
                     elif doc_type == InputFormat.MD :
-                        self.doc_type_md_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_md_counter.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                         self.doc_type_md_counter.inc()
                     elif doc_type == InputFormat.XLSX :
-                        self.doc_type_xlsx_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_xlsx_counter.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                         self.doc_type_xlsx_counter.inc()
                     elif doc_type in (InputFormat.XML_USPTO, InputFormat.XML_JATS, InputFormat.XML_XBRL) :
-                        self.doc_type_xml_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_xml_counter.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                         self.doc_type_xml_counter.inc()
                     elif doc_type == InputFormat.XML_DOCLANG :
-                        self.doc_type_doclang_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_doclang_counter.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                         self.doc_type_doclang_counter.inc()
                     elif doc_type == InputFormat.JSON_DOCLING :
+                        self.doc_type_docling_counter.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                         self.doc_type_docling_counter.inc()
-                        self.doc_type_docling_counter.set_default_tags({"tenant_id": tenant_id})
                     else:
-                        self.doc_type_other_counter.set_default_tags({"tenant_id": tenant_id})
+                        self.doc_type_other_counter.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                         self.doc_type_other_counter.inc()
                 if 'num_pages' in document_stats:
-                    self.num_pages_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.num_pages_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.num_pages_hist.inc(document_stats["num_pages"])
                 if 'pictures' in document_stats:
-                    self.pictures_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.pictures_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.pictures_hist.inc(document_stats["pictures"])
                 if 'tables' in document_stats:
-                    self.tables_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.tables_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.tables_hist.inc(document_stats["tables"])
                 if 'key_value_items' in document_stats:
-                    self.key_value_items_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.key_value_items_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.key_value_items_hist.inc(document_stats["key_value_items"])
                 if 'form_items' in document_stats:
-                    self.form_items_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.form_items_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.form_items_hist.inc(document_stats["form_items"])
                 if 'texts' in document_stats:
-                    self.texts_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.texts_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.texts_hist.inc(document_stats["texts"])
                 if 'groups' in document_stats:
-                    self.groups_hist.set_default_tags({"tenant_id": tenant_id})
+                    self.groups_hist.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.groups_hist.inc(document_stats["groups"])
 
                 conv_status = record["status"]
                 if conv_status == "success":
-                    self.success_counter.set_default_tags({"tenant_id": tenant_id})
+                    self.success_counter.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.success_counter.inc()
                 elif conv_status == "partial":
-                    self.partial_counter.set_default_tags({"tenant_id": tenant_id})
+                    self.partial_counter.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.partial_counter.inc()
                 else:
-                    self.failed_counter.set_default_tags({"tenant_id": tenant_id})
+                    self.failed_counter.set_default_tags({"tenant_id": tenant_id, "replica_tag": replica_tag})
                     self.failed_counter.inc()
 
 
