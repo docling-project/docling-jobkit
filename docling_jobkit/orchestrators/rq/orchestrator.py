@@ -12,7 +12,7 @@ import msgpack
 import redis
 import redis.asyncio as async_redis
 from pydantic import BaseModel, model_validator
-from rq import Queue
+from rq import Queue, Worker
 from rq.exceptions import NoSuchJobError
 from rq.job import Job, JobStatus
 from rq.registry import StartedJobRegistry
@@ -33,6 +33,7 @@ from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
+    SystemCapacity,
     TaskNotFoundError,
 )
 from docling_jobkit.orchestrators.serialization import dump_model_with_secrets
@@ -210,6 +211,24 @@ class RQOrchestrator(BaseOrchestrator):
 
     async def queue_size(self) -> int:
         return self._rq_queue.count
+
+    async def get_capacity(self) -> SystemCapacity:
+        async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
+
+            def _collect() -> tuple[int, int, int]:
+                queued = self._rq_queue.count
+                started = StartedJobRegistry(
+                    queue=self._rq_queue, connection=self._redis_conn
+                ).count
+                workers = len(Worker.all(connection=self._redis_conn))
+                return queued, started, workers
+
+            queued, started, workers = await asyncio.to_thread(_collect)
+            return SystemCapacity(
+                queue_depth=queued,
+                active_jobs=started,
+                active_workers=workers,
+            )
 
     async def _refresh_task_from_rq(self, task_id: str) -> None:
         task = await self.get_raw_task(task_id=task_id)
