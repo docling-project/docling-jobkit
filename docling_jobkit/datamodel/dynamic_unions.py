@@ -2,7 +2,7 @@
 
 The static source and target unions cover built-in CLI/YAML configuration. These
 helpers build precise plugin-aware unions for that external configuration boundary.
-Internal task sources and targets hydrate structurally through the connector registry.
+Internal task sources and targets resolve structurally through the connector registry.
 """
 
 from docling_jobkit.connectors.connector_factory import (

@@ -167,7 +167,7 @@ External (non–docling-jobkit) plugins load only when external plugins are allo
 - **Local and Ray orchestrators:** set `allow_external_plugins=True` on the
   converter-manager config.
 - **RQ:** set `allow_external_plugins=True` on `RQOrchestratorConfig` in both the
-  submitter and worker process. Task hydration uses that explicit policy; it does
+  submitter and worker process. Task resolution uses that explicit policy; it does
   not mutate the global `Task` model.
 
 API and worker processes must install compatible versions of the same connector

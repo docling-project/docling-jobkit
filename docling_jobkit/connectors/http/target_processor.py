@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from docling.datamodel.service.targets import PutTarget
 
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
+from docling_jobkit.public_errors import TargetWriteError
 
 _log = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ class HttpPutTargetProcessor(BaseTargetProcessor):
                 )
                 if attempt < self._max_retries - 1:
                     time.sleep(self._retry_delay * (attempt + 1))
-        raise RuntimeError(
+        raise TargetWriteError(
             f"Failed to upload file to target url after {self._max_retries} attempts."
         ) from last_exc
 
@@ -102,6 +103,6 @@ class HttpPutTargetProcessor(BaseTargetProcessor):
                 )
                 if attempt < self._max_retries - 1:
                     time.sleep(self._retry_delay * (attempt + 1))
-        raise RuntimeError(
+        raise TargetWriteError(
             f"Failed to upload object to target url after {self._max_retries} attempts."
         ) from last_exc

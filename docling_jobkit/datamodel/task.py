@@ -28,7 +28,7 @@ from docling_jobkit.datamodel.chunking import (
 from docling_jobkit.datamodel.task_meta import TaskStatus
 
 
-def _hydrate_source(value: Any, info: ValidationInfo) -> Any:
+def _resolve_source(value: Any, info: ValidationInfo) -> Any:
     if isinstance(value, DocumentStream):
         return value
 
@@ -46,11 +46,11 @@ def _hydrate_source(value: Any, info: ValidationInfo) -> Any:
 # revalidate_instances="never" preserves that instance under the BaseModel branch.
 TaskSource = Annotated[
     DocumentStream | SerializeAsAny[BaseModel],
-    BeforeValidator(_hydrate_source),
+    BeforeValidator(_resolve_source),
 ]
 
 
-def _hydrate_target(value: Any, info: ValidationInfo) -> Any:
+def _resolve_target(value: Any, info: ValidationInfo) -> Any:
     if isinstance(value, (InBodyTarget, ZipTarget)):
         return value
     if isinstance(value, Mapping):
@@ -71,7 +71,7 @@ def _hydrate_target(value: Any, info: ValidationInfo) -> Any:
 
 TaskTarget = Annotated[
     InBodyTarget | ZipTarget | SerializeAsAny[BaseModel],
-    BeforeValidator(_hydrate_target),
+    BeforeValidator(_resolve_target),
 ]
 
 

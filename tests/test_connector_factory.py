@@ -1,4 +1,4 @@
-"""Tests for connector registration, hydration, transport, and dispatch."""
+"""Tests for connector registration, resolution, transport, and dispatch."""
 
 import json
 from io import BytesIO
@@ -337,7 +337,7 @@ def test_registry_errors_are_safe_and_identify_local_plugin():
     assert "version" not in message.lower()
 
 
-def test_task_structurally_hydrates_builtin_and_rejects_missing_kind():
+def test_task_structurally_resolves_builtin_and_rejects_missing_kind():
     payload = {
         "task_id": "task-1",
         "sources": [
@@ -381,7 +381,7 @@ def test_filenet_survives_trusted_task_json_roundtrip():
     assert rebuilt.sources[0].api_key.get_secret_value() == "filenet-secret"
 
 
-def test_external_task_hydration_requires_context_and_roundtrips(monkeypatch):
+def test_external_task_resolution_requires_context_and_roundtrips(monkeypatch):
     import docling_jobkit.connectors.connector_factory as connector_factory_module
 
     builtin_factory = get_source_connector_factory(False)
@@ -451,7 +451,7 @@ def test_rq_worker_uses_explicit_external_plugin_policy(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ray_redis_hydration_uses_external_plugin_policy(monkeypatch):
+async def test_ray_redis_resolution_uses_external_plugin_policy(monkeypatch):
     import docling_jobkit.connectors.connector_factory as connector_factory_module
     from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 
