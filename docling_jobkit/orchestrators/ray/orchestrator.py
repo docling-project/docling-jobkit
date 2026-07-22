@@ -19,15 +19,12 @@ from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.requests import FileSourceRequest
-from docling.datamodel.service.targets import (
-    AzureBlobTarget,
-    GoogleCloudStorageTarget,
-    GoogleDriveTarget,
-    S3Target,
-)
 from docling.datamodel.service.tasks import TaskType
 
-from docling_jobkit.connectors.connector_factory import get_source_connector_factory
+from docling_jobkit.connectors.connector_factory import (
+    get_source_connector_factory,
+    get_target_connector_factory,
+)
 from docling_jobkit.convert.manager import DoclingConverterManager
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult, TaskOutcome
@@ -56,14 +53,6 @@ from docling_jobkit.orchestrators.ray.serve_deployment import (
 _log = logging.getLogger(__name__)
 
 
-_STORAGE_TARGET_TYPES = (
-    S3Target,
-    AzureBlobTarget,
-    GoogleCloudStorageTarget,
-    GoogleDriveTarget,
-)
-
-
 def _validate_expandable_source_targets(
     sources: list[TaskSource],
     target: TaskTarget,
@@ -71,15 +60,20 @@ def _validate_expandable_source_targets(
     *,
     allow_external_plugins: bool = False,
 ) -> None:
-    factory = get_source_connector_factory(allow_external_plugins)
+    source_factory = get_source_connector_factory(allow_external_plugins)
     has_expandable_source = any(
-        not isinstance(source, DocumentStream) and factory.is_expandable(source)
+        not isinstance(source, DocumentStream) and source_factory.is_expandable(source)
         for source in sources
     )
     if not has_expandable_source:
         return
 
-    if task_type != TaskType.CONVERT or not isinstance(target, _STORAGE_TARGET_TYPES):
+    target_factory = get_target_connector_factory(allow_external_plugins)
+    is_artifact_target = (
+        target_factory.supports(target)
+        and target_factory.result_mode(target) == "artifacts"
+    )
+    if task_type != TaskType.CONVERT or not is_artifact_target:
         raise ValueError(
             "Tasks containing an expandable storage source require a storage target."
         )

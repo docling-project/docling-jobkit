@@ -293,6 +293,16 @@ class TargetConnectorFactory(BaseConnectorFactory[BaseTargetProcessor]):
         normalized = self.validate_config(config)
         return self._classes[type(normalized)].result_mode()
 
+    def result_mode_for_kind(
+        self, kind: str
+    ) -> Literal["artifacts", "archive", "presigned"]:
+        config_type = self._config_types_by_kind.get(kind)
+        if config_type is None:
+            raise TargetConnectorConfigError(
+                f"Target connector kind {kind!r} is not registered."
+            )
+        return self._classes[config_type].result_mode()
+
 
 @lru_cache(maxsize=None)
 def get_source_connector_factory(

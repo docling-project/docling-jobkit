@@ -23,7 +23,10 @@ from docling_jobkit.connectors.connector_factory import (
     get_source_connector_factory,
     get_target_connector_factory,
 )
-from docling_jobkit.connectors.errors import SourceConnectorConfigError
+from docling_jobkit.connectors.errors import (
+    SourceConnectorConfigError,
+    TargetConnectorConfigError,
+)
 from docling_jobkit.connectors.filenet.models import TaskFileNetSource
 from docling_jobkit.connectors.local_path.models import LocalPathTarget
 from docling_jobkit.connectors.source_processor import (
@@ -165,6 +168,9 @@ def test_external_connector_registration_and_union():
         _OneDriveTarget
     )
     assert factory.result_mode(parsed) == "artifacts"
+    assert factory.result_mode_for_kind("onedrive") == "artifacts"
+    with pytest.raises(TargetConnectorConfigError, match=r"missing.*not registered"):
+        factory.result_mode_for_kind("missing")
 
 
 def test_single_member_union_returns_bare_type():
@@ -568,6 +574,61 @@ def test_factory_expandability_can_depend_on_config_type():
 
     assert factory.is_expandable(_FakeSource()) is True
     assert factory.is_expandable(SingleSource()) is False
+
+
+def test_ray_expandable_source_accepts_plugin_artifact_target(monkeypatch):
+    from docling.datamodel.service.tasks import TaskType
+
+    from docling_jobkit.orchestrators.ray import orchestrator as ray_orchestrator
+
+    source_factory = _source_factory_with_fake()
+    target_factory = _target_factory_with_fake()
+    monkeypatch.setattr(
+        ray_orchestrator,
+        "get_source_connector_factory",
+        lambda allow_external_plugins=False: source_factory,
+    )
+    monkeypatch.setattr(
+        ray_orchestrator,
+        "get_target_connector_factory",
+        lambda allow_external_plugins=False: target_factory,
+    )
+
+    ray_orchestrator._validate_expandable_source_targets(
+        [_FakeSource()],
+        _OneDriveTarget(drive_id="target"),
+        TaskType.CONVERT,
+        allow_external_plugins=True,
+    )
+
+
+def test_ray_s3_fanout_accepts_plugin_artifact_target(monkeypatch):
+    from docling.datamodel.service.tasks import TaskType
+
+    from docling_jobkit.orchestrators.ray import serve_deployment
+
+    target_factory = _target_factory_with_fake()
+    monkeypatch.setattr(
+        serve_deployment,
+        "get_target_connector_factory",
+        lambda allow_external_plugins=False: target_factory,
+    )
+    task = Task.model_construct(
+        task_id="task-plugin-fanout",
+        task_type=TaskType.CONVERT,
+        sources=[
+            S3Coordinates(
+                endpoint="127.0.0.1:9000",
+                access_key="minioadmin",
+                secret_key="minioadmin",
+                bucket="source-bucket",
+                key_prefix="incoming/",
+            )
+        ],
+        target=_OneDriveTarget(drive_id="target"),
+    )
+
+    assert serve_deployment._is_s3_fanout_task(task, allow_external_plugins=True)
 
 
 def test_source_expansion_dispatches_fake_registered_processor(monkeypatch):
