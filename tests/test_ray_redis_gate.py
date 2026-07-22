@@ -5,9 +5,10 @@ import pytest
 # Skip all tests if Ray is not available
 pytest.importorskip("ray")
 
+from docling.datamodel.service.targets import InBodyTarget
+
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
-from docling_jobkit.datamodel.task_targets import InBodyTarget
 from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
 from docling_jobkit.orchestrators.base_orchestrator import RedisBackpressureError
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig

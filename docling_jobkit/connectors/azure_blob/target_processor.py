@@ -14,7 +14,7 @@ _log = logging.getLogger(__name__)
 
 
 def _is_authentication_error(exc: BaseException) -> bool:
-    from docling_jobkit.connectors.azure_blob_helper import (
+    from docling_jobkit.connectors.azure_blob.helper import (
         is_azure_blob_authentication_error,
     )
 
@@ -32,7 +32,7 @@ class AzureBlobTargetProcessor(BaseTargetProcessor):
 
     @map_connector_authentication_errors("Azure Blob Storage", _is_authentication_error)
     def _initialize(self):
-        from docling_jobkit.connectors.azure_blob_helper import (
+        from docling_jobkit.connectors.azure_blob.helper import (
             get_azure_blob_connection,
         )
 
@@ -64,7 +64,7 @@ class AzureBlobTargetProcessor(BaseTargetProcessor):
         content_type: str,
     ) -> None:
         """Upload a local file from disk into Azure Blob Storage."""
-        from docling_jobkit.connectors.azure_blob_upload_support import (
+        from docling_jobkit.connectors.azure_blob.upload_support import (
             upload_azure_blob_file,
         )
 
@@ -90,7 +90,7 @@ class AzureBlobTargetProcessor(BaseTargetProcessor):
         content_type: str,
     ) -> None:
         """Upload an in-memory object into Azure Blob Storage."""
-        from docling_jobkit.connectors.azure_blob_upload_support import (
+        from docling_jobkit.connectors.azure_blob.upload_support import (
             upload_azure_blob_object,
         )
 

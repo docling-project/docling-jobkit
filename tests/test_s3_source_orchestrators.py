@@ -10,16 +10,15 @@ from docling.datamodel.service.requests import (
     HttpSourceRequest,
     S3SourceRequest,
 )
-from docling.datamodel.service.targets import S3Target
+from docling.datamodel.service.targets import InBodyTarget, S3Target
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.cli.local import JobConfig as LocalJobConfig
 from docling_jobkit.cli.multiproc import JobConfig as MultiprocJobConfig
-from docling_jobkit.connectors.s3_source_processor import S3SourceProcessor
+from docling_jobkit.connectors.s3.source_processor import S3SourceProcessor
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.convert.source_expansion import expand_task_sources
 from docling_jobkit.datamodel.task import Task
-from docling_jobkit.datamodel.task_targets import InBodyTarget
 from docling_jobkit.orchestrators.rq.orchestrator import (
     RQOrchestrator,
     RQOrchestratorConfig,
@@ -237,7 +236,7 @@ async def test_rq_enqueue_preserves_registered_s3_request(
                 "kind": "http",
                 "url": "https://example.com/doc.pdf",
             },
-            HttpSourceRequest,
+            AnyHttpSourceRequest,
         ),
         (
             {

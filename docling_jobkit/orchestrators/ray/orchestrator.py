@@ -34,9 +34,8 @@ from docling_jobkit.datamodel.result import DoclingTaskResult, TaskOutcome
 from docling_jobkit.datamodel.stored_outcome import (
     StoredSuccessOutcome,
 )
-from docling_jobkit.datamodel.task import Task, TaskSource, validate_task
+from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget, validate_task
 from docling_jobkit.datamodel.task_meta import TaskStatus
-from docling_jobkit.datamodel.task_targets import TaskTarget
 from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,

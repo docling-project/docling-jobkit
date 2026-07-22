@@ -20,7 +20,7 @@ class GoogleDriveTargetProcessor(BaseTargetProcessor):
         return (GoogleDriveTarget,)
 
     def _initialize(self):
-        from docling_jobkit.connectors.google_drive_helper import get_service
+        from docling_jobkit.connectors.google_drive.helper import get_service
 
         self._service = get_service(self._coords)
 
@@ -36,7 +36,7 @@ class GoogleDriveTargetProcessor(BaseTargetProcessor):
         """
         Upload a local file from disk to Google Drive.
         """
-        from docling_jobkit.connectors.google_drive_helper import upload_file
+        from docling_jobkit.connectors.google_drive.helper import upload_file
 
         upload_file(
             service=self._service,
@@ -55,7 +55,7 @@ class GoogleDriveTargetProcessor(BaseTargetProcessor):
         """
         Upload an in-memory object (bytes or file-like) to Google Drive.
         """
-        from docling_jobkit.connectors.google_drive_helper import upload_file
+        from docling_jobkit.connectors.google_drive.helper import upload_file
 
         if isinstance(obj, (bytes, bytearray)):
             body: BinaryIO = BytesIO(obj)

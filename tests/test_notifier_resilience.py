@@ -3,9 +3,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from docling.datamodel.service.targets import InBodyTarget
+
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
-from docling_jobkit.datamodel.task_targets import InBodyTarget
 from docling_jobkit.orchestrators.rq.orchestrator import (
     RQOrchestrator,
     RQOrchestratorConfig,

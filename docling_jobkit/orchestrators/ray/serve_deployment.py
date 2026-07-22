@@ -701,7 +701,9 @@ class DoclingProcessorConverterDeployment:
                         phase=FailurePhase.EXECUTION,
                         details={
                             "task_size": str(len(task.sources)),
-                            "target_kind": task.target.kind,
+                            "target_kind": getattr(
+                                task.target, "kind", type(task.target).__name__
+                            ),
                         },
                     )
                     if is_client_actionable_failure(failure):
@@ -1082,7 +1084,9 @@ class DoclingProcessorCoordinatorDeployment:
                 phase=FailurePhase.EXECUTION,
                 details={
                     "task_size": str(task_size),
-                    "target_kind": task.target.kind,
+                    "target_kind": getattr(
+                        task.target, "kind", type(task.target).__name__
+                    ),
                 },
             )
             error_message = failure.message

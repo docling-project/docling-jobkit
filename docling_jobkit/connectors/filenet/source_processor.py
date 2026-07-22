@@ -6,13 +6,17 @@ from typing_extensions import override
 
 from docling_core.types.io import DocumentStream
 
-from docling_jobkit.connectors.filenet_helper import (
+from docling_jobkit.connectors.filenet.helper import (
     check_connection,
     download_document,
     get_document_metadata,
     get_filenet_auth_header,
     list_folder_documents,
     list_repository_documents,
+)
+from docling_jobkit.connectors.filenet.models import (
+    FileNetCoordinates,
+    TaskFileNetSource,
 )
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
@@ -22,8 +26,6 @@ from docling_jobkit.convert.materialization import (
     SourceLimitExceededError,
     normalize_max_file_size,
 )
-from docling_jobkit.datamodel.filenet_coords import FileNetCoordinates
-from docling_jobkit.datamodel.task_sources import TaskFileNetSource
 
 _log = logging.getLogger(__name__)
 

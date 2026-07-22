@@ -13,7 +13,7 @@ from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 
 
 def _is_authentication_error(exc: BaseException) -> bool:
-    from docling_jobkit.connectors.google_cloud_storage_helper import (
+    from docling_jobkit.connectors.google_cloud_storage.helper import (
         is_google_cloud_storage_authentication_error,
     )
 
@@ -33,7 +33,7 @@ class GoogleCloudStorageTargetProcessor(BaseTargetProcessor):
         "Google Cloud Storage", _is_authentication_error
     )
     def _initialize(self):
-        from docling_jobkit.connectors.google_cloud_storage_helper import get_client
+        from docling_jobkit.connectors.google_cloud_storage.helper import get_client
 
         self._client = get_client(self._coords)
 

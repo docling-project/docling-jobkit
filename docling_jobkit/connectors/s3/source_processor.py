@@ -12,9 +12,10 @@ from docling.datamodel.service.sources import S3Coordinates
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.errors import map_connector_authentication_errors
-from docling_jobkit.connectors.s3_helper import (
+from docling_jobkit.connectors.s3.helper import (
     get_s3_connection,
     is_s3_authentication_error,
+    is_s3_unavailable_error,
 )
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
@@ -26,6 +27,15 @@ from docling_jobkit.convert.materialization import (
 )
 
 _log = logging.getLogger(__name__)
+
+_map_s3_source_errors = map_connector_authentication_errors(
+    "S3",
+    is_s3_authentication_error,
+    source=True,
+    source_kind="s3",
+    is_unavailable_error=is_s3_unavailable_error,
+    unavailable_message="Source object storage could not be reached.",
+)
 
 
 class S3FileIdentifier(BaseModel):
@@ -43,14 +53,14 @@ class S3SourceProcessor(BaseSourceProcessor[S3Coordinates, S3FileIdentifier]):
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
         return (S3SourceRequest,)
 
-    @map_connector_authentication_errors("S3", is_s3_authentication_error, source=True)
+    @_map_s3_source_errors
     def _initialize(self):
         self._client, self._resource = get_s3_connection(self._coords)
 
     def _finalize(self):
         self._client.close()
 
-    @map_connector_authentication_errors("S3", is_s3_authentication_error, source=True)
+    @_map_s3_source_errors
     def _list_document_ids(self) -> Iterator[S3FileIdentifier]:
         paginator = self._client.get_paginator("list_objects_v2")
         yielded = 0
@@ -70,7 +80,7 @@ class S3SourceProcessor(BaseSourceProcessor[S3Coordinates, S3FileIdentifier]):
                     last_modified=last_modified,
                 )
 
-    @map_connector_authentication_errors("S3", is_s3_authentication_error, source=True)
+    @_map_s3_source_errors
     def _count_documents(self) -> int:
         total = 0
         max_num_elements = self._coords.max_num_elements
@@ -107,7 +117,7 @@ class S3SourceProcessor(BaseSourceProcessor[S3Coordinates, S3FileIdentifier]):
 
     # ----------------- Document fetch -----------------
 
-    @map_connector_authentication_errors("S3", is_s3_authentication_error, source=True)
+    @_map_s3_source_errors
     def _fetch_document_by_id(
         self,
         identifier: S3FileIdentifier,

@@ -3,25 +3,8 @@ from typing import Annotated, Optional
 
 import typer
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import ValidationError
 from rich.console import Console
-
-from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.requests import (
-    AzureBlobSourceRequest,
-    FileSourceRequest,
-    GoogleCloudStorageSourceRequest,
-    GoogleDriveSourceRequest,
-    HttpSourceRequest,
-    S3SourceRequest,
-)
-from docling.datamodel.service.targets import (
-    AzureBlobTarget,
-    GoogleCloudStorageTarget,
-    GoogleDriveTarget,
-    S3Target,
-    ZipTarget,
-)
 
 from docling_jobkit.connectors.auth_context import allow_interactive_auth
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
@@ -32,10 +15,6 @@ from docling_jobkit.convert.manager import (
 )
 from docling_jobkit.convert.results_processor import ResultsProcessor
 from docling_jobkit.datamodel.dynamic_unions import build_job_config_model
-from docling_jobkit.datamodel.task_sources import (
-    TaskLocalPathSource,
-)
-from docling_jobkit.datamodel.task_targets import LocalPathTarget
 
 console = Console()
 err_console = Console(stderr=True)
@@ -48,32 +27,7 @@ app = typer.Typer(
     pretty_exceptions_enable=False,
 )
 
-JobTaskSource = Annotated[
-    FileSourceRequest
-    | HttpSourceRequest
-    | TaskLocalPathSource
-    | S3SourceRequest
-    | AzureBlobSourceRequest
-    | GoogleDriveSourceRequest
-    | GoogleCloudStorageSourceRequest,
-    Field(discriminator="kind"),
-]
-
-JobTaskTarget = Annotated[
-    ZipTarget
-    | LocalPathTarget
-    | S3Target
-    | AzureBlobTarget
-    | GoogleDriveTarget
-    | GoogleCloudStorageTarget,
-    Field(discriminator="kind"),
-]
-
-
-class JobConfig(BaseModel):
-    options: ConvertDocumentsOptions = ConvertDocumentsOptions()
-    sources: list[JobTaskSource]
-    target: JobTaskTarget
+JobConfig = build_job_config_model()
 
 
 @app.command(no_args_is_help=True)

@@ -12,10 +12,10 @@ from docling.datamodel.service.sources import (
 )
 
 from docling_jobkit.connectors.errors import SourceConnectorAuthenticationError
-from docling_jobkit.connectors.google_cloud_storage_helper import (
+from docling_jobkit.connectors.google_cloud_storage.helper import (
     GoogleCloudStorageFileIdentifier,
 )
-from docling_jobkit.connectors.google_cloud_storage_source_processor import (
+from docling_jobkit.connectors.google_cloud_storage.source_processor import (
     GoogleCloudStorageSourceProcessor,
 )
 from docling_jobkit.convert.materialization import SourceLimitExceededError

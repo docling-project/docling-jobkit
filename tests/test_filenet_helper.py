@@ -4,8 +4,12 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 import requests
 
-from docling_jobkit.connectors import filenet_helper
-from docling_jobkit.connectors.filenet_helper import (
+from docling_jobkit.connectors.errors import (
+    SourceConnectorPolicyError,
+    SourceConnectorUnavailableError,
+)
+from docling_jobkit.connectors.filenet import helper as filenet_helper
+from docling_jobkit.connectors.filenet.helper import (
     _execute_graphql_query,
     _with_exponential_retry,
     list_folder_documents,
@@ -37,7 +41,7 @@ def test_exp_backoff_retries_on_transient_error_then_succeeds(
 ) -> None:
     """It should not fail immediately and retry if transient"""
     fn = MagicMock(side_effect=[transient_exc, "ok"])
-    with patch("docling_jobkit.connectors.filenet_helper.time.sleep"):
+    with patch("docling_jobkit.connectors.filenet.helper.time.sleep"):
         assert _with_exponential_retry(fn, "op") == "ok"
 
     assert fn.call_count == 2
@@ -46,8 +50,8 @@ def test_exp_backoff_retries_on_transient_error_then_succeeds(
 def test_exp_backoff_raises_immediately_on_4xx() -> None:
     """Any 4xx error (except 429) is not considered a transient error so it should raise immediately"""
     fn = MagicMock(side_effect=_make_http_exc(403))
-    with patch("docling_jobkit.connectors.filenet_helper.time.sleep"):
-        with pytest.raises(requests.HTTPError):
+    with patch("docling_jobkit.connectors.filenet.helper.time.sleep"):
+        with pytest.raises(SourceConnectorPolicyError):
             _with_exponential_retry(fn, "op")
 
     fn.assert_called_once()
@@ -56,8 +60,8 @@ def test_exp_backoff_raises_immediately_on_4xx() -> None:
 def test_exp_backoff_sequence() -> None:
     """It should do proper exp backoff wait properly (increases each time)"""
     fn = MagicMock(side_effect=requests.Timeout("timed out"))
-    with patch("docling_jobkit.connectors.filenet_helper.time.sleep") as mock_sleep:
-        with pytest.raises(requests.Timeout):
+    with patch("docling_jobkit.connectors.filenet.helper.time.sleep") as mock_sleep:
+        with pytest.raises(SourceConnectorUnavailableError):
             _with_exponential_retry(fn, "op")
 
     assert mock_sleep.call_args_list == [call(0.5), call(1.0), call(2.0)]
@@ -71,9 +75,9 @@ def test_graphql_errors_payload_raises_immediately_without_retry() -> None:
     ok_res = MagicMock()
     ok_res.json.return_value = {"errors": [{"message": "Invalid identifier"}]}
 
-    with patch("docling_jobkit.connectors.filenet_helper.time.sleep") as mock_sleep:
+    with patch("docling_jobkit.connectors.filenet.helper.time.sleep") as mock_sleep:
         with patch(
-            "docling_jobkit.connectors.filenet_helper.requests.post",
+            "docling_jobkit.connectors.filenet.helper.requests.post",
             return_value=ok_res,
         ):
             with pytest.raises(RuntimeError, match="GraphQL query failed"):

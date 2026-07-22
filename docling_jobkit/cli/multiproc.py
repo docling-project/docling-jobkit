@@ -3,11 +3,11 @@ import multiprocessing as mp
 import queue
 import time
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Optional, Protocol, cast
 
 import typer
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ValidationError
 from rich.console import Console
 from rich.progress import (
     BarColumn,
@@ -18,21 +18,6 @@ from rich.progress import (
 )
 
 from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.requests import (
-    AzureBlobSourceRequest,
-    FileSourceRequest,
-    GoogleCloudStorageSourceRequest,
-    GoogleDriveSourceRequest,
-    HttpSourceRequest,
-    S3SourceRequest,
-)
-from docling.datamodel.service.targets import (
-    AzureBlobTarget,
-    GoogleCloudStorageTarget,
-    GoogleDriveTarget,
-    S3Target,
-    ZipTarget,
-)
 
 from docling_jobkit.connectors.auth_context import allow_interactive_auth
 from docling_jobkit.connectors.source_processor import DocumentChunk
@@ -45,10 +30,6 @@ from docling_jobkit.convert.manager import (
 )
 from docling_jobkit.convert.results_processor import ResultsProcessor
 from docling_jobkit.datamodel.dynamic_unions import build_job_config_model
-from docling_jobkit.datamodel.task_sources import (
-    TaskLocalPathSource,
-)
-from docling_jobkit.datamodel.task_targets import LocalPathTarget
 
 console = Console()
 err_console = Console(stderr=True)
@@ -61,32 +42,13 @@ app = typer.Typer(
     pretty_exceptions_enable=False,
 )
 
-JobTaskSource = Annotated[
-    FileSourceRequest
-    | HttpSourceRequest
-    | TaskLocalPathSource
-    | S3SourceRequest
-    | AzureBlobSourceRequest
-    | GoogleDriveSourceRequest
-    | GoogleCloudStorageSourceRequest,
-    Field(discriminator="kind"),
-]
-
-JobTaskTarget = Annotated[
-    ZipTarget
-    | LocalPathTarget
-    | S3Target
-    | AzureBlobTarget
-    | GoogleDriveTarget
-    | GoogleCloudStorageTarget,
-    Field(discriminator="kind"),
-]
+JobConfig = build_job_config_model()
 
 
-class JobConfig(BaseModel):
-    options: ConvertDocumentsOptions = ConvertDocumentsOptions()
-    sources: list[JobTaskSource]
-    target: JobTaskTarget
+class _JobConfig(Protocol):
+    options: ConvertDocumentsOptions
+    sources: list[BaseModel]
+    target: BaseModel
 
 
 class BatchResult(BaseModel):
@@ -101,7 +63,7 @@ class BatchResult(BaseModel):
     error_message: Optional[str] = None
 
 
-def _load_config(config_file: Path, allow_external_plugins: bool = False) -> JobConfig:
+def _load_config(config_file: Path, allow_external_plugins: bool = False) -> _JobConfig:
     """Load and validate configuration file.
 
     The config model is built from the connector factories so that, when external
@@ -112,7 +74,7 @@ def _load_config(config_file: Path, allow_external_plugins: bool = False) -> Job
         with config_file.open("r") as f:
             raw_data = yaml.safe_load(f)
         config_model = build_job_config_model(allow_external_plugins)
-        return config_model(**raw_data)
+        return cast(_JobConfig, config_model(**raw_data))
     except FileNotFoundError:
         err_console.print(f"[red]❌ File not found: {config_file}[/red]")
         raise typer.Exit(1)
@@ -124,10 +86,10 @@ def _load_config(config_file: Path, allow_external_plugins: bool = False) -> Job
 
 @allow_interactive_auth()
 def _process_source(
-    source: JobTaskSource,
+    source: BaseModel,
     source_idx: int,
     total_sources: int,
-    config: JobConfig,
+    config: _JobConfig,
     batch_size: int,
     num_processes: int,
     artifacts_path: Optional[Path],
@@ -284,7 +246,7 @@ def _display_summary(
 @allow_interactive_auth()
 def process_batch(
     chunk: DocumentChunk,
-    target: JobTaskTarget,
+    target: BaseModel,
     options: ConvertDocumentsOptions,
     artifacts_path: Optional[Path],
     enable_remote_services: bool,

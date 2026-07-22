@@ -8,7 +8,12 @@ from typing import Callable, Iterator, TypeVar
 
 import requests
 
-from docling_jobkit.datamodel.filenet_coords import FileNetCoordinates
+from docling_jobkit.connectors.errors import (
+    SourceConnectorPolicyError,
+    SourceConnectorUnavailableError,
+)
+from docling_jobkit.connectors.filenet.errors import FileNetGraphQLError
+from docling_jobkit.connectors.filenet.models import FileNetCoordinates
 
 _log = logging.getLogger(__name__)
 
@@ -17,16 +22,6 @@ _BACKOFF_BASE_S = 0.5
 _RETRYABLE_4XX_STATUS = {429}
 
 T = TypeVar("T")
-
-
-class FileNetGraphQLError(RuntimeError):
-    """Non-retryable failure reported by the FileNet GraphQL API itself.
-
-    Raised for a 200-OK response whose body carries an ``errors`` payload
-    (FileNet's convention for surfacing bad credentials, missing
-    repository/folder/document identifiers, and permission failures), so it
-    is classified separately from transport-level (HTTP status) errors.
-    """
 
 
 # I dont think we need to add jitter/randomness for the cli case but maybe for distributed version
@@ -41,9 +36,12 @@ def _with_exponential_retry(fn: Callable[[], T], operation: str) -> T:
                 result.raise_for_status()
 
             return result
-        except (requests.Timeout, requests.ConnectionError):
+        except (requests.Timeout, requests.ConnectionError) as exc:
             if attempt == _MAX_RETRIES:
-                raise
+                raise SourceConnectorUnavailableError(
+                    "Source document could not be reached.",
+                    source_kind="filenet",
+                ) from exc
         except requests.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else None
             # 4xx are permanent (except 429) so we bail immediately
@@ -52,9 +50,25 @@ def _with_exponential_retry(fn: Callable[[], T], operation: str) -> T:
                 and status < 500
                 and status not in _RETRYABLE_4XX_STATUS
             ):
-                raise
+                error_type = (
+                    SourceConnectorPolicyError
+                    if status in {401, 403, 404, 413, 415, 422}
+                    else SourceConnectorUnavailableError
+                )
+                raise error_type(
+                    str(exc),
+                    source_kind="filenet",
+                    **(
+                        {"retryable": False}
+                        if error_type is SourceConnectorUnavailableError
+                        else {}
+                    ),
+                ) from exc
             if attempt == _MAX_RETRIES:
-                raise
+                raise SourceConnectorUnavailableError(
+                    str(exc),
+                    source_kind="filenet",
+                ) from exc
 
         wait = _BACKOFF_BASE_S * (2**attempt)
         logging.warning(

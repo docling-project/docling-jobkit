@@ -22,6 +22,9 @@ This guide uses small source and target examples.
   object — `get_source_processor()` / `get_target_processor()` are thin wrappers
   over it.
 - Connectors are found through the `docling_jobkit` setuptools entry-point group.
+- Built-ins keep their processors, helpers, connector-owned models, and custom
+  errors together under `docling_jobkit.connectors.<connector>`; core modules
+  import only the shared contracts and factories.
 
 ## Checklist
 
@@ -122,7 +125,7 @@ class ArchiveSourceProcessor(BaseSourceProcessor[ArchiveSource, str]):
             yield DocumentStream(name=name, stream=BytesIO(content))
 ```
 
-See `s3_source_processor.py` for connector-native chunking. The in-test fake
+See `connectors/s3/source_processor.py` for connector-native chunking. The in-test fake
 source connector exercises this same registration, task round-trip, dispatch,
 and expansion contract.
 

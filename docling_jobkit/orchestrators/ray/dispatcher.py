@@ -438,7 +438,9 @@ class RayTaskDispatcher:
                 phase=FailurePhase.ORCHESTRATION,
                 details={
                     "task_size": str(task_size),
-                    "target_kind": task.target.kind,
+                    "target_kind": getattr(
+                        task.target, "kind", type(task.target).__name__
+                    ),
                 },
             )
             error_message = failure.message

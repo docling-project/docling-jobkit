@@ -3,8 +3,8 @@ from typing import BinaryIO
 
 from pydantic import BaseModel
 
+from docling_jobkit.connectors.local_path.models import LocalPathTarget
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
-from docling_jobkit.datamodel.task_targets import LocalPathTarget
 
 
 class LocalPathTargetProcessor(BaseTargetProcessor):

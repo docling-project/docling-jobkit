@@ -15,7 +15,7 @@ from docling.datamodel.service.requests import (
     S3SourceRequest,
 )
 from docling.datamodel.service.sources import S3Coordinates
-from docling.datamodel.service.targets import InBodyTarget, S3Target
+from docling.datamodel.service.targets import GoogleDriveTarget, InBodyTarget, S3Target
 
 from docling_jobkit.connectors.connector_factory import (
     SourceConnectorFactory,
@@ -24,6 +24,8 @@ from docling_jobkit.connectors.connector_factory import (
     get_target_connector_factory,
 )
 from docling_jobkit.connectors.errors import SourceConnectorConfigError
+from docling_jobkit.connectors.filenet.models import TaskFileNetSource
+from docling_jobkit.connectors.local_path.models import LocalPathTarget
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     DocumentChunk,
@@ -31,8 +33,6 @@ from docling_jobkit.connectors.source_processor import (
 )
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.datamodel.task import Task, validate_task, validate_task_json
-from docling_jobkit.datamodel.task_sources import TaskFileNetSource
-from docling_jobkit.datamodel.task_targets import GoogleDriveTarget, LocalPathTarget
 from docling_jobkit.orchestrators.serialization import dump_model_with_secrets
 
 
@@ -59,6 +59,7 @@ def test_builtin_target_connectors_registered():
         "local_path",
         "put",
         "google_drive",
+        "presigned_url",
     }
 
 

@@ -8,7 +8,7 @@ from azure.core.exceptions import ClientAuthenticationError, ResourceNotFoundErr
 from docling.datamodel.service.sources import AzureBlobCoordinates
 from docling_core.types.io import DocumentStream
 
-from docling_jobkit.connectors.azure_blob_source_processor import (
+from docling_jobkit.connectors.azure_blob.source_processor import (
     AzureBlobFileIdentifier,
     AzureBlobSourceProcessor,
 )

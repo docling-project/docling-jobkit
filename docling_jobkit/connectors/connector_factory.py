@@ -28,7 +28,10 @@ from pluggy import PluginManager
 from pydantic import BaseModel, Field
 from pydantic_core import PydanticUndefined
 
-from docling_jobkit.connectors.errors import SourceConnectorConfigError
+from docling_jobkit.connectors.errors import (
+    SourceConnectorConfigError,
+    TargetConnectorConfigError,
+)
 from docling_jobkit.connectors.source_processor import BaseSourceProcessor
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 
@@ -244,6 +247,51 @@ class SourceConnectorFactory(BaseConnectorFactory[BaseSourceProcessor]):
 class TargetConnectorFactory(BaseConnectorFactory[BaseTargetProcessor]):
     def __init__(self, plugin_name: str = PLUGIN_GROUP):
         super().__init__("target_connectors", plugin_name)
+
+    def supports(self, config: Mapping[str, Any] | BaseModel) -> bool:
+        kind = (
+            config.get("kind")
+            if isinstance(config, Mapping)
+            else getattr(config, "kind", None)
+        )
+        return isinstance(kind, str) and kind in self._config_types_by_kind
+
+    def validate_config(self, payload: Mapping[str, Any] | BaseModel) -> BaseModel:
+        values = (
+            payload
+            if isinstance(payload, Mapping)
+            else payload.model_dump(mode="python")
+            if isinstance(payload, BaseModel)
+            else {}
+        )
+        kind = values.get("kind")
+        if not isinstance(kind, str) or not kind:
+            raise TargetConnectorConfigError(
+                "Target connector config requires a non-empty string `kind`."
+            )
+
+        config_type = self._config_types_by_kind.get(kind)
+        if config_type is None:
+            raise TargetConnectorConfigError(
+                f"Target connector kind {kind!r} is not registered."
+            )
+        if type(payload) is config_type:
+            return payload
+
+        try:
+            return config_type.model_validate(values)
+        except Exception as exc:
+            meta = self._meta[config_type]
+            raise TargetConnectorConfigError(
+                f"Target connector kind {kind!r} registered by plugin "
+                f"{meta.plugin_name!r} ({meta.module}) has invalid configuration."
+            ) from exc
+
+    def result_mode(
+        self, config: Mapping[str, Any] | BaseModel
+    ) -> Literal["artifacts", "archive", "presigned"]:
+        normalized = self.validate_config(config)
+        return self._classes[type(normalized)].result_mode()
 
 
 @lru_cache(maxsize=None)

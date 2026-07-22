@@ -11,12 +11,42 @@ class ConnectorAuthenticationError(RuntimeError):
     """Safe, client-actionable connector authentication failure."""
 
 
-class SourceConnectorAuthenticationError(ConnectorAuthenticationError):
+class SourceConnectorError(RuntimeError):
+    """Safe source-connector failure for core error classification."""
+
+    def __init__(self, message: str, *, source_kind: str, retryable: bool):
+        super().__init__(message)
+        self.source_kind = source_kind
+        self.retryable = retryable
+
+
+class SourceConnectorAuthenticationError(
+    ConnectorAuthenticationError, SourceConnectorError
+):
     """Authentication failure while opening a task source."""
+
+    def __init__(self, message: str, *, source_kind: str = "connector"):
+        SourceConnectorError.__init__(
+            self, message, source_kind=source_kind, retryable=False
+        )
+
+
+class SourceConnectorPolicyError(SourceConnectorError):
+    def __init__(self, message: str, *, source_kind: str):
+        super().__init__(message, source_kind=source_kind, retryable=False)
+
+
+class SourceConnectorUnavailableError(SourceConnectorError):
+    def __init__(self, message: str, *, source_kind: str, retryable: bool = True):
+        super().__init__(message, source_kind=source_kind, retryable=retryable)
 
 
 class SourceConnectorConfigError(ValueError):
     """Safe failure while resolving or validating a task source config."""
+
+
+class TargetConnectorConfigError(ValueError):
+    """Safe failure while resolving or validating a task target config."""
 
 
 def map_connector_authentication_errors(
@@ -24,6 +54,9 @@ def map_connector_authentication_errors(
     is_authentication_error: Callable[[BaseException], bool],
     *,
     source: bool = False,
+    source_kind: str = "connector",
+    is_unavailable_error: Callable[[BaseException], bool] | None = None,
+    unavailable_message: str = "Source could not be reached.",
 ) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
     """Translate recognized SDK auth failures from a connector method."""
 
@@ -35,8 +68,19 @@ def map_connector_authentication_errors(
         )
         raise error_type(
             f"{connector_name} authentication failed; verify permissions and "
-            "supply valid credentials."
+            "supply valid credentials.",
+            **({"source_kind": source_kind} if source else {}),
         ) from exc
+
+    def translate_or_raise(exc: Exception) -> NoReturn:
+        if is_authentication_error(exc):
+            translate(exc)
+        if source and is_unavailable_error and is_unavailable_error(exc):
+            raise SourceConnectorUnavailableError(
+                unavailable_message,
+                source_kind=source_kind,
+            ) from exc
+        raise exc
 
     def decorator(func: Callable[_P, _R]) -> Callable[_P, _R]:
         if inspect.isgeneratorfunction(func):
@@ -46,9 +90,7 @@ def map_connector_authentication_errors(
                 try:
                     yield from func(*args, **kwargs)
                 except Exception as exc:
-                    if not is_authentication_error(exc):
-                        raise
-                    translate(exc)
+                    translate_or_raise(exc)
 
             return cast(Callable[_P, _R], generator_wrapper)
 
@@ -57,9 +99,7 @@ def map_connector_authentication_errors(
             try:
                 return func(*args, **kwargs)
             except Exception as exc:
-                if not is_authentication_error(exc):
-                    raise
-                translate(exc)
+                translate_or_raise(exc)
 
         return wrapper
 

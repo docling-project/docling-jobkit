@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from typing_extensions import override
 
 from docling.datamodel.base_models import DocumentStream
+from docling.datamodel.service.requests import GoogleCloudStorageSourceRequest
 from docling.datamodel.service.sources import (
     GoogleCloudStorageCoordinates,
 )
@@ -21,10 +22,9 @@ from docling_jobkit.convert.materialization import (
     SourceLimitExceededError,
     normalize_max_file_size,
 )
-from docling_jobkit.datamodel.task_sources import TaskGoogleCloudStorageSource
 
 if TYPE_CHECKING:
-    from docling_jobkit.connectors.google_cloud_storage_helper import (
+    from docling_jobkit.connectors.google_cloud_storage.helper import (
         GoogleCloudStorageFileIdentifier,
     )
 
@@ -32,7 +32,7 @@ _log = logging.getLogger(__name__)
 
 
 def _is_authentication_error(exc: BaseException) -> bool:
-    from docling_jobkit.connectors.google_cloud_storage_helper import (
+    from docling_jobkit.connectors.google_cloud_storage.helper import (
         is_google_cloud_storage_authentication_error,
     )
 
@@ -50,13 +50,13 @@ class GoogleCloudStorageSourceProcessor(
 
     @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
-        return (TaskGoogleCloudStorageSource,)
+        return (GoogleCloudStorageSourceRequest,)
 
     @map_connector_authentication_errors(
         "Google Cloud Storage", _is_authentication_error, source=True
     )
     def _initialize(self):
-        from docling_jobkit.connectors.google_cloud_storage_helper import get_client
+        from docling_jobkit.connectors.google_cloud_storage.helper import get_client
 
         self._client = get_client(self._coords)
 
@@ -67,7 +67,7 @@ class GoogleCloudStorageSourceProcessor(
         "Google Cloud Storage", _is_authentication_error, source=True
     )
     def _list_document_ids(self) -> Iterator[GoogleCloudStorageFileIdentifier]:
-        from docling_jobkit.connectors.google_cloud_storage_helper import (
+        from docling_jobkit.connectors.google_cloud_storage.helper import (
             GoogleCloudStorageFileIdentifier,
         )
 

@@ -18,7 +18,7 @@ from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.responses import PublicFailureInfo
-from docling.datamodel.service.targets import InBodyTarget
+from docling.datamodel.service.targets import InBodyTarget, ZipTarget
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
 from docling_jobkit.datamodel.chunking import (
@@ -26,7 +26,6 @@ from docling_jobkit.datamodel.chunking import (
     ChunkingOptionType,
 )
 from docling_jobkit.datamodel.task_meta import TaskStatus
-from docling_jobkit.datamodel.task_targets import TaskTarget
 
 
 def _hydrate_source(value: Any, info: ValidationInfo) -> Any:
@@ -48,6 +47,31 @@ def _hydrate_source(value: Any, info: ValidationInfo) -> Any:
 TaskSource = Annotated[
     DocumentStream | SerializeAsAny[BaseModel],
     BeforeValidator(_hydrate_source),
+]
+
+
+def _hydrate_target(value: Any, info: ValidationInfo) -> Any:
+    if isinstance(value, (InBodyTarget, ZipTarget)):
+        return value
+    if isinstance(value, Mapping):
+        if value.get("kind") == "inbody":
+            return InBodyTarget.model_validate(value)
+        if value.get("kind") == "zip":
+            return ZipTarget.model_validate(value)
+
+    from docling_jobkit.connectors.connector_factory import (
+        get_target_connector_factory,
+    )
+
+    allow_external_plugins = bool(
+        (info.context or {}).get("allow_external_plugins", False)
+    )
+    return get_target_connector_factory(allow_external_plugins).validate_config(value)
+
+
+TaskTarget = Annotated[
+    InBodyTarget | ZipTarget | SerializeAsAny[BaseModel],
+    BeforeValidator(_hydrate_target),
 ]
 
 

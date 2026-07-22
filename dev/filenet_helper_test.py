@@ -5,12 +5,12 @@ from pathlib import Path
 
 from pydantic import SecretStr
 
-from docling_jobkit.connectors.filenet_helper import (
+from docling_jobkit.connectors.filenet.helper import (
     download_document,
     get_document_metadata,
     get_filenet_auth_header,
 )
-from docling_jobkit.datamodel.filenet_coords import FileNetCoordinates
+from docling_jobkit.connectors.filenet.models import FileNetCoordinates
 
 # should change to env vars
 BASE_URL = "xxx"

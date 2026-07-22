@@ -21,7 +21,7 @@ from docling.datamodel.service.requests import (
     FileSourceRequest as FileSource,
     S3SourceRequest as S3Coordinates,
 )
-from docling.datamodel.service.targets import PresignedUrlTarget, S3Target
+from docling.datamodel.service.targets import InBodyTarget, PresignedUrlTarget, S3Target
 from docling.utils.model_downloader import download_models
 
 from docling_jobkit.convert.manager import (
@@ -30,7 +30,6 @@ from docling_jobkit.convert.manager import (
 )
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.task_meta import TaskStatus, TaskType
-from docling_jobkit.datamodel.task_targets import InBodyTarget
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.ray.orchestrator import (
     RayOrchestrator,

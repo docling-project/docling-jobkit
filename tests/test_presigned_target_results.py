@@ -18,14 +18,15 @@ from docling.datamodel.service.targets import (
     AzureBlobTarget,
     GoogleCloudStorageTarget,
     PresignedUrlTarget,
+    PutTarget,
     S3Target,
 )
 from docling_core.types.doc import ImageRefMode
 from docling_core.types.doc.document import DoclingDocument
 
 from docling_jobkit.config.target_config import S3PresignedConfig
-from docling_jobkit.connectors.artifact_paths import build_s3_source_key
-from docling_jobkit.connectors.s3_helper import check_target_has_source_converted
+from docling_jobkit.connectors.artifact_paths import hash_path_component
+from docling_jobkit.connectors.s3.helper import check_target_has_source_converted
 from docling_jobkit.convert.results import process_exportable_results
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
@@ -219,7 +220,7 @@ def test_process_exportable_results_returns_presigned_artifact_result(
 ):
     fake_client = _FakeS3Client()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        "docling_jobkit.connectors.s3.target_processor.get_s3_connection",
         lambda _coords: (fake_client, object()),
     )
 
@@ -270,7 +271,7 @@ def test_process_exportable_results_omits_default_tenant_id_from_object_metadata
 ):
     fake_client = _FakeS3Client()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        "docling_jobkit.connectors.s3.target_processor.get_s3_connection",
         lambda _coords: (fake_client, object()),
     )
     task = _make_task().model_copy(update={"metadata": {"user_id": "user-1"}})
@@ -298,7 +299,7 @@ def test_process_exportable_results_reuses_presigned_artifact_result_for_multi_d
 ):
     fake_client = _FakeS3Client()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        "docling_jobkit.connectors.s3.target_processor.get_s3_connection",
         lambda _coords: (fake_client, object()),
     )
 
@@ -324,7 +325,7 @@ def test_presigned_target_duplicate_source_uris_share_storage_keys(
 ):
     fake_client = _FakeS3Client()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        "docling_jobkit.connectors.s3.target_processor.get_s3_connection",
         lambda _coords: (fake_client, object()),
     )
 
@@ -381,7 +382,7 @@ def test_process_exportable_results_returns_remote_target_result_for_s3_target(
 ):
     fake_client = _FakeS3Client()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        "docling_jobkit.connectors.s3.target_processor.get_s3_connection",
         lambda _coords: (fake_client, object()),
     )
     task = _make_task().model_copy(
@@ -419,11 +420,11 @@ def test_process_exportable_results_returns_remote_target_result_for_azure_targe
     service_client = _FakeAzureServiceClient()
     container_client = _FakeAzureContainerClient()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.azure_blob_helper.get_azure_blob_connection",
+        "docling_jobkit.connectors.azure_blob.helper.get_azure_blob_connection",
         lambda _coords: (service_client, container_client),
     )
     monkeypatch.setattr(
-        "docling_jobkit.connectors.azure_blob_upload_support.upload_azure_blob_file",
+        "docling_jobkit.connectors.azure_blob.upload_support.upload_azure_blob_file",
         lambda blob_client, filename, content_type: container_client.uploads.append(
             {
                 "key": blob_client.name,
@@ -433,7 +434,7 @@ def test_process_exportable_results_returns_remote_target_result_for_azure_targe
         ),
     )
     monkeypatch.setattr(
-        "docling_jobkit.connectors.azure_blob_upload_support.upload_azure_blob_object",
+        "docling_jobkit.connectors.azure_blob.upload_support.upload_azure_blob_object",
         lambda blob_client, obj, content_type: container_client.uploads.append(
             {
                 "key": blob_client.name,
@@ -471,7 +472,7 @@ def test_process_exportable_results_returns_remote_target_result_for_gcs_target(
 ):
     fake_client = _FakeGcsClient()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.google_cloud_storage_helper.get_client",
+        "docling_jobkit.connectors.google_cloud_storage.helper.get_client",
         lambda _coords: fake_client,
     )
     task = _make_task().model_copy(
@@ -490,9 +491,34 @@ def test_process_exportable_results_returns_remote_target_result_for_gcs_target(
     )
 
     assert isinstance(task_result.result, RemoteTargetResult)
+
     uploaded_keys = [item["key"] for item in fake_client.uploads]
     assert len(uploaded_keys) == 2
     assert all(str(key).startswith("converted/") for key in uploaded_keys)
+
+
+def test_process_exportable_results_dispatches_put_target_through_factory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    response = MagicMock()
+    put = MagicMock(return_value=response)
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.http.target_processor.httpx.put", put
+    )
+    task = _make_task().model_copy(
+        update={"target": PutTarget(url="https://example.com/result")}
+    )
+
+    task_result = process_exportable_results(
+        task=task,
+        exportable_documents=[_make_exportable_document()],
+        work_dir=tmp_path,
+    )
+
+    assert isinstance(task_result.result, RemoteTargetResult)
+    put.assert_called_once()
+    response.raise_for_status.assert_called_once()
 
 
 def test_presigned_callbacks_emit_document_completed_after_uploads(
@@ -508,7 +534,7 @@ def test_presigned_callbacks_emit_document_completed_after_uploads(
 
     fake_client = _RecordingS3Client()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        "docling_jobkit.connectors.s3.target_processor.get_s3_connection",
         lambda _coords: (fake_client, object()),
     )
 
@@ -552,7 +578,7 @@ def test_document_completed_num_characters_uses_placeholder_image_mode(
 ):
     fake_client = _FakeS3Client()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        "docling_jobkit.connectors.s3.target_processor.get_s3_connection",
         lambda _coords: (fake_client, object()),
     )
     _FakeDoc.markdown_image_modes = []
@@ -583,7 +609,7 @@ def test_presigned_remote_exports_release_document_references_and_cleanup_temp_d
 ):
     fake_client = _FakeS3Client()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        "docling_jobkit.connectors.s3.target_processor.get_s3_connection",
         lambda _coords: (fake_client, object()),
     )
     exportable_documents = [
@@ -614,7 +640,7 @@ def test_presigned_upload_failure_becomes_failed_document_callback(
 
     fake_client = _FailingS3Client()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        "docling_jobkit.connectors.s3.target_processor.get_s3_connection",
         lambda _coords: (fake_client, object()),
     )
 
@@ -659,7 +685,7 @@ def test_s3_target_uses_distinct_task_scoped_keys_for_same_basename_sources(
 ):
     fake_client = _FakeS3Client()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        "docling_jobkit.connectors.s3.target_processor.get_s3_connection",
         lambda _coords: (fake_client, object()),
     )
     task = Task(
@@ -705,7 +731,7 @@ def test_s3_target_uses_s3_source_coordinates_hash_for_s3_inputs(
 ):
     fake_client = _FakeS3Client()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        "docling_jobkit.connectors.s3.target_processor.get_s3_connection",
         lambda _coords: (fake_client, object()),
     )
     task = Task(
@@ -760,7 +786,15 @@ def test_check_target_has_source_converted_uses_hashed_source_root(
         bucket="source-bucket",
         key_prefix="incoming/documents",
     )
-    expected_source_hash = build_s3_source_key(source_coords)
+    expected_source_hash = hash_path_component(
+        "|".join(
+            [
+                source_coords.endpoint.strip(),
+                source_coords.bucket.strip(),
+                source_coords.key_prefix.strip("/"),
+            ]
+        )
+    )
 
     seen_prefixes: list[str] = []
 
@@ -772,7 +806,7 @@ def test_check_target_has_source_converted_uses_hashed_source_root(
             return _FakePaginator()
 
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_helper.get_s3_connection",
+        "docling_jobkit.connectors.s3.helper.get_s3_connection",
         lambda _coords: (_FakeClient(), object()),
     )
 
@@ -781,11 +815,11 @@ def test_check_target_has_source_converted_uses_hashed_source_root(
         return 1
 
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_helper.count_s3_objects",
+        "docling_jobkit.connectors.s3.helper.count_s3_objects",
         _fake_count,
     )
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_helper.get_keys_s3_objects_as_set",
+        "docling_jobkit.connectors.s3.helper.get_keys_s3_objects_as_set",
         lambda _resource, _bucket, prefix: {
             f"{prefix}paper.json",
         },
@@ -807,7 +841,7 @@ def test_process_exportable_results_tracks_partial_success_counts(
 ):
     fake_client = _FakeS3Client()
     monkeypatch.setattr(
-        "docling_jobkit.connectors.s3_target_processor.get_s3_connection",
+        "docling_jobkit.connectors.s3.target_processor.get_s3_connection",
         lambda _coords: (fake_client, object()),
     )
 

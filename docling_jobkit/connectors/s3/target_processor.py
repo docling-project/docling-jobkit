@@ -7,11 +7,11 @@ from docling.datamodel.service.sources import S3Coordinates
 from docling.datamodel.service.targets import S3Target
 
 from docling_jobkit.connectors.errors import map_connector_authentication_errors
-from docling_jobkit.connectors.s3_helper import (
+from docling_jobkit.connectors.s3.helper import (
     get_s3_connection,
     is_s3_authentication_error,
 )
-from docling_jobkit.connectors.s3_upload_support import (
+from docling_jobkit.connectors.s3.upload_support import (
     upload_s3_file,
     upload_s3_object,
 )

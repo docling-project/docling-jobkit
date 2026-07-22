@@ -20,6 +20,10 @@ class HttpPutTargetProcessor(BaseTargetProcessor):
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
         return (PutTarget,)
 
+    @classmethod
+    def result_mode(cls):
+        return "archive"
+
     def __init__(
         self, target: PutTarget, *, max_retries: int = 3, retry_delay: float = 1.0
     ):

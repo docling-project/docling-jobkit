@@ -15,6 +15,7 @@ from docling.datamodel.base_models import ConversionStatus, InputFormat
 if TYPE_CHECKING:
     pass
 from docling.datamodel.service.requests import FileSourceRequest, HttpSourceRequest
+from docling.datamodel.service.targets import InBodyTarget
 from docling.document_converter import PdfFormatOption
 from docling_core.types.doc import DoclingDocument
 
@@ -36,7 +37,6 @@ from docling_jobkit.datamodel.result import (
 )
 from docling_jobkit.datamodel.task import Task, TaskSource
 from docling_jobkit.datamodel.task_meta import TaskType
-from docling_jobkit.datamodel.task_targets import InBodyTarget
 from docling_jobkit.orchestrators.base_orchestrator import BaseOrchestrator
 from docling_jobkit.orchestrators.rq.orchestrator import (
     RQOrchestrator,

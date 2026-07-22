@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, SecretStr
 
@@ -47,7 +47,6 @@ class FileNetCoordinates(BaseModel):
             examples=["/docling-test", "{FOLDER-ID-GUID}"],
         ),
     ] = None
-
     document_id: Annotated[
         str | None,
         Field(
@@ -58,7 +57,6 @@ class FileNetCoordinates(BaseModel):
             ),
         ),
     ] = None
-
     max_num_elements: Annotated[
         int | None,
         Field(
@@ -71,4 +69,8 @@ class FileNetCoordinates(BaseModel):
     ] = None
 
 
-__all__ = ["FileNetCoordinates"]
+class TaskFileNetSource(FileNetCoordinates):
+    kind: Literal["filenet"] = "filenet"
+
+
+__all__ = ["FileNetCoordinates", "TaskFileNetSource"]

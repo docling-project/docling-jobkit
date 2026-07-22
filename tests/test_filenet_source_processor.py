@@ -7,12 +7,13 @@ import requests
 
 from docling_core.types.io import DocumentStream
 
-from docling_jobkit.connectors.filenet_source_processor import (
+from docling_jobkit.connectors.errors import SourceConnectorUnavailableError
+from docling_jobkit.connectors.filenet.models import FileNetCoordinates
+from docling_jobkit.connectors.filenet.source_processor import (
     FileNetFileIdentifier,
     FileNetSourceProcessor,
 )
 from docling_jobkit.convert.materialization import SourceLimitExceededError
-from docling_jobkit.datamodel.filenet_coords import FileNetCoordinates
 
 # Note: Same with GCP + Azure, we need to build actual integration tests at some point. S3 uses Minio
 
@@ -29,11 +30,11 @@ def filenet_coords() -> FileNetCoordinates:
 
 def test_initialize_does_not_log_connected_on_probe_failure(caplog) -> None:
     processor = FileNetSourceProcessor(MagicMock())
-    with patch("docling_jobkit.connectors.filenet_helper.time.sleep"):
+    with patch("docling_jobkit.connectors.filenet.helper.time.sleep"):
         with patch(
             "requests.post", side_effect=requests.ConnectionError("DNS failure")
         ):
-            with pytest.raises(requests.ConnectionError):
+            with pytest.raises(SourceConnectorUnavailableError):
                 processor._initialize()
 
     assert "Connected to FileNet" not in caplog.text
@@ -84,7 +85,7 @@ def test_filenet_list_respects_max_num_elements(filenet_coords):
     ]
 
     with patch(
-        "docling_jobkit.connectors.filenet_source_processor.list_folder_documents",
+        "docling_jobkit.connectors.filenet.source_processor.list_folder_documents",
         return_value=iter(mock_folder_docs),
     ):
         doc_ids = list(processor._list_document_ids())
@@ -103,7 +104,7 @@ def test_filenet_count_clips_to_max_num_elements(filenet_coords):
     mock_folder_docs = [{"id": f"{{DOC-{i}}}", "name": f"doc{i}.pdf"} for i in range(5)]
 
     with patch(
-        "docling_jobkit.connectors.filenet_source_processor.list_folder_documents",
+        "docling_jobkit.connectors.filenet.source_processor.list_folder_documents",
         return_value=iter(mock_folder_docs),
     ):
         count = processor._count_documents()
@@ -142,7 +143,7 @@ def test_filenet_iterate_documents_respects_max_num_elements(filenet_coords):
     ]
 
     with patch(
-        "docling_jobkit.connectors.filenet_source_processor.list_folder_documents",
+        "docling_jobkit.connectors.filenet.source_processor.list_folder_documents",
         return_value=iter(mock_folder_docs),
     ):
         processor._fetch_document_by_id = MagicMock(
@@ -202,11 +203,11 @@ def test_filenet_fetch_logs_and_reraises_error(filenet_coords, caplog):
         download_url="/content?id={DOC-MISSING}",
     )
 
-    with patch("docling_jobkit.connectors.filenet_helper.time.sleep"):
+    with patch("docling_jobkit.connectors.filenet.helper.time.sleep"):
         with patch(
             "requests.get",
             side_effect=requests.HTTPError("404 Not Found"),
         ):
             with caplog.at_level(logging.WARNING):
-                with pytest.raises(requests.HTTPError):
+                with pytest.raises(SourceConnectorUnavailableError):
                     processor._fetch_document_by_id(identifier)
