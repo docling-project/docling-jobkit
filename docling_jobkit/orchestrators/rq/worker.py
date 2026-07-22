@@ -176,6 +176,9 @@ def _run_docling_task(
                         s3_presigned_config=orchestrator_config.s3_presigned_config,
                         callback_invoker=callback_invoker,
                         debug_error_details=orchestrator_config.debug_error_details,
+                        allow_external_plugins=(
+                            orchestrator_config.allow_external_plugins
+                        ),
                     )
             elif task.task_type == TaskType.CHUNK:
                 with phase_cm("process_chunk_results"):

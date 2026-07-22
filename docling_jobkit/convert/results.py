@@ -575,6 +575,7 @@ def _process_remote_exportable_results(
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
     start_time: float,
+    allow_external_plugins: bool,
 ) -> _ProcessedExportResults:
     output_dir = work_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -592,7 +593,7 @@ def _process_remote_exportable_results(
         else:
             num_failed += 1
 
-    target_factory = get_target_connector_factory()
+    target_factory = get_target_connector_factory(allow_external_plugins)
     target_mode = target_factory.result_mode(task.target)
 
     if target_mode == "presigned":
@@ -604,6 +605,7 @@ def _process_remote_exportable_results(
         presigned_documents: list[DocumentArtifactItem] = []
         with get_target_processor(
             task.target,
+            allow_external_plugins=allow_external_plugins,
             s3_presigned_config=s3_presigned_config,
             task=task,
         ) as base_target_processor:
@@ -660,7 +662,9 @@ def _process_remote_exportable_results(
         # the target processor applies its own prefix/root (S3 key_prefix, local
         # directory, Drive folder, …) when writing. Adding a new storage
         # connector therefore needs no change in this module.
-        with get_target_processor(task.target) as target_processor:
+        with get_target_processor(
+            task.target, allow_external_plugins=allow_external_plugins
+        ) as target_processor:
             for idx, exportable_document in enumerate(exportable_documents):
                 final_document, processed_doc, _ = _process_remote_document(
                     task=task,
@@ -735,6 +739,7 @@ def _process_exportable_results_internal(
     expected_doc_count: Optional[int] = None,
     start_time: Optional[float] = None,
     callback_mode: CallbackMode = CallbackMode.FULL,
+    allow_external_plugins: bool = False,
 ) -> _ProcessedExportResults:
     conversion_options = task.convert_options
     if conversion_options is None:
@@ -762,7 +767,7 @@ def _process_exportable_results_internal(
     export_doclang = OutputFormat.DOCLANG in conversion_options.to_formats
     export_dclx = OutputFormat.DCLX in conversion_options.to_formats
 
-    target_factory = get_target_connector_factory()
+    target_factory = get_target_connector_factory(allow_external_plugins)
     target_mode = (
         target_factory.result_mode(task.target)
         if target_factory.supports(task.target)
@@ -788,6 +793,7 @@ def _process_exportable_results_internal(
             image_export_mode=conversion_options.image_export_mode,
             md_page_break_placeholder=conversion_options.md_page_break_placeholder,
             start_time=start_time,
+            allow_external_plugins=allow_external_plugins,
         )
 
     finalized_documents = list(exportable_documents)
@@ -865,7 +871,9 @@ def _process_exportable_results_internal(
         )
 
         if target_mode == "archive":
-            with get_target_processor(task.target) as target_processor:
+            with get_target_processor(
+                task.target, allow_external_plugins=allow_external_plugins
+            ) as target_processor:
                 target_processor.upload_archive(file_path)
             task_result = RemoteTargetResult()
         else:
@@ -912,6 +920,7 @@ def process_exportable_results(
     expected_doc_count: Optional[int] = None,
     start_time: Optional[float] = None,
     callback_mode: CallbackMode = CallbackMode.FULL,
+    allow_external_plugins: bool = False,
 ) -> DoclingTaskResult:
     processed = _process_exportable_results_internal(
         task=task,
@@ -923,6 +932,7 @@ def process_exportable_results(
         expected_doc_count=expected_doc_count,
         start_time=start_time,
         callback_mode=callback_mode,
+        allow_external_plugins=allow_external_plugins,
     )
 
     return processed.task_result

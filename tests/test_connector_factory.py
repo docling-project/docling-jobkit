@@ -161,6 +161,10 @@ def test_external_connector_registration_and_union():
 
     proc = factory.create_instance(_OneDriveTarget(drive_id="d2"))
     assert isinstance(proc, _OneDriveTargetProcessor)
+    assert type(factory.validate_config({"kind": "onedrive", "drive_id": "d3"})) is (
+        _OneDriveTarget
+    )
+    assert factory.result_mode(parsed) == "artifacts"
 
 
 def test_single_member_union_returns_bare_type():
@@ -219,6 +223,13 @@ def _source_factory_with_fake() -> SourceConnectorFactory:
     return factory
 
 
+def _target_factory_with_fake() -> TargetConnectorFactory:
+    factory = TargetConnectorFactory()
+    factory.load_from_plugins()
+    factory.register(_OneDriveTargetProcessor, "fake_plugin", "fake_plugin.targets")
+    return factory
+
+
 def test_duplicate_kind_registration_and_plugin_processing_fail():
     class DuplicateFakeSource(BaseModel):
         kind: Literal["fake"] = "fake"
@@ -239,6 +250,24 @@ def test_duplicate_kind_registration_and_plugin_processing_fail():
             "second",
             "second.sources",
         )
+
+
+def test_target_registration_reuses_kind_checks():
+    class BadTarget(BaseModel):
+        kind: str = "bad"
+
+    class BadTargetProcessor(_OneDriveTargetProcessor):
+        @classmethod
+        def get_config_types(cls):
+            return (BadTarget,)
+
+    factory = TargetConnectorFactory()
+    with pytest.raises(ValueError, match="kind"):
+        factory.register(BadTargetProcessor, "bad", "bad.targets")
+
+    factory.register(_OneDriveTargetProcessor, "first", "first.targets")
+    with pytest.raises(ValueError, match=r"onedrive.*already registered"):
+        factory.register(_OneDriveTargetProcessor, "second", "second.targets")
 
 
 @pytest.mark.parametrize(
@@ -386,6 +415,8 @@ def test_external_task_resolution_requires_context_and_roundtrips(monkeypatch):
 
     builtin_factory = get_source_connector_factory(False)
     external_factory = _source_factory_with_fake()
+    builtin_target_factory = get_target_connector_factory(False)
+    external_target_factory = _target_factory_with_fake()
     monkeypatch.setattr(
         connector_factory_module,
         "get_source_connector_factory",
@@ -393,9 +424,19 @@ def test_external_task_resolution_requires_context_and_roundtrips(monkeypatch):
             external_factory if allow_external_plugins else builtin_factory
         ),
     )
+    monkeypatch.setattr(
+        connector_factory_module,
+        "get_target_connector_factory",
+        lambda allow_external_plugins=False: (
+            external_target_factory
+            if allow_external_plugins
+            else builtin_target_factory
+        ),
+    )
     payload = {
         "task_id": "task-1",
         "sources": [{"kind": "fake", "label": "preserved", "token": "value"}],
+        "target": {"kind": "onedrive", "drive_id": "preserved"},
     }
 
     with pytest.raises(ValidationError, match="not registered"):
@@ -405,7 +446,9 @@ def test_external_task_resolution_requires_context_and_roundtrips(monkeypatch):
     rebuilt = validate_task_json(task_json, allow_external_plugins=True)
 
     assert type(rebuilt.sources[0]) is _FakeSource
+    assert type(rebuilt.target) is _OneDriveTarget
     assert rebuilt.sources[0].label == "preserved"
+    assert rebuilt.target.drive_id == "preserved"
     assert external_factory.create_instance(rebuilt.sources[0]).source.label == (
         "preserved"
     )
@@ -427,27 +470,44 @@ def test_rq_worker_uses_explicit_external_plugin_policy(monkeypatch, tmp_path):
     from docling_jobkit.orchestrators.rq.orchestrator import RQOrchestratorConfig
 
     factory = _source_factory_with_fake()
+    target_factory = _target_factory_with_fake()
     monkeypatch.setattr(
         connector_factory_module,
         "get_source_connector_factory",
         lambda allow_external_plugins=False: factory,
     )
+    monkeypatch.setattr(
+        connector_factory_module,
+        "get_target_connector_factory",
+        lambda allow_external_plugins=False: target_factory,
+    )
     captured = {}
+
+    def capture_task(task, *args):
+        captured["source"] = task.sources[0]
+        captured["target"] = task.target
+        return task
+
     monkeypatch.setattr(
         rq_worker,
         "_run_docling_task",
-        lambda task, *args: captured.setdefault("source", task.sources[0]),
+        capture_task,
     )
 
     result = rq_worker.docling_task(
-        {"task_id": "task-rq", "sources": [{"kind": "fake"}]},
+        {
+            "task_id": "task-rq",
+            "sources": [{"kind": "fake"}],
+            "target": {"kind": "onedrive", "drive_id": "rq"},
+        },
         object(),
         RQOrchestratorConfig(allow_external_plugins=True),
         tmp_path,
     )
 
-    assert result is captured["source"]
-    assert type(result) is _FakeSource
+    assert result.sources[0] is captured["source"]
+    assert type(result.sources[0]) is _FakeSource
+    assert type(captured["target"]) is _OneDriveTarget
 
 
 @pytest.mark.asyncio
@@ -456,16 +516,25 @@ async def test_ray_redis_resolution_uses_external_plugin_policy(monkeypatch):
     from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 
     factory = _source_factory_with_fake()
+    target_factory = _target_factory_with_fake()
     monkeypatch.setattr(
         connector_factory_module,
         "get_source_connector_factory",
         lambda allow_external_plugins=False: factory,
     )
+    monkeypatch.setattr(
+        connector_factory_module,
+        "get_target_connector_factory",
+        lambda allow_external_plugins=False: target_factory,
+    )
 
     class FakeRedis:
         async def lpop(self, key):
             del key
-            return b'{"task_id":"task-ray","sources":[{"kind":"fake"}]}'
+            return (
+                b'{"task_id":"task-ray","sources":[{"kind":"fake"}],'
+                b'"target":{"kind":"onedrive","drive_id":"ray"}}'
+            )
 
     manager = RedisStateManager("redis://localhost:6379/", allow_external_plugins=True)
     manager.redis = FakeRedis()
@@ -478,6 +547,7 @@ async def test_ray_redis_resolution_uses_external_plugin_policy(monkeypatch):
 
     assert task is not None
     assert type(task.sources[0]) is _FakeSource
+    assert type(task.target) is _OneDriveTarget
 
 
 def test_factory_expandability_can_depend_on_config_type():

@@ -102,6 +102,7 @@ class AsyncLocalWorker:
                             work_dir=workdir,
                             s3_presigned_config=self.orchestrator.config.s3_presigned_config,
                             callback_invoker=callback_invoker,
+                            allow_external_plugins=cm.config.allow_external_plugins,
                         )
                     elif task.task_type == TaskType.CHUNK:
                         processed_results = process_chunkable_results(

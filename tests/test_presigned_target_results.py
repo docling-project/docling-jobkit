@@ -2,10 +2,11 @@ import base64
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import BaseModel
 
 from docling.datamodel.base_models import ConversionStatus, OutputFormat
 from docling.datamodel.service.callbacks import CallbackSpec, ProgressKind
@@ -26,7 +27,9 @@ from docling_core.types.doc.document import DoclingDocument
 
 from docling_jobkit.config.target_config import S3PresignedConfig
 from docling_jobkit.connectors.artifact_paths import hash_path_component
+from docling_jobkit.connectors.connector_factory import TargetConnectorFactory
 from docling_jobkit.connectors.s3.helper import check_target_has_source_converted
+from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.convert.results import process_exportable_results
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
@@ -150,6 +153,34 @@ class _FakeGcsClient:
 
     def close(self) -> None:
         return None
+
+
+class _PluginTarget(BaseModel):
+    kind: Literal["plugin_target"] = "plugin_target"
+
+
+class _PluginTargetProcessor(BaseTargetProcessor):
+    uploads: ClassVar[list[str]] = []
+
+    def __init__(self, target: _PluginTarget):
+        del target
+        super().__init__()
+
+    @classmethod
+    def get_config_types(cls):
+        return (_PluginTarget,)
+
+    def _initialize(self): ...
+
+    def _finalize(self): ...
+
+    def upload_file(self, filename, target_filename, content_type):
+        del filename, content_type
+        self.uploads.append(target_filename)
+
+    def upload_object(self, obj, target_filename, content_type):
+        del obj, content_type
+        self.uploads.append(target_filename)
 
 
 def _make_exportable_document(
@@ -495,6 +526,47 @@ def test_process_exportable_results_returns_remote_target_result_for_gcs_target(
     uploaded_keys = [item["key"] for item in fake_client.uploads]
     assert len(uploaded_keys) == 2
     assert all(str(key).startswith("converted/") for key in uploaded_keys)
+
+
+def test_external_artifact_target_reaches_registered_processor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import docling_jobkit.connectors.connector_factory as connector_factory_module
+    import docling_jobkit.connectors.target_processor_factory as processor_factory_module
+    import docling_jobkit.convert.results as results_module
+
+    task = _make_task().model_copy(update={"target": _PluginTarget()})
+    factory = TargetConnectorFactory()
+    factory.register(_PluginTargetProcessor, "test_plugin", "test_plugin.targets")
+
+    def external_factory(allow_external_plugins=False):
+        assert allow_external_plugins is True
+        return factory
+
+    monkeypatch.setattr(
+        connector_factory_module, "get_target_connector_factory", external_factory
+    )
+    monkeypatch.setattr(
+        processor_factory_module, "get_target_connector_factory", external_factory
+    )
+    monkeypatch.setattr(
+        results_module, "get_target_connector_factory", external_factory
+    )
+    _PluginTargetProcessor.uploads.clear()
+
+    task_result = process_exportable_results(
+        task=task,
+        exportable_documents=[_make_exportable_document()],
+        work_dir=tmp_path,
+        allow_external_plugins=True,
+    )
+
+    assert isinstance(task_result.result, RemoteTargetResult)
+    assert {Path(name).name for name in _PluginTargetProcessor.uploads} == {
+        "paper.json",
+        "paper_bundle.zip",
+    }
 
 
 def test_process_exportable_results_dispatches_put_target_through_factory(

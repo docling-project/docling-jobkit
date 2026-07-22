@@ -41,6 +41,7 @@ from docling.datamodel.service.tasks import TaskType
 from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
 
+from docling_jobkit.connectors.connector_factory import get_target_connector_factory
 from docling_jobkit.connectors.source_processor import (
     DocumentChunk,
     SourceDocumentRef,
@@ -342,6 +343,7 @@ def _build_materialization_failure_result(
     start_time: float,
     *,
     debug_error_details: bool,
+    allow_external_plugins: bool,
 ) -> DoclingTaskResult:
     """Per-document result + progress callbacks for an admission-time source rejection.
 
@@ -396,7 +398,18 @@ def _build_materialization_failure_result(
             ),
         )
 
-    if isinstance(task.target, PresignedUrlTarget):
+    # Mirror the success-path result shape (convert/results.py) via result_mode()
+    # rather than enumerating concrete storage target types, so plugin artifact
+    # targets get the same RemoteTargetResult envelope on a preflight failure that
+    # they get on success. supports() is False for InBody/Zip (service-only
+    # targets), which fall through to the in-body ExportResult.
+    target_factory = get_target_connector_factory(allow_external_plugins)
+    target_mode = (
+        target_factory.result_mode(task.target)
+        if target_factory.supports(task.target)
+        else None
+    )
+    if target_mode == "presigned":
         result: ResultType = PresignedArtifactResult(
             documents=[
                 DocumentArtifactItem(
@@ -408,7 +421,7 @@ def _build_materialization_failure_result(
                 )
             ]
         )
-    elif isinstance(task.target, _REMOTE_STORAGE_TARGET_TYPES):
+    elif target_mode == "artifacts":
         result = RemoteTargetResult()
     else:
         result = ExportResult(
@@ -551,6 +564,7 @@ def _finalize_slice_results(
     callback_invoker: Optional[CallbackInvoker],
     start_time: float,
     debug_error_details: bool,
+    allow_external_plugins: bool,
 ) -> DoclingTaskResult:
     """Fetch child slice outputs, merge them, and build the parent task result."""
     # This is the only place where full slice documents enter the coordinator's
@@ -565,6 +579,7 @@ def _finalize_slice_results(
         callback_invoker=callback_invoker,
         start_time=start_time,
         debug_error_details=debug_error_details,
+        allow_external_plugins=allow_external_plugins,
     )
 
 
@@ -774,6 +789,9 @@ class DoclingProcessorConverterDeployment:
                     expected_doc_count=expected_doc_count,
                     start_time=start_time,
                     callback_mode=callback_mode,
+                    allow_external_plugins=(
+                        self.converter_manager_config.allow_external_plugins
+                    ),
                 )
                 task_result = processed.task_result
                 processed_docs = processed.processed_docs
@@ -1229,6 +1247,9 @@ class DoclingProcessorCoordinatorDeployment:
                     exc,
                     materialized_start_time,
                     debug_error_details=self.config.debug_error_details,
+                    allow_external_plugins=(
+                        self.converter_manager_config.allow_external_plugins
+                    ),
                 )
             artifact_ref = ray.put(materialized.content_bytes)
             page_count = materialized.page_count
@@ -1271,6 +1292,9 @@ class DoclingProcessorCoordinatorDeployment:
                                 callback_invoker=callback_invoker,
                                 start_time=materialized_start_time,
                                 debug_error_details=self.config.debug_error_details,
+                                allow_external_plugins=(
+                                    self.converter_manager_config.allow_external_plugins
+                                ),
                             )
                     finally:
                         # Release ObjectRefs so plasma can free the slice documents
