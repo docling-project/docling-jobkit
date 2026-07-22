@@ -53,6 +53,7 @@ class RayTaskDispatcher:
         self,
         config: RayOrchestratorConfig,
         deployment_handle: Any,
+        allow_external_plugins: bool = False,
     ) -> None:
         """Initialize the shared dispatcher actor.
 
@@ -79,6 +80,7 @@ class RayTaskDispatcher:
             task_timeout=config.task_timeout,
             dispatcher_interval=config.dispatcher_interval,
             log_level=config.log_level,
+            allow_external_plugins=allow_external_plugins,
         )
 
         self.active = False
@@ -100,11 +102,13 @@ class RayTaskDispatcher:
         self,
         deployment_handle: Any,
         config: RayOrchestratorConfig,
+        allow_external_plugins: bool = False,
     ) -> None:
         """Refresh Serve handle and runtime-derived settings after API startup."""
         async with self._runtime_lock:
             self.deployment_handle = deployment_handle
             self.config = config
+            self.redis_manager.allow_external_plugins = allow_external_plugins
 
             # Processing keys must outlive the typical task runtime so the
             # dispatcher can tell whether a STARTED task still has a live worker.

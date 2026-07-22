@@ -14,6 +14,7 @@ from docling.datamodel.base_models import ConversionStatus, InputFormat
 
 if TYPE_CHECKING:
     pass
+from docling.datamodel.service.requests import FileSourceRequest, HttpSourceRequest
 from docling.document_converter import PdfFormatOption
 from docling_core.types.doc import DoclingDocument
 
@@ -28,7 +29,6 @@ from docling_jobkit.datamodel.chunking import (
 from docling_jobkit.datamodel.convert import (
     ConvertDocumentsOptions,
 )
-from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
 from docling_jobkit.datamodel.result import (
     ChunkedDocumentResult,
     ExportDocumentResponse,
@@ -101,7 +101,7 @@ async def test_convert_url(orchestrator: RQOrchestrator, test_option: TestOption
         pytest.skip("Skipping test in CI")
 
     sources: list[TaskSource] = []
-    sources.append(HttpSource(url="https://arxiv.org/pdf/2311.18481"))
+    sources.append(HttpSourceRequest(url="https://arxiv.org/pdf/2311.18481"))
 
     task = await orchestrator.enqueue(
         sources=sources,
@@ -125,7 +125,9 @@ async def test_convert_file(orchestrator: RQOrchestrator):
     encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()
 
     sources: list[TaskSource] = []
-    sources.append(FileSource(base64_string=encoded_doc, filename=doc_filename.name))
+    sources.append(
+        FileSourceRequest(base64_string=encoded_doc, filename=doc_filename.name)
+    )
 
     task = await orchestrator.enqueue(
         sources=sources,
@@ -146,7 +148,7 @@ def test_prepare_convert_sources_threads_max_file_size(monkeypatch: pytest.Monke
     task = Task(
         task_id="task-prepare",
         sources=[
-            FileSource(
+            FileSourceRequest(
                 filename="doc.pdf", base64_string=base64.b64encode(b"pdf").decode()
             )
         ],
@@ -154,8 +156,9 @@ def test_prepare_convert_sources_threads_max_file_size(monkeypatch: pytest.Monke
     )
     captured: list[int | None] = []
 
-    def _fake_expand(task_arg, *, max_file_size=None):
+    def _fake_expand(task_arg, *, max_file_size=None, allow_external_plugins=False):
         assert task_arg is task
+        assert allow_external_plugins is False
         captured.append(max_file_size)
         return ([], None)
 
@@ -171,7 +174,9 @@ def test_prepare_convert_sources_threads_max_file_size(monkeypatch: pytest.Monke
 
     assert convert_sources == []
     assert headers is None
-    assert source_info == [{"type": "FileSource", "filename": "doc.pdf"}]
+    assert source_info == [
+        {"type": "FileSourceRequest", "kind": "file", "filename": "doc.pdf"}
+    ]
     assert captured == [123]
 
 
@@ -185,7 +190,9 @@ async def test_chunk_file(orchestrator: RQOrchestrator, include_converted_doc: b
     encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()
 
     sources: list[TaskSource] = []
-    sources.append(FileSource(base64_string=encoded_doc, filename=doc_filename.name))
+    sources.append(
+        FileSourceRequest(base64_string=encoded_doc, filename=doc_filename.name)
+    )
 
     task: Task = await orchestrator.enqueue(
         task_type=TaskType.CHUNK,
@@ -226,7 +233,9 @@ async def test_delete_task_cleans_up_job(orchestrator: RQOrchestrator):
     encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()
 
     sources: list[TaskSource] = []
-    sources.append(FileSource(base64_string=encoded_doc, filename=doc_filename.name))
+    sources.append(
+        FileSourceRequest(base64_string=encoded_doc, filename=doc_filename.name)
+    )
 
     # Enqueue a task (this creates the job in Redis but won't process it without a worker)
     task = await orchestrator.enqueue(
@@ -363,7 +372,9 @@ async def test_convert_with_callbacks(orchestrator: RQOrchestrator, callback_ser
     encoded_doc = base64.b64encode(doc_filename.read_bytes()).decode()
 
     sources: list[TaskSource] = []
-    sources.append(FileSource(base64_string=encoded_doc, filename=doc_filename.name))
+    sources.append(
+        FileSourceRequest(base64_string=encoded_doc, filename=doc_filename.name)
+    )
 
     # Create task with callback
     task = await orchestrator.enqueue(
@@ -441,7 +452,7 @@ async def test_get_task_from_rq_direct_preserves_metadata(
     from rq.job import Job, JobStatus
 
     options = ConvertDocumentsOptions()
-    sources: list[TaskSource] = [HttpSource(url="https://example.com/test.pdf")]
+    sources: list[TaskSource] = [HttpSourceRequest(url="https://example.com/test.pdf")]
 
     task = await orchestrator.enqueue(
         sources=sources,

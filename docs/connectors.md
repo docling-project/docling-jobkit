@@ -6,7 +6,7 @@ works identically when you test it locally with the CLI and when it runs on
 distributed compute (Ray / RQ), with no changes to the core dispatch or export
 code.
 
-This guide uses a hypothetical **OneDrive** target connector as the example.
+This guide uses small source and target examples.
 
 ## How dispatch works
 
@@ -15,6 +15,8 @@ This guide uses a hypothetical **OneDrive** target connector as the example.
 - Every connector has a **processor** — a subclass of `BaseSourceProcessor` or
   `BaseTargetProcessor` that does the actual I/O.
 - A processor declares which config models it handles via `get_config_types()`.
+- Internal tasks validate source configs by `kind` through this registry and retain
+  the exact concrete model across serialization.
 - The pluggy-based factory (`docling_jobkit.connectors.connector_factory`) keys a
   registry on the config type and instantiates the right processor from a config
   object — `get_source_processor()` / `get_target_processor()` are thin wrappers
@@ -35,8 +37,11 @@ class OneDriveTarget(BaseModel):
     folder: str = ""
 ```
 
-The `kind` must be unique within its registry (source kinds and target kinds are
-separate registries, so a source and a target may share a `kind`).
+The `kind` must be one non-empty string `Literal`, its default must match that
+literal, and it must be unique within its registry. Source and target registries
+are separate, so a source and target may share a `kind`. Source configs must be
+JSON-compatible. Connectors intended for docling-serve must also support Pydantic
+JSON Schema generation.
 
 ### 2. Processor subclass
 
@@ -73,9 +78,53 @@ class OneDriveTargetProcessor(BaseTargetProcessor):
         self._client.upload(self._target.folder, target_filename, obj)
 ```
 
-Source connectors instead subclass `BaseSourceProcessor` and implement
-`_fetch_documents` (and, for batch/chunked processing, `_list_document_ids` +
-`_fetch_document_by_id`). See `s3_source_processor.py` for a full example.
+Source connectors subclass `BaseSourceProcessor`. The supported plugin surface is:
+
+- `get_config_types()` and the normal constructor;
+- `_initialize()`, `_finalize()`, and `_fetch_documents()`;
+- `_list_document_ids()` plus `_fetch_document_by_id()` when connector-native
+  chunking is supported;
+- optional `iterate_converter_sources()` when the converter should receive
+  something other than materialized `DocumentStream` values;
+- optional `converter_headers()` for converter-side HTTP fetching; and
+- optional `is_expandable(config)`, which defaults conservatively to `True`.
+
+```python
+from io import BytesIO
+from typing import Iterator, Literal
+
+from pydantic import BaseModel
+from docling_core.types.io import DocumentStream
+from docling_jobkit.connectors.source_processor import BaseSourceProcessor
+
+
+class ArchiveSource(BaseModel):
+    kind: Literal["archive"] = "archive"
+    archive_id: str
+
+
+class ArchiveSourceProcessor(BaseSourceProcessor[ArchiveSource, str]):
+    @classmethod
+    def get_config_types(cls) -> tuple[type[BaseModel], ...]:
+        return (ArchiveSource,)
+
+    def _initialize(self) -> None:
+        from archive_sdk import Client  # optional dependency: import lazily
+
+        self.client = Client()
+
+    def _finalize(self) -> None:
+        self.client.close()
+
+    def _fetch_documents(self, *, max_file_size=None) -> Iterator[DocumentStream]:
+        del max_file_size
+        for name, content in self.client.download(self.source.archive_id):
+            yield DocumentStream(name=name, stream=BytesIO(content))
+```
+
+See `s3_source_processor.py` for connector-native chunking. The in-test fake
+source connector exercises this same registration, task round-trip, dispatch,
+and expansion contract.
 
 ### 3. Plugin module
 
@@ -87,6 +136,10 @@ classes. Keep the imports inside the functions.
 def target_connectors():
     from my_pkg.onedrive import OneDriveTargetProcessor
     return {"target_connectors": [OneDriveTargetProcessor]}
+
+def source_connectors():
+    from my_pkg.archive import ArchiveSourceProcessor
+    return {"source_connectors": [ArchiveSourceProcessor]}
 ```
 
 ### 4. Entry point
@@ -108,11 +161,18 @@ External (non–docling-jobkit) plugins load only when external plugins are allo
 - **CLI:** `docling-jobkit-local convert config.yaml --allow-external-plugins`
   (and the multiproc CLI likewise). The config then validates `kind: onedrive`
   from YAML.
-- **Orchestrators:** set `allow_external_plugins=True` on the converter manager
-  config. For the RQ worker, the dynamic union must be installed *before* the
-  worker reconstructs `Task` objects — call
-  `docling_jobkit.datamodel.dynamic_unions.install_dynamic_unions(allow_external_plugins=True)`
-  at worker bootstrap (with the same flag as the submitter).
+- **Local and Ray orchestrators:** set `allow_external_plugins=True` on the
+  converter-manager config.
+- **RQ:** set `allow_external_plugins=True` on `RQOrchestratorConfig` in both the
+  submitter and worker process. Task hydration uses that explicit policy; it does
+  not mutate the global `Task` model.
+
+API and worker processes must install compatible versions of the same connector
+package. Pluggy imports installed entry-point modules before jobkit applies the
+`docling_jobkit.*` module-prefix eligibility filter. Therefore
+`allow_external_plugins=False` prevents external connectors from being registered
+and used, but it is not a sandbox: deployment operators must trust every installed
+Python plugin package.
 
 ## Restricting targets per orchestrator
 

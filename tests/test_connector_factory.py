@@ -1,14 +1,20 @@
-"""Tests for the pluggy connector factory, dynamic unions, transport chunk,
-and the orchestrator target allowlist."""
+"""Tests for connector registration, hydration, transport, and dispatch."""
 
+import json
+from io import BytesIO
 from typing import Iterator, Literal
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr, ValidationError
 
 from docling.datamodel.base_models import DocumentStream
-from docling.datamodel.service.requests import S3SourceRequest
-from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.requests import (
+    AnyHttpSourceRequest,
+    FileSourceRequest,
+    HttpSourceRequest,
+    S3SourceRequest,
+)
+from docling.datamodel.service.sources import S3Coordinates
 from docling.datamodel.service.targets import InBodyTarget, S3Target
 
 from docling_jobkit.connectors.connector_factory import (
@@ -17,13 +23,17 @@ from docling_jobkit.connectors.connector_factory import (
     get_source_connector_factory,
     get_target_connector_factory,
 )
+from docling_jobkit.connectors.errors import SourceConnectorConfigError
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     DocumentChunk,
     SourceDocumentRef,
 )
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
+from docling_jobkit.datamodel.task import Task, validate_task, validate_task_json
+from docling_jobkit.datamodel.task_sources import TaskFileNetSource
 from docling_jobkit.datamodel.task_targets import GoogleDriveTarget, LocalPathTarget
+from docling_jobkit.orchestrators.serialization import dump_model_with_secrets
 
 
 def test_builtin_source_connectors_registered():
@@ -63,21 +73,15 @@ def test_create_instance_exact_and_subtype_match():
     assert type(proc).__name__ == "S3SourceProcessor"
 
 
-def test_create_instance_bare_base_fallback():
-    """A bare S3Coordinates (no kind) must resolve to the S3 processor that is
-    registered under the S3SourceRequest subclass."""
+def test_kindless_base_config_does_not_guess_registered_subtype():
     factory = get_source_connector_factory()
-    proc = factory.create_instance(
-        S3Coordinates(
-            endpoint="e", bucket="b", access_key="k", secret_key="s", key_prefix="p/"
-        )
+    source = S3Coordinates(
+        endpoint="e", bucket="b", access_key="k", secret_key="s", key_prefix="p/"
     )
-    assert type(proc).__name__ == "S3SourceProcessor"
-
-    http = factory.create_instance(HttpSource(url="https://example.com/a.pdf"))
-    assert type(http).__name__ == "HttpSourceProcessor"
-    file = factory.create_instance(FileSource(base64_string="", filename="a.pdf"))
-    assert type(file).__name__ == "HttpSourceProcessor"
+    with pytest.raises(SourceConnectorConfigError, match=r"requires.*kind"):
+        factory.validate_config(source)
+    with pytest.raises(RuntimeError, match="No connector found"):
+        factory.create_instance(source)
 
 
 def test_target_factory_dispatch():
@@ -170,6 +174,8 @@ def test_single_member_union_returns_bare_type():
 
 class _FakeSource(BaseModel):
     kind: Literal["fake"] = "fake"
+    label: str = "ok"
+    token: SecretStr = SecretStr("secret")
 
 
 class _FakeSourceProcessor(BaseSourceProcessor):
@@ -185,7 +191,8 @@ class _FakeSourceProcessor(BaseSourceProcessor):
     def _finalize(self): ...
 
     def _fetch_documents(self, *, max_file_size=None) -> Iterator[DocumentStream]:
-        yield from ()
+        del max_file_size
+        yield DocumentStream(name="fake.pdf", stream=BytesIO(b"pdf"))
 
 
 def test_document_chunk_is_plain_serializable():
@@ -202,6 +209,321 @@ def test_document_chunk_is_plain_serializable():
     restored = pickle.loads(pickle.dumps(chunk))
     assert restored.chunk_index == 3
     assert restored.ids == ["a"]
+
+
+def _source_factory_with_fake() -> SourceConnectorFactory:
+    factory = SourceConnectorFactory()
+    factory.load_from_plugins()
+    factory.register(_FakeSourceProcessor, "fake_plugin", "fake_plugin.sources")
+    return factory
+
+
+def test_duplicate_kind_registration_and_plugin_processing_fail():
+    class DuplicateFakeSource(BaseModel):
+        kind: Literal["fake"] = "fake"
+
+    class DuplicateFakeProcessor(_FakeSourceProcessor):
+        @classmethod
+        def get_config_types(cls):
+            return (DuplicateFakeSource,)
+
+    factory = SourceConnectorFactory()
+    factory.register(_FakeSourceProcessor, "first", "first.sources")
+
+    with pytest.raises(ValueError, match=r"kind 'fake'.*already registered"):
+        factory.register(DuplicateFakeProcessor, "second", "second.sources")
+    with pytest.raises(ValueError, match=r"kind 'fake'.*already registered"):
+        factory.process_plugin(
+            {"source_connectors": [DuplicateFakeProcessor]},
+            "second",
+            "second.sources",
+        )
+
+
+@pytest.mark.parametrize(
+    "config_type",
+    [
+        type("MissingKind", (BaseModel,), {"__annotations__": {"value": str}}),
+        type(
+            "NonLiteralKind",
+            (BaseModel,),
+            {"__annotations__": {"kind": str}, "kind": "bad"},
+        ),
+        type(
+            "MultiLiteralKind",
+            (BaseModel,),
+            {
+                "__annotations__": {"kind": Literal["one", "two"]},
+                "kind": "one",
+            },
+        ),
+        type(
+            "MismatchedKind",
+            (BaseModel,),
+            {"__annotations__": {"kind": Literal["expected"]}, "kind": "wrong"},
+        ),
+    ],
+)
+def test_registration_rejects_malformed_kind(config_type):
+    class BadProcessor(_FakeSourceProcessor):
+        @classmethod
+        def get_config_types(cls):
+            return (config_type,)
+
+    with pytest.raises(ValueError, match="kind"):
+        SourceConnectorFactory().register(BadProcessor, "bad", "bad.sources")
+
+
+def test_registry_validates_filenet_and_http_canonical_models():
+    factory = get_source_connector_factory()
+    filenet = factory.validate_config(
+        {
+            "kind": "filenet",
+            "base_url": "https://filenet.example.com/content-services-graphql",
+            "username": "user",
+            "api_key": "secret",
+            "repository_id": "OS1",
+        }
+    )
+    http = factory.validate_config(
+        {"kind": "http", "url": "https://example.com/archive.zip"}
+    )
+
+    assert type(filenet) is TaskFileNetSource
+    assert type(http) is AnyHttpSourceRequest
+    with pytest.raises(ValidationError):
+        HttpSourceRequest(url="https://example.com/archive.zip")
+
+
+def test_builtin_capabilities_come_from_registered_processors():
+    factory = get_source_connector_factory()
+
+    assert factory.supports("filenet") is True
+    assert factory.supports("missing") is False
+    assert (
+        factory.is_expandable(FileSourceRequest(filename="doc.pdf", base64_string=""))
+        is False
+    )
+    assert (
+        factory.is_expandable(AnyHttpSourceRequest(url="https://example.com/doc.pdf"))
+        is False
+    )
+    assert (
+        factory.is_expandable(
+            S3SourceRequest(
+                endpoint="e",
+                bucket="b",
+                access_key="k",
+                secret_key="s",
+                key_prefix="p/",
+            )
+        )
+        is True
+    )
+
+
+def test_registry_errors_are_safe_and_identify_local_plugin():
+    factory = _source_factory_with_fake()
+    with pytest.raises(SourceConnectorConfigError) as exc_info:
+        factory.validate_config(
+            {"kind": "fake", "label": 1, "token": "credential-value"}
+        )
+
+    message = str(exc_info.value)
+    assert "fake_plugin" in message
+    assert "fake_plugin.sources" in message
+    assert "credential-value" not in message
+    assert "version" not in message.lower()
+
+
+def test_task_structurally_hydrates_builtin_and_rejects_missing_kind():
+    payload = {
+        "task_id": "task-1",
+        "sources": [
+            {
+                "kind": "s3",
+                "endpoint": "e",
+                "bucket": "b",
+                "access_key": "k",
+                "secret_key": "s",
+                "key_prefix": "p/",
+            }
+        ],
+    }
+    rebuilt = Task.model_validate_json(Task.model_validate(payload).model_dump_json())
+
+    assert type(rebuilt.sources[0]) is S3SourceRequest
+    assert rebuilt.sources[0].bucket == "b"
+    with pytest.raises(ValidationError, match=r"requires.*kind"):
+        Task.model_validate({"task_id": "task-2", "sources": [{"bucket": "b"}]})
+
+
+def test_filenet_survives_trusted_task_json_roundtrip():
+    task = Task.model_validate(
+        {
+            "task_id": "task-filenet",
+            "sources": [
+                {
+                    "kind": "filenet",
+                    "base_url": "https://filenet.example.com/graphql",
+                    "username": "user",
+                    "api_key": "filenet-secret",
+                    "repository_id": "OS1",
+                }
+            ],
+        }
+    )
+    task_json = json.dumps(dump_model_with_secrets(task, serialize_as_any=True))
+    rebuilt = Task.model_validate_json(task_json)
+
+    assert type(rebuilt.sources[0]) is TaskFileNetSource
+    assert rebuilt.sources[0].api_key.get_secret_value() == "filenet-secret"
+
+
+def test_external_task_hydration_requires_context_and_roundtrips(monkeypatch):
+    import docling_jobkit.connectors.connector_factory as connector_factory_module
+
+    builtin_factory = get_source_connector_factory(False)
+    external_factory = _source_factory_with_fake()
+    monkeypatch.setattr(
+        connector_factory_module,
+        "get_source_connector_factory",
+        lambda allow_external_plugins=False: (
+            external_factory if allow_external_plugins else builtin_factory
+        ),
+    )
+    payload = {
+        "task_id": "task-1",
+        "sources": [{"kind": "fake", "label": "preserved", "token": "value"}],
+    }
+
+    with pytest.raises(ValidationError, match="not registered"):
+        Task.model_validate(payload)
+    task = validate_task(payload, allow_external_plugins=True)
+    task_json = json.dumps(dump_model_with_secrets(task, serialize_as_any=True))
+    rebuilt = validate_task_json(task_json, allow_external_plugins=True)
+
+    assert type(rebuilt.sources[0]) is _FakeSource
+    assert rebuilt.sources[0].label == "preserved"
+    assert external_factory.create_instance(rebuilt.sources[0]).source.label == (
+        "preserved"
+    )
+
+    invalid = {
+        "task_id": "task-invalid",
+        "sources": [{"kind": "fake", "label": 1, "token": "credential-value"}],
+    }
+    with pytest.raises(ValidationError) as exc_info:
+        validate_task(invalid, allow_external_plugins=True)
+    message = str(exc_info.value)
+    assert "fake_plugin" in message
+    assert "credential-value" not in message
+
+
+def test_rq_worker_uses_explicit_external_plugin_policy(monkeypatch, tmp_path):
+    import docling_jobkit.connectors.connector_factory as connector_factory_module
+    import docling_jobkit.orchestrators.rq.worker as rq_worker
+    from docling_jobkit.orchestrators.rq.orchestrator import RQOrchestratorConfig
+
+    factory = _source_factory_with_fake()
+    monkeypatch.setattr(
+        connector_factory_module,
+        "get_source_connector_factory",
+        lambda allow_external_plugins=False: factory,
+    )
+    captured = {}
+    monkeypatch.setattr(
+        rq_worker,
+        "_run_docling_task",
+        lambda task, *args: captured.setdefault("source", task.sources[0]),
+    )
+
+    result = rq_worker.docling_task(
+        {"task_id": "task-rq", "sources": [{"kind": "fake"}]},
+        object(),
+        RQOrchestratorConfig(allow_external_plugins=True),
+        tmp_path,
+    )
+
+    assert result is captured["source"]
+    assert type(result) is _FakeSource
+
+
+@pytest.mark.asyncio
+async def test_ray_redis_hydration_uses_external_plugin_policy(monkeypatch):
+    import docling_jobkit.connectors.connector_factory as connector_factory_module
+    from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
+
+    factory = _source_factory_with_fake()
+    monkeypatch.setattr(
+        connector_factory_module,
+        "get_source_connector_factory",
+        lambda allow_external_plugins=False: factory,
+    )
+
+    class FakeRedis:
+        async def lpop(self, key):
+            del key
+            return b'{"task_id":"task-ray","sources":[{"kind":"fake"}]}'
+
+    manager = RedisStateManager("redis://localhost:6379/", allow_external_plugins=True)
+    manager.redis = FakeRedis()
+
+    async def ignore_limits(*args, **kwargs):
+        return None
+
+    manager.update_tenant_limits = ignore_limits
+    task = await manager.dequeue_task("tenant")
+
+    assert task is not None
+    assert type(task.sources[0]) is _FakeSource
+
+
+def test_factory_expandability_can_depend_on_config_type():
+    class SingleSource(BaseModel):
+        kind: Literal["single"] = "single"
+
+    class MixedProcessor(_FakeSourceProcessor):
+        @classmethod
+        def get_config_types(cls):
+            return (_FakeSource, SingleSource)
+
+        @classmethod
+        def is_expandable(cls, config):
+            return isinstance(config, _FakeSource)
+
+    factory = SourceConnectorFactory()
+    factory.register(MixedProcessor, "mixed", "mixed.sources")
+
+    assert factory.is_expandable(_FakeSource()) is True
+    assert factory.is_expandable(SingleSource()) is False
+
+
+def test_source_expansion_dispatches_fake_registered_processor(monkeypatch):
+    import docling_jobkit.connectors.connector_factory as connector_factory_module
+    import docling_jobkit.connectors.source_processor_factory as processor_factory_module
+
+    factory = _source_factory_with_fake()
+    monkeypatch.setattr(
+        connector_factory_module,
+        "get_source_connector_factory",
+        lambda allow_external_plugins=False: factory,
+    )
+    monkeypatch.setattr(
+        processor_factory_module,
+        "get_source_connector_factory",
+        lambda allow_external_plugins=False: factory,
+    )
+    task = validate_task(
+        {"task_id": "task-1", "sources": [{"kind": "fake"}]},
+        allow_external_plugins=True,
+    )
+
+    from docling_jobkit.convert.source_expansion import expand_task_sources
+
+    sources, headers = expand_task_sources(task, allow_external_plugins=True)
+    assert headers is None
+    assert [source.name for source in sources] == ["fake.pdf"]
 
 
 # --- Orchestrator allowlist ----------------------------------------------------

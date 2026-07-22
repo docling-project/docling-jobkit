@@ -15,6 +15,10 @@ class SourceConnectorAuthenticationError(ConnectorAuthenticationError):
     """Authentication failure while opening a task source."""
 
 
+class SourceConnectorConfigError(ValueError):
+    """Safe failure while resolving or validating a task source config."""
+
+
 def map_connector_authentication_errors(
     connector_name: str,
     is_authentication_error: Callable[[BaseException], bool],

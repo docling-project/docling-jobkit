@@ -72,6 +72,7 @@ class AsyncLocalWorker:
                     convert_sources, headers = expand_task_sources(
                         task,
                         max_file_size=cm.config.max_file_size,
+                        allow_external_plugins=cm.config.allow_external_plugins,
                     )
                     # Note: results are only an iterator->lazy evaluation
                     conv_results = cm.convert_documents(

@@ -9,7 +9,11 @@ import pytest
 
 from docling.datamodel.base_models import ConversionStatus, OutputFormat
 from docling.datamodel.service.callbacks import CallbackSpec, ProgressKind
-from docling.datamodel.service.sources import FileSource, HttpSource
+from docling.datamodel.service.requests import (
+    AnyHttpSourceRequest as HttpSource,
+    FileSourceRequest as FileSource,
+    S3SourceRequest as S3Coordinates,
+)
 from docling.datamodel.service.targets import (
     AzureBlobTarget,
     GoogleCloudStorageTarget,
@@ -26,7 +30,6 @@ from docling_jobkit.convert.results import process_exportable_results
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import PresignedArtifactResult, RemoteTargetResult
-from docling_jobkit.datamodel.s3_coords import S3Coordinates
 from docling_jobkit.datamodel.task import Task
 
 

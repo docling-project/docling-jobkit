@@ -18,7 +18,7 @@ from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.sources import FileSource, HttpSource
+from docling.datamodel.service.requests import FileSourceRequest
 from docling.datamodel.service.targets import (
     AzureBlobTarget,
     GoogleCloudStorageTarget,
@@ -27,14 +27,14 @@ from docling.datamodel.service.targets import (
 )
 from docling.datamodel.service.tasks import TaskType
 
+from docling_jobkit.connectors.connector_factory import get_source_connector_factory
 from docling_jobkit.convert.manager import DoclingConverterManager
-from docling_jobkit.convert.source_expansion import _EXPANDABLE_SOURCE_TYPES
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult, TaskOutcome
 from docling_jobkit.datamodel.stored_outcome import (
     StoredSuccessOutcome,
 )
-from docling_jobkit.datamodel.task import Task, TaskSource
+from docling_jobkit.datamodel.task import Task, TaskSource, validate_task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.datamodel.task_targets import TaskTarget
 from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
@@ -66,10 +66,16 @@ _STORAGE_TARGET_TYPES = (
 
 
 def _validate_expandable_source_targets(
-    sources: list[TaskSource], target: TaskTarget, task_type: TaskType
+    sources: list[TaskSource],
+    target: TaskTarget,
+    task_type: TaskType,
+    *,
+    allow_external_plugins: bool = False,
 ) -> None:
+    factory = get_source_connector_factory(allow_external_plugins)
     has_expandable_source = any(
-        isinstance(source, _EXPANDABLE_SOURCE_TYPES) for source in sources
+        not isinstance(source, DocumentStream) and factory.is_expandable(source)
+        for source in sources
     )
     if not has_expandable_source:
         return
@@ -141,6 +147,7 @@ class RayOrchestrator(BaseOrchestrator):
             task_timeout=config.task_timeout,
             dispatcher_interval=config.dispatcher_interval,
             log_level=config.log_level,
+            allow_external_plugins=self.cm.config.allow_external_plugins,
         )
 
         # Pub/sub listener task
@@ -323,7 +330,11 @@ class RayOrchestrator(BaseOrchestrator):
         _log.info("Binding to named Ray Task Dispatcher actor")
         return RayTaskDispatcher.options(  # type: ignore[attr-defined]
             **dispatcher_kwargs
-        ).remote(self.config, self.deployment_handle)
+        ).remote(
+            self.config,
+            self.deployment_handle,
+            self.cm.config.allow_external_plugins,
+        )
 
     async def _get_existing_serve_app_state(
         self, app_name: str
@@ -481,7 +492,11 @@ class RayOrchestrator(BaseOrchestrator):
                 self.dispatcher = dispatcher
 
             await asyncio.wait_for(
-                dispatcher.refresh_runtime.remote(self.deployment_handle, self.config),
+                dispatcher.refresh_runtime.remote(
+                    self.deployment_handle,
+                    self.config,
+                    self.cm.config.allow_external_plugins,
+                ),
                 timeout=rpc_timeout,
             )
         except asyncio.TimeoutError as exc:
@@ -662,7 +677,14 @@ class RayOrchestrator(BaseOrchestrator):
             task_id = str(uuid.uuid4())
             chunking_export_options = chunking_export_options or ChunkingExportOptions()
 
-            _validate_expandable_source_targets(sources, target, task_type)
+            allow_external_plugins = self.cm.config.allow_external_plugins
+            source_factory = get_source_connector_factory(allow_external_plugins)
+            _validate_expandable_source_targets(
+                sources,
+                target,
+                task_type,
+                allow_external_plugins=allow_external_plugins,
+            )
 
             # Convert DocumentStream sources to FileSource for JSON serialization
             ray_sources: list[TaskSource] = []
@@ -670,23 +692,26 @@ class RayOrchestrator(BaseOrchestrator):
                 if isinstance(source, DocumentStream):
                     encoded_doc = base64.b64encode(source.stream.read()).decode()
                     ray_sources.append(
-                        FileSource(filename=source.name, base64_string=encoded_doc)
+                        FileSourceRequest(
+                            filename=source.name, base64_string=encoded_doc
+                        )
                     )
-                elif isinstance(
-                    source, (HttpSource, FileSource, *_EXPANDABLE_SOURCE_TYPES)
-                ):
-                    ray_sources.append(source)
+                else:
+                    ray_sources.append(source_factory.validate_config(source))
 
-            task = Task(
-                task_id=task_id,
-                task_type=task_type,
-                sources=ray_sources,
-                target=target,
-                convert_options=convert_options,
-                chunking_options=chunking_options,
-                chunking_export_options=chunking_export_options,
-                callbacks=callbacks or [],
-                metadata=metadata or {},
+            task = validate_task(
+                {
+                    "task_id": task_id,
+                    "task_type": task_type,
+                    "sources": ray_sources,
+                    "target": target,
+                    "convert_options": convert_options,
+                    "chunking_options": chunking_options,
+                    "chunking_export_options": chunking_export_options,
+                    "callbacks": callbacks or [],
+                    "metadata": metadata or {},
+                },
+                allow_external_plugins=allow_external_plugins,
             )
 
             tenant_id = task.metadata.get("tenant_id", "default")

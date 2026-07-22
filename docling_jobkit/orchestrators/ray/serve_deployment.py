@@ -800,6 +800,7 @@ class DoclingProcessorConverterDeployment:
         convert_sources, headers = expand_task_sources(
             task,
             max_file_size=self.converter_manager_config.max_file_size,
+            allow_external_plugins=self.converter_manager_config.allow_external_plugins,
         )
         convert_opts = task.convert_options or ConvertDocumentsOptions()
         return list(
@@ -936,6 +937,7 @@ class DoclingProcessorCoordinatorDeployment:
             task_timeout=config.task_timeout,
             dispatcher_interval=config.dispatcher_interval,
             log_level=config.log_level,
+            allow_external_plugins=converter_manager_config.allow_external_plugins,
         )
         self.scratch_dir = config.scratch_dir or Path(
             tempfile.mkdtemp(prefix=f"docling_serve_{self.replica_id}_")
@@ -1354,7 +1356,12 @@ class DoclingProcessorCoordinatorDeployment:
                 raise TypeError(
                     "Raw DocumentStream sources are not supported in Ray source-chunk fan-out"
                 )
-            with get_source_processor(source) as source_processor:
+            with get_source_processor(
+                source,
+                allow_external_plugins=(
+                    self.converter_manager_config.allow_external_plugins
+                ),
+            ) as source_processor:
                 source_doc_count = 0
                 for chunk in source_processor.iterate_document_chunks(
                     self.config.s3_dispatch_batch_size

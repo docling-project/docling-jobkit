@@ -1,14 +1,9 @@
 """Build pydantic discriminated unions from the registered connector plugins.
 
-The static unions in :mod:`docling_jobkit.datamodel.task_sources` /
-:mod:`docling_jobkit.datamodel.task_targets` cover the built-in connectors. When
-third-party connectors are enabled (``allow_external_plugins=True``), their config
-models must also be accepted when validating job configs (CLI) and when a worker
-re-validates a ``Task`` (RQ). These helpers build those unions from the connector
-factories so external ``kind`` values parse.
-
-``install_dynamic_unions`` must run once at process entry, before any ``Task`` is
-validated, with the same ``allow_external_plugins`` value as the submitter.
+The static source and target unions cover built-in CLI/YAML configuration. These
+helpers build precise plugin-aware unions for that external configuration boundary.
+Internal task sources hydrate structurally through the source connector registry;
+``install_dynamic_unions`` therefore remains target-only.
 """
 
 import logging

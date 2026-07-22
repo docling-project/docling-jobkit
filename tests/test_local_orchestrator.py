@@ -20,6 +20,10 @@ from docling.datamodel.pipeline_options import (
     ProcessingPipeline,
 )
 from docling.datamodel.pipeline_options_vlm_model import ResponseFormat
+from docling.datamodel.service.requests import (
+    FileSourceRequest as FileSource,
+    HttpSourceRequest as HttpSource,
+)
 from docling.datamodel.stage_model_specs import ObjectDetectionModelSpec
 from docling.models.utils.hf_model_download import download_hf_model
 from docling.utils.model_downloader import download_models
@@ -40,7 +44,6 @@ from docling_jobkit.datamodel.convert import (
     VlmModelApi,
     VlmModelLocal,
 )
-from docling_jobkit.datamodel.http_inputs import FileSource, HttpSource
 from docling_jobkit.datamodel.result import ChunkedDocumentResult, ExportResult
 from docling_jobkit.datamodel.task import Task, TaskSource
 from docling_jobkit.datamodel.task_meta import TaskType

@@ -1,22 +1,23 @@
 import datetime
 import warnings
+from collections.abc import Mapping
 from functools import partial
-from typing import Annotated, Any, Optional, Union
+from typing import Annotated, Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    SerializeAsAny,
+    ValidationInfo,
+    model_validator,
+)
 
 from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.responses import PublicFailureInfo
-from docling.datamodel.service.sources import (
-    AzureBlobCoordinates,
-    FileSource,
-    GoogleCloudStorageCoordinates,
-    GoogleDriveCoordinates,
-    HttpSource,
-    S3Coordinates,
-)
 from docling.datamodel.service.targets import InBodyTarget
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
@@ -27,19 +28,34 @@ from docling_jobkit.datamodel.chunking import (
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.datamodel.task_targets import TaskTarget
 
-TaskSource = Union[
-    HttpSource,
-    FileSource,
-    DocumentStream,
-    S3Coordinates,
-    AzureBlobCoordinates,
-    GoogleCloudStorageCoordinates,
-    GoogleDriveCoordinates,
+
+def _hydrate_source(value: Any, info: ValidationInfo) -> Any:
+    if isinstance(value, DocumentStream):
+        return value
+
+    from docling_jobkit.connectors.connector_factory import (
+        get_source_connector_factory,
+    )
+
+    allow_external_plugins = bool(
+        (info.context or {}).get("allow_external_plugins", False)
+    )
+    return get_source_connector_factory(allow_external_plugins).validate_config(value)
+
+
+# The factory returns the exact concrete model. Pydantic's default
+# revalidate_instances="never" preserves that instance under the BaseModel branch.
+TaskSource = Annotated[
+    DocumentStream | SerializeAsAny[BaseModel],
+    BeforeValidator(_hydrate_source),
 ]
 
 
 class Task(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        hide_input_in_errors=True,
+    )
 
     task_id: str
     task_type: TaskType = TaskType.CONVERT
@@ -105,3 +121,21 @@ class Task(BaseModel):
         if self.task_status in [TaskStatus.SUCCESS, TaskStatus.FAILURE]:
             return True
         return False
+
+
+def validate_task(
+    payload: Mapping[str, Any], *, allow_external_plugins: bool = False
+) -> Task:
+    return Task.model_validate(
+        payload,
+        context={"allow_external_plugins": allow_external_plugins},
+    )
+
+
+def validate_task_json(
+    payload: str | bytes, *, allow_external_plugins: bool = False
+) -> Task:
+    return Task.model_validate_json(
+        payload,
+        context={"allow_external_plugins": allow_external_plugins},
+    )
