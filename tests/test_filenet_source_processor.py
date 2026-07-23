@@ -249,3 +249,76 @@ def test_filenet_fetch_logs_and_reraises_error(filenet_coords, caplog):
             with caplog.at_level(logging.WARNING):
                 with pytest.raises(SourceConnectorUnavailableError):
                     processor._fetch_document_by_id(identifier)
+
+
+def test_filenet_unique_filenames_for_duplicate_names(filenet_coords):
+    """Test that documents with the same name get unique filenames using doc ID."""
+    processor = FileNetSourceProcessor(filenet_coords)
+    processor._auth_header = "test-auth"
+    processor._graphql_url = "https://test.com/graphql"
+    processor._coords = filenet_coords
+
+    # Two documents with the same name but different IDs
+    identifier1 = FileNetFileIdentifier(
+        id="{DOC-ABC-123}",
+        name="report.pdf",
+        size=1000,
+        mime_type="application/pdf",
+        download_url="/content?id={DOC-ABC-123}",
+    )
+    identifier2 = FileNetFileIdentifier(
+        id="{DOC-XYZ-789}",
+        name="report.pdf",
+        size=2000,
+        mime_type="application/pdf",
+        download_url="/content?id={DOC-XYZ-789}",
+    )
+
+    # Test _make_document_ref creates unique filenames
+    ref1 = processor._make_document_ref(identifier1, source_index=0)
+    ref2 = processor._make_document_ref(identifier2, source_index=1)
+
+    assert ref1.filename == "report-DOC-ABC-123.pdf"
+    assert ref2.filename == "report-DOC-XYZ-789.pdf"
+    assert ref1.filename != ref2.filename
+
+    # Test _fetch_document_by_id uses the same unique filename
+    mock_buffer1 = BytesIO(b"test content 1")
+    mock_buffer2 = BytesIO(b"test content 2")
+    with patch(
+        "docling_jobkit.connectors.filenet.source_processor.download_document",
+        side_effect=[mock_buffer1, mock_buffer2],
+    ):
+        stream1 = processor._fetch_document_by_id(identifier1)
+        stream2 = processor._fetch_document_by_id(identifier2)
+
+    assert stream1.name == "report-DOC-ABC-123.pdf"
+    assert stream2.name == "report-DOC-XYZ-789.pdf"
+    assert stream1.name == ref1.filename
+    assert stream2.name == ref2.filename
+
+
+def test_filenet_unique_filenames_without_extension(filenet_coords):
+    """Test unique filename generation for files without extensions."""
+    processor = FileNetSourceProcessor(filenet_coords)
+    processor._coords = filenet_coords
+
+    identifier = FileNetFileIdentifier(
+        id="{DOC-NO-EXT}",
+        name="README",
+        size=500,
+        download_url="/content?id={DOC-NO-EXT}",
+    )
+
+    ref = processor._make_document_ref(identifier, source_index=0)
+    assert ref.filename == "README-DOC-NO-EXT"
+
+    mock_buffer = BytesIO(b"readme content")
+    with patch(
+        "docling_jobkit.connectors.filenet.source_processor.download_document",
+        return_value=mock_buffer,
+    ):
+        stream = processor._fetch_document_by_id(identifier)
+
+    assert stream.name == "README-DOC-NO-EXT"
+    assert stream.name == ref.filename
