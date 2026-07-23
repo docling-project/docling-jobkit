@@ -10,10 +10,9 @@ from docling_core.types.io import DocumentStream
 from docling_jobkit.connectors.filenet.helper import (
     check_connection,
     download_document,
-    get_document_metadata,
     get_filenet_auth_header,
+    list_docs_by_id,
     list_folder_documents,
-    list_multiple_documents,
     list_repository_documents,
 )
 from docling_jobkit.connectors.filenet.models import (
@@ -75,30 +74,12 @@ class FileNetSourceProcessor(
         yielded = 0
         max_elements = self._coords.max_num_elements
 
-        # Single document mode
-        if len(self._coords.document_ids) == 1:
-            doc_id = self._coords.document_ids[0]
-            metadata = get_document_metadata(
+        # Document IDs mode (single or multiple)
+        if self._coords.document_ids:
+            docs = list_docs_by_id(
                 self._coords,
                 self._auth_header,
-                doc_id,
-            )
-            yield FileNetFileIdentifier(
-                id=metadata["id"],
-                name=metadata["name"],
-                size=metadata["contentSize"],
-                mime_type=metadata.get("mimeType"),
-                download_url=metadata["downloadUrl"],
-            )
-            return
-
-        # Multi-doc mode
-        elif self._coords.document_ids:
-            doc_ids = self._coords.document_ids
-            docs = list_multiple_documents(
-                self._coords,
-                self._auth_header,
-                doc_ids,
+                self._coords.document_ids,
             )
 
         # Folder mode

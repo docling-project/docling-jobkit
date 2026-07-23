@@ -109,18 +109,23 @@ def test_filenet_document_ids_is_optional_single_document_override(filenet_coord
     )
     processor = FileNetSourceProcessor(coords)
     processor._auth_header = "test-auth"
-    metadata = {
+
+    mock_doc = {
         "id": "{DOC-1}",
         "name": "doc1.pdf",
         "contentSize": 1000,
-        "downloadUrl": "/content?id={DOC-1}",
+        "contentElements": [
+            {
+                "downloadUrl": "/content?id={DOC-1}",
+            }
+        ],
     }
 
     with (
         patch(
-            "docling_jobkit.connectors.filenet.source_processor.get_document_metadata",
-            return_value=metadata,
-        ) as get_metadata,
+            "docling_jobkit.connectors.filenet.source_processor.list_docs_by_id",
+            return_value=iter([mock_doc]),
+        ) as list_docs,
         patch(
             "docling_jobkit.connectors.filenet.source_processor.list_folder_documents"
         ) as list_folder,
@@ -129,7 +134,7 @@ def test_filenet_document_ids_is_optional_single_document_override(filenet_coord
 
     assert [doc.id for doc in docs] == ["{DOC-1}"]
     assert processor._count_documents() == 1
-    get_metadata.assert_called_once_with(coords, "test-auth", "{DOC-1}")
+    list_docs.assert_called_once_with(coords, "test-auth", ["{DOC-1}"])
     list_folder.assert_not_called()
 
 

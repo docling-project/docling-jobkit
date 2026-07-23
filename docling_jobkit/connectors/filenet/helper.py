@@ -300,7 +300,7 @@ def list_folder_documents(
         yield doc
 
 
-def list_multiple_documents(
+def list_docs_by_id(
     coords: FileNetCoordinates,
     auth_header: str,
     doc_ids: list[str],
@@ -355,63 +355,6 @@ def list_multiple_documents(
 
     for doc in _paginate_documents(graphql_url, auth_header, data.get("documents", {})):
         yield doc
-
-
-def get_document_metadata(
-    coords: FileNetCoordinates,
-    auth_header: str,
-    document_id: str,
-) -> dict:
-    """Fetch metadata for a specific FileNet document."""
-    query = """
-    query ($repo: String!, $doc: String!) {
-      document(
-        repositoryIdentifier: $repo
-        identifier: $doc
-      ) {
-        id
-        name
-        mimeType
-        contentSize
-        contentElements {
-          contentType
-          elementSequenceNumber
-          ... on ContentTransfer {
-            contentSize
-            retrievalName
-            downloadUrl
-          }
-        }
-      }
-    }
-    """
-
-    graphql_url = f"{coords.base_url.rstrip('/')}/graphql"
-
-    data = _execute_graphql_query(
-        graphql_url,
-        auth_header,
-        query,
-        {
-            "repo": coords.repository_id,
-            "doc": document_id,
-        },
-    )
-
-    doc = data.get("document", {})
-
-    if not doc.get("contentElements"):
-        raise RuntimeError(f"Document {document_id} has no content elements")
-
-    content_element = doc["contentElements"][0]
-
-    return {
-        "id": doc["id"],
-        "name": doc["name"],
-        "mimeType": doc.get("mimeType"),
-        "contentSize": int(doc.get("contentSize", 0)),
-        "downloadUrl": content_element["downloadUrl"],
-    }
 
 
 def download_document(
