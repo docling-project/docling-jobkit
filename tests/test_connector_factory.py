@@ -518,6 +518,7 @@ def test_rq_worker_uses_explicit_external_plugin_policy(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_ray_redis_resolution_uses_external_plugin_policy(monkeypatch):
+    pytest.importorskip("ray")
     import docling_jobkit.connectors.connector_factory as connector_factory_module
     from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 
@@ -577,6 +578,7 @@ def test_factory_expandability_can_depend_on_config_type():
 
 
 def test_ray_expandable_source_accepts_plugin_artifact_target(monkeypatch):
+    pytest.importorskip("ray")
     from docling.datamodel.service.tasks import TaskType
 
     from docling_jobkit.orchestrators.ray import orchestrator as ray_orchestrator
@@ -603,6 +605,7 @@ def test_ray_expandable_source_accepts_plugin_artifact_target(monkeypatch):
 
 
 def test_ray_s3_fanout_accepts_plugin_artifact_target(monkeypatch):
+    pytest.importorskip("ray")
     from docling.datamodel.service.tasks import TaskType
 
     from docling_jobkit.orchestrators.ray import serve_deployment
