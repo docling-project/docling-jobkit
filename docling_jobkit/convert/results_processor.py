@@ -11,6 +11,7 @@ from typing import Any, Iterable, Optional
 
 import pandas as pd
 from pandas import DataFrame
+from pydantic import BaseModel
 
 from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.document import ConversionResult
@@ -37,7 +38,6 @@ from docling_jobkit.convert.chunking import (
     _write_document_chunks_jsonl,
 )
 from docling_jobkit.datamodel.target_field_slots import ChunkFieldSlots
-from docling_jobkit.datamodel.task_targets import ChunkTarget
 
 _log = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class ResultsProcessor:
         export_parquet_file: bool = False,
         scratch_dir: Path | None = None,
         artifact_root_prefix: str = "",
-        chunk_target: Optional[ChunkTarget] = None,
+        chunk_target: Optional[BaseModel] = None,
         chunking_options: Optional[BaseChunkerOptions] = None,
     ):
         self._target_processor = target_processor

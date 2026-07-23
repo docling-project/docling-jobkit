@@ -1,6 +1,6 @@
 import json as _json
 from pathlib import Path
-from typing import Any, BinaryIO, Generic, Optional, TypeVar
+from typing import Any, BinaryIO, Generic, Literal, Optional, TypeVar
 
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.datamodel.target_field_slots import (
@@ -42,6 +42,10 @@ class BaseDatabaseTargetProcessor(BaseTargetProcessor, Generic[_T]):
     @classmethod
     def get_config_types(cls) -> tuple[type[FieldMappings], ...]:
         return ()
+
+    @classmethod
+    def result_mode(cls) -> Literal["database"]:
+        return "database"
 
     def _initialize(self) -> None:
         pass

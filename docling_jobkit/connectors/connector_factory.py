@@ -289,13 +289,13 @@ class TargetConnectorFactory(BaseConnectorFactory[BaseTargetProcessor]):
 
     def result_mode(
         self, config: Mapping[str, Any] | BaseModel
-    ) -> Literal["artifacts", "archive", "presigned"]:
+    ) -> Literal["artifacts", "archive", "presigned", "database"]:
         normalized = self.validate_config(config)
         return self._classes[type(normalized)].result_mode()
 
     def result_mode_for_kind(
         self, kind: str
-    ) -> Literal["artifacts", "archive", "presigned"]:
+    ) -> Literal["artifacts", "archive", "presigned", "database"]:
         config_type = self._config_types_by_kind.get(kind)
         if config_type is None:
             raise TargetConnectorConfigError(

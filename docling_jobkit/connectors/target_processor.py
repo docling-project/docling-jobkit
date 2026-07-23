@@ -28,7 +28,7 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         )
 
     @classmethod
-    def result_mode(cls) -> Literal["artifacts", "archive", "presigned"]:
+    def result_mode(cls) -> Literal["artifacts", "archive", "presigned", "database"]:
         return "artifacts"
 
     def __enter__(self):

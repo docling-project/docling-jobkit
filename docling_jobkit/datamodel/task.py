@@ -26,7 +26,6 @@ from docling_jobkit.datamodel.chunking import (
     ChunkingOptionType,
 )
 from docling_jobkit.datamodel.task_meta import TaskStatus
-from docling_jobkit.datamodel.task_targets import ChunkTarget
 
 
 def _resolve_source(value: Any, info: ValidationInfo) -> Any:
@@ -70,9 +69,27 @@ def _resolve_target(value: Any, info: ValidationInfo) -> Any:
     return get_target_connector_factory(allow_external_plugins).validate_config(value)
 
 
+def _resolve_chunk_target(value: Any, info: ValidationInfo) -> Any:
+    if value is None:
+        return value
+    allow_external_plugins = bool(
+        (info.context or {}).get("allow_external_plugins", False)
+    )
+    from docling_jobkit.connectors.connector_factory import (
+        get_target_connector_factory,
+    )
+
+    return get_target_connector_factory(allow_external_plugins).validate_config(value)
+
+
 TaskTarget = Annotated[
     InBodyTarget | ZipTarget | SerializeAsAny[BaseModel],
     BeforeValidator(_resolve_target),
+]
+
+ChunkTarget = Annotated[
+    SerializeAsAny[BaseModel],
+    BeforeValidator(_resolve_chunk_target),
 ]
 
 
@@ -87,7 +104,7 @@ class Task(BaseModel):
     task_status: TaskStatus = TaskStatus.PENDING
     sources: list[TaskSource] = []
     target: TaskTarget = InBodyTarget()
-    chunk_target: Optional[ChunkTarget] = None
+    chunk_target: Optional[ChunkTarget] = None  # type: ignore[valid-type]
     options: Annotated[
         Optional[ConvertDocumentsOptions],
         Field(

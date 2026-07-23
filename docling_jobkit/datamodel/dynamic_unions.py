@@ -5,6 +5,8 @@ helpers build precise plugin-aware unions for that external configuration bounda
 Internal task sources and targets resolve structurally through the connector registry.
 """
 
+from typing import Any
+
 from docling_jobkit.connectors.connector_factory import (
     get_source_connector_factory,
     get_target_connector_factory,
@@ -34,15 +36,33 @@ def build_job_config_model(allow_external_plugins: bool = False):
     from docling.datamodel.service.options import ConvertDocumentsOptions
     from docling.datamodel.service.targets import PresignedUrlTarget, ZipTarget
 
-    from docling_jobkit.datamodel.task_targets import ChunkTarget
+    from docling_jobkit.datamodel.task import ChunkTarget
 
     source_union = build_source_union(allow_external_plugins)
+    target_factory = get_target_connector_factory(allow_external_plugins)
+
     target_types = (
-        *get_target_connector_factory(allow_external_plugins).registered_config_types,
+        *target_factory.registered_config_types,
         ZipTarget,
     )
     target_types = tuple(t for t in target_types if t is not PresignedUrlTarget)
     target_union = Annotated[Union[target_types], Field(discriminator="kind")]  # type: ignore[valid-type]
+
+    # chunk_target accepts only database-mode targets registered in the factory.
+    chunk_types = tuple(
+        t
+        for t in target_factory.registered_config_types
+        if target_factory.result_mode_for_kind(t.model_fields["kind"].default)
+        == "database"
+    )
+    if chunk_types:
+        chunk_union: Any = (
+            Annotated[Union[chunk_types], Field(discriminator="kind")]  # type: ignore[valid-type]
+            if len(chunk_types) > 1
+            else chunk_types[0]
+        )
+    else:
+        chunk_union = ChunkTarget
 
     return create_model(
         "DynamicJobConfig",
@@ -50,7 +70,7 @@ def build_job_config_model(allow_external_plugins: bool = False):
         options=(ConvertDocumentsOptions, ConvertDocumentsOptions()),
         sources=(list[source_union], ...),  # type: ignore[valid-type]
         target=(target_union, ...),  # type: ignore[valid-type]
-        chunk_target=(Optional[ChunkTarget], None),  # type: ignore[valid-type]
+        chunk_target=(Optional[chunk_union], None),  # type: ignore[valid-type]
     )
 
 

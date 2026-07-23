@@ -24,9 +24,6 @@ from docling_jobkit.connectors.artifact_paths import (
     hash_path_component,
 )
 from docling_jobkit.connectors.connector_factory import get_target_connector_factory
-from docling_jobkit.connectors.database_target_processor import (
-    BaseDatabaseTargetProcessor,
-)
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.convert.export import (
@@ -704,13 +701,10 @@ def _process_remote_exportable_results(
 
         task_result = RemoteTargetResult()
     else:
-        with get_target_processor(task.target) as target_processor:
-            if not isinstance(target_processor, BaseDatabaseTargetProcessor):
-                raise TypeError(
-                    f"Unsupported target type {type(task.target)!r}: "
-                    "only storage targets (S3, local path, Google Drive) and "
-                    "database targets are supported here."
-                )
+        # target_mode == "database": accumulate formats per document then upsert
+        with get_target_processor(
+            task.target, allow_external_plugins=allow_external_plugins
+        ) as target_processor:
             for idx, exportable_document in enumerate(exportable_documents):
                 doc_hash = exportable_document.document_hash or f"doc_{idx}"
 

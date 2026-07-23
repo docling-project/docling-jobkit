@@ -67,8 +67,7 @@ from docling_jobkit.datamodel.target_field_slots import (
     ChunkFieldSlots,
     coerce_large_ints,
 )
-from docling_jobkit.datamodel.task import Task
-from docling_jobkit.datamodel.task_targets import ChunkTarget
+from docling_jobkit.datamodel.task import ChunkTarget, Task
 from docling_jobkit.public_errors import TargetWriteError, render_public_error_list
 
 if TYPE_CHECKING:
