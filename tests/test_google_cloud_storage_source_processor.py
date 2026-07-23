@@ -4,20 +4,21 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from google.api_core.exceptions import NotFound
+from google.api_core.exceptions import Forbidden, NotFound
 
 from docling.datamodel.base_models import DocumentStream
+from docling.datamodel.service.sources import (
+    GoogleCloudStorageCoordinates,
+)
 
-from docling_jobkit.connectors.google_cloud_storage_helper import (
+from docling_jobkit.connectors.errors import SourceConnectorAuthenticationError
+from docling_jobkit.connectors.google_cloud_storage.helper import (
     GoogleCloudStorageFileIdentifier,
 )
-from docling_jobkit.connectors.google_cloud_storage_source_processor import (
+from docling_jobkit.connectors.google_cloud_storage.source_processor import (
     GoogleCloudStorageSourceProcessor,
 )
 from docling_jobkit.convert.materialization import SourceLimitExceededError
-from docling_jobkit.datamodel.google_cloud_storage_coords import (
-    GoogleCloudStorageCoordinates,
-)
 
 
 @pytest.fixture
@@ -114,6 +115,18 @@ def test_fetch_document_logs_and_reraises_api_error(coords, caplog):
         "source3/missing.pdf" in record.message and coords.bucket in record.message
         for record in caplog.records
     )
+
+
+def test_gcs_source_authentication_error_is_client_actionable(coords):
+    processor = GoogleCloudStorageSourceProcessor(coords)
+    processor._client = MagicMock()
+    processor._client.list_blobs.side_effect = Forbidden("denied")
+
+    with pytest.raises(
+        SourceConnectorAuthenticationError,
+        match="Google Cloud Storage authentication",
+    ):
+        list(processor._list_document_ids())
 
 
 def test_fetch_document_returns_stream_with_name(coords):

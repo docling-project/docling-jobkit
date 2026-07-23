@@ -21,19 +21,21 @@ from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.requests import FileSourceRequest
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
 from docling_jobkit.config.target_config import S3PresignedConfig
+from docling_jobkit.connectors.connector_factory import get_source_connector_factory
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
-from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
+from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget, validate_task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
     TaskNotFoundError,
 )
+from docling_jobkit.orchestrators.serialization import dump_model_with_secrets
 
 _log = logging.getLogger(__name__)
 
@@ -60,6 +62,7 @@ class RQOrchestratorConfig(BaseModel):
     debug_error_details: bool = False
     s3_presigned_config: S3PresignedConfig | None = None
     allowed_target_kinds: Optional[set[str]] = None
+    allow_external_plugins: bool = False
 
     @model_validator(mode="after")
     def resolve_redis_gate_concurrency(self) -> "RQOrchestratorConfig":
@@ -171,28 +174,36 @@ class RQOrchestrator(BaseOrchestrator):
                     stacklevel=2,
                 )
             task_id = str(uuid.uuid4())
-            rq_sources: list[HttpSource | FileSource | S3Coordinates] = []
+            source_factory = get_source_connector_factory(
+                self.config.allow_external_plugins
+            )
+            rq_sources: list[TaskSource] = []
             for source in sources:
                 if isinstance(source, DocumentStream):
                     encoded_doc = base64.b64encode(source.stream.read()).decode()
                     rq_sources.append(
-                        FileSource(filename=source.name, base64_string=encoded_doc)
+                        FileSourceRequest(
+                            filename=source.name, base64_string=encoded_doc
+                        )
                     )
-                elif isinstance(source, (HttpSource, FileSource, S3Coordinates)):
-                    rq_sources.append(source)
+                else:
+                    rq_sources.append(source_factory.validate_config(source))
             chunking_export_options = chunking_export_options or ChunkingExportOptions()
-            task = Task(
-                task_id=task_id,
-                task_type=task_type,
-                sources=rq_sources,
-                convert_options=convert_options,
-                chunking_options=chunking_options,
-                chunking_export_options=chunking_export_options,
-                target=target,
-                callbacks=callbacks or [],
-                metadata=metadata or {},
+            task = validate_task(
+                {
+                    "task_id": task_id,
+                    "task_type": task_type,
+                    "sources": rq_sources,
+                    "convert_options": convert_options,
+                    "chunking_options": chunking_options,
+                    "chunking_export_options": chunking_export_options,
+                    "target": target,
+                    "callbacks": callbacks or [],
+                    "metadata": metadata or {},
+                },
+                allow_external_plugins=self.config.allow_external_plugins,
             )
-            task_data = task.model_dump(mode="json", serialize_as_any=True)
+            task_data = dump_model_with_secrets(task, serialize_as_any=True)
             self._rq_queue.enqueue(
                 self._rq_job_function,
                 kwargs={"task_data": task_data},
@@ -396,7 +407,10 @@ class RQOrchestrator(BaseOrchestrator):
             ):
                 if data.get(field_name) is not None:
                     task_kwargs[field_name] = data[field_name]
-            return Task(**task_kwargs)
+            return validate_task(
+                task_kwargs,
+                allow_external_plugins=self.config.allow_external_plugins,
+            )
         except Exception as exc:
             _log.error(f"Redis get task {task_id}: {exc}")
             return None

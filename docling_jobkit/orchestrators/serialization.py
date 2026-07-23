@@ -1,5 +1,48 @@
 """Shared serialization utilities for orchestrators."""
 
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, SecretBytes, SecretStr
+
+
+def _restore_secret_values(raw: Any, dumped: Any) -> Any:
+    """Restore secret values into a dumped structure for trusted transports."""
+    if isinstance(raw, (SecretStr, SecretBytes)):
+        return raw.get_secret_value()
+
+    if isinstance(raw, dict) and isinstance(dumped, dict):
+        return {key: _restore_secret_values(raw[key], dumped[key]) for key in dumped}
+
+    if isinstance(raw, list) and isinstance(dumped, list):
+        return [
+            _restore_secret_values(raw_item, dumped_item)
+            for raw_item, dumped_item in zip(raw, dumped)
+        ]
+
+    return dumped
+
+
+def dump_model_with_secrets(
+    model: BaseModel,
+    *,
+    exclude_none: bool = False,
+    serialize_as_any: bool = False,
+) -> Any:
+    """Dump a model for trusted internal transport with secrets restored."""
+    dumped = model.model_dump(
+        mode="json",
+        exclude_none=exclude_none,
+        serialize_as_any=serialize_as_any,
+    )
+    raw = model.model_dump(
+        mode="python",
+        exclude_none=exclude_none,
+        serialize_as_any=serialize_as_any,
+    )
+    return _restore_secret_values(raw, dumped)
+
 
 def make_msgpack_safe(obj):
     """Recursively convert any non-msgpack-serializable types to safe types.

@@ -6,14 +6,19 @@ from unittest.mock import MagicMock
 import pytest
 from botocore.exceptions import ClientError
 
+from docling.datamodel.service.sources import S3Coordinates
 from docling_core.types.io import DocumentStream
 
-from docling_jobkit.connectors.s3_source_processor import (
+from docling_jobkit.connectors.errors import (
+    ConnectorAuthenticationError,
+    SourceConnectorAuthenticationError,
+)
+from docling_jobkit.connectors.s3.source_processor import (
     S3FileIdentifier,
     S3SourceProcessor,
 )
+from docling_jobkit.connectors.s3.target_processor import S3TargetProcessor
 from docling_jobkit.convert.materialization import SourceLimitExceededError
-from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
 # -------------------------------------------------------------------
 # Helper function to check MinIO availability
@@ -226,6 +231,34 @@ def test_s3_fetch_document_logs_and_reraises_client_error(minio_coords, caplog):
         and minio_coords.bucket in record.message
         for record in caplog.records
     )
+
+
+def test_s3_source_authentication_error_is_client_actionable(minio_coords):
+    processor = S3SourceProcessor(minio_coords)
+    processor._client = MagicMock()
+    processor._client.download_fileobj.side_effect = ClientError(
+        error_response={
+            "Error": {"Code": "InvalidAccessKeyId", "Message": "invalid key"}
+        },
+        operation_name="DownloadFileobj",
+    )
+
+    with pytest.raises(SourceConnectorAuthenticationError, match="S3 authentication"):
+        processor._fetch_document_by_id(
+            S3FileIdentifier(key="incoming/doc.pdf", size=1)
+        )
+
+
+def test_s3_target_authentication_error_is_client_actionable(minio_coords):
+    processor = S3TargetProcessor(minio_coords)
+    processor._client = MagicMock()
+    processor._client.upload_fileobj.side_effect = ClientError(
+        error_response={"Error": {"Code": "AccessDenied", "Message": "denied"}},
+        operation_name="UploadFileobj",
+    )
+
+    with pytest.raises(ConnectorAuthenticationError, match="S3 authentication"):
+        processor.upload_object(b"data", "out.json", "application/json")
 
 
 @pytest.mark.skipif(

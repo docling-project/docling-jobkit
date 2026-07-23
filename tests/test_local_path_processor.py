@@ -6,14 +6,16 @@ import pytest
 
 from docling_core.types.io import DocumentStream
 
-from docling_jobkit.connectors.local_path_source_processor import (
+from docling_jobkit.connectors.local_path.models import (
+    LocalPathSource,
+    LocalPathTarget,
+)
+from docling_jobkit.connectors.local_path.source_processor import (
     LocalPathSourceProcessor,
 )
-from docling_jobkit.connectors.local_path_target_processor import (
+from docling_jobkit.connectors.local_path.target_processor import (
     LocalPathTargetProcessor,
 )
-from docling_jobkit.datamodel.task_sources import TaskLocalPathSource
-from docling_jobkit.datamodel.task_targets import LocalPathTarget
 
 # -------------------------------------------------------------------
 # Pytest fixtures
@@ -58,7 +60,7 @@ def temp_output_dir():
 
 def test_local_path_single_file(temp_test_dir):
     """Test processing a single file."""
-    source = TaskLocalPathSource(
+    source = LocalPathSource(
         kind="local_path",
         path=temp_test_dir / "file1.pdf",
     )
@@ -83,7 +85,7 @@ def test_local_path_single_file(temp_test_dir):
 
 def test_local_path_directory_recursive(temp_test_dir):
     """Test processing a directory recursively with pattern."""
-    source = TaskLocalPathSource(
+    source = LocalPathSource(
         kind="local_path",
         path=temp_test_dir,
         pattern="*.pdf",
@@ -116,7 +118,7 @@ def test_local_path_directory_recursive(temp_test_dir):
 
 def test_local_path_directory_non_recursive(temp_test_dir):
     """Test processing a directory non-recursively."""
-    source = TaskLocalPathSource(
+    source = LocalPathSource(
         kind="local_path",
         path=temp_test_dir,
         pattern="*.pdf",
@@ -139,7 +141,7 @@ def test_local_path_directory_non_recursive(temp_test_dir):
 
 def test_local_path_all_files(temp_test_dir):
     """Test processing all files with default pattern."""
-    source = TaskLocalPathSource(
+    source = LocalPathSource(
         kind="local_path",
         path=temp_test_dir,
         pattern="*",
@@ -153,7 +155,7 @@ def test_local_path_all_files(temp_test_dir):
 
 def test_local_path_nonexistent_file():
     """Test that nonexistent path raises error."""
-    source = TaskLocalPathSource(
+    source = LocalPathSource(
         kind="local_path",
         path=Path("/nonexistent/path/file.pdf"),
     )

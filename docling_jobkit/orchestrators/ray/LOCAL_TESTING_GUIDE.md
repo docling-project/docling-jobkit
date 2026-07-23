@@ -56,7 +56,7 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManagerConfig,
 )
 from docling_jobkit.datamodel.http_inputs import FileSource
-from docling_jobkit.datamodel.task_targets import InBodyTarget
+from docling.datamodel.service.targets import InBodyTarget
 from docling_jobkit.orchestrators.ray import (
     RayOrchestrator,
     RayOrchestratorConfig,

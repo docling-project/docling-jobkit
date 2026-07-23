@@ -1,4 +1,4 @@
-from docling_jobkit.connectors.s3_helper import strip_prefix_postfix
+from docling_jobkit.connectors.s3.helper import strip_prefix_postfix
 
 
 def test_strip_prefix_postfix():

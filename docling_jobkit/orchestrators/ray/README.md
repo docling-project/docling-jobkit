@@ -208,7 +208,7 @@ config = RayOrchestratorConfig(
 ```python
 import asyncio
 from docling_jobkit.datamodel.http_inputs import FileSource
-from docling_jobkit.datamodel.task_targets import InBodyTarget
+from docling.datamodel.service.targets import InBodyTarget
 
 async def main():
     # Start processing queue

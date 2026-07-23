@@ -900,6 +900,24 @@ class DoclingConverterManager:
                 f"Allowed engines: {', '.join(allowed_engines)}"
             )
 
+    def _instantiate_custom_preset_options(
+        self, config_dict: dict, options_model: Type[BaseModel]
+    ) -> BaseModel:
+        """Validate a raw custom-preset dict into its options model.
+
+        Custom presets come from admin config (e.g. env vars) as plain dicts, so
+        they need the same engine_options instantiation and model validation
+        that the custom_config request path already applies.
+        """
+        config_dict = config_dict.copy()
+        if "engine_options" in config_dict and isinstance(
+            config_dict["engine_options"], dict
+        ):
+            config_dict["engine_options"] = self._instantiate_engine_options(
+                config_dict["engine_options"]
+            )
+        return options_model.model_validate(config_dict)
+
     def _get_options_from_preset(
         self,
         preset_id: str,
@@ -907,6 +925,7 @@ class DoclingConverterManager:
         preset_type: str,
         allowed_engines: Optional[list[str]],
         from_preset_func: Optional[Callable[[str], Any]] = None,
+        custom_options_model: Optional[Type[BaseModel]] = None,
     ) -> Any:
         """Generic method to get options from preset with engine validation.
 
@@ -916,6 +935,8 @@ class DoclingConverterManager:
             preset_type: Human-readable type name for error messages
             allowed_engines: List of allowed engine types (None means all allowed)
             from_preset_func: Optional function to create options from preset_id (e.g., VlmConvertOptions.from_preset)
+            custom_options_model: Options model used to validate a custom preset that is
+                still a raw dict (e.g. PictureDescriptionVlmEngineOptions)
 
         Returns:
             Options object or preset_id string (for legacy handling)
@@ -942,7 +963,12 @@ class DoclingConverterManager:
                 return preset_info["preset_id"]
         else:  # custom preset
             # Use admin-configured preset
-            preset_options = preset_info["options"]
+            preset_options: Any = preset_info["options"]
+
+            if isinstance(preset_options, dict) and custom_options_model is not None:
+                preset_options = self._instantiate_custom_preset_options(
+                    preset_options, custom_options_model
+                )
 
             # Validate engine is allowed (only for options that have engine_options)
             if allowed_engines is not None and hasattr(
@@ -998,29 +1024,14 @@ class DoclingConverterManager:
         """Parse VLM options from preset OR custom config."""
         # Option 1: Preset (recommended)
         if request.vlm_pipeline_preset:
-            result = self._get_options_from_preset(
+            return self._get_options_from_preset(
                 request.vlm_pipeline_preset,
                 self.vlm_preset_registry,
                 "VLM",
                 self.config.allowed_vlm_engines,
                 VlmConvertOptions.from_preset,
+                VlmConvertOptions,
             )
-
-            # Custom presets return raw dicts - convert to VlmConvertOptions
-            if isinstance(result, dict):
-                config_dict = result.copy()
-
-                # Instantiate the correct engine options class
-                if "engine_options" in config_dict and isinstance(
-                    config_dict["engine_options"], dict
-                ):
-                    config_dict["engine_options"] = self._instantiate_engine_options(
-                        config_dict["engine_options"]
-                    )
-
-                return VlmConvertOptions.model_validate(config_dict)
-
-            return result
 
         # Option 2: Custom config (if allowed)
         if request.vlm_pipeline_custom_config:
@@ -1080,6 +1091,7 @@ class DoclingConverterManager:
                 "Picture description",
                 self.config.allowed_picture_description_engines,
                 PictureDescriptionVlmEngineOptions.from_preset,
+                PictureDescriptionVlmEngineOptions,
             )
 
         if request.picture_description_custom_config:
@@ -1135,6 +1147,7 @@ class DoclingConverterManager:
                 "Code/formula",
                 self.config.allowed_code_formula_engines,
                 CodeFormulaVlmOptions.from_preset,
+                CodeFormulaVlmOptions,
             )
 
         if request.code_formula_custom_config:

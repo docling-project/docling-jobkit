@@ -1,3 +1,25 @@
+## [v3.0.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.0.0) - 2026-07-23
+
+### Feature
+
+* **connectors:** Support registry-backed plugin sources ([#205](https://github.com/docling-project/docling-jobkit/issues/205)) ([`3e7ad25`](https://github.com/docling-project/docling-jobkit/commit/3e7ad25f477658d932ad45da49e06af8fbed7364))
+
+### Breaking
+
+* support registry-backed plugin sources ([#205](https://github.com/docling-project/docling-jobkit/issues/205)) ([`3e7ad25`](https://github.com/docling-project/docling-jobkit/commit/3e7ad25f477658d932ad45da49e06af8fbed7364))
+
+## [v2.1.0](https://github.com/docling-project/docling-jobkit/releases/tag/v2.1.0) - 2026-07-17
+
+### Feature
+
+* Google cloud storage connector ([#198](https://github.com/docling-project/docling-jobkit/issues/198)) ([`137ffa7`](https://github.com/docling-project/docling-jobkit/commit/137ffa79fe676ff9d4c234f3db4f07aff7fb0ed9))
+* Add support to export doclang and dclx ([#197](https://github.com/docling-project/docling-jobkit/issues/197)) ([`31c8a35`](https://github.com/docling-project/docling-jobkit/commit/31c8a35385c3672fd36d372d18dbe785ba22f37b))
+* Azure blob storage connector ([#196](https://github.com/docling-project/docling-jobkit/issues/196)) ([`d1c9e3d`](https://github.com/docling-project/docling-jobkit/commit/d1c9e3db0ca37950cc64fafcbb9aefadc5c06367))
+
+### Fix
+
+* Validate custom picture_description/vlm/code_formula presets ([#199](https://github.com/docling-project/docling-jobkit/issues/199)) ([`307af55`](https://github.com/docling-project/docling-jobkit/commit/307af554b981c34715f18d3c1f4a10e027fcbe62))
+
 ## [v2.0.0](https://github.com/docling-project/docling-jobkit/releases/tag/v2.0.0) - 2026-06-29
 
 ### Feature

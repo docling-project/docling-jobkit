@@ -29,10 +29,6 @@ from docling_core.types.doc.labels import DocItemLabel
 from docling_jobkit.connectors.database_target_processor import (
     BaseDatabaseTargetProcessor,
 )
-from docling_jobkit.connectors.s3_helper import (
-    MAX_PARQUET_FILE_SIZE,
-    classifier_labels,
-)
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.convert.chunking import (
@@ -44,6 +40,26 @@ from docling_jobkit.datamodel.target_field_slots import ChunkFieldSlots
 from docling_jobkit.datamodel.task_targets import ChunkTarget
 
 _log = logging.getLogger(__name__)
+
+MAX_PARQUET_FILE_SIZE = 500 * 1024 * 1024
+_CLASSIFIER_LABELS = [
+    "bar_chart",
+    "bar_code",
+    "chemistry_markush_structure",
+    "chemistry_molecular_structure",
+    "flow_chart",
+    "icon",
+    "line_chart",
+    "logo",
+    "map",
+    "other",
+    "pie_chart",
+    "qr_code",
+    "remote_sensing",
+    "screenshot",
+    "signature",
+    "stamp",
+]
 
 
 class ResultsProcessor:
@@ -351,7 +367,7 @@ class ResultsProcessor:
         # Count the number of picture of each type
         num_formulas = 0
         num_codes = 0
-        picture_classes = dict.fromkeys(classifier_labels, 0)
+        picture_classes = dict.fromkeys(_CLASSIFIER_LABELS, 0)
         for element, _level in conv_res.document.iterate_items():
             if isinstance(element, PictureItem):
                 element.image = None  # reset images

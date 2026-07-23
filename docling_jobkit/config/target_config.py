@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from docling_jobkit.datamodel.s3_coords import S3Coordinates
+from docling.datamodel.service.sources import S3Coordinates
 
 
 class S3PresignedConfig(BaseModel):

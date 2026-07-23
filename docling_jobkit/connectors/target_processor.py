@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Literal
 
 from pydantic import BaseModel
 
@@ -26,6 +26,10 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
             f"{cls.__name__} must implement get_config_types() to be registered "
             "as a connector plugin."
         )
+
+    @classmethod
+    def result_mode(cls) -> Literal["artifacts", "archive", "presigned"]:
+        return "artifacts"
 
     def __enter__(self):
         self._initialize()
@@ -73,6 +77,9 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         Upload an in-memory object (bytes or file-like) to the target.
         """
         ...
+
+    def upload_archive(self, filename: Path) -> None:
+        self.upload_file(filename, filename.name, "application/zip")
 
     def begin_document(self, doc_id: str) -> None:
         """Signal the start of a new document's uploads.

@@ -11,7 +11,14 @@ from docling.datamodel.base_models import (
 )
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.responses import ConfidenceScores
-from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.sources import (
+    AzureBlobCoordinates,
+    FileSource,
+    GoogleCloudStorageCoordinates,
+    GoogleDriveCoordinates,
+    HttpSource,
+    S3Coordinates,
+)
 from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
 
@@ -26,6 +33,18 @@ def source_to_public_uri(source: object) -> str | None:
         if key_prefix:
             return f"s3://{source.bucket}/{key_prefix}"
         return f"s3://{source.bucket}"
+    if isinstance(source, AzureBlobCoordinates):
+        blob_prefix = source.blob_prefix.lstrip("/")
+        if blob_prefix:
+            return f"azure://{source.account_name}/{source.container}/{blob_prefix}"
+        return f"azure://{source.account_name}/{source.container}"
+    if isinstance(source, GoogleCloudStorageCoordinates):
+        key_prefix = source.key_prefix.lstrip("/")
+        if key_prefix:
+            return f"gs://{source.bucket}/{key_prefix}"
+        return f"gs://{source.bucket}"
+    if isinstance(source, GoogleDriveCoordinates):
+        return f"gdrive://{source.path_id}"
     if isinstance(source, DocumentStream):
         return source.name
     return None

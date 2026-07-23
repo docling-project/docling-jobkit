@@ -22,7 +22,10 @@ pytest.importorskip("ray")
 from docling.datamodel.base_models import ConversionStatus, OutputFormat
 from docling.datamodel.service.callbacks import ProcessedDocsItem
 from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.sources import FileSource, S3Coordinates
+from docling.datamodel.service.requests import (
+    FileSourceRequest as FileSource,
+    S3SourceRequest as S3Coordinates,
+)
 from docling.datamodel.service.targets import InBodyTarget, S3Target
 
 from docling_jobkit.connectors.source_processor import DocumentChunk, SourceDocumentRef
@@ -91,8 +94,10 @@ def _make_coordinator(
         DoclingProcessorCoordinatorDeployment, "func_or_class", None
     )
     assert deployment_cls is not None
+    converter_manager_config = MagicMock()
+    converter_manager_config.allow_external_plugins = False
     deployment = deployment_cls(
-        converter_manager_config=MagicMock(),
+        converter_manager_config=converter_manager_config,
         config=config,
         redis_url=config.redis_url,
         converter_handle=converter_handle,
@@ -171,9 +176,15 @@ def _patch_source_processor(
             for idx, ref in enumerate(refs):
                 yield DocumentChunk(source=self.source, refs=[ref], chunk_index=idx)
 
+    def get_fake_source_processor(
+        source: object, *, allow_external_plugins: bool
+    ) -> FakeSourceProcessor:
+        assert allow_external_plugins is False
+        return FakeSourceProcessor(source)
+
     monkeypatch.setattr(
         "docling_jobkit.orchestrators.ray.serve_deployment.get_source_processor",
-        lambda source: FakeSourceProcessor(source),
+        get_fake_source_processor,
     )
 
 

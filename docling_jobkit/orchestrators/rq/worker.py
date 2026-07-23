@@ -12,7 +12,7 @@ import redis as sync_redis
 from rq import SimpleWorker, get_current_job
 
 from docling.datamodel.base_models import DocumentStream
-from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.sources import FileSource
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.convert.chunking import process_chunkable_results
@@ -27,7 +27,7 @@ from docling_jobkit.datamodel.exportable_document import (
     source_to_public_uri,
 )
 from docling_jobkit.datamodel.result import DoclingTaskResult
-from docling_jobkit.datamodel.task import Task
+from docling_jobkit.datamodel.task import Task, validate_task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
 from docling_jobkit.orchestrators.rq.orchestrator import (
@@ -57,6 +57,7 @@ def _prepare_convert_sources(
     task: Task,
     *,
     max_file_size: int | None = None,
+    allow_external_plugins: bool = False,
     on_source_prepared: Optional[_SourcePreparedHook] = None,
 ) -> tuple[
     list[Union[str, DocumentStream]],
@@ -66,6 +67,7 @@ def _prepare_convert_sources(
     convert_sources, headers = expand_task_sources(
         task,
         max_file_size=max_file_size,
+        allow_external_plugins=allow_external_plugins,
     )
     source_info: list[dict[str, str]] = []
 
@@ -73,19 +75,14 @@ def _prepare_convert_sources(
         raw_bytes: Optional[bytes] = None
         if isinstance(source, DocumentStream):
             info = {"type": "DocumentStream", "name": source.name}
-        elif isinstance(source, FileSource):
-            raw_bytes = base64.b64decode(source.base64_string)
-            info = {"type": "FileSource", "filename": source.filename}
-        elif isinstance(source, HttpSource):
-            info = {"type": "HttpSource", "url": str(source.url)}
-        elif isinstance(source, S3Coordinates):
-            info = {
-                "type": "S3Coordinates",
-                "bucket": source.bucket,
-                "key_prefix": source.key_prefix,
-            }
         else:
-            raise RuntimeError(f"Unsupported runtime task source: {type(source)!r}")
+            info = {
+                "type": type(source).__name__,
+                "kind": str(source.kind),  # type: ignore[attr-defined]
+            }
+            if isinstance(source, FileSource):
+                raw_bytes = base64.b64decode(source.base64_string)
+                info["filename"] = source.filename
 
         source_info.append(info)
         if on_source_prepared:
@@ -135,6 +132,7 @@ def _run_docling_task(
             convert_sources, headers, source_info = _prepare_convert_sources(
                 task,
                 max_file_size=conversion_manager.config.max_file_size,
+                allow_external_plugins=orchestrator_config.allow_external_plugins,
                 on_source_prepared=on_source_prepared,
             )
             if on_sources_prepared:
@@ -178,6 +176,9 @@ def _run_docling_task(
                         s3_presigned_config=orchestrator_config.s3_presigned_config,
                         callback_invoker=callback_invoker,
                         debug_error_details=orchestrator_config.debug_error_details,
+                        allow_external_plugins=(
+                            orchestrator_config.allow_external_plugins
+                        ),
                     )
             elif task.task_type == TaskType.CHUNK:
                 with phase_cm("process_chunk_results"):
@@ -315,7 +316,10 @@ def docling_task(
     scratch_dir: Path,
 ):
     _log.debug("started task")
-    task = Task.model_validate(task_data)
+    task = validate_task(
+        task_data,
+        allow_external_plugins=orchestrator_config.allow_external_plugins,
+    )
     _log.debug(f"task_id inside task is: {task.task_id}")
     result_key = _run_docling_task(
         task,

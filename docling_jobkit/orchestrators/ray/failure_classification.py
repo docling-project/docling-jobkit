@@ -25,11 +25,6 @@ def _unwrap_ray_failure_exception(exc: BaseException) -> BaseException:
             current = current.cause
             continue
 
-        cause = current.__cause__
-        if isinstance(cause, BaseException):
-            current = cause
-            continue
-
         return current
 
 

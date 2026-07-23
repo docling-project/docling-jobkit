@@ -5,29 +5,28 @@ import pytest
 
 from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.requests import (
+    AnyHttpSourceRequest,
     FileSourceRequest,
     HttpSourceRequest,
     S3SourceRequest,
 )
-from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
-from docling.datamodel.service.targets import S3Target
+from docling.datamodel.service.targets import InBodyTarget, S3Target
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.cli.local import JobConfig as LocalJobConfig
 from docling_jobkit.cli.multiproc import JobConfig as MultiprocJobConfig
-from docling_jobkit.connectors.s3_source_processor import S3SourceProcessor
+from docling_jobkit.connectors.s3.source_processor import S3SourceProcessor
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.convert.source_expansion import expand_task_sources
 from docling_jobkit.datamodel.task import Task
-from docling_jobkit.datamodel.task_targets import InBodyTarget
 from docling_jobkit.orchestrators.rq.orchestrator import (
     RQOrchestrator,
     RQOrchestratorConfig,
 )
 
 
-def _make_s3_source() -> S3Coordinates:
-    return S3Coordinates(
+def _make_s3_source() -> S3SourceRequest:
+    return S3SourceRequest(
         endpoint="127.0.0.1:9000",
         verify_ssl=False,
         access_key="minioadmin",
@@ -57,13 +56,16 @@ def test_expand_task_sources_materializes_s3(monkeypatch: pytest.MonkeyPatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def iterate_documents(self, *, max_file_size=None):
+        def iterate_converter_sources(self, *, max_file_size=None):
             del max_file_size
             return iter(expected_docs)
 
+        def converter_headers(self):
+            return None
+
     monkeypatch.setattr(
         "docling_jobkit.convert.source_expansion.get_source_processor",
-        lambda source: FakeSourceProcessor(),
+        lambda source, **kwargs: FakeSourceProcessor(),
     )
 
     convert_sources, headers = expand_task_sources(task)
@@ -72,7 +74,7 @@ def test_expand_task_sources_materializes_s3(monkeypatch: pytest.MonkeyPatch):
     assert convert_sources == expected_docs
 
 
-def test_get_source_processor_accepts_s3coordinates():
+def test_get_source_processor_accepts_registered_s3_request():
     processor = get_source_processor(_make_s3_source())
     assert isinstance(processor, S3SourceProcessor)
 
@@ -97,13 +99,16 @@ def test_expand_task_sources_passes_max_file_size_to_source_processor(
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def iterate_documents(self, *, max_file_size=None):
+        def iterate_converter_sources(self, *, max_file_size=None):
             seen_limits.append(max_file_size)
             return iter(expected_docs)
 
+        def converter_headers(self):
+            return None
+
     monkeypatch.setattr(
         "docling_jobkit.convert.source_expansion.get_source_processor",
-        lambda source: FakeSourceProcessor(),
+        lambda source, **kwargs: FakeSourceProcessor(),
     )
 
     convert_sources, headers = expand_task_sources(task, max_file_size=123)
@@ -113,7 +118,7 @@ def test_expand_task_sources_passes_max_file_size_to_source_processor(
     assert seen_limits == [123]
 
 
-def test_task_roundtrip_accepts_request_subclasses_without_normalization():
+def test_task_roundtrip_preserves_registered_canonical_types():
     task = Task(
         task_id="task-1",
         task_type=TaskType.CONVERT,
@@ -139,9 +144,9 @@ def test_task_roundtrip_accepts_request_subclasses_without_normalization():
     task_data = task.model_dump(mode="json", serialize_as_any=True)
     rebuilt_task = Task.model_validate(task_data)
 
-    assert isinstance(rebuilt_task.sources[0], FileSource)
-    assert isinstance(rebuilt_task.sources[1], HttpSource)
-    assert isinstance(rebuilt_task.sources[2], S3Coordinates)
+    assert type(rebuilt_task.sources[0]) is FileSourceRequest
+    assert type(rebuilt_task.sources[1]) is AnyHttpSourceRequest
+    assert type(rebuilt_task.sources[2]) is S3SourceRequest
     assert rebuilt_task.sources[2].access_key == "minioadmin"
     assert rebuilt_task.sources[2].secret_key == "minioadmin"
     assert rebuilt_task.sources[2].max_num_elements == 4
@@ -169,7 +174,7 @@ def test_task_json_roundtrip_preserves_s3_secrets_for_source_and_target():
     rebuilt_source = rebuilt_task.sources[0]
     rebuilt_target = rebuilt_task.target
 
-    assert isinstance(rebuilt_source, S3Coordinates)
+    assert type(rebuilt_source) is S3SourceRequest
     assert rebuilt_source.access_key == "minioadmin"
     assert rebuilt_source.secret_key == "minioadmin"
     assert isinstance(rebuilt_target, S3Target)
@@ -178,7 +183,9 @@ def test_task_json_roundtrip_preserves_s3_secrets_for_source_and_target():
 
 
 @pytest.mark.asyncio
-async def test_rq_enqueue_preserves_s3coordinates(monkeypatch: pytest.MonkeyPatch):
+async def test_rq_enqueue_preserves_registered_s3_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
     orchestrator = RQOrchestrator(config=RQOrchestratorConfig())
     captured: dict[str, object] = {}
 
@@ -202,7 +209,7 @@ async def test_rq_enqueue_preserves_s3coordinates(monkeypatch: pytest.MonkeyPatc
     )
 
     assert len(task.sources) == 1
-    assert isinstance(task.sources[0], S3Coordinates)
+    assert type(task.sources[0]) is S3SourceRequest
 
     task_data = captured["kwargs"]["kwargs"]["task_data"]
     assert len(task_data["sources"]) == 1
@@ -229,7 +236,7 @@ async def test_rq_enqueue_preserves_s3coordinates(monkeypatch: pytest.MonkeyPatc
                 "kind": "http",
                 "url": "https://example.com/doc.pdf",
             },
-            HttpSourceRequest,
+            AnyHttpSourceRequest,
         ),
         (
             {
@@ -260,8 +267,8 @@ def test_cli_config_parsing_keeps_kind_compatibility(
 
 def test_expand_task_sources_preserves_file_and_headers():
     encoded = base64.b64encode(b"pdf-bytes").decode()
-    file_source = FileSource(filename="doc.pdf", base64_string=encoded)
-    http_source = HttpSource(
+    file_source = FileSourceRequest(filename="doc.pdf", base64_string=encoded)
+    http_source = HttpSourceRequest(
         url="https://example.com/doc.pdf",
         headers={"Authorization": "Bearer test-token"},
     )

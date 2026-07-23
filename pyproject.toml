@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "docling-jobkit"
-version = "2.0.0"  # DO NOT EDIT, updated automatically
+version = "3.0.0"  # DO NOT EDIT, updated automatically
 description = "Running a distributed job processing documents with Docling."
 readme = "README.md"
 license = "MIT"
@@ -42,7 +42,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "docling-slim[standard]>=2.110.0,<3.0.0",
+    "docling-slim[standard]>=2.113.0,<3.0.0",
     "pydantic~=2.10",
     "pydantic-settings~=2.4",
     "boto3~=1.35",
@@ -110,6 +110,7 @@ dev = [
 
 [tool.uv.sources]
 docling-slim = { git = "https://github.com/docling-project/docling/", rev = "feat-chunking-options-and-target" }
+# docling-slim = { git = "https://github.com/docling-project/docling/", branch = "main" }
 # docling-slim = { path = "../docling", editable = true }
 
 

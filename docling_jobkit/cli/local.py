@@ -6,6 +6,7 @@ import yaml
 from pydantic import ValidationError
 from rich.console import Console
 
+from docling_jobkit.connectors.auth_context import allow_interactive_auth
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.convert.manager import (
@@ -26,8 +27,11 @@ app = typer.Typer(
     pretty_exceptions_enable=False,
 )
 
+JobConfig = build_job_config_model()
+
 
 @app.command(no_args_is_help=True)
+@allow_interactive_auth()
 def convert(
     config_file: Annotated[
         Path,

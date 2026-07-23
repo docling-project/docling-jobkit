@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+from io import BytesIO
+from typing import TYPE_CHECKING, Iterator
+
+from typing_extensions import override
+
+from docling.datamodel.base_models import DocumentStream
+
+if TYPE_CHECKING:
+    from docling_jobkit.connectors.google_drive.helper import GoogleDriveFileIdentifier
+
+from pydantic import BaseModel
+
+from docling.datamodel.service.requests import GoogleDriveSourceRequest
+from docling.datamodel.service.sources import GoogleDriveCoordinates
+
+from docling_jobkit.connectors.errors import (
+    ConnectorAuthenticationError,
+    SourceConnectorAuthenticationError,
+)
+from docling_jobkit.connectors.source_processor import (
+    BaseSourceProcessor,
+    SourceDocumentRef,
+)
+
+
+class GoogleDriveSourceProcessor(
+    BaseSourceProcessor[GoogleDriveCoordinates, "GoogleDriveFileIdentifier"]
+):
+    def __init__(self, coords: GoogleDriveCoordinates):
+        super().__init__(coords)
+        self._coords = coords
+
+    @classmethod
+    def get_config_types(cls) -> tuple[type[BaseModel], ...]:
+        return (GoogleDriveSourceRequest,)
+
+    def _initialize(self):
+        from docling_jobkit.connectors.google_drive.helper import get_service
+
+        try:
+            self._service = get_service(self._coords)
+        except ConnectorAuthenticationError as exc:
+            raise SourceConnectorAuthenticationError(str(exc)) from exc
+
+    def _finalize(self):
+        return
+
+    def _fetch_documents(
+        self, *, max_file_size: int | None = None
+    ) -> Iterator[DocumentStream]:
+        del max_file_size
+        from docling_jobkit.connectors.google_drive.helper import (
+            download_file,
+            get_source_files_infos,
+        )
+
+        files_infos = get_source_files_infos(
+            service=self._service,
+            coords=self._coords,
+        )
+
+        # download and yield one document at the time
+        for file_info in files_infos:
+            buffer = BytesIO()
+            download_file(
+                service=self._service,
+                file_info=file_info,
+                file_stream=buffer,
+            )
+            buffer.seek(0)
+
+            yield DocumentStream(
+                name=file_info.name,
+                stream=buffer,
+            )
+
+    def _list_document_ids(self) -> Iterator[GoogleDriveFileIdentifier]:
+        from docling_jobkit.connectors.google_drive.helper import get_source_files_infos
+
+        for info in get_source_files_infos(self._service, self._coords):
+            yield info
+
+    def _fetch_document_by_id(
+        self,
+        info: GoogleDriveFileIdentifier,
+        *,
+        max_file_size: int | None = None,
+    ) -> DocumentStream:
+        del max_file_size
+        from docling_jobkit.connectors.google_drive.helper import download_file
+
+        buffer = BytesIO()
+
+        download_file(
+            service=self._service,
+            file_info=info,
+            file_stream=buffer,
+        )
+        buffer.seek(0)
+
+        return DocumentStream(
+            name=info.name,
+            stream=buffer,
+        )
+
+    @override
+    def _make_document_ref(
+        self, info: GoogleDriveFileIdentifier, source_index: int
+    ) -> SourceDocumentRef[GoogleDriveFileIdentifier]:
+        source_uri = info.path or info.name
+        return SourceDocumentRef(
+            id=info,
+            source_index=source_index,
+            source_uri=source_uri,
+            filename=info.name,
+        )

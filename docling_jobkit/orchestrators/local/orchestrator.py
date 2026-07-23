@@ -20,7 +20,7 @@ from docling_jobkit.convert.chunking import DocumentChunkerManager
 from docling_jobkit.convert.manager import DoclingConverterManager
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
-from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
+from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget, validate_task
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
 )
@@ -81,15 +81,18 @@ class LocalOrchestrator(BaseOrchestrator):
         self._validate_target(target)
         task_id = str(uuid.uuid4())
         chunking_export_options = chunking_export_options or ChunkingExportOptions()
-        task = Task(
-            task_id=task_id,
-            task_type=task_type,
-            sources=sources,
-            convert_options=convert_options,
-            chunking_options=chunking_options,
-            chunking_export_options=chunking_export_options,
-            target=target,
-            callbacks=callbacks or [],
+        task = validate_task(
+            {
+                "task_id": task_id,
+                "task_type": task_type,
+                "sources": sources,
+                "convert_options": convert_options,
+                "chunking_options": chunking_options,
+                "chunking_export_options": chunking_export_options,
+                "target": target,
+                "callbacks": callbacks or [],
+            },
+            allow_external_plugins=self.cm.config.allow_external_plugins,
         )
         await self.init_task_tracking(task)
 
