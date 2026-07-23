@@ -18,7 +18,7 @@ from docling_jobkit.datamodel.chunking import (
     ChunkingOptionType,
 )
 from docling_jobkit.datamodel.task_meta import TaskStatus
-from docling_jobkit.datamodel.task_targets import TaskTarget
+from docling_jobkit.datamodel.task_targets import ChunkTarget, TaskTarget
 
 TaskSource = Union[HttpSource, FileSource, DocumentStream, S3Coordinates]
 
@@ -31,6 +31,7 @@ class Task(BaseModel):
     task_status: TaskStatus = TaskStatus.PENDING
     sources: list[TaskSource] = []
     target: TaskTarget = InBodyTarget()
+    chunk_target: Optional[ChunkTarget] = None
     options: Annotated[
         Optional[ConvertDocumentsOptions],
         Field(
@@ -72,6 +73,19 @@ class Task(BaseModel):
             )
             values["convert_options"] = values["options"]
         return values
+
+    @model_validator(mode="after")
+    def validate_chunk_target(self):
+        convert_options = self.convert_options
+        do_chunking = convert_options is not None and convert_options.do_chunking
+
+        if self.chunk_target is not None and not do_chunking:
+            raise ValueError("chunk_target requires convert_options.do_chunking=True")
+
+        if self.task_type == TaskType.CHUNK and self.chunk_target is not None:
+            raise ValueError("chunk_target is only supported for convert tasks")
+
+        return self
 
     def set_status(self, status: TaskStatus):
         now = datetime.datetime.now(datetime.timezone.utc)

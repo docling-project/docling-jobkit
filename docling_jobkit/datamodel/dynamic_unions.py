@@ -91,9 +91,13 @@ def install_dynamic_unions(allow_external_plugins: bool = False) -> None:
 
 def build_job_config_model(allow_external_plugins: bool = False):
     """Build a CLI ``JobConfig``-shaped model whose source/target accept plugins."""
+    from typing import Optional
+
     from pydantic import ConfigDict, create_model
 
     from docling.datamodel.service.options import ConvertDocumentsOptions
+
+    from docling_jobkit.datamodel.task_targets import ChunkTarget
 
     source_union = build_source_union(allow_external_plugins)
     target_union = build_target_union(allow_external_plugins)
@@ -104,6 +108,7 @@ def build_job_config_model(allow_external_plugins: bool = False):
         options=(ConvertDocumentsOptions, ConvertDocumentsOptions()),
         sources=(list[source_union], ...),  # type: ignore[valid-type]
         target=(target_union, ...),  # type: ignore[valid-type]
+        chunk_target=(Optional[ChunkTarget], None),  # type: ignore[valid-type]
     )
 
 

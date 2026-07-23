@@ -56,6 +56,7 @@ def target_connectors():
     from docling_jobkit.connectors.local_path_target_processor import (
         LocalPathTargetProcessor,
     )
+    from docling_jobkit.connectors.opensearch import OpenSearchTargetProcessor
     from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
 
     return {
@@ -66,5 +67,6 @@ def target_connectors():
             HttpPutTargetProcessor,
             GoogleDriveTargetProcessor,
             GoogleCloudStorageTargetProcessor,
+            OpenSearchTargetProcessor,
         ]
     }

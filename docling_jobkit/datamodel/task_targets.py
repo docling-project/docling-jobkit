@@ -11,11 +11,23 @@ from docling.datamodel.service.targets import (
     ZipTarget,
 )
 
+# OpenSearch target models live in the opensearch connector package.
+# Re-exported here so existing imports from task_targets keep working.
+from docling_jobkit.connectors.opensearch.targets import (
+    OpenSearchAuth,
+    OpenSearchAWSIAMAuth,
+    OpenSearchBasicAuth,
+    OpenSearchChunkTarget,
+    OpenSearchDocTarget,
+)
 from docling_jobkit.datamodel.azure_blob_coords import AzureBlobCoordinates
 from docling_jobkit.datamodel.google_cloud_storage_coords import (
     GoogleCloudStorageCoordinates,
 )
 from docling_jobkit.datamodel.google_drive_coords import GoogleDriveCoordinates
+
+# Re-exported from the leaf module so existing `from task_targets import ...` keeps working.
+from docling_jobkit.datamodel.target_field_slots import ChunkFieldSlots, FieldMappings
 
 
 class AzureBlobTarget(AzureBlobCoordinates):
@@ -51,11 +63,12 @@ class LocalPathTarget(BaseModel):
     ]
 
 
-TaskTarget = Annotated[
+DocumentTarget = Annotated[
     InBodyTarget
     | ZipTarget
     | S3Target
     | AzureBlobTarget
+    | OpenSearchDocTarget
     | PresignedUrlTarget
     | GoogleDriveTarget
     | GoogleCloudStorageTarget
@@ -64,15 +77,31 @@ TaskTarget = Annotated[
     Field(discriminator="kind"),
 ]
 
+ChunkTarget = Annotated[
+    OpenSearchChunkTarget | PresignedUrlTarget | S3Target | ZipTarget | LocalPathTarget,
+    Field(discriminator="kind"),
+]
+
+TaskTarget = DocumentTarget
+
 __all__ = [
     "AzureBlobTarget",
+    "ChunkFieldSlots",
+    "ChunkTarget",
+    "DocumentTarget",
+    "FieldMappings",
     "GoogleCloudStorageTarget",
     "GoogleDriveTarget",
     "InBodyTarget",
     "LocalPathTarget",
+    "OpenSearchAWSIAMAuth",
+    "OpenSearchAuth",
+    "OpenSearchBasicAuth",
+    "OpenSearchChunkTarget",
+    "OpenSearchDocTarget",
     "PresignedUrlTarget",
     "PutTarget",
     "S3Target",
     "TaskTarget",
     "ZipTarget",
-]
+]  # OpenSearch symbols re-exported from docling_jobkit.connectors.opensearch.targets

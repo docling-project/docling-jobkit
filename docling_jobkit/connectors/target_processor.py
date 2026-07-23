@@ -73,3 +73,18 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         Upload an in-memory object (bytes or file-like) to the target.
         """
         ...
+
+    def begin_document(self, doc_id: str) -> None:
+        """Signal the start of a new document's uploads.
+
+        Processors that accumulate multiple format uploads into a single record
+        (e.g. database targets) should override this to initialise per-document
+        state.  File/object-storage targets can leave this as a no-op.
+        """
+
+    def end_document(self, doc_id: str) -> None:
+        """Signal that all uploads for the current document are complete.
+
+        Database targets should flush the accumulated row here.  File/object-
+        storage targets can leave this as a no-op.
+        """

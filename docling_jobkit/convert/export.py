@@ -18,12 +18,14 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from docling.datamodel.base_models import OutputFormat
 from docling.datamodel.document import ConversionStatus
 from docling_core.types.doc import ImageRefMode
 
 from docling_jobkit.connectors.artifact_paths import ArtifactType
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
+from docling_jobkit.datamodel.target_field_slots import OUTPUT_FORMAT_MIME
 
 _log = logging.getLogger(__name__)
 
@@ -84,7 +86,7 @@ def _materialize_document_exports(
                 artifact_type="json",
                 path=fname,
                 target_filename=fname.name,
-                mime_type="application/json",
+                mime_type=OUTPUT_FORMAT_MIME[OutputFormat.JSON],
             )
         )
 
@@ -101,7 +103,7 @@ def _materialize_document_exports(
                 artifact_type="html",
                 path=fname,
                 target_filename=fname.name,
-                mime_type="text/html",
+                mime_type=OUTPUT_FORMAT_MIME[OutputFormat.HTML],
             )
         )
 
@@ -118,7 +120,7 @@ def _materialize_document_exports(
                 artifact_type="text",
                 path=fname,
                 target_filename=fname.name,
-                mime_type="text/plain",
+                mime_type=OUTPUT_FORMAT_MIME[OutputFormat.TEXT],
             )
         )
 
@@ -136,7 +138,7 @@ def _materialize_document_exports(
                 artifact_type="markdown",
                 path=fname,
                 target_filename=fname.name,
-                mime_type="text/markdown",
+                mime_type=OUTPUT_FORMAT_MIME[OutputFormat.MARKDOWN],
             )
         )
 
@@ -149,7 +151,7 @@ def _materialize_document_exports(
                 artifact_type="doctags",
                 path=fname,
                 target_filename=fname.name,
-                mime_type="text/plain",
+                mime_type=OUTPUT_FORMAT_MIME[OutputFormat.DOCTAGS],
             )
         )
 
@@ -164,7 +166,7 @@ def _materialize_document_exports(
                 artifact_type="doclang",
                 path=fname,
                 target_filename=fname.name,
-                mime_type="application/xml",
+                mime_type=OUTPUT_FORMAT_MIME[OutputFormat.DOCLANG],
             )
         )
 
@@ -177,7 +179,7 @@ def _materialize_document_exports(
                 artifact_type="dclx",
                 path=fname,
                 target_filename=fname.name,
-                mime_type="application/zip",
+                mime_type=OUTPUT_FORMAT_MIME[OutputFormat.DCLX],
             )
         )
 

@@ -82,6 +82,9 @@ gcloudstorage = [
 azure = [
     "azure-storage-blob>=12.19.0",
 ]
+opensearch = [
+    "opensearch-py>=2.8.0,<3",
+]
 
 [dependency-groups]
 dev = [
@@ -106,7 +109,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-# docling-slim = { git = "https://github.com/docling-project/docling/", rev = "main" }
+docling-slim = { git = "https://github.com/docling-project/docling/", rev = "feat-chunking-options-and-target" }
 # docling-slim = { path = "../docling", editable = true }
 
 
@@ -224,6 +227,7 @@ module = [
     "google.*",
     "ray.*",
     "codeflare_sdk.*",
+    "opensearchpy.*",
 ]
 ignore_missing_imports = true
 

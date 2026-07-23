@@ -3,16 +3,8 @@ from typing import Annotated, Optional
 
 import typer
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import ValidationError
 from rich.console import Console
-
-from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.requests import (
-    FileSourceRequest,
-    HttpSourceRequest,
-    S3SourceRequest,
-)
-from docling.datamodel.service.targets import S3Target, ZipTarget
 
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
@@ -22,16 +14,6 @@ from docling_jobkit.convert.manager import (
 )
 from docling_jobkit.convert.results_processor import ResultsProcessor
 from docling_jobkit.datamodel.dynamic_unions import build_job_config_model
-from docling_jobkit.datamodel.task_sources import (
-    TaskGoogleCloudStorageSource,
-    TaskGoogleDriveSource,
-    TaskLocalPathSource,
-)
-from docling_jobkit.datamodel.task_targets import (
-    GoogleCloudStorageTarget,
-    GoogleDriveTarget,
-    LocalPathTarget,
-)
 
 console = Console()
 err_console = Console(stderr=True)
@@ -43,31 +25,6 @@ app = typer.Typer(
     add_completion=False,
     pretty_exceptions_enable=False,
 )
-
-JobTaskSource = Annotated[
-    FileSourceRequest
-    | HttpSourceRequest
-    | TaskLocalPathSource
-    | S3SourceRequest
-    | TaskGoogleDriveSource
-    | TaskGoogleCloudStorageSource,
-    Field(discriminator="kind"),
-]
-
-JobTaskTarget = Annotated[
-    ZipTarget
-    | LocalPathTarget
-    | S3Target
-    | GoogleDriveTarget
-    | GoogleCloudStorageTarget,
-    Field(discriminator="kind"),
-]
-
-
-class JobConfig(BaseModel):
-    options: ConvertDocumentsOptions = ConvertDocumentsOptions()
-    sources: list[JobTaskSource]
-    target: JobTaskTarget
 
 
 @app.command(no_args_is_help=True)
@@ -116,6 +73,11 @@ def convert(
     )
     manager = DoclingConverterManager(config=cm_config)
 
+    # Resolve chunking options once — manager applies preset fallback if needed
+    chunking_options = None
+    if config.options.do_chunking:
+        chunking_options = manager.parse_chunking_options(config.options)
+
     results = []
     with get_target_processor(
         config.target, allow_external_plugins=allow_external_plugins
@@ -125,6 +87,8 @@ def convert(
             to_formats=[v.value for v in config.options.to_formats],
             generate_page_images=config.options.include_page_images,
             generate_picture_images=config.options.include_images,
+            chunk_target=config.chunk_target,
+            chunking_options=chunking_options,
         )
         for source in config.sources:
             with get_source_processor(

@@ -44,6 +44,10 @@ from docling_core.transforms.serializer.markdown import (
 )
 from docling_core.types.doc.document import DoclingDocument, ImageRefMode
 
+from docling_jobkit.connectors.database_target_processor import (
+    BaseDatabaseTargetProcessor,
+)
+from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.convert.results import (
     _build_document_completed_item,
     _export_document_as_content,
@@ -59,7 +63,12 @@ from docling_jobkit.datamodel.result import (
     ResultType,
     ZipArchiveResult,
 )
+from docling_jobkit.datamodel.target_field_slots import (
+    ChunkFieldSlots,
+    coerce_large_ints,
+)
 from docling_jobkit.datamodel.task import Task
+from docling_jobkit.datamodel.task_targets import ChunkTarget
 from docling_jobkit.public_errors import TargetWriteError, render_public_error_list
 
 if TYPE_CHECKING:
@@ -323,6 +332,79 @@ def _export_chunking_result(
         )
 
 
+def _write_document_chunks_jsonl(
+    output_dir: Path,
+    filename: str,
+    chunks: list[ChunkedDocumentResultItem],
+) -> Path:
+    chunk_file = output_dir / f"{Path(filename).stem}.chunks.jsonl"
+    with chunk_file.open("w", encoding="utf-8") as handle:
+        for chunk in chunks:
+            handle.write(json.dumps(chunk.model_dump(mode="json"), ensure_ascii=False))
+            handle.write("\n")
+    return chunk_file
+
+
+def _chunk_row_payload(
+    chunk: ChunkedDocumentResultItem,
+    target: ChunkFieldSlots,
+) -> dict[str, Any]:
+    # Serialize metadata to a plain JSON-safe dict.  chunk.metadata may contain
+    # pydantic model instances (e.g. DocumentOrigin) that JSON / opensearchpy
+    # cannot serialise directly.
+    raw_meta: dict[str, Any] = {}
+    for k, v in (chunk.metadata or {}).items():
+        if hasattr(v, "model_dump"):
+            raw_meta[k] = v.model_dump(mode="json")
+        else:
+            raw_meta[k] = v
+
+    if target.coerce_large_ints_to_str:
+        raw_meta = coerce_large_ints(raw_meta)
+
+    row: dict[str, Any] = {
+        target.text_field: chunk.text,
+        target.metadata_field: raw_meta,
+        target.doc_id_field: chunk.filename,
+        target.chunk_index_field: chunk.chunk_index,
+    }
+    if target.page_field is not None:
+        row[target.page_field] = chunk.page_numbers
+    if target.headings_field is not None:
+        row[target.headings_field] = chunk.headings
+    return row
+
+
+def _upload_chunk_records(
+    *,
+    target: ChunkTarget,
+    chunks_by_document: dict[str, list[ChunkedDocumentResultItem]],
+    output_dir: Path,
+) -> None:
+    with get_target_processor(target) as target_processor:
+        if isinstance(target_processor, BaseDatabaseTargetProcessor):
+            # DB chunk target: one upsert_row() call per chunk.
+            if not isinstance(target, ChunkFieldSlots):
+                raise TypeError(
+                    f"DB chunk target processor requires a ChunkFieldSlots target config, "
+                    f"got {type(target)!r}"
+                )
+            for document_chunks in chunks_by_document.values():
+                for chunk in document_chunks:
+                    target_processor.upsert_row(_chunk_row_payload(chunk, target))
+        else:
+            # File-based chunk target: write one .chunks.jsonl per document.
+            for filename, document_chunks in chunks_by_document.items():
+                chunk_file = _write_document_chunks_jsonl(
+                    output_dir, filename, document_chunks
+                )
+                target_processor.upload_file(
+                    filename=chunk_file,
+                    target_filename=chunk_file.name,
+                    content_type="application/jsonl",
+                )
+
+
 def process_chunkable_results(
     task: Task,
     exportable_documents: Iterable[ExportableDocument],
@@ -352,6 +434,7 @@ def process_chunkable_results(
     # We have some results, let's prepare the response
     task_result: ResultType
     chunks: list[ChunkedDocumentResultItem] = []
+    chunks_by_document: dict[str, list[ChunkedDocumentResultItem]] = {}
     documents: list[DocumentResultItem] = []
     num_succeeded = 0
     num_failed = 0
@@ -379,13 +462,15 @@ def process_chunkable_results(
             and exportable_document.document is not None
         ):
             try:
-                chunks.extend(
+                document_chunks = list(
                     chunker_manager.chunk_document(
                         document=exportable_document.document,
                         filename=filename,
                         options=chunking_options,
                     )
                 )
+                chunks.extend(document_chunks)
+                chunks_by_document[filename] = document_chunks
                 num_succeeded += 1
             except Exception as e:
                 _log.exception(
@@ -524,6 +609,12 @@ def process_chunkable_results(
             result=chunked_result,
             output_dir=output_dir,
         )
+        if task.chunk_target is not None:
+            _upload_chunk_records(
+                target=task.chunk_target,
+                chunks_by_document=chunks_by_document,
+                output_dir=output_dir,
+            )
         files = os.listdir(output_dir)
         if len(files) == 0:
             raise RuntimeError("No documents were exported.")
