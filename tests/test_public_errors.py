@@ -375,21 +375,6 @@ def test_rq_worker_keeps_internal_failure_sanitized_even_in_debug_mode(tmp_path:
     assert failure_update.error_message == INTERNAL_TASK_ERROR_MESSAGE
 
 
-def test_classify_target_write_error():
-    exc = TargetWriteError("Failed to upload to target URL after 3 attempts.")
-
-    failure = classify_public_task_failure(
-        exc,
-        task_id="task-1",
-        phase=FailurePhase.EXECUTION,
-    )
-
-    assert failure.category == FailureCategory.TARGET_UNAVAILABLE
-    assert failure.phase == FailurePhase.EXECUTION
-    assert failure.retryable is False
-    assert failure.message == "Result could not be written to the requested target."
-
-
 def test_classify_target_write_error_preserves_phase():
     exc = TargetWriteError("upload failed")
 

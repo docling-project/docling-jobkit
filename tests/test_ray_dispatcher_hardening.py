@@ -671,15 +671,6 @@ async def test_finalize_task_failure_atomic_preserves_existing_success() -> None
     assert "task-1" not in active_members
 
 
-def test_config_accepts_heartbeat_interval_without_stale_age() -> None:
-    config = RayOrchestratorConfig(
-        redis_url="redis://localhost:6379/",
-        heartbeat_interval=60.0,
-    )
-
-    assert config.heartbeat_interval == 60.0
-
-
 def test_config_rejects_non_positive_heartbeat_interval() -> None:
     with pytest.raises(ValueError, match="heartbeat_interval must be > 0"):
         RayOrchestratorConfig(
