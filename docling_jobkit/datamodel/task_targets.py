@@ -16,7 +16,7 @@ from docling.datamodel.service.targets import (
 
 # OpenSearch target models live in the opensearch connector package.
 # Re-exported here so existing imports from task_targets keep working.
-from docling_jobkit.connectors.opensearch.targets import (
+from docling_jobkit.connectors.opensearch.models import (
     OpenSearchAuth,
     OpenSearchAWSIAMAuth,
     OpenSearchBasicAuth,
@@ -90,4 +90,4 @@ __all__ = [
     "S3Target",
     "TaskTarget",
     "ZipTarget",
-]  # OpenSearch symbols re-exported from docling_jobkit.connectors.opensearch.targets
+]  # OpenSearch symbols re-exported from docling_jobkit.connectors.opensearch.models

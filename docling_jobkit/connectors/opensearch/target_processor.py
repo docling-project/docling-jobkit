@@ -6,7 +6,7 @@ from opensearchpy import OpenSearch
 from docling_jobkit.connectors.database_target_processor import (
     BaseDatabaseTargetProcessor,
 )
-from docling_jobkit.connectors.opensearch.targets import (
+from docling_jobkit.connectors.opensearch.models import (
     OpenSearchChunkTarget,
     OpenSearchDocTarget,
 )

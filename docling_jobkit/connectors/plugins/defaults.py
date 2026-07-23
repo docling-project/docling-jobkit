@@ -61,7 +61,9 @@ def target_connectors():
     from docling_jobkit.connectors.local_path.target_processor import (
         LocalPathTargetProcessor,
     )
-    from docling_jobkit.connectors.opensearch import OpenSearchTargetProcessor
+    from docling_jobkit.connectors.opensearch.target_processor import (
+        OpenSearchTargetProcessor,
+    )
     from docling_jobkit.connectors.s3.presigned_target_processor import (
         S3PresignedTargetProcessor,
     )
