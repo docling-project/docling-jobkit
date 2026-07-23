@@ -300,6 +300,63 @@ def list_folder_documents(
         yield doc
 
 
+def list_multiple_documents(
+    coords: FileNetCoordinates,
+    auth_header: str,
+    doc_ids: list[str],
+) -> Iterator[dict]:
+    """List multiple specific documents by their IDs, paginating across all pages."""
+    if not doc_ids:
+        return
+
+    # Construct WHERE clause: Id IN ('{id1}', '{id2}', ...)
+    quoted_ids = "', '".join(doc_ids)
+    where_clause = f"Id IN ('{quoted_ids}')"
+
+    query = """
+    query ($repo: String!, $where: String!) {
+      documents(
+        repositoryIdentifier: $repo
+        where: $where
+      ) {
+        documents {
+          id
+          name
+          mimeType
+          contentSize
+          contentElements {
+            contentType
+            elementSequenceNumber
+            ... on ContentTransfer {
+              contentSize
+              retrievalName
+              downloadUrl
+            }
+          }
+        }
+        pageInfo {
+          token
+        }
+      }
+    }
+    """
+
+    graphql_url = f"{coords.base_url.rstrip('/')}/graphql"
+
+    data = _execute_graphql_query(
+        graphql_url,
+        auth_header,
+        query,
+        {
+            "repo": coords.repository_id,
+            "where": where_clause,
+        },
+    )
+
+    for doc in _paginate_documents(graphql_url, auth_header, data.get("documents", {})):
+        yield doc
+
+
 def get_document_metadata(
     coords: FileNetCoordinates,
     auth_header: str,
