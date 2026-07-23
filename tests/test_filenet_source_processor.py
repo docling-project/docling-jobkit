@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
-from pydantic import ValidationError
 
 from docling_core.types.io import DocumentStream
 
@@ -98,11 +97,13 @@ def test_filenet_list_respects_max_num_elements(filenet_coords):
 def test_filenet_document_ids_is_optional_single_document_override(filenet_coords):
     assert filenet_coords.document_ids == []
 
-    with pytest.raises(ValidationError):
-        FileNetCoordinates.model_validate(
-            {**filenet_coords.model_dump(), "document_ids": ["{DOC-1}", "{DOC-2}"]}
-        )
+    # Multiple document_ids are now supported (no longer raises ValidationError)
+    coords_multi = filenet_coords.model_copy(
+        update={"document_ids": ["{DOC-1}", "{DOC-2}"]}
+    )
+    assert coords_multi.document_ids == ["{DOC-1}", "{DOC-2}"]
 
+    # Single document_id with folder_id
     coords = filenet_coords.model_copy(
         update={"folder_id": "{FOLDER-123}", "document_ids": ["{DOC-1}"]}
     )
@@ -211,10 +212,13 @@ def test_filenet_make_document_ref_uses_name_not_repr(filenet_coords):
 
     ref = processor._make_document_ref(identifier, source_index=0)
 
-    assert ref.filename == "report.pdf"
+    # Filename now includes document ID for uniqueness
+    assert ref.filename == "report-DOC-1.pdf"
     assert ref.source_uri == "filenet://test-repo/{DOC-1}"
+    # Verify no sensitive information is leaked
     assert "download_url" not in ref.filename
     assert "secret" not in ref.filename
+    assert "token" not in ref.filename
 
 
 def test_filenet_fetch_rejects_oversized_before_download(filenet_coords):
