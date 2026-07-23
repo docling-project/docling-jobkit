@@ -1,3 +1,13 @@
+## [v3.0.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.0.0) - 2026-07-23
+
+### Feature
+
+* **connectors:** Support registry-backed plugin sources ([#205](https://github.com/docling-project/docling-jobkit/issues/205)) ([`3e7ad25`](https://github.com/docling-project/docling-jobkit/commit/3e7ad25f477658d932ad45da49e06af8fbed7364))
+
+### Breaking
+
+* support registry-backed plugin sources ([#205](https://github.com/docling-project/docling-jobkit/issues/205)) ([`3e7ad25`](https://github.com/docling-project/docling-jobkit/commit/3e7ad25f477658d932ad45da49e06af8fbed7364))
+
 ## [v2.1.0](https://github.com/docling-project/docling-jobkit/releases/tag/v2.1.0) - 2026-07-17
 
 ### Feature
