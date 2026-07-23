@@ -3,18 +3,21 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from docling.datamodel.base_models import ConversionStatus, ErrorItem
 from docling.datamodel.service.responses import (
     ArtifactRef,
     ConfidenceScores,
     DocumentArtifactItem,
 )
+from docling.datamodel.service.targets import PresignedUrlTarget
 from docling.utils.profiling import ProfilingItem
 
 from docling_jobkit.config.target_config import S3PresignedConfig
 from docling_jobkit.connectors.artifact_paths import ArtifactType
-from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
-from docling_jobkit.connectors.s3_upload_support import (
+from docling_jobkit.connectors.s3.target_processor import S3TargetProcessor
+from docling_jobkit.connectors.s3.upload_support import (
     build_task_scoped_s3_key,
     upload_s3_file,
 )
@@ -25,11 +28,26 @@ _METADATA_FIELDS = ("tenant_id", "user_id", "project_id")
 
 
 class S3PresignedTargetProcessor(S3TargetProcessor):
-    def __init__(self, config: S3PresignedConfig, task: Task):
-        super().__init__(config.s3_coords)
-        self._config = config
+    def __init__(
+        self,
+        target: PresignedUrlTarget,
+        *,
+        s3_presigned_config: S3PresignedConfig,
+        task: Task,
+    ):
+        del target
+        super().__init__(s3_presigned_config.s3_coords)
+        self._config = s3_presigned_config
         self._task = task
         self._uploaded_artifacts: dict[int, list[tuple[ArtifactType, str, str]]] = {}
+
+    @classmethod
+    def get_config_types(cls) -> tuple[type[BaseModel], ...]:
+        return (PresignedUrlTarget,)
+
+    @classmethod
+    def result_mode(cls):
+        return "presigned"
 
     def upload_artifact_file(
         self,

@@ -6,7 +6,7 @@ from azure.core.exceptions import ClientAuthenticationError
 
 from docling.datamodel.service.sources import AzureBlobCoordinates
 
-from docling_jobkit.connectors.azure_blob_target_processor import (
+from docling_jobkit.connectors.azure_blob.target_processor import (
     AzureBlobTargetProcessor,
 )
 from docling_jobkit.connectors.errors import ConnectorAuthenticationError
@@ -47,7 +47,7 @@ def test_azure_blob_upload_file(azure_coords):
     processor._container_client.get_blob_client.return_value = mock_blob_client
 
     with patch(
-        "docling_jobkit.connectors.azure_blob_upload_support.upload_azure_blob_file"
+        "docling_jobkit.connectors.azure_blob.upload_support.upload_azure_blob_file"
     ) as mock_upload:
         processor.upload_file(
             filename=Path("/tmp/test.json"),
@@ -74,7 +74,7 @@ def test_azure_blob_upload_file_with_prefix(azure_coords):
     processor._container_client.get_blob_client.return_value = mock_blob_client
 
     with patch(
-        "docling_jobkit.connectors.azure_blob_upload_support.upload_azure_blob_file"
+        "docling_jobkit.connectors.azure_blob.upload_support.upload_azure_blob_file"
     ):
         processor.upload_file(
             filename=Path("/tmp/test.json"),
@@ -95,7 +95,7 @@ def test_azure_blob_upload_object(azure_coords):
     processor._container_client.get_blob_client.return_value = mock_blob_client
 
     with patch(
-        "docling_jobkit.connectors.azure_blob_upload_support.upload_azure_blob_object"
+        "docling_jobkit.connectors.azure_blob.upload_support.upload_azure_blob_object"
     ) as mock_upload:
         processor.upload_object(
             obj=b"test content",
@@ -122,7 +122,7 @@ def test_azure_blob_upload_object_with_prefix(azure_coords):
     processor._container_client.get_blob_client.return_value = mock_blob_client
 
     with patch(
-        "docling_jobkit.connectors.azure_blob_upload_support.upload_azure_blob_object"
+        "docling_jobkit.connectors.azure_blob.upload_support.upload_azure_blob_object"
     ):
         processor.upload_object(
             obj="test string",
@@ -141,7 +141,7 @@ def test_azure_blob_target_authentication_error_is_client_actionable(azure_coord
 
     with (
         patch(
-            "docling_jobkit.connectors.azure_blob_upload_support."
+            "docling_jobkit.connectors.azure_blob.upload_support."
             "upload_azure_blob_object",
             side_effect=ClientAuthenticationError("invalid credentials"),
         ),

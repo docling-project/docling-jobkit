@@ -17,8 +17,11 @@ if os.getenv("CI"):
 
 import redis.asyncio as redis_async
 
-from docling.datamodel.service.sources import S3Coordinates
-from docling.datamodel.service.targets import PresignedUrlTarget, S3Target
+from docling.datamodel.service.requests import (
+    FileSourceRequest as FileSource,
+    S3SourceRequest as S3Coordinates,
+)
+from docling.datamodel.service.targets import InBodyTarget, PresignedUrlTarget, S3Target
 from docling.utils.model_downloader import download_models
 
 from docling_jobkit.convert.manager import (
@@ -26,9 +29,7 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManagerConfig,
 )
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
-from docling_jobkit.datamodel.http_inputs import FileSource
 from docling_jobkit.datamodel.task_meta import TaskStatus, TaskType
-from docling_jobkit.datamodel.task_targets import InBodyTarget
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.ray.orchestrator import (
     RayOrchestrator,
@@ -405,7 +406,7 @@ async def test_on_result_fetched_ray():
 
 @pytest.mark.asyncio
 async def test_enqueue_rejects_s3_source_without_remote_target():
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     config = RayOrchestratorConfig(redis_url="redis://localhost:6379/")
 
@@ -415,6 +416,10 @@ async def test_enqueue_rejects_s3_source_without_remote_target():
     ):
         orch = RayOrchestrator.__new__(RayOrchestrator)
         orch.config = config
+        orch.allowed_target_kinds = None
+        orch.cm = MagicMock()
+        orch.cm.config.allow_external_plugins = False
+        orch._unhealthy_since = None
         orch.tasks = {}
         orch.notifier = None
 
@@ -446,7 +451,7 @@ async def test_enqueue_rejects_s3_source_without_remote_target():
         )
 
         for bad_target in (InBodyTarget(), PresignedUrlTarget()):
-            with pytest.raises(ValueError, match="require an S3Target"):
+            with pytest.raises(ValueError, match="require a storage target"):
                 await orch.enqueue(
                     sources=[s3_source],
                     target=bad_target,

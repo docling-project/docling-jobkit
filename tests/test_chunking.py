@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.service.options import ConvertDocumentsOptions
-from docling.datamodel.service.targets import ZipTarget
+from docling.datamodel.service.targets import InBodyTarget, ZipTarget
 
 from docling_jobkit.convert.chunking import (
     DocumentChunkerManager,
@@ -28,7 +28,6 @@ from docling_jobkit.datamodel.result import (
 )
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskType
-from docling_jobkit.datamodel.task_targets import InBodyTarget
 
 
 class TestDocumentChunker:

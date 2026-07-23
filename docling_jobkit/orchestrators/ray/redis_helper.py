@@ -24,7 +24,7 @@ from docling_jobkit.datamodel.stored_outcome import (
     StoredTaskOutcome,
     stored_task_outcome_adapter,
 )
-from docling_jobkit.datamodel.task import Task
+from docling_jobkit.datamodel.task import Task, validate_task_json
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.ray.models import (
     RedisTaskMetadata,
@@ -129,6 +129,7 @@ class RedisStateManager:
         task_timeout: Optional[float] = None,
         dispatcher_interval: float = 2.0,
         log_level: str = "INFO",
+        allow_external_plugins: bool = False,
     ):
         """Initialize Redis state manager.
 
@@ -152,6 +153,7 @@ class RedisStateManager:
         self.results_prefix = results_prefix
         self.sub_channel = sub_channel
         self.log_level = log_level
+        self.allow_external_plugins = allow_external_plugins
 
         # Configure logging level for Redis helper
         _log.setLevel(log_level.upper())
@@ -284,7 +286,10 @@ class RedisStateManager:
         task_json = await redis.lpop(queue_key)  # type: ignore[misc]
 
         if task_json:
-            task = Task.model_validate_json(task_json)
+            task = validate_task_json(
+                task_json,
+                allow_external_plugins=self.allow_external_plugins,
+            )
             # Update tenant limits
             await self.update_tenant_limits(tenant_id, delta_queued_tasks=-1)
             _log.debug(f"Dequeued task {task.task_id} for tenant {tenant_id}")
@@ -309,7 +314,10 @@ class RedisStateManager:
         task_json = await redis.lindex(queue_key, 0)  # type: ignore[misc]
 
         if task_json:
-            return Task.model_validate_json(task_json)
+            return validate_task_json(
+                task_json,
+                allow_external_plugins=self.allow_external_plugins,
+            )
 
         return None
 
@@ -837,7 +845,10 @@ class RedisStateManager:
                     await pipe.unwatch()
                     return False
 
-                front_task = Task.model_validate_json(front_task_json)
+                front_task = validate_task_json(
+                    front_task_json,
+                    allow_external_plugins=self.allow_external_plugins,
+                )
                 if front_task.task_id != task_id:
                     # Race condition: someone else popped it
                     await pipe.unwatch()

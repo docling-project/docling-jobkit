@@ -16,7 +16,7 @@ import pytest
 pytest.importorskip("msgpack")
 pytest.importorskip("redis")
 
-from docling.datamodel.service.sources import HttpSource
+from docling.datamodel.service.requests import AnyHttpSourceRequest as HttpSource
 
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus

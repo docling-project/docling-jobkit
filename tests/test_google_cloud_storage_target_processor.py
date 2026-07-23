@@ -9,7 +9,7 @@ from docling.datamodel.service.sources import (
 )
 
 from docling_jobkit.connectors.errors import ConnectorAuthenticationError
-from docling_jobkit.connectors.google_cloud_storage_target_processor import (
+from docling_jobkit.connectors.google_cloud_storage.target_processor import (
     GoogleCloudStorageTargetProcessor,
 )
 

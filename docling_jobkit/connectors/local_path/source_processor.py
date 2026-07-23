@@ -7,11 +7,11 @@ from typing_extensions import override
 
 from docling_core.types.io import DocumentStream
 
+from docling_jobkit.connectors.local_path.models import LocalPathSource
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     SourceDocumentRef,
 )
-from docling_jobkit.datamodel.task_sources import TaskLocalPathSource
 
 
 def _should_ignore_file(file_path: Path) -> bool:
@@ -57,15 +57,15 @@ class LocalPathFileIdentifier(BaseModel):
 
 
 class LocalPathSourceProcessor(
-    BaseSourceProcessor[TaskLocalPathSource, LocalPathFileIdentifier]
+    BaseSourceProcessor[LocalPathSource, LocalPathFileIdentifier]
 ):
-    def __init__(self, source: TaskLocalPathSource):
+    def __init__(self, source: LocalPathSource):
         super().__init__(source)
         self._source = source
 
     @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
-        return (TaskLocalPathSource,)
+        return (LocalPathSource,)
 
     def _initialize(self):
         """Validate that the path exists."""

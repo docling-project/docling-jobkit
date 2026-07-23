@@ -4,8 +4,6 @@ import asyncio
 from collections.abc import Sequence
 
 import httpx
-from botocore.exceptions import BotoCoreError
-from requests.exceptions import HTTPError as RequestsHTTPError, RequestException
 
 from docling.datamodel.base_models import DoclingComponentType, ErrorItem
 from docling.datamodel.service.responses import (
@@ -17,6 +15,8 @@ from docling.datamodel.service.responses import (
 from docling_jobkit.connectors.errors import (
     ConnectorAuthenticationError,
     SourceConnectorAuthenticationError,
+    SourceConnectorError,
+    SourceConnectorPolicyError,
 )
 from docling_jobkit.convert.materialization import (
     MaterializationLimitExceededError,
@@ -60,7 +60,10 @@ def _unwrap_failure_exception(exc: BaseException) -> BaseException:
             return current
         seen.add(obj_id)
 
-        if isinstance(current, (ConnectorAuthenticationError, TargetWriteError)):
+        if isinstance(
+            current,
+            (ConnectorAuthenticationError, SourceConnectorError, TargetWriteError),
+        ):
             return current
 
         cause = current.__cause__
@@ -132,6 +135,19 @@ def classify_public_task_failure(
             phase = FailurePhase.SOURCE_ENUMERATION
         retryable = False
         message = exception_text
+    elif isinstance(root_exc, SourceConnectorError):
+        category = (
+            FailureCategory.POLICY
+            if isinstance(root_exc, SourceConnectorPolicyError)
+            else FailureCategory.SOURCE_UNAVAILABLE
+        )
+        phase = FailurePhase.SOURCE_ENUMERATION
+        retryable = root_exc.retryable
+        merged_details = {
+            **merged_details,
+            **_safe_details(source_kind=root_exc.source_kind),
+        }
+        message = exception_text
     elif isinstance(root_exc, httpx.HTTPStatusError):
         # httpx fetched the source but the upstream HTTP status is not usable.
         merged_details = {**merged_details, **_safe_details(source_kind="http")}
@@ -139,33 +155,12 @@ def classify_public_task_failure(
         category, retryable, message = _classify_http_status(
             root_exc.response.status_code, exception_text
         )
-    elif isinstance(root_exc, RequestsHTTPError):
-        # requests fetched the source but the upstream HTTP status is not usable.
-        response = root_exc.response
-        status_code_value = response.status_code if response is not None else None
-        status_code: int | None = (
-            int(status_code_value) if isinstance(status_code_value, int) else None
-        )
-        merged_details = {**merged_details, **_safe_details(source_kind="http")}
-        phase = FailurePhase.SOURCE_ENUMERATION
-        category, retryable, message = _classify_http_status(
-            status_code, exception_text
-        )
-    elif isinstance(root_exc, httpx.HTTPError) or isinstance(
-        root_exc, RequestException
-    ):
+    elif isinstance(root_exc, httpx.HTTPError):
         # HTTP transport failed before a usable response body/status was available.
         category = FailureCategory.SOURCE_UNAVAILABLE
         phase = FailurePhase.SOURCE_ENUMERATION
         retryable = True
         message = "Source document could not be reached."
-    elif isinstance(root_exc, BotoCoreError):
-        # S3 source enumeration or object retrieval failed through botocore.
-        category = FailureCategory.SOURCE_UNAVAILABLE
-        phase = FailurePhase.SOURCE_ENUMERATION
-        retryable = True
-        merged_details = {**merged_details, **_safe_details(source_kind="s3")}
-        message = "Source object storage could not be reached."
     elif isinstance(root_exc, MemoryError) or "oom" in exception_text.lower():
         # The local process or a nested exception reports memory exhaustion.
         category = FailureCategory.CAPACITY
@@ -184,9 +179,9 @@ def build_public_task_error(exc: BaseException) -> str:
     root_exc = _unwrap_failure_exception(exc)
     if (
         isinstance(root_exc, httpx.HTTPStatusError)
-        or isinstance(root_exc, RequestsHTTPError)
         or isinstance(root_exc, SourceLimitExceededError)
         or isinstance(root_exc, ConnectorAuthenticationError)
+        or isinstance(root_exc, SourceConnectorError)
     ):
         return _exception_text(root_exc)
     return INTERNAL_TASK_ERROR_MESSAGE

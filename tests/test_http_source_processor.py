@@ -3,7 +3,7 @@ import pytest
 from docling.datamodel.service.sources import HttpSource
 from docling_core.types.io import DocumentStream
 
-from docling_jobkit.connectors.http_source_processor import HttpSourceProcessor
+from docling_jobkit.connectors.http.source_processor import HttpSourceProcessor
 from docling_jobkit.convert.materialization import SourceLimitExceededError
 from docling_jobkit.datamodel.http_inputs import FileSource
 

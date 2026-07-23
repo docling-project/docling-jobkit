@@ -6,7 +6,7 @@ from docling.datamodel.service.sources import (
     GoogleCloudStorageCoordinates,
 )
 
-from docling_jobkit.connectors.google_cloud_storage_helper import get_client
+from docling_jobkit.connectors.google_cloud_storage.helper import get_client
 
 
 def test_get_client_uses_service_account_key_when_provided() -> None:

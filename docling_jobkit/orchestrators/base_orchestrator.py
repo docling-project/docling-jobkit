@@ -10,8 +10,7 @@ from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult, TaskOutcome
-from docling_jobkit.datamodel.task import Task, TaskSource
-from docling_jobkit.datamodel.task_targets import TaskTarget
+from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
 
 if TYPE_CHECKING:
     from docling_jobkit.orchestrators.base_notifier import BaseNotifier

@@ -8,6 +8,7 @@ from urllib.parse import urlunsplit
 from boto3.session import Session
 from botocore.config import Config
 from botocore.exceptions import (
+    BotoCoreError,
     ClientError,
     CredentialRetrievalError,
     NoCredentialsError,
@@ -22,31 +23,9 @@ if TYPE_CHECKING:
 
 from docling.datamodel.service.sources import S3Coordinates
 
-from docling_jobkit.connectors.artifact_paths import build_s3_source_key
+from docling_jobkit.connectors.artifact_paths import hash_path_component
 
 logging.basicConfig(level=logging.INFO)
-
-# Set the maximum file size of parquet to 500MB
-MAX_PARQUET_FILE_SIZE = 500 * 1024 * 1024
-
-classifier_labels = [
-    "bar_chart",
-    "bar_code",
-    "chemistry_markush_structure",
-    "chemistry_molecular_structure",
-    "flow_chart",
-    "icon",
-    "line_chart",
-    "logo",
-    "map",
-    "other",
-    "pie_chart",
-    "qr_code",
-    "remote_sensing",
-    "screenshot",
-    "signature",
-    "stamp",
-]
 
 _S3_AUTH_ERROR_CODES = {
     "AccessDenied",
@@ -77,6 +56,10 @@ def is_s3_authentication_error(exc: BaseException) -> bool:
     if not isinstance(exc, ClientError):
         return False
     return exc.response.get("Error", {}).get("Code") in _S3_AUTH_ERROR_CODES
+
+
+def is_s3_unavailable_error(exc: BaseException) -> bool:
+    return isinstance(exc, BotoCoreError)
 
 
 def get_s3_connection(coords: S3Coordinates):
@@ -208,7 +191,15 @@ def check_target_has_source_converted(
     s3_target_client, s3_target_resource = get_s3_connection(coords)
     target_paginator = s3_target_client.get_paginator("list_objects_v2")
 
-    source_key = build_s3_source_key(source_coords)
+    source_key = hash_path_component(
+        "|".join(
+            [
+                source_coords.endpoint.strip(),
+                source_coords.bucket.strip(),
+                source_coords.key_prefix.strip("/"),
+            ]
+        )
+    )
     key_prefix = coords.key_prefix.strip("/")
     converted_prefix = (
         f"{key_prefix}/{source_key}/json/" if key_prefix else f"{source_key}/json/"

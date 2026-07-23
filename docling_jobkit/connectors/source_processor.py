@@ -71,6 +71,11 @@ class BaseSourceProcessor(
             "as a connector plugin."
         )
 
+    @classmethod
+    def is_expandable(cls, config: BaseModel) -> bool:
+        del config
+        return True
+
     def __enter__(self):
         self._initialize()
         self._initialized = True
@@ -155,6 +160,14 @@ class BaseSourceProcessor(
                 "Processor not initialized. Use 'with' to open it first."
             )
         yield from self._fetch_documents(max_file_size=max_file_size)
+
+    def iterate_converter_sources(
+        self, *, max_file_size: int | None = None
+    ) -> Iterator[ConverterSource]:
+        yield from self.iterate_documents(max_file_size=max_file_size)
+
+    def converter_headers(self) -> dict[str, object] | None:
+        return None
 
     def iterate_document_chunks(
         self, chunk_size: int

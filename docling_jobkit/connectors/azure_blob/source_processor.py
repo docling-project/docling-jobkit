@@ -6,6 +6,7 @@ from typing import Iterator
 from pydantic import BaseModel
 from typing_extensions import override
 
+from docling.datamodel.service.requests import AzureBlobSourceRequest
 from docling.datamodel.service.sources import AzureBlobCoordinates
 from docling_core.types.io import DocumentStream
 
@@ -18,13 +19,12 @@ from docling_jobkit.convert.materialization import (
     SourceLimitExceededError,
     normalize_max_file_size,
 )
-from docling_jobkit.datamodel.task_sources import TaskAzureBlobSource
 
 _log = logging.getLogger(__name__)
 
 
 def _is_authentication_error(exc: BaseException) -> bool:
-    from docling_jobkit.connectors.azure_blob_helper import (
+    from docling_jobkit.connectors.azure_blob.helper import (
         is_azure_blob_authentication_error,
     )
 
@@ -46,17 +46,13 @@ class AzureBlobSourceProcessor(
 
     @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
-        # Note: Using TaskAzureBlobSource (not AzureBlobSourceRequest) to follow
-        # the naming pattern for connectors defined in docling-jobkit (Google Drive, Local Path)
-        # S3 has S3SourceRequest defined in docling core library. No azure equivalent.
-
-        return (TaskAzureBlobSource,)
+        return (AzureBlobSourceRequest,)
 
     @map_connector_authentication_errors(
         "Azure Blob Storage", _is_authentication_error, source=True
     )
     def _initialize(self):
-        from docling_jobkit.connectors.azure_blob_helper import (
+        from docling_jobkit.connectors.azure_blob.helper import (
             get_azure_blob_connection,
         )
 

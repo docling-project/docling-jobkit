@@ -22,7 +22,9 @@ from docling.datamodel.service.responses import (
 )
 from docling.datamodel.service.sources import HttpSource as SharedHttpSource
 from docling.datamodel.service.targets import (
+    InBodyTarget,
     InBodyTarget as SharedInBodyTarget,
+    PresignedUrlTarget,
     PresignedUrlTarget as SharedPresignedUrlTarget,
 )
 
@@ -43,7 +45,6 @@ from docling_jobkit.datamodel.result import (
     ResultType,
     ZipArchiveResult,
 )
-from docling_jobkit.datamodel.task_targets import InBodyTarget, PresignedUrlTarget
 
 
 def test_jobkit_convert_options_is_shared_type():

@@ -6,19 +6,19 @@ from unittest.mock import MagicMock
 import pytest
 from botocore.exceptions import ClientError
 
+from docling.datamodel.service.sources import S3Coordinates
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.errors import (
     ConnectorAuthenticationError,
     SourceConnectorAuthenticationError,
 )
-from docling_jobkit.connectors.s3_source_processor import (
+from docling_jobkit.connectors.s3.source_processor import (
     S3FileIdentifier,
     S3SourceProcessor,
 )
-from docling_jobkit.connectors.s3_target_processor import S3TargetProcessor
+from docling_jobkit.connectors.s3.target_processor import S3TargetProcessor
 from docling_jobkit.convert.materialization import SourceLimitExceededError
-from docling_jobkit.datamodel.s3_coords import S3Coordinates
 
 # -------------------------------------------------------------------
 # Helper function to check MinIO availability

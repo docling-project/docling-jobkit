@@ -4,8 +4,8 @@ from pydantic import BaseModel, ConfigDict
 from typing_extensions import override
 
 from docling.datamodel.service.requests import (
+    AnyHttpSourceRequest,
     FileSourceRequest,
-    HttpSourceRequest,
 )
 from docling.datamodel.service.sources import FileSource, HttpSource
 from docling_core.types.io import DocumentStream
@@ -39,7 +39,12 @@ class HttpSourceProcessor(
 
     @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
-        return (FileSourceRequest, HttpSourceRequest)
+        return (FileSourceRequest, AnyHttpSourceRequest)
+
+    @classmethod
+    def is_expandable(cls, config: BaseModel) -> bool:
+        del config
+        return False
 
     def _initialize(self):
         pass
@@ -155,3 +160,22 @@ class HttpSourceProcessor(
         elif isinstance(self._source, HttpSource):
             # See _fetch_document_by_id: HttpSource is passthrough-only.
             raise NotImplementedError("HttpSource fetching is not supported")
+
+    @override
+    def iterate_converter_sources(
+        self, *, max_file_size: int | None = None
+    ) -> Iterator[ConverterSource]:
+        if isinstance(self._source, HttpSource):
+            if not self._initialized:
+                raise RuntimeError(
+                    "Processor not initialized. Use 'with' to open it first."
+                )
+            yield str(self._source.url)
+            return
+        yield from super().iterate_converter_sources(max_file_size=max_file_size)
+
+    @override
+    def converter_headers(self) -> dict[str, object] | None:
+        if isinstance(self._source, HttpSource) and self._source.headers:
+            return self._source.headers
+        return None

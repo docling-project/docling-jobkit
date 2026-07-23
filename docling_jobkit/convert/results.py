@@ -7,8 +7,6 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-import httpx
-
 from docling.datamodel.base_models import InputFormat, OutputFormat
 from docling.datamodel.document import ConversionStatus
 from docling.datamodel.service.callbacks import (
@@ -18,24 +16,14 @@ from docling.datamodel.service.callbacks import (
     ProgressSetNumDocs,
     ProgressUpdateProcessed,
 )
-from docling.datamodel.service.targets import (
-    AzureBlobTarget,
-    GoogleCloudStorageTarget,
-    GoogleDriveTarget,
-    InBodyTarget,
-    PresignedUrlTarget,
-    PutTarget,
-    S3Target,
-)
+from docling.datamodel.service.targets import InBodyTarget
 from docling_core.types.doc import ImageRefMode
 
 from docling_jobkit.config.target_config import S3PresignedConfig
 from docling_jobkit.connectors.artifact_paths import (
     hash_path_component,
 )
-from docling_jobkit.connectors.s3_presigned_target_processor import (
-    S3PresignedTargetProcessor,
-)
+from docling_jobkit.connectors.connector_factory import get_target_connector_factory
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.convert.export import (
@@ -61,9 +49,7 @@ from docling_jobkit.datamodel.result import (
 )
 from docling_jobkit.datamodel.source_identity import SourceIdentity
 from docling_jobkit.datamodel.task import Task
-from docling_jobkit.datamodel.task_targets import LocalPathTarget
 from docling_jobkit.public_errors import (
-    TargetWriteError,
     build_public_error_item,
     render_public_error_list,
 )
@@ -72,14 +58,6 @@ if TYPE_CHECKING:
     from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
 
 _log = logging.getLogger(__name__)
-
-_REMOTE_STORAGE_TARGET_TYPES = (
-    S3Target,
-    AzureBlobTarget,
-    GoogleCloudStorageTarget,
-    GoogleDriveTarget,
-    LocalPathTarget,
-)
 
 
 @dataclass
@@ -353,35 +331,6 @@ def _export_documents_as_files(
     return success_count, failure_count
 
 
-def _upload_to_put_target(
-    url: str,
-    file_path: Path,
-    max_retries: int = 3,
-    retry_delay: float = 1.0,
-) -> None:
-    last_exc: Optional[Exception] = None
-    for attempt in range(max_retries):
-        try:
-            with file_path.open("rb") as file_data:
-                r = httpx.put(url, files={"file": file_data})
-                r.raise_for_status()
-            return
-        except Exception as exc:
-            last_exc = exc
-            _log.warning(
-                "Upload to %s failed (attempt %d/%d): %s",
-                url,
-                attempt + 1,
-                max_retries,
-                exc,
-            )
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay * (attempt + 1))
-    raise TargetWriteError(
-        f"Failed to upload to target URL after {max_retries} attempts."
-    ) from last_exc
-
-
 def _resolve_source_identity(
     task: Task,
     exportable_document: ExportableDocument,
@@ -422,7 +371,7 @@ def _upload_document_as_presigned_artifact(
     exportable_document: ExportableDocument,
     response_index: int,
     output_dir: Path,
-    target_processor: S3PresignedTargetProcessor,
+    target_processor: Any,
     export_json: bool,
     export_html: bool,
     export_md: bool,
@@ -626,6 +575,7 @@ def _process_remote_exportable_results(
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
     start_time: float,
+    allow_external_plugins: bool,
 ) -> _ProcessedExportResults:
     output_dir = work_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -643,14 +593,23 @@ def _process_remote_exportable_results(
         else:
             num_failed += 1
 
-    if isinstance(task.target, PresignedUrlTarget):
+    target_factory = get_target_connector_factory(allow_external_plugins)
+    target_mode = target_factory.result_mode(task.target)
+
+    if target_mode == "presigned":
         if s3_presigned_config is None:
             raise ValueError(
                 "PresignedUrlTarget requires s3_presigned_config in orchestrator config"
             )
 
         presigned_documents: list[DocumentArtifactItem] = []
-        with S3PresignedTargetProcessor(s3_presigned_config, task) as target_processor:
+        with get_target_processor(
+            task.target,
+            allow_external_plugins=allow_external_plugins,
+            s3_presigned_config=s3_presigned_config,
+            task=task,
+        ) as base_target_processor:
+            target_processor: Any = base_target_processor
             for idx, exportable_document in enumerate(exportable_documents):
                 final_document, processed_doc, artifact_item = _process_remote_document(
                     task=task,
@@ -697,13 +656,15 @@ def _process_remote_exportable_results(
             raise RuntimeError("No documents were generated by Docling.")
 
         task_result: ResultType = PresignedArtifactResult(documents=presigned_documents)
-    elif isinstance(task.target, _REMOTE_STORAGE_TARGET_TYPES):
+    elif target_mode == "artifacts":
         # Every user-owned storage target is handled identically through the
         # connector factory: the per-source artifact path is computed here and
         # the target processor applies its own prefix/root (S3 key_prefix, local
         # directory, Drive folder, …) when writing. Adding a new storage
         # connector therefore needs no change in this module.
-        with get_target_processor(task.target) as target_processor:
+        with get_target_processor(
+            task.target, allow_external_plugins=allow_external_plugins
+        ) as target_processor:
             for idx, exportable_document in enumerate(exportable_documents):
                 final_document, processed_doc, _ = _process_remote_document(
                     task=task,
@@ -778,6 +739,7 @@ def _process_exportable_results_internal(
     expected_doc_count: Optional[int] = None,
     start_time: Optional[float] = None,
     callback_mode: CallbackMode = CallbackMode.FULL,
+    allow_external_plugins: bool = False,
 ) -> _ProcessedExportResults:
     conversion_options = task.convert_options
     if conversion_options is None:
@@ -805,10 +767,13 @@ def _process_exportable_results_internal(
     export_doclang = OutputFormat.DOCLANG in conversion_options.to_formats
     export_dclx = OutputFormat.DCLX in conversion_options.to_formats
 
-    if isinstance(
-        task.target,
-        (PresignedUrlTarget, *_REMOTE_STORAGE_TARGET_TYPES),
-    ):
+    target_factory = get_target_connector_factory(allow_external_plugins)
+    target_mode = (
+        target_factory.result_mode(task.target)
+        if target_factory.supports(task.target)
+        else None
+    )
+    if target_mode in {"artifacts", "presigned"}:
         return _process_remote_exportable_results(
             task=task,
             exportable_documents=exportable_documents,
@@ -828,6 +793,7 @@ def _process_exportable_results_internal(
             image_export_mode=conversion_options.image_export_mode,
             md_page_break_placeholder=conversion_options.md_page_break_placeholder,
             start_time=start_time,
+            allow_external_plugins=allow_external_plugins,
         )
 
     finalized_documents = list(exportable_documents)
@@ -904,8 +870,11 @@ def _process_exportable_results_internal(
             root_dir=output_dir,
         )
 
-        if isinstance(task.target, PutTarget):
-            _upload_to_put_target(str(task.target.url), file_path)
+        if target_mode == "archive":
+            with get_target_processor(
+                task.target, allow_external_plugins=allow_external_plugins
+            ) as target_processor:
+                target_processor.upload_archive(file_path)
             task_result = RemoteTargetResult()
         else:
             task_result = ZipArchiveResult(content=file_path.read_bytes())
@@ -951,6 +920,7 @@ def process_exportable_results(
     expected_doc_count: Optional[int] = None,
     start_time: Optional[float] = None,
     callback_mode: CallbackMode = CallbackMode.FULL,
+    allow_external_plugins: bool = False,
 ) -> DoclingTaskResult:
     processed = _process_exportable_results_internal(
         task=task,
@@ -962,6 +932,7 @@ def process_exportable_results(
         expected_doc_count=expected_doc_count,
         start_time=start_time,
         callback_mode=callback_mode,
+        allow_external_plugins=allow_external_plugins,
     )
 
     return processed.task_result

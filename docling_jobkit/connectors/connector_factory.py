@@ -10,12 +10,28 @@ from a config object via :meth:`BaseConnectorFactory.create_instance`.
 
 import logging
 from abc import ABCMeta
+from collections.abc import Mapping
 from functools import lru_cache
-from typing import Annotated, Generic, Optional, TypeVar, Union
+from typing import (
+    Annotated,
+    Any,
+    Generic,
+    Literal,
+    Optional,
+    TypeVar,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from pluggy import PluginManager
 from pydantic import BaseModel, Field
+from pydantic_core import PydanticUndefined
 
+from docling_jobkit.connectors.errors import (
+    SourceConnectorConfigError,
+    TargetConnectorConfigError,
+)
 from docling_jobkit.connectors.source_processor import BaseSourceProcessor
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 
@@ -36,12 +52,23 @@ class ConnectorFactoryMeta(BaseModel):
 def _kind_of(config_type: type[BaseModel]) -> str:
     """Return the ``kind`` discriminator value declared on a config model."""
     field = config_type.model_fields.get("kind")
-    if field is None or field.default is None:
+    if field is None or get_origin(field.annotation) is not Literal:
         raise ValueError(
-            f"Connector config {config_type!r} must declare a `kind` field with a "
-            "literal default to be registered."
+            f"Connector config {config_type!r} must declare one non-empty string "
+            "`Literal` value for `kind`."
         )
-    return str(field.default)
+    values = get_args(field.annotation)
+    if len(values) != 1 or not isinstance(values[0], str) or not values[0]:
+        raise ValueError(
+            f"Connector config {config_type!r} must declare one non-empty string "
+            "`Literal` value for `kind`."
+        )
+    kind = values[0]
+    if field.default is PydanticUndefined or field.default != kind:
+        raise ValueError(
+            f"Connector config {config_type!r} must default `kind` to {kind!r}."
+        )
+    return kind
 
 
 class BaseConnectorFactory(Generic[P], metaclass=ABCMeta):
@@ -54,6 +81,7 @@ class BaseConnectorFactory(Generic[P], metaclass=ABCMeta):
         )
         self._classes: dict[type[BaseModel], type[P]] = {}
         self._meta: dict[type[BaseModel], ConnectorFactoryMeta] = {}
+        self._config_types_by_kind: dict[str, type[BaseModel]] = {}
 
     @property
     def registered_config_types(self) -> tuple[type[BaseModel], ...]:
@@ -61,13 +89,18 @@ class BaseConnectorFactory(Generic[P], metaclass=ABCMeta):
 
     @property
     def registered_kinds(self) -> list[str]:
-        return [meta.kind for meta in self._meta.values()]
+        return list(self._config_types_by_kind)
+
+    @property
+    def registered_config_types_by_kind(self) -> dict[str, type[BaseModel]]:
+        return dict(self._config_types_by_kind)
 
     @property
     def registered_meta(self) -> dict[type[BaseModel], ConnectorFactoryMeta]:
         return self._meta
 
     def register(self, cls: type[P], plugin_name: str, plugin_module_name: str) -> None:
+        registrations: list[tuple[type[BaseModel], str]] = []
         for config_type in cls.get_config_types():
             kind = _kind_of(config_type)
             if config_type in self._classes:
@@ -75,32 +108,31 @@ class BaseConnectorFactory(Generic[P], metaclass=ABCMeta):
                     f"{kind!r} ({config_type!r}) already registered to class "
                     f"{self._classes[config_type]!r}"
                 )
+            if kind in self._config_types_by_kind or any(
+                registered_kind == kind for _, registered_kind in registrations
+            ):
+                registered_type = self._config_types_by_kind.get(kind) or next(
+                    registered_config
+                    for registered_config, registered_kind in registrations
+                    if registered_kind == kind
+                )
+                raise ValueError(
+                    f"Connector kind {kind!r} is already registered to "
+                    f"{registered_type!r}."
+                )
+            registrations.append((config_type, kind))
+
+        for config_type, kind in registrations:
             self._classes[config_type] = cls
+            self._config_types_by_kind[kind] = config_type
             self._meta[config_type] = ConnectorFactoryMeta(
                 kind=kind,
                 plugin_name=plugin_name,
                 module=plugin_module_name,
             )
 
-    def _resolve_class(self, config: BaseModel) -> Optional[type[P]]:
-        # 1. Exact config-type match (the discriminated-union / YAML path).
-        cls = self._classes.get(type(config))
-        if cls is not None:
-            return cls
-        # 2. config is an instance of a registered (super)type.
-        for config_type, candidate in self._classes.items():
-            if isinstance(config, config_type):
-                return candidate
-        # 3. A bare base object (e.g. S3Coordinates) was passed but the registry
-        #    holds the kind-bearing subclass (e.g. S3SourceRequest). Match when the
-        #    registered type derives from the runtime type.
-        for config_type, candidate in self._classes.items():
-            if issubclass(config_type, type(config)):
-                return candidate
-        return None
-
     def create_instance(self, config: BaseModel, **kwargs) -> P:
-        cls = self._resolve_class(config)
+        cls = self._classes.get(type(config))
         if cls is None:
             raise RuntimeError(self._err_msg_on_class_not_found(config))
         return cls(config, **kwargs)  # type: ignore[call-arg]
@@ -151,10 +183,7 @@ class BaseConnectorFactory(Generic[P], metaclass=ABCMeta):
 
     def process_plugin(self, config, plugin_name: str, plugin_module_name: str) -> None:
         for item in config[self.plugin_attr_name]:
-            try:
-                self.register(item, plugin_name, plugin_module_name)
-            except ValueError:
-                logger.warning("%r already registered", item)
+            self.register(item, plugin_name, plugin_module_name)
 
     def _err_msg_on_class_not_found(self, config: BaseModel) -> str:
         known = "\n".join(
@@ -172,10 +201,107 @@ class SourceConnectorFactory(BaseConnectorFactory[BaseSourceProcessor]):
     def __init__(self, plugin_name: str = PLUGIN_GROUP):
         super().__init__("source_connectors", plugin_name)
 
+    def supports(self, kind: str) -> bool:
+        return kind in self._config_types_by_kind
+
+    def validate_config(self, payload: Mapping[str, Any] | BaseModel) -> BaseModel:
+        if isinstance(payload, Mapping):
+            kind = payload.get("kind")
+            values: Mapping[str, Any] = payload
+        elif isinstance(payload, BaseModel):
+            values = payload.model_dump(mode="python")
+            kind = values.get("kind")
+        else:
+            kind = None
+            values = {}
+
+        if not isinstance(kind, str) or not kind:
+            raise SourceConnectorConfigError(
+                "Source connector config requires a non-empty string `kind`."
+            )
+
+        config_type = self._config_types_by_kind.get(kind)
+        if config_type is None:
+            raise SourceConnectorConfigError(
+                f"Source connector kind {kind!r} is not registered."
+            )
+        if type(payload) is config_type:
+            return payload
+
+        meta = self._meta[config_type]
+        try:
+            return config_type.model_validate(values)
+        except Exception as exc:
+            raise SourceConnectorConfigError(
+                f"Source connector kind {kind!r} registered by plugin "
+                f"{meta.plugin_name!r} ({meta.module}) has invalid configuration; "
+                "the submitted payload may be incompatible with the locally "
+                "installed plugin."
+            ) from exc
+
+    def is_expandable(self, config: Mapping[str, Any] | BaseModel) -> bool:
+        normalized = self.validate_config(config)
+        return self._classes[type(normalized)].is_expandable(normalized)
+
 
 class TargetConnectorFactory(BaseConnectorFactory[BaseTargetProcessor]):
     def __init__(self, plugin_name: str = PLUGIN_GROUP):
         super().__init__("target_connectors", plugin_name)
+
+    def supports(self, config: Mapping[str, Any] | BaseModel) -> bool:
+        kind = (
+            config.get("kind")
+            if isinstance(config, Mapping)
+            else getattr(config, "kind", None)
+        )
+        return isinstance(kind, str) and kind in self._config_types_by_kind
+
+    def validate_config(self, payload: Mapping[str, Any] | BaseModel) -> BaseModel:
+        values = (
+            payload
+            if isinstance(payload, Mapping)
+            else payload.model_dump(mode="python")
+            if isinstance(payload, BaseModel)
+            else {}
+        )
+        kind = values.get("kind")
+        if not isinstance(kind, str) or not kind:
+            raise TargetConnectorConfigError(
+                "Target connector config requires a non-empty string `kind`."
+            )
+
+        config_type = self._config_types_by_kind.get(kind)
+        if config_type is None:
+            raise TargetConnectorConfigError(
+                f"Target connector kind {kind!r} is not registered."
+            )
+        if type(payload) is config_type:
+            return payload
+
+        try:
+            return config_type.model_validate(values)
+        except Exception as exc:
+            meta = self._meta[config_type]
+            raise TargetConnectorConfigError(
+                f"Target connector kind {kind!r} registered by plugin "
+                f"{meta.plugin_name!r} ({meta.module}) has invalid configuration."
+            ) from exc
+
+    def result_mode(
+        self, config: Mapping[str, Any] | BaseModel
+    ) -> Literal["artifacts", "archive", "presigned"]:
+        normalized = self.validate_config(config)
+        return self._classes[type(normalized)].result_mode()
+
+    def result_mode_for_kind(
+        self, kind: str
+    ) -> Literal["artifacts", "archive", "presigned"]:
+        config_type = self._config_types_by_kind.get(kind)
+        if config_type is None:
+            raise TargetConnectorConfigError(
+                f"Target connector kind {kind!r} is not registered."
+            )
+        return self._classes[config_type].result_mode()
 
 
 @lru_cache(maxsize=None)

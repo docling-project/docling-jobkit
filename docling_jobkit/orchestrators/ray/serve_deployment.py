@@ -30,17 +30,12 @@ from docling.datamodel.service.callbacks import (
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.responses import FailurePhase, PublicFailureInfo
 from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
-from docling.datamodel.service.targets import (
-    AzureBlobTarget,
-    GoogleCloudStorageTarget,
-    GoogleDriveTarget,
-    PresignedUrlTarget,
-    S3Target,
-)
+from docling.datamodel.service.targets import PresignedUrlTarget
 from docling.datamodel.service.tasks import TaskType
 from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
 
+from docling_jobkit.connectors.connector_factory import get_target_connector_factory
 from docling_jobkit.connectors.source_processor import (
     DocumentChunk,
     SourceDocumentRef,
@@ -117,12 +112,6 @@ from docling_jobkit.public_errors import (
 _log = logging.getLogger(__name__)
 
 _SOURCE_CHUNK_CALLBACK_MODE = CallbackMode.CHILD_ONLY
-_REMOTE_STORAGE_TARGET_TYPES = (
-    S3Target,
-    AzureBlobTarget,
-    GoogleCloudStorageTarget,
-    GoogleDriveTarget,
-)
 
 # Back-off between retries when a coordinator is fully starved of converter units
 # (the tenant's whole budget is held by its own sibling tasks and nothing is in
@@ -186,10 +175,16 @@ def _to_exportable_documents_from_chunk(
     return exportable
 
 
-def _is_s3_fanout_task(task: Task) -> bool:
+def _is_s3_fanout_task(task: Task, *, allow_external_plugins: bool = False) -> bool:
+    target_factory = get_target_connector_factory(allow_external_plugins)
+    target_mode = (
+        target_factory.result_mode(task.target)
+        if target_factory.supports(task.target)
+        else None
+    )
     return (
         task.task_type == TaskType.CONVERT
-        and isinstance(task.target, (PresignedUrlTarget, *_REMOTE_STORAGE_TARGET_TYPES))
+        and target_mode in {"artifacts", "presigned"}
         and len(task.sources) > 0
         and any(isinstance(source, S3Coordinates) for source in task.sources)
     )
@@ -342,6 +337,7 @@ def _build_materialization_failure_result(
     start_time: float,
     *,
     debug_error_details: bool,
+    allow_external_plugins: bool,
 ) -> DoclingTaskResult:
     """Per-document result + progress callbacks for an admission-time source rejection.
 
@@ -396,7 +392,18 @@ def _build_materialization_failure_result(
             ),
         )
 
-    if isinstance(task.target, PresignedUrlTarget):
+    # Mirror the success-path result shape (convert/results.py) via result_mode()
+    # rather than enumerating concrete storage target types, so plugin artifact
+    # targets get the same RemoteTargetResult envelope on a preflight failure that
+    # they get on success. supports() is False for InBody/Zip (service-only
+    # targets), which fall through to the in-body ExportResult.
+    target_factory = get_target_connector_factory(allow_external_plugins)
+    target_mode = (
+        target_factory.result_mode(task.target)
+        if target_factory.supports(task.target)
+        else None
+    )
+    if target_mode == "presigned":
         result: ResultType = PresignedArtifactResult(
             documents=[
                 DocumentArtifactItem(
@@ -408,7 +415,7 @@ def _build_materialization_failure_result(
                 )
             ]
         )
-    elif isinstance(task.target, _REMOTE_STORAGE_TARGET_TYPES):
+    elif target_mode == "artifacts":
         result = RemoteTargetResult()
     else:
         result = ExportResult(
@@ -551,6 +558,7 @@ def _finalize_slice_results(
     callback_invoker: Optional[CallbackInvoker],
     start_time: float,
     debug_error_details: bool,
+    allow_external_plugins: bool,
 ) -> DoclingTaskResult:
     """Fetch child slice outputs, merge them, and build the parent task result."""
     # This is the only place where full slice documents enter the coordinator's
@@ -565,6 +573,7 @@ def _finalize_slice_results(
         callback_invoker=callback_invoker,
         start_time=start_time,
         debug_error_details=debug_error_details,
+        allow_external_plugins=allow_external_plugins,
     )
 
 
@@ -701,7 +710,9 @@ class DoclingProcessorConverterDeployment:
                         phase=FailurePhase.EXECUTION,
                         details={
                             "task_size": str(len(task.sources)),
-                            "target_kind": task.target.kind,
+                            "target_kind": getattr(
+                                task.target, "kind", type(task.target).__name__
+                            ),
                         },
                     )
                     if is_client_actionable_failure(failure):
@@ -772,6 +783,9 @@ class DoclingProcessorConverterDeployment:
                     expected_doc_count=expected_doc_count,
                     start_time=start_time,
                     callback_mode=callback_mode,
+                    allow_external_plugins=(
+                        self.converter_manager_config.allow_external_plugins
+                    ),
                 )
                 task_result = processed.task_result
                 processed_docs = processed.processed_docs
@@ -800,6 +814,7 @@ class DoclingProcessorConverterDeployment:
         convert_sources, headers = expand_task_sources(
             task,
             max_file_size=self.converter_manager_config.max_file_size,
+            allow_external_plugins=self.converter_manager_config.allow_external_plugins,
         )
         convert_opts = task.convert_options or ConvertDocumentsOptions()
         return list(
@@ -936,6 +951,7 @@ class DoclingProcessorCoordinatorDeployment:
             task_timeout=config.task_timeout,
             dispatcher_interval=config.dispatcher_interval,
             log_level=config.log_level,
+            allow_external_plugins=converter_manager_config.allow_external_plugins,
         )
         self.scratch_dir = config.scratch_dir or Path(
             tempfile.mkdtemp(prefix=f"docling_serve_{self.replica_id}_")
@@ -1080,7 +1096,9 @@ class DoclingProcessorCoordinatorDeployment:
                 phase=FailurePhase.EXECUTION,
                 details={
                     "task_size": str(task_size),
-                    "target_kind": task.target.kind,
+                    "target_kind": getattr(
+                        task.target, "kind", type(task.target).__name__
+                    ),
                 },
             )
             error_message = failure.message
@@ -1189,7 +1207,12 @@ class DoclingProcessorCoordinatorDeployment:
         convert_options = task.convert_options or ConvertDocumentsOptions()
         materialized_start_time = time.monotonic()
 
-        if _is_s3_fanout_task(task):
+        if _is_s3_fanout_task(
+            task,
+            allow_external_plugins=(
+                self.converter_manager_config.allow_external_plugins
+            ),
+        ):
             return await self._process_s3_fanout_task(task, materialized_start_time)
 
         if self._should_materialize_pdf(task):
@@ -1223,6 +1246,9 @@ class DoclingProcessorCoordinatorDeployment:
                     exc,
                     materialized_start_time,
                     debug_error_details=self.config.debug_error_details,
+                    allow_external_plugins=(
+                        self.converter_manager_config.allow_external_plugins
+                    ),
                 )
             artifact_ref = ray.put(materialized.content_bytes)
             page_count = materialized.page_count
@@ -1265,6 +1291,9 @@ class DoclingProcessorCoordinatorDeployment:
                                 callback_invoker=callback_invoker,
                                 start_time=materialized_start_time,
                                 debug_error_details=self.config.debug_error_details,
+                                allow_external_plugins=(
+                                    self.converter_manager_config.allow_external_plugins
+                                ),
                             )
                     finally:
                         # Release ObjectRefs so plasma can free the slice documents
@@ -1354,7 +1383,12 @@ class DoclingProcessorCoordinatorDeployment:
                 raise TypeError(
                     "Raw DocumentStream sources are not supported in Ray source-chunk fan-out"
                 )
-            with get_source_processor(source) as source_processor:
+            with get_source_processor(
+                source,
+                allow_external_plugins=(
+                    self.converter_manager_config.allow_external_plugins
+                ),
+            ) as source_processor:
                 source_doc_count = 0
                 for chunk in source_processor.iterate_document_chunks(
                     self.config.s3_dispatch_batch_size
