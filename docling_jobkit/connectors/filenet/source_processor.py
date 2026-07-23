@@ -74,11 +74,12 @@ class FileNetSourceProcessor(
         max_elements = self._coords.max_num_elements
 
         # Single document mode
-        if self._coords.document_id:
+        if self._coords.document_ids:
+            document_id = self._coords.document_ids[0]
             metadata = get_document_metadata(
                 self._coords,
                 self._auth_header,
-                self._coords.document_id,
+                document_id,
             )
             yield FileNetFileIdentifier(
                 id=metadata["id"],
@@ -136,6 +137,9 @@ class FileNetSourceProcessor(
     def _count_documents(self) -> int:
         """Count total documents by consuming the iterator."""
         max_elements = self._coords.max_num_elements
+
+        if self._coords.document_ids:
+            return 1
 
         if self._coords.folder_id:
             docs = list_folder_documents(

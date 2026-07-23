@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
+from pydantic import ValidationError
 
 from docling_core.types.io import DocumentStream
 
@@ -92,6 +93,43 @@ def test_filenet_list_respects_max_num_elements(filenet_coords):
 
     assert len(doc_ids) == 2
     assert [doc.name for doc in doc_ids] == ["doc1.pdf", "doc2.pdf"]
+
+
+def test_filenet_document_ids_is_optional_single_document_override(filenet_coords):
+    assert filenet_coords.document_ids == []
+
+    with pytest.raises(ValidationError):
+        FileNetCoordinates.model_validate(
+            {**filenet_coords.model_dump(), "document_ids": ["{DOC-1}", "{DOC-2}"]}
+        )
+
+    coords = filenet_coords.model_copy(
+        update={"folder_id": "{FOLDER-123}", "document_ids": ["{DOC-1}"]}
+    )
+    processor = FileNetSourceProcessor(coords)
+    processor._auth_header = "test-auth"
+    metadata = {
+        "id": "{DOC-1}",
+        "name": "doc1.pdf",
+        "contentSize": 1000,
+        "downloadUrl": "/content?id={DOC-1}",
+    }
+
+    with (
+        patch(
+            "docling_jobkit.connectors.filenet.source_processor.get_document_metadata",
+            return_value=metadata,
+        ) as get_metadata,
+        patch(
+            "docling_jobkit.connectors.filenet.source_processor.list_folder_documents"
+        ) as list_folder,
+    ):
+        docs = list(processor._list_document_ids())
+
+    assert [doc.id for doc in docs] == ["{DOC-1}"]
+    assert processor._count_documents() == 1
+    get_metadata.assert_called_once_with(coords, "test-auth", "{DOC-1}")
+    list_folder.assert_not_called()
 
 
 def test_filenet_count_clips_to_max_num_elements(filenet_coords):

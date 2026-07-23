@@ -10,7 +10,7 @@ sources:
     api_key: "key"
     repository_id: "OS1"
     folder_id: "/my-folder" # optional, will grab all files from folder. folder_id guid works here as well
-    document_id: "{doc-id}" # optional, will override folder_id for to grab just one file
+    document_ids: ["{doc-id}"] # optional, will override folder_id to grab just one file
     max_num_elements: 10
 
 target:

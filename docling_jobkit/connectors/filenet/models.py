@@ -47,16 +47,17 @@ class FileNetCoordinates(BaseModel):
             examples=["/docling-test", "{FOLDER-ID-GUID}"],
         ),
     ] = None
-    document_id: Annotated[
-        str | None,
+    document_ids: Annotated[
+        list[str],
         Field(
-            default=None,
+            default_factory=list,
+            max_length=1,
             description=(
-                "ID for individual document w/in repository."
-                "If not None, will download just this one document. Overrides folder id."
+                "IDs for individual documents within the repository. "
+                "Currently limited to one document. If not empty, overrides folder_id."
             ),
         ),
-    ] = None
+    ]
     max_num_elements: Annotated[
         int | None,
         Field(
