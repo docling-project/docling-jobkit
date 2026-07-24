@@ -1,3 +1,13 @@
+## [v3.1.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.1.0) - 2026-07-24
+
+### Feature
+
+* Document_ids support for FileNet connector ([#208](https://github.com/docling-project/docling-jobkit/issues/208)) ([`94bbcc9`](https://github.com/docling-project/docling-jobkit/commit/94bbcc9c990b791348c8075c1afea0ce84999f0d))
+
+### Fix
+
+* Allow custom model configs on the CLI ([#209](https://github.com/docling-project/docling-jobkit/issues/209)) ([`c3bc5e5`](https://github.com/docling-project/docling-jobkit/commit/c3bc5e5f62bdb862ad4697d4c5481e02df8f9d99))
+
 ## [v3.0.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.0.0) - 2026-07-23
 
 ### Feature
