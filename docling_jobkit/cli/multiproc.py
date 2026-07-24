@@ -297,6 +297,15 @@ def process_batch(
             enable_remote_services=enable_remote_services,
             allow_external_plugins=allow_external_plugins,
             options_cache_size=1,
+            # ponytail: local CLI is run by the operator who wrote the config file,
+            # so the untrusted-serve lockdowns on custom configs don't apply here.
+            allow_custom_vlm_config=True,
+            allow_custom_picture_description_config=True,
+            allow_custom_code_formula_config=True,
+            allow_custom_table_structure_config=True,
+            allow_custom_layout_config=True,
+            allow_custom_picture_classification_config=True,
+            allow_custom_ocr_config=True,
         )
         manager = DoclingConverterManager(config=cm_config)
 
