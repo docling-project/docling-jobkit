@@ -27,6 +27,7 @@ def source_connectors():
         GoogleDriveSourceProcessor,
     )
     from docling_jobkit.connectors.http.source_processor import HttpSourceProcessor
+    from docling_jobkit.connectors.kafka.source_processor import KafkaSourceProcessor
     from docling_jobkit.connectors.local_path.source_processor import (
         LocalPathSourceProcessor,
     )
@@ -41,6 +42,7 @@ def source_connectors():
             GoogleDriveSourceProcessor,
             FileNetSourceProcessor,
             GoogleCloudStorageSourceProcessor,
+            KafkaSourceProcessor,
         ]
     }
 
@@ -58,6 +60,7 @@ def target_connectors():
     from docling_jobkit.connectors.http.target_processor import (
         HttpPutTargetProcessor,
     )
+    from docling_jobkit.connectors.kafka.target_processor import KafkaTargetProcessor
     from docling_jobkit.connectors.local_path.target_processor import (
         LocalPathTargetProcessor,
     )
@@ -75,5 +78,6 @@ def target_connectors():
             HttpPutTargetProcessor,
             GoogleDriveTargetProcessor,
             GoogleCloudStorageTargetProcessor,
+            KafkaTargetProcessor,
         ]
     }
