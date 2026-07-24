@@ -138,8 +138,10 @@ class Task(BaseModel):
             raise ValueError("'target' and 'targets' are mutually exclusive")
         if self.target is not None:
             # Expand the convenience alias into the list so all downstream code
-            # only ever reads self.targets.
-            object.__setattr__(self, "targets", [self.target])
+            # only ever reads self.targets.  Clear target so it is absent from
+            # serialised output and a round-trip does not see both fields set.
+            self.targets = [self.target]
+            self.target = None
         if not self.targets:
             raise ValueError(
                 "At least one target is required. Provide either 'target' or 'targets'."
