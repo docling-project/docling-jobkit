@@ -1,7 +1,6 @@
 import logging
 import time
 from collections import defaultdict, deque
-from collections.abc import Iterable
 from typing import Callable, Optional, TypeVar
 
 from confluent_kafka import (
@@ -11,32 +10,10 @@ from confluent_kafka import (
     Producer,
     TopicPartition,
 )
-from pydantic import BaseModel
 
 _log = logging.getLogger(__name__)
 
 T = TypeVar("T")
-
-
-class KafkaConfigError(ValueError):
-    """Raised when Kafka is configured on only one side of a job"""
-
-
-def validate_kafka_kind_pairing(
-    sources: Iterable[BaseModel], target: BaseModel
-) -> None:
-    """This ensures that Kafka is used as both source and target connector or neither"""
-    source_kinds = {getattr(s, "kind", None) for s in sources}
-    target_is_kafka = getattr(target, "kind", None) == "kafka"
-    source_has_kafka = "kafka" in source_kinds
-
-    if source_has_kafka != target_is_kafka:
-        raise KafkaConfigError(
-            "Kafka must be used on both sides. "
-            "A Kafka source requires a kafka target and vice versa"
-        )
-    if source_has_kafka and source_kinds != {"kafka"}:
-        raise KafkaConfigError("A Kafka job cannot mix 'kafka' with non-kafka sources")
 
 
 def build_consumer(client_config: dict[str, str]) -> Consumer:

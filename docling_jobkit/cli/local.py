@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from rich.console import Console
 
 from docling_jobkit.connectors.auth_context import allow_interactive_auth
-from docling_jobkit.connectors.kafka.helper import (
+from docling_jobkit.connectors.errors import (
     KafkaConfigError,
     validate_kafka_kind_pairing,
 )

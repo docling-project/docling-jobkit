@@ -1,7 +1,9 @@
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from functools import wraps
 from typing import NoReturn, ParamSpec, TypeVar, cast
+
+from pydantic import BaseModel
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -47,6 +49,27 @@ class SourceConnectorConfigError(ValueError):
 
 class TargetConnectorConfigError(ValueError):
     """Safe failure while resolving or validating a task target config."""
+
+
+class KafkaConfigError(ValueError):
+    """Raised when Kafka is configured on only one side of a job."""
+
+
+def validate_kafka_kind_pairing(
+    sources: Iterable[BaseModel], target: BaseModel
+) -> None:
+    """Ensures that Kafka is used as both source and target connector or neither."""
+    source_kinds = {getattr(s, "kind", None) for s in sources}
+    target_is_kafka = getattr(target, "kind", None) == "kafka"
+    source_has_kafka = "kafka" in source_kinds
+
+    if source_has_kafka != target_is_kafka:
+        raise KafkaConfigError(
+            "Kafka must be used on both sides. "
+            "A Kafka source requires a kafka target and vice versa"
+        )
+    if source_has_kafka and source_kinds != {"kafka"}:
+        raise KafkaConfigError("A Kafka job cannot mix 'kafka' with non-kafka sources")
 
 
 def map_connector_authentication_errors(
