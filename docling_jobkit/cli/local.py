@@ -7,6 +7,10 @@ from pydantic import ValidationError
 from rich.console import Console
 
 from docling_jobkit.connectors.auth_context import allow_interactive_auth
+from docling_jobkit.connectors.kafka.helper import (
+    KafkaConfigError,
+    validate_kafka_kind_pairing,
+)
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.convert.manager import (
@@ -64,9 +68,13 @@ def convert(
             raw_data = yaml.safe_load(f)
         config_model = build_job_config_model(allow_external_plugins)
         config = config_model(**raw_data)
+        validate_kafka_kind_pairing(config.sources, config.target)
     except ValidationError as e:
         typer.echo("❌ Validation failed:")
         typer.echo(e.json(indent=2))
+        raise typer.Exit(1)
+    except KafkaConfigError as e:
+        typer.echo(f"❌ {e}")
         raise typer.Exit(1)
 
     cm_config = DoclingConverterManagerConfig(

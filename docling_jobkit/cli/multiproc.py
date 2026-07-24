@@ -20,6 +20,10 @@ from rich.progress import (
 from docling.datamodel.service.options import ConvertDocumentsOptions
 
 from docling_jobkit.connectors.auth_context import allow_interactive_auth
+from docling_jobkit.connectors.kafka.helper import (
+    KafkaConfigError,
+    validate_kafka_kind_pairing,
+)
 from docling_jobkit.connectors.source_processor import DocumentChunk
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
@@ -74,13 +78,18 @@ def _load_config(config_file: Path, allow_external_plugins: bool = False) -> _Jo
         with config_file.open("r") as f:
             raw_data = yaml.safe_load(f)
         config_model = build_job_config_model(allow_external_plugins)
-        return cast(_JobConfig, config_model(**raw_data))
+        config = cast(_JobConfig, config_model(**raw_data))
+        validate_kafka_kind_pairing(config.sources, config.target)
+        return config
     except FileNotFoundError:
         err_console.print(f"[red]❌ File not found: {config_file}[/red]")
         raise typer.Exit(1)
     except ValidationError as e:
         err_console.print("[red]❌ Validation failed:[/red]")
         err_console.print(e.json(indent=2))
+        raise typer.Exit(1)
+    except KafkaConfigError as e:
+        err_console.print(f"[red]❌ {e}[/red]")
         raise typer.Exit(1)
 
 
