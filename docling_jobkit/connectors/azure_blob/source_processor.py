@@ -164,3 +164,13 @@ class AzureBlobSourceProcessor(
                 blob_id,
                 max_file_size=max_file_size,
             )
+
+    @override
+    def fetch_by_locator(
+        self, locator: str, *, max_file_size: int | None = None
+    ) -> DocumentStream:
+        prefix = self._coords.blob_prefix or ""
+        name = f"{prefix.rstrip('/')}/{locator.lstrip('/')}" if prefix else locator
+        return self._fetch_document_by_id(
+            AzureBlobFileIdentifier(name=name, size=0), max_file_size=max_file_size
+        )

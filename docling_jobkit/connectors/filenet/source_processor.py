@@ -217,3 +217,18 @@ class FileNetSourceProcessor(
     ) -> Iterator[DocumentStream]:
         for doc_id in self._list_document_ids():
             yield self._fetch_document_by_id(doc_id, max_file_size=max_file_size)
+
+    @override
+    def fetch_by_locator(
+        self, locator: str, *, max_file_size: int | None = None
+    ) -> DocumentStream:
+        metadata = get_document_metadata(self._coords, self._auth_header, locator)
+        identifier = FileNetFileIdentifier(
+            id=metadata["id"],
+            name=metadata["name"],
+            size=metadata["contentSize"],
+            mime_type=metadata.get("mineType"),
+            download_url=metadata["downloadUrl"],
+        )
+
+        return self._fetch_document_by_id(identifier, max_file_size=max_file_size)

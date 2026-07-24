@@ -154,3 +154,13 @@ class S3SourceProcessor(BaseSourceProcessor[S3Coordinates, S3FileIdentifier]):
                 key,
                 max_file_size=max_file_size,
             )
+
+    @override
+    def fetch_by_locator(
+        self, locator: str, *, max_file_size: int | None = None
+    ) -> DocumentStream:
+        prefix = self._coords.key_prefix or ""
+        key = f"{prefix.rstrip('/')}/{locator.lstrip('/')}" if prefix else locator
+        return self._fetch_document_by_id(
+            S3FileIdentifier(key=key, size=0), max_file_size=max_file_size
+        )

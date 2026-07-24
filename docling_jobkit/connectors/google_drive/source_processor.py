@@ -106,6 +106,23 @@ class GoogleDriveSourceProcessor(
         )
 
     @override
+    def fetch_by_locator(
+        self, locator: str, *, max_file_size: int | None = None
+    ) -> DocumentStream:
+        from docling_jobkit.connectors.google_drive.helper import get_source_files_infos
+
+        coords = self._coords.model_copy(update={"path_id": locator})
+        infos = get_source_files_infos(self._service, coords)
+
+        # TODO: in the future when we support multiple files per kafka event we can remove this guard
+        if len(infos) != 1:
+            raise ValueError(
+                f"locator {locator} did not resolve to a single Drive file (go {len(infos)})"
+            )
+
+        return self._fetch_document_by_id(infos[0], max_file_size=max_file_size)
+
+    @override
     def _make_document_ref(
         self, info: GoogleDriveFileIdentifier, source_index: int
     ) -> SourceDocumentRef[GoogleDriveFileIdentifier]:

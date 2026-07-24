@@ -145,3 +145,18 @@ class GoogleCloudStorageSourceProcessor(
     ) -> Iterator[DocumentStream]:
         for key in self._list_document_ids():
             yield self._fetch_document_by_id(key, max_file_size=max_file_size)
+
+    @override
+    def fetch_by_locator(
+        self, locator: str, *, max_file_size: int | None = None
+    ) -> DocumentStream:
+        from docling_jobkit.connectors.google_cloud_storage.helper import (
+            GoogleCloudStorageFileIdentifier,
+        )
+
+        prefix = self._coords.key_prefix or ""
+        name = f"{prefix.rstrip('/')}/{locator.lstrip('/')}" if prefix else locator
+        return self._fetch_document_by_id(
+            GoogleCloudStorageFileIdentifier(name=name, size=0),
+            max_file_size=max_file_size,
+        )
