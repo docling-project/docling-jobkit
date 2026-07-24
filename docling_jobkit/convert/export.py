@@ -7,8 +7,9 @@ exercised locally (CLI) or on distributed compute (Ray/RQ/local orchestrator),
 and keeps memory bounded: callers stream documents one at a time and release each
 document's heavy ``DoclingDocument`` reference right after its artifacts are sent.
 
-Only :func:`export_documents_to_target` is public; the other helpers are internal
-building blocks (underscore-prefixed) that ``convert.results`` reuses directly.
+Only :func:`export_documents_to_target` and :func:`stream_chunks_for_document`
+are public; the other helpers are internal building blocks (underscore-prefixed)
+that ``convert.results`` reuses directly.
 """
 
 import logging
@@ -17,15 +18,23 @@ import zipfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from docling.datamodel.base_models import OutputFormat
 from docling.datamodel.document import ConversionStatus
+from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling_core.types.doc import ImageRefMode
 
 from docling_jobkit.connectors.artifact_paths import ArtifactType
+from docling_jobkit.connectors.database_target_processor import (
+    BaseDatabaseTargetProcessor,
+)
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.target_field_slots import OUTPUT_FORMAT_MIME
+
+if TYPE_CHECKING:
+    from docling_jobkit.convert.chunking import DocumentChunkerManager
 
 _log = logging.getLogger(__name__)
 
@@ -40,6 +49,83 @@ class _ExportedArtifactFile:
 
 def _is_exportable_status(status: ConversionStatus) -> bool:
     return status in (ConversionStatus.SUCCESS, ConversionStatus.PARTIAL_SUCCESS)
+
+
+def _processor_requires_chunks(p: BaseTargetProcessor) -> bool:
+    """True when *p* should receive the streaming chunk protocol.
+
+    Mirrors the same helper in ``convert/results_processor.py`` so the decision
+    logic is not duplicated between the CLI and orchestrator paths.
+    """
+    if p.requires_chunks():
+        return True
+    instance_check = getattr(p, "instance_requires_chunks", None)
+    if callable(instance_check):
+        return bool(instance_check())
+    return False
+
+
+def stream_chunks_for_document(
+    *,
+    exportable_document: ExportableDocument,
+    filename: str,
+    chunker_manager: "DocumentChunkerManager",
+    chunking_options: BaseChunkerOptions,
+    processors: list[BaseTargetProcessor],
+    chunks_in_formats: bool,
+    temp_dir: Path,
+) -> int:
+    """Run the streaming chunk protocol across *processors* for one document.
+
+    This is the single shared implementation used by every execution path
+    (CLI via ``ResultsProcessor``, and all orchestrators via
+    ``_process_remote_exportable_results``).  Callers must *not* run the
+    ``begin_chunks / consume_chunk / end_chunks`` protocol themselves.
+
+    The chunker generator is invoked exactly once; each chunk is fanned out to
+    all participating processors in a single pass so the full chunk list is
+    never materialised in memory.
+
+    Returns the number of chunks produced (0 when the document is not
+    exportable or no processors participate).
+
+    Processor participation rules (same as ``ResultsProcessor``):
+    - DB processors that override ``requires_chunks()`` always participate.
+    - File-storage processors participate only when *chunks_in_formats* is
+      True, and only if they are *not* database processors.
+    """
+    if not _is_exportable_status(exportable_document.status):
+        return 0
+    if exportable_document.document is None:
+        return 0
+
+    chunk_processors = [
+        p
+        for p in processors
+        if _processor_requires_chunks(p)
+        or (chunks_in_formats and not isinstance(p, BaseDatabaseTargetProcessor))
+    ]
+    if not chunk_processors:
+        return 0
+
+    for p in chunk_processors:
+        p.begin_chunks(filename, temp_dir)
+    n = 0
+    try:
+        for chunk in chunker_manager.chunk_document(
+            document=exportable_document.document,
+            filename=filename,
+            options=chunking_options,
+        ):
+            for p in chunk_processors:
+                p.consume_chunk(chunk)
+            n += 1
+    finally:
+        for p in chunk_processors:
+            p.end_chunks()
+
+    _log.info("Streamed %d chunks for %s", n, filename)
+    return n
 
 
 def _materialize_document_exports(

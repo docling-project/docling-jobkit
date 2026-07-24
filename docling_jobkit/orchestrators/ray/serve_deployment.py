@@ -561,6 +561,8 @@ def _finalize_slice_results(
     start_time: float,
     debug_error_details: bool,
     allow_external_plugins: bool,
+    chunker_manager: Optional[DocumentChunkerManager] = None,
+    chunking_options: Any = None,
 ) -> DoclingTaskResult:
     """Fetch child slice outputs, merge them, and build the parent task result."""
     # This is the only place where full slice documents enter the coordinator's
@@ -576,6 +578,8 @@ def _finalize_slice_results(
         start_time=start_time,
         debug_error_details=debug_error_details,
         allow_external_plugins=allow_external_plugins,
+        chunker_manager=chunker_manager,
+        chunking_options=chunking_options,
     )
 
 
@@ -775,6 +779,11 @@ class DoclingProcessorConverterDeployment:
         with tempfile.TemporaryDirectory(**temp_dir_kwargs) as temp_dir:
             workdir = Path(temp_dir)
             if task.task_type == TaskType.CONVERT:
+                chunking_options = None
+                if task.convert_options is not None:
+                    chunking_options = self.cm.parse_chunking_options(
+                        task.convert_options
+                    )
                 processed = _process_exportable_results_internal(
                     task=task,
                     exportable_documents=exportable_documents,
@@ -788,6 +797,8 @@ class DoclingProcessorConverterDeployment:
                     allow_external_plugins=(
                         self.converter_manager_config.allow_external_plugins
                     ),
+                    chunker_manager=self._get_chunker_manager(),
+                    chunking_options=chunking_options,
                 )
                 task_result = processed.task_result
                 processed_docs = processed.processed_docs
@@ -966,6 +977,9 @@ class DoclingProcessorCoordinatorDeployment:
         self._slice_finalization_semaphore = asyncio.Semaphore(
             self.config.max_concurrent_coordinator_slice_finalizations
         )
+        # Lazily-initialized chunker manager for use during slice finalization
+        # and single-doc result processing on the coordinator.
+        self._chunker_manager: Optional[DocumentChunkerManager] = None
 
         _log.setLevel(self.config.log_level.upper())
 
@@ -1194,6 +1208,11 @@ class DoclingProcessorCoordinatorDeployment:
                     follow_up_exc,
                 )
 
+    def _get_chunker_manager(self) -> DocumentChunkerManager:
+        if self._chunker_manager is None:
+            self._chunker_manager = DocumentChunkerManager()
+        return self._chunker_manager
+
     async def _process_task(
         self, task: Task, workdir: Path
     ) -> DoclingTaskResult | ConverterFailureResult:
@@ -1296,6 +1315,8 @@ class DoclingProcessorCoordinatorDeployment:
                                 allow_external_plugins=(
                                     self.converter_manager_config.allow_external_plugins
                                 ),
+                                chunker_manager=self._get_chunker_manager(),
+                                chunking_options=convert_options.chunking_options,
                             )
                     finally:
                         # Release ObjectRefs so plasma can free the slice documents

@@ -26,11 +26,10 @@ from docling_core.types.doc.document import (
 )
 from docling_core.types.doc.labels import DocItemLabel
 
-from docling_jobkit.connectors.database_target_processor import (
-    BaseDatabaseTargetProcessor,
-)
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.convert.chunking import DocumentChunkerManager
+from docling_jobkit.convert.export import stream_chunks_for_document
+from docling_jobkit.datamodel.exportable_document import ExportableDocument
 
 _log = logging.getLogger(__name__)
 
@@ -63,6 +62,11 @@ def _processor_requires_chunks(p: BaseTargetProcessor) -> bool:
     chunk participation is determined by the runtime target config (e.g.
     ``OpenSearchTargetProcessor`` which serves both ``opensearch_doc`` and
     ``opensearch_chunks``).
+
+    .. deprecated::
+        Prefer ``export.stream_chunks_for_document`` which contains its own
+        equivalent helper.  This function is kept for backward compatibility
+        with code that calls it directly.
     """
     if p.requires_chunks():
         return True
@@ -269,42 +273,17 @@ class ResultsProcessor:
                                 and self._chunking_options
                             ):
                                 filename = str(conv_res.input.file)
-
-                                # Determine which processors participate.
-                                # DB-doc processors (no requires_chunks) are
-                                # excluded even when chunks_in_formats is True.
-                                chunk_processors = [
-                                    p
-                                    for p in processors
-                                    if _processor_requires_chunks(p)
-                                    or (
-                                        self._chunks_in_formats
-                                        and not isinstance(
-                                            p, BaseDatabaseTargetProcessor
-                                        )
-                                    )
-                                ]
-
-                                for p in chunk_processors:
-                                    p.begin_chunks(filename, temp_dir)
-                                n_chunks = 0
-                                try:
-                                    for chunk in self._chunker_manager.chunk_document(
-                                        document=conv_res.document,
-                                        filename=filename,
-                                        options=self._chunking_options,
-                                    ):
-                                        for p in chunk_processors:
-                                            p.consume_chunk(chunk)
-                                        n_chunks += 1
-                                finally:
-                                    for p in chunk_processors:
-                                        p.end_chunks()
-
-                                _log.info(
-                                    "Streamed %d chunks for %s",
-                                    n_chunks,
-                                    conv_res.input.file,
+                                _exp = ExportableDocument.from_conversion_result(
+                                    conv_res, source_index=0
+                                )
+                                stream_chunks_for_document(
+                                    exportable_document=_exp,
+                                    filename=filename,
+                                    chunker_manager=self._chunker_manager,
+                                    chunking_options=self._chunking_options,
+                                    processors=processors,
+                                    chunks_in_formats=self._chunks_in_formats,
+                                    temp_dir=temp_dir,
                                 )
 
                             yield f"{doc_hash} - SUCCESS"
