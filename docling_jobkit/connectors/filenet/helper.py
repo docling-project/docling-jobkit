@@ -300,30 +300,42 @@ def list_folder_documents(
         yield doc
 
 
-def get_document_metadata(
+def list_docs_by_id(
     coords: FileNetCoordinates,
     auth_header: str,
-    document_id: str,
-) -> dict:
-    """Fetch metadata for a specific FileNet document."""
+    doc_ids: list[str],
+) -> Iterator[dict]:
+    """List multiple specific documents by their IDs, paginating across all pages."""
+    if not doc_ids:
+        return
+
+    # Construct WHERE clause: Id IN ('{id1}', '{id2}', ...)
+    quoted_ids = "', '".join(doc_ids)
+    where_clause = f"Id IN ('{quoted_ids}')"
+
     query = """
-    query ($repo: String!, $doc: String!) {
-      document(
+    query ($repo: String!, $where: String!) {
+      documents(
         repositoryIdentifier: $repo
-        identifier: $doc
+        where: $where
       ) {
-        id
-        name
-        mimeType
-        contentSize
-        contentElements {
-          contentType
-          elementSequenceNumber
-          ... on ContentTransfer {
-            contentSize
-            retrievalName
-            downloadUrl
+        documents {
+          id
+          name
+          mimeType
+          contentSize
+          contentElements {
+            contentType
+            elementSequenceNumber
+            ... on ContentTransfer {
+              contentSize
+              retrievalName
+              downloadUrl
+            }
           }
+        }
+        pageInfo {
+          token
         }
       }
     }
@@ -337,24 +349,12 @@ def get_document_metadata(
         query,
         {
             "repo": coords.repository_id,
-            "doc": document_id,
+            "where": where_clause,
         },
     )
 
-    doc = data.get("document", {})
-
-    if not doc.get("contentElements"):
-        raise RuntimeError(f"Document {document_id} has no content elements")
-
-    content_element = doc["contentElements"][0]
-
-    return {
-        "id": doc["id"],
-        "name": doc["name"],
-        "mimeType": doc.get("mimeType"),
-        "contentSize": int(doc.get("contentSize", 0)),
-        "downloadUrl": content_element["downloadUrl"],
-    }
+    for doc in _paginate_documents(graphql_url, auth_header, data.get("documents", {})):
+        yield doc
 
 
 def download_document(

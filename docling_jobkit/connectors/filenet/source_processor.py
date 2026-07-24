@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from typing import Iterator
 
 from pydantic import BaseModel
@@ -9,8 +10,8 @@ from docling_core.types.io import DocumentStream
 from docling_jobkit.connectors.filenet.helper import (
     check_connection,
     download_document,
-    get_document_metadata,
     get_filenet_auth_header,
+    list_docs_by_id,
     list_folder_documents,
     list_repository_documents,
 )
@@ -73,32 +74,24 @@ class FileNetSourceProcessor(
         yielded = 0
         max_elements = self._coords.max_num_elements
 
-        # Single document mode
+        # Document IDs mode (single or multiple)
         if self._coords.document_ids:
-            document_id = self._coords.document_ids[0]
-            metadata = get_document_metadata(
+            docs = list_docs_by_id(
                 self._coords,
                 self._auth_header,
-                document_id,
+                self._coords.document_ids,
             )
-            yield FileNetFileIdentifier(
-                id=metadata["id"],
-                name=metadata["name"],
-                size=metadata["contentSize"],
-                mime_type=metadata.get("mimeType"),
-                download_url=metadata["downloadUrl"],
-            )
-            return
 
         # Folder mode
-        if self._coords.folder_id:
+        elif self._coords.folder_id:
             docs = list_folder_documents(
                 self._coords,
                 self._auth_header,
                 self._coords.folder_id,
             )
+
+        # Repository mode
         else:
-            # Repository mode
             docs = list_repository_documents(
                 self._coords,
                 self._auth_header,
@@ -166,11 +159,20 @@ class FileNetSourceProcessor(
     def _make_document_ref(
         self, identifier: FileNetFileIdentifier, source_index: int
     ) -> SourceDocumentRef[FileNetFileIdentifier]:
+        base_name = identifier.name
+        doc_id = identifier.id.strip("{}")
+
+        ext = Path(base_name).suffix
+        if ext:
+            unique_filename = f"{Path(base_name).stem}-{doc_id}{ext}"
+        else:
+            unique_filename = f"{base_name}-{doc_id}"
+
         return SourceDocumentRef(
             id=identifier,
             source_index=source_index,
             source_uri=f"filenet://{self._coords.repository_id}/{identifier.id}",
-            filename=identifier.name,
+            filename=unique_filename,
         )
 
     def _fetch_document_by_id(
@@ -179,7 +181,7 @@ class FileNetSourceProcessor(
         *,
         max_file_size: int | None = None,
     ) -> DocumentStream:
-        """Download a document by its identifier."""
+        """Download a document by its identifier (download url in this case)."""
         limit = normalize_max_file_size(max_file_size)
         if limit is not None and identifier.size > limit:
             raise SourceLimitExceededError(
@@ -199,7 +201,16 @@ class FileNetSourceProcessor(
             identifier.download_url,
         )
 
-        return DocumentStream(name=identifier.name, stream=buffer)
+        # Create unique filename using same logic as _make_document_ref
+        base_name = identifier.name
+        doc_id = identifier.id.strip("{}")
+        ext = Path(base_name).suffix
+        if ext:
+            unique_filename = f"{Path(base_name).stem}-{doc_id}{ext}"
+        else:
+            unique_filename = f"{base_name}-{doc_id}"
+
+        return DocumentStream(name=unique_filename, stream=buffer)
 
     def _fetch_documents(
         self, *, max_file_size: int | None = None

@@ -51,7 +51,6 @@ class FileNetCoordinates(BaseModel):
         list[str],
         Field(
             default_factory=list,
-            max_length=1,
             description=(
                 "IDs for individual documents within the repository. "
                 "Currently limited to one document. If not empty, overrides folder_id."
