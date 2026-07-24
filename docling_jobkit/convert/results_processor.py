@@ -11,7 +11,6 @@ from typing import Any, Iterable, Optional
 
 import pandas as pd
 from pandas import DataFrame
-from pydantic import BaseModel
 
 from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.document import ConversionResult
@@ -31,13 +30,7 @@ from docling_jobkit.connectors.database_target_processor import (
     BaseDatabaseTargetProcessor,
 )
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
-from docling_jobkit.connectors.target_processor_factory import get_target_processor
-from docling_jobkit.convert.chunking import (
-    DocumentChunkerManager,
-    _chunk_row_payload,
-    _write_document_chunks_jsonl,
-)
-from docling_jobkit.datamodel.target_field_slots import ChunkFieldSlots
+from docling_jobkit.convert.chunking import DocumentChunkerManager
 
 _log = logging.getLogger(__name__)
 
@@ -62,20 +55,36 @@ _CLASSIFIER_LABELS = [
 ]
 
 
+def _processor_requires_chunks(p: BaseTargetProcessor) -> bool:
+    """True when *p* should receive the streaming chunk protocol.
+
+    Checks the class-level ``requires_chunks()`` flag first, then falls back
+    to an optional ``instance_requires_chunks()`` method for processors whose
+    chunk participation is determined by the runtime target config (e.g.
+    ``OpenSearchTargetProcessor`` which serves both ``opensearch_doc`` and
+    ``opensearch_chunks``).
+    """
+    if p.requires_chunks():
+        return True
+    instance_check = getattr(p, "instance_requires_chunks", None)
+    if callable(instance_check):
+        return bool(instance_check())
+    return False
+
+
 class ResultsProcessor:
     def __init__(
         self,
-        target_processor: BaseTargetProcessor,
+        target_processors: list[BaseTargetProcessor],
         to_formats: list[str] | None = None,
         generate_page_images: bool = False,
         generate_picture_images: bool = False,
         export_parquet_file: bool = False,
         scratch_dir: Path | None = None,
         artifact_root_prefix: str = "",
-        chunk_target: Optional[BaseModel] = None,
         chunking_options: Optional[BaseChunkerOptions] = None,
     ):
-        self._target_processor = target_processor
+        self._target_processors = target_processors
 
         self.export_page_images = generate_page_images
         self.export_images = generate_picture_images
@@ -86,9 +95,18 @@ class ResultsProcessor:
         self.scratch_dir = scratch_dir or Path(tempfile.mkdtemp(prefix="docling_"))
         self.scratch_dir.mkdir(exist_ok=True, parents=True)
         self._artifact_root_prefix = artifact_root_prefix.strip("/")
-        self._chunk_target = chunk_target
         self._chunking_options = chunking_options
-        self._chunker_manager = DocumentChunkerManager() if chunk_target else None
+
+        # Chunking is active when:
+        #   a) "chunks" is listed in to_formats, OR
+        #   b) at least one processor declares it requires chunk records
+        self._chunks_in_formats: bool = (
+            to_formats is not None and "chunks" in to_formats
+        )
+        self._chunk_active: bool = self._chunks_in_formats or any(
+            _processor_requires_chunks(p) for p in target_processors
+        )
+        self._chunker_manager = DocumentChunkerManager() if self._chunk_active else None
 
     def __del__(self):
         if self.scratch_dir is not None:
@@ -100,18 +118,123 @@ class ResultsProcessor:
             return relative_key
         return f"{self._artifact_root_prefix}/{relative_key}"
 
+    def _upload_formats(
+        self,
+        conv_res: ConversionResult,
+        temp_dir: Path,
+        name_without_ext: str,
+    ) -> None:
+        """Upload all requested output formats to every target processor."""
+        for target_processor in self._target_processors:
+            if os.path.exists(conv_res.input.file):
+                target_processor.upload_file(
+                    filename=Path(conv_res.input.file),
+                    target_filename=self._target_key(f"pdf/{name_without_ext}.pdf"),
+                    content_type="application/pdf",
+                )
+
+            if self.export_page_images:
+                self._upload_page_images(
+                    conv_res.document.pages,
+                    conv_res.input.document_hash,
+                    target_processor,
+                )
+
+            if self.export_images:
+                self._upload_pictures(
+                    conv_res.document,
+                    conv_res.input.document_hash,
+                    target_processor,
+                )
+
+            if self.to_formats is None or (
+                self.to_formats and "json" in self.to_formats
+            ):
+                target_key = f"json/{name_without_ext}.json"
+                temp_json_file = temp_dir / f"{name_without_ext}.json"
+                if not temp_json_file.exists():
+                    conv_res.document.save_as_json(
+                        filename=temp_json_file,
+                        image_mode=ImageRefMode.REFERENCED,
+                    )
+                target_processor.upload_file(
+                    filename=temp_json_file,
+                    target_filename=self._target_key(target_key),
+                    content_type="application/json",
+                )
+            if self.to_formats is None or (
+                self.to_formats and "doctags" in self.to_formats
+            ):
+                target_key = f"doctags/{name_without_ext}.doctags.txt"
+                data = conv_res.document.export_to_doctags()
+                target_processor.upload_object(
+                    obj=data,
+                    target_filename=self._target_key(target_key),
+                    content_type="text/plain",
+                )
+            if self.to_formats is None or (self.to_formats and "md" in self.to_formats):
+                target_key = f"md/{name_without_ext}.md"
+                data = conv_res.document.export_to_markdown()
+                target_processor.upload_object(
+                    obj=data,
+                    target_filename=self._target_key(target_key),
+                    content_type="text/markdown",
+                )
+            if self.to_formats is None or (
+                self.to_formats and "html" in self.to_formats
+            ):
+                target_key = f"html/{name_without_ext}.html"
+                temp_html_file = temp_dir / f"{name_without_ext}.html"
+                if not temp_html_file.exists():
+                    conv_res.document.save_as_html(temp_html_file)
+                target_processor.upload_file(
+                    filename=temp_html_file,
+                    target_filename=self._target_key(target_key),
+                    content_type="text/html",
+                )
+            if self.to_formats is None or (
+                self.to_formats and "text" in self.to_formats
+            ):
+                target_key = f"txt/{name_without_ext}.txt"
+                data = conv_res.document.export_to_text()
+                target_processor.upload_object(
+                    obj=data,
+                    target_filename=self._target_key(target_key),
+                    content_type="text/plain",
+                )
+            if self.to_formats and "doclang" in self.to_formats:
+                target_key = f"doclang/{name_without_ext}.dclg"
+                data = conv_res.document.export_to_doclang() + "\n"
+                target_processor.upload_object(
+                    obj=data,
+                    target_filename=self._target_key(target_key),
+                    content_type="application/xml",
+                )
+            if self.to_formats and "dclx" in self.to_formats:
+                import tempfile as _tempfile
+
+                dclx_path = temp_dir / f"{name_without_ext}.dclx"
+                if not dclx_path.exists():
+                    with _tempfile.NamedTemporaryFile(
+                        suffix=".dclx", dir=temp_dir, delete=False
+                    ) as _tmp:
+                        dclx_path = Path(_tmp.name)
+                    conv_res.document.save_as_doclang_archive(filename=dclx_path)
+                target_key = f"dclx/{name_without_ext}.dclx"
+                target_processor.upload_file(
+                    filename=dclx_path,
+                    target_filename=self._target_key(target_key),
+                    content_type="application/zip",
+                )
+
     def process_documents(self, results: Iterable[ConversionResult]):
         pd_d = DataFrame()  # DataFrame to append parquet info
+        # Open all target processors once for the whole batch — they stay open
+        # across all documents so DB connections / storage sessions are reused.
         with ExitStack() as stack:
-            # Open the chunk-target processor once for the whole batch so we
-            # don't reconnect on every document.
-            chunk_processor = (
-                stack.enter_context(get_target_processor(self._chunk_target))
-                if self._chunk_target is not None
-                else None
-            )
+            processors = [stack.enter_context(p) for p in self._target_processors]
             try:
-                for i, conv_res in enumerate(results):
+                for conv_res in results:
                     with tempfile.TemporaryDirectory(
                         dir=self.scratch_dir
                     ) as tmpdirname:
@@ -121,114 +244,13 @@ class ResultsProcessor:
                             name_without_ext = os.path.splitext(conv_res.input.file)[0]
                             _log.debug(f"Converted {doc_hash} now saving results")
 
-                            self._target_processor.begin_document(doc_hash)
+                            # ── Format upload phase ──────────────────────
+                            for p in processors:
+                                p.begin_document(doc_hash)
                             try:
-                                if os.path.exists(conv_res.input.file):
-                                    self._target_processor.upload_file(
-                                        filename=Path(conv_res.input.file),
-                                        target_filename=self._target_key(
-                                            f"pdf/{name_without_ext}.pdf"
-                                        ),
-                                        content_type="application/pdf",
-                                    )
-
-                                if self.export_page_images:
-                                    self.upload_page_images(
-                                        conv_res.document.pages,
-                                        conv_res.input.document_hash,
-                                    )
-
-                                if self.export_images:
-                                    self.upload_pictures(
-                                        conv_res.document,
-                                        conv_res.input.document_hash,
-                                    )
-
-                                if self.to_formats is None or (
-                                    self.to_formats and "json" in self.to_formats
-                                ):
-                                    target_key = f"json/{name_without_ext}.json"
-                                    temp_json_file = (
-                                        temp_dir / f"{name_without_ext}.json"
-                                    )
-                                    conv_res.document.save_as_json(
-                                        filename=temp_json_file,
-                                        image_mode=ImageRefMode.REFERENCED,
-                                    )
-                                    self._target_processor.upload_file(
-                                        filename=temp_json_file,
-                                        target_filename=self._target_key(target_key),
-                                        content_type="application/json",
-                                    )
-                                if self.to_formats is None or (
-                                    self.to_formats and "doctags" in self.to_formats
-                                ):
-                                    target_key = (
-                                        f"doctags/{name_without_ext}.doctags.txt"
-                                    )
-                                    data = conv_res.document.export_to_doctags()
-                                    self._target_processor.upload_object(
-                                        obj=data,
-                                        target_filename=self._target_key(target_key),
-                                        content_type="text/plain",
-                                    )
-                                if self.to_formats is None or (
-                                    self.to_formats and "md" in self.to_formats
-                                ):
-                                    target_key = f"md/{name_without_ext}.md"
-                                    data = conv_res.document.export_to_markdown()
-                                    self._target_processor.upload_object(
-                                        obj=data,
-                                        target_filename=self._target_key(target_key),
-                                        content_type="text/markdown",
-                                    )
-                                if self.to_formats is None or (
-                                    self.to_formats and "html" in self.to_formats
-                                ):
-                                    target_key = f"html/{name_without_ext}.html"
-                                    temp_html_file = (
-                                        temp_dir / f"{name_without_ext}.html"
-                                    )
-                                    conv_res.document.save_as_html(temp_html_file)
-                                    self._target_processor.upload_file(
-                                        filename=temp_html_file,
-                                        target_filename=self._target_key(target_key),
-                                        content_type="text/html",
-                                    )
-                                if self.to_formats is None or (
-                                    self.to_formats and "text" in self.to_formats
-                                ):
-                                    target_key = f"txt/{name_without_ext}.txt"
-                                    data = conv_res.document.export_to_text()
-                                    self._target_processor.upload_object(
-                                        obj=data,
-                                        target_filename=self._target_key(target_key),
-                                        content_type="text/plain",
-                                    )
-                                if self.to_formats and "doclang" in self.to_formats:
-                                    target_key = f"doclang/{name_without_ext}.dclg"
-                                    data = conv_res.document.export_to_doclang() + "\n"
-                                    self._target_processor.upload_object(
-                                        obj=data,
-                                        target_filename=self._target_key(target_key),
-                                        content_type="application/xml",
-                                    )
-                                if self.to_formats and "dclx" in self.to_formats:
-                                    import tempfile as _tempfile
-
-                                    with _tempfile.NamedTemporaryFile(
-                                        suffix=".dclx", dir=temp_dir, delete=False
-                                    ) as _tmp:
-                                        dclx_path = Path(_tmp.name)
-                                    conv_res.document.save_as_doclang_archive(
-                                        filename=dclx_path
-                                    )
-                                    target_key = f"dclx/{name_without_ext}.dclx"
-                                    self._target_processor.upload_file(
-                                        filename=dclx_path,
-                                        target_filename=self._target_key(target_key),
-                                        content_type="application/zip",
-                                    )
+                                self._upload_formats(
+                                    conv_res, temp_dir, name_without_ext
+                                )
                                 if self.export_parquet_file:
                                     _log.info("saving document info in dataframe...")
                                     pd_d = self.document_to_dataframe(
@@ -237,50 +259,51 @@ class ResultsProcessor:
                                         filename=name_without_ext,
                                     )
                             finally:
-                                self._target_processor.end_document(doc_hash)
+                                for p in processors:
+                                    p.end_document(doc_hash)
 
-                            # Chunking — runs after the doc target is flushed
+                            # ── Streaming chunk phase ────────────────────
                             if (
-                                chunk_processor is not None
-                                and self._chunker_manager is not None
-                                and self._chunking_options is not None
-                                and conv_res.document is not None
+                                self._chunk_active
+                                and self._chunker_manager
+                                and self._chunking_options
                             ):
-                                if not isinstance(self._chunk_target, ChunkFieldSlots):
-                                    raise TypeError(
-                                        f"chunk_target must be a ChunkFieldSlots instance, "
-                                        f"got {type(self._chunk_target)!r}"
-                                    )
-                                chunks = list(
-                                    self._chunker_manager.chunk_document(
-                                        document=conv_res.document,
-                                        filename=str(conv_res.input.file),
-                                        options=self._chunking_options,
-                                    )
-                                )
-                                if isinstance(
-                                    chunk_processor, BaseDatabaseTargetProcessor
-                                ):
-                                    for chunk in chunks:
-                                        chunk_processor.upsert_row(
-                                            _chunk_row_payload(
-                                                chunk, self._chunk_target
-                                            )
+                                filename = str(conv_res.input.file)
+
+                                # Determine which processors participate.
+                                # DB-doc processors (no requires_chunks) are
+                                # excluded even when chunks_in_formats is True.
+                                chunk_processors = [
+                                    p
+                                    for p in processors
+                                    if _processor_requires_chunks(p)
+                                    or (
+                                        self._chunks_in_formats
+                                        and not isinstance(
+                                            p, BaseDatabaseTargetProcessor
                                         )
-                                else:
-                                    chunk_file = _write_document_chunks_jsonl(
-                                        temp_dir,
-                                        str(conv_res.input.file),
-                                        chunks,
                                     )
-                                    chunk_processor.upload_file(
-                                        filename=chunk_file,
-                                        target_filename=chunk_file.name,
-                                        content_type="application/jsonl",
-                                    )
+                                ]
+
+                                for p in chunk_processors:
+                                    p.begin_chunks(filename, temp_dir)
+                                n_chunks = 0
+                                try:
+                                    for chunk in self._chunker_manager.chunk_document(
+                                        document=conv_res.document,
+                                        filename=filename,
+                                        options=self._chunking_options,
+                                    ):
+                                        for p in chunk_processors:
+                                            p.consume_chunk(chunk)
+                                        n_chunks += 1
+                                finally:
+                                    for p in chunk_processors:
+                                        p.end_chunks()
+
                                 _log.info(
-                                    "Wrote %d chunks for %s",
-                                    len(chunks),
+                                    "Streamed %d chunks for %s",
+                                    n_chunks,
                                     conv_res.input.file,
                                 )
 
@@ -295,10 +318,11 @@ class ResultsProcessor:
                 if self.export_parquet_file and not pd_d.empty:
                     self.upload_parquet_file(pd_d)
 
-    def upload_page_images(
+    def _upload_page_images(
         self,
         pages: dict[int, PageItem],
         doc_hash: str,
+        target_processor: BaseTargetProcessor,
     ):
         for page_no, page in pages.items():
             page_hash = create_hash(f"{doc_hash}_page_no_{page_no}")
@@ -309,7 +333,7 @@ class ResultsProcessor:
                     buf = BytesIO()
                     page.image.pil_image.save(buf, format="PNG")
                     buf.seek(0)
-                    self._target_processor.upload_object(
+                    target_processor.upload_object(
                         obj=buf,
                         target_filename=self._target_key(page_path_suffix),
                         content_type="application/png",
@@ -323,23 +347,24 @@ class ResultsProcessor:
                     exc,
                 )
 
-    def upload_pictures(
+    def _upload_pictures(
         self,
         document: DoclingDocument,
         doc_hash: str,
+        target_processor: BaseTargetProcessor,
     ):
         picture_number = 0
         for element, _level in document.iterate_items():
             if isinstance(element, PictureItem):
                 if element.image and element.image.pil_image:
+                    element_hash = create_hash(f"{doc_hash}_img_{picture_number}")
                     try:
-                        element_hash = create_hash(f"{doc_hash}_img_{picture_number}")
                         element_dpi = element.image.dpi
                         element_path_suffix = f"images/{element_hash}_{element_dpi}.png"
                         buf = BytesIO()
                         element.image.pil_image.save(buf, format="PNG")
                         buf.seek(0)
-                        self._target_processor.upload_object(
+                        target_processor.upload_object(
                             obj=buf,
                             target_filename=self._target_key(element_path_suffix),
                             content_type="application/png",
@@ -464,11 +489,12 @@ class ResultsProcessor:
 
                     parquet_file_name = f"{timestamp}_{file_index}.parquet"
                     target_key = f"parquet/{parquet_file_name}"
-                    self._target_processor.upload_file(
-                        filename=temp_file.name,
-                        target_filename=self._target_key(target_key),
-                        content_type="application/vnd.apache.parquet",
-                    )
+                    for p in self._target_processors:
+                        p.upload_file(
+                            filename=temp_file.name,
+                            target_filename=self._target_key(target_key),
+                            content_type="application/vnd.apache.parquet",
+                        )
 
                     manifest[f"{parquet_file_name}"] = {
                         "filename": pd_dataframe["filename"].tolist(),
@@ -492,11 +518,12 @@ class ResultsProcessor:
 
                     parquet_file_name = f"{timestamp}_{file_index}.parquet"
                     target_key = f"parquet/{parquet_file_name}"
-                    self._target_processor.upload_file(
-                        filename=temp_file.name,
-                        target_filename=self._target_key(target_key),
-                        content_type="application/vnd.apache.parquet",
-                    )
+                    for p in self._target_processors:
+                        p.upload_file(
+                            filename=temp_file.name,
+                            target_filename=self._target_key(target_key),
+                            content_type="application/vnd.apache.parquet",
+                        )
 
                     manifest[f"{parquet_file_name}"] = {
                         "filenames": current_df["filename"].tolist(),
@@ -513,8 +540,9 @@ class ResultsProcessor:
         ) as temp_file_json:
             with open(temp_file_json.name, "w") as file:
                 json.dump(manifest, file, indent=4)
-            self._target_processor.upload_file(
-                filename=temp_file_json.name,
-                target_filename=self._target_key(f"manifest/{timestamp}.json"),
-                content_type="application/json",
-            )
+            for p in self._target_processors:
+                p.upload_file(
+                    filename=temp_file_json.name,
+                    target_filename=self._target_key(f"manifest/{timestamp}.json"),
+                    content_type="application/json",
+                )

@@ -1197,9 +1197,6 @@ class DoclingConverterManager:
         if request.chunking_options is not None:
             return request.chunking_options
 
-        if not request.do_chunking:
-            return None
-
         preset_id = request.chunking_preset or "default"
         preset_info = self.chunking_preset_registry.get(preset_id)
         if preset_info is None:

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import Any, Union
 
 from opensearchpy import OpenSearch
@@ -10,6 +11,7 @@ from docling_jobkit.connectors.opensearch.models import (
     OpenSearchChunkTarget,
     OpenSearchDocTarget,
 )
+from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
 from docling_jobkit.datamodel.target_field_slots import FieldMappings
 
 # Both OpenSearch target types inherit FieldMappings so the bound _T=FieldMappings
@@ -74,6 +76,32 @@ class OpenSearchTargetProcessor(BaseDatabaseTargetProcessor[_OpenSearchTarget]):
 
     # upload_file / upload_object accumulation is handled by BaseDatabaseTargetProcessor.
     # upsert_row is called once per document by end_document() with the merged row.
+
+    # ------------------------------------------------------------------
+    # Streaming chunk protocol
+    # ------------------------------------------------------------------
+
+    def instance_requires_chunks(self) -> bool:
+        """True when this processor is configured as an opensearch_chunks target."""
+        return isinstance(self._target, OpenSearchChunkTarget)
+
+    def begin_chunks(self, filename: str, temp_dir: Path) -> None:
+        """No file needed — each chunk is upserted directly in consume_chunk()."""
+
+    def consume_chunk(self, chunk: ChunkedDocumentResultItem) -> None:
+        """Upsert one chunk row into OpenSearch immediately."""
+        from docling_jobkit.convert.chunking import _chunk_row_payload
+        from docling_jobkit.datamodel.target_field_slots import ChunkFieldSlots
+
+        if not isinstance(self._target, ChunkFieldSlots):
+            raise TypeError(
+                f"opensearch_chunks processor requires a ChunkFieldSlots target, "
+                f"got {type(self._target)!r}"
+            )
+        self.upsert_row(_chunk_row_payload(chunk, self._target))
+
+    def end_chunks(self) -> None:
+        """Nothing to flush — each chunk was written in consume_chunk()."""
 
     def _is_serverless(self) -> bool:
         auth = self._target.auth

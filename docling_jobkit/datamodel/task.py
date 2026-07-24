@@ -69,27 +69,9 @@ def _resolve_target(value: Any, info: ValidationInfo) -> Any:
     return get_target_connector_factory(allow_external_plugins).validate_config(value)
 
 
-def _resolve_chunk_target(value: Any, info: ValidationInfo) -> Any:
-    if value is None:
-        return value
-    allow_external_plugins = bool(
-        (info.context or {}).get("allow_external_plugins", False)
-    )
-    from docling_jobkit.connectors.connector_factory import (
-        get_target_connector_factory,
-    )
-
-    return get_target_connector_factory(allow_external_plugins).validate_config(value)
-
-
 TaskTarget = Annotated[
     InBodyTarget | ZipTarget | SerializeAsAny[BaseModel],
     BeforeValidator(_resolve_target),
-]
-
-ChunkTarget = Annotated[
-    SerializeAsAny[BaseModel],
-    BeforeValidator(_resolve_chunk_target),
 ]
 
 
@@ -103,8 +85,11 @@ class Task(BaseModel):
     task_type: TaskType = TaskType.CONVERT
     task_status: TaskStatus = TaskStatus.PENDING
     sources: list[TaskSource] = []
-    target: TaskTarget = InBodyTarget()
-    chunk_target: Optional[ChunkTarget] = None  # type: ignore[valid-type]
+    # Singular convenience alias — normalised to targets=[target] at validation
+    # time.  Mutually exclusive with targets.  Neither field is deprecated.
+    target: Optional[TaskTarget] = None  # type: ignore[valid-type]
+    # Preferred multi-target form.  At least one entry is required.
+    targets: Optional[list[TaskTarget]] = None  # type: ignore[valid-type]
     options: Annotated[
         Optional[ConvertDocumentsOptions],
         Field(
@@ -148,16 +133,17 @@ class Task(BaseModel):
         return values
 
     @model_validator(mode="after")
-    def validate_chunk_target(self):
-        convert_options = self.convert_options
-        do_chunking = convert_options is not None and convert_options.do_chunking
-
-        if self.chunk_target is not None and not do_chunking:
-            raise ValueError("chunk_target requires convert_options.do_chunking=True")
-
-        if self.task_type == TaskType.CHUNK and self.chunk_target is not None:
-            raise ValueError("chunk_target is only supported for convert tasks")
-
+    def normalise_targets(self):
+        if self.target is not None and self.targets is not None:
+            raise ValueError("'target' and 'targets' are mutually exclusive")
+        if self.target is not None:
+            # Expand the convenience alias into the list so all downstream code
+            # only ever reads self.targets.
+            object.__setattr__(self, "targets", [self.target])
+        if not self.targets:
+            raise ValueError(
+                "At least one target is required. Provide either 'target' or 'targets'."
+            )
         return self
 
     def set_status(self, status: TaskStatus):

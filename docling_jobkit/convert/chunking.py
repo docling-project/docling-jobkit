@@ -44,10 +44,6 @@ from docling_core.transforms.serializer.markdown import (
 )
 from docling_core.types.doc.document import DoclingDocument, ImageRefMode
 
-from docling_jobkit.connectors.database_target_processor import (
-    BaseDatabaseTargetProcessor,
-)
-from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.convert.results import (
     _build_document_completed_item,
     _export_document_as_content,
@@ -67,7 +63,7 @@ from docling_jobkit.datamodel.target_field_slots import (
     ChunkFieldSlots,
     coerce_large_ints,
 )
-from docling_jobkit.datamodel.task import ChunkTarget, Task
+from docling_jobkit.datamodel.task import Task
 from docling_jobkit.public_errors import TargetWriteError, render_public_error_list
 
 if TYPE_CHECKING:
@@ -212,22 +208,19 @@ class DocumentChunkerManager:
         filename: str,
         options: BaseChunkerOptions,
     ) -> Iterable[ChunkedDocumentResultItem]:
-        """Chunk a document using chunker from docling-core."""
+        """Chunk a document using chunker from docling-core.
 
+        This is a generator — chunks are yielded one at a time as they are
+        produced by the underlying chunker.  Callers must not materialise the
+        full sequence into a list unless absolutely necessary.
+        """
         chunker = self._get_chunker(options)
 
-        chunks = list(chunker.chunk(document))
-
-        # Convert chunks to response format
-        chunk_items: list[ChunkedDocumentResultItem] = []
-        for i, chunk in enumerate(chunks):
-            page_numbers: List[int] = []
-            metadata: Dict[str, Any] = {}
-
+        for i, chunk in enumerate(chunker.chunk(document)):
             doc_chunk = DocChunk.model_validate(chunk)
 
             # Extract page numbers and doc_items refs
-            page_numbers = []
+            page_numbers: List[int] = []
             doc_items = []
             for item in doc_chunk.meta.doc_items:
                 doc_items.append(item.self_ref)
@@ -238,6 +231,7 @@ class DocumentChunkerManager:
             page_numbers = sorted(set(page_numbers))
 
             # Store additional metadata
+            metadata: Dict[str, Any] = {}
             if doc_chunk.meta.origin:
                 metadata["origin"] = doc_chunk.meta.origin
 
@@ -254,8 +248,7 @@ class DocumentChunkerManager:
             if isinstance(chunker, HybridChunker):
                 num_tokens = chunker.tokenizer.count_tokens(text)
 
-            # Create chunk item
-            chunk_item = ChunkedDocumentResultItem(
+            yield ChunkedDocumentResultItem(
                 filename=filename,
                 chunk_index=i,
                 text=text,
@@ -267,9 +260,6 @@ class DocumentChunkerManager:
                 page_numbers=page_numbers,
                 metadata=metadata,
             )
-            chunk_items.append(chunk_item)
-
-        return chunk_items
 
 
 def _export_document_for_chunking(
@@ -331,19 +321,6 @@ def _export_chunking_result(
         )
 
 
-def _write_document_chunks_jsonl(
-    output_dir: Path,
-    filename: str,
-    chunks: list[ChunkedDocumentResultItem],
-) -> Path:
-    chunk_file = output_dir / f"{Path(filename).stem}.chunks.jsonl"
-    with chunk_file.open("w", encoding="utf-8") as handle:
-        for chunk in chunks:
-            handle.write(json.dumps(chunk.model_dump(mode="json"), ensure_ascii=False))
-            handle.write("\n")
-    return chunk_file
-
-
 def _chunk_row_payload(
     chunk: ChunkedDocumentResultItem,
     target: ChunkFieldSlots,
@@ -372,36 +349,6 @@ def _chunk_row_payload(
     if target.headings_field is not None:
         row[target.headings_field] = chunk.headings
     return row
-
-
-def _upload_chunk_records(
-    *,
-    target: ChunkTarget,
-    chunks_by_document: dict[str, list[ChunkedDocumentResultItem]],
-    output_dir: Path,
-) -> None:
-    with get_target_processor(target) as target_processor:
-        if isinstance(target_processor, BaseDatabaseTargetProcessor):
-            # DB chunk target: one upsert_row() call per chunk.
-            if not isinstance(target, ChunkFieldSlots):
-                raise TypeError(
-                    f"DB chunk target processor requires a ChunkFieldSlots target config, "
-                    f"got {type(target)!r}"
-                )
-            for document_chunks in chunks_by_document.values():
-                for chunk in document_chunks:
-                    target_processor.upsert_row(_chunk_row_payload(chunk, target))
-        else:
-            # File-based chunk target: write one .chunks.jsonl per document.
-            for filename, document_chunks in chunks_by_document.items():
-                chunk_file = _write_document_chunks_jsonl(
-                    output_dir, filename, document_chunks
-                )
-                target_processor.upload_file(
-                    filename=chunk_file,
-                    target_filename=chunk_file.name,
-                    content_type="application/jsonl",
-                )
 
 
 def process_chunkable_results(
@@ -442,8 +389,10 @@ def process_chunkable_results(
     # TODO: DocumentChunkerManager should be initialized outside for really working as a cache
     chunker_manager = chunker_manager or DocumentChunkerManager()
 
+    # Use the first target for routing decisions in this legacy path.
+    first_target = task.targets[0] if task.targets else None
     output_dir: Optional[Path] = None
-    if not isinstance(task.target, InBodyTarget):
+    if not isinstance(first_target, InBodyTarget):
         output_dir = work_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -530,12 +479,12 @@ def process_chunkable_results(
 
         if task.chunking_export_options.include_converted_doc:
             if (
-                isinstance(task.target, InBodyTarget)
+                isinstance(first_target, InBodyTarget)
                 and conversion_options.image_export_mode == ImageRefMode.REFERENCED
             ):
                 raise RuntimeError("InBodyTarget cannot use REFERENCED image mode.")
 
-            if isinstance(task.target, InBodyTarget):
+            if isinstance(first_target, InBodyTarget):
                 doc_content = _export_document_as_content(
                     exportable_document,
                     export_json=True,
@@ -586,8 +535,7 @@ def process_chunkable_results(
         )
 
     # Export results based on target type and options
-    # Booleans to know what to export
-    if isinstance(task.target, InBodyTarget):
+    if isinstance(first_target, InBodyTarget):
         task_result = ChunkedDocumentResult(
             chunks=chunks,
             documents=documents,
@@ -608,12 +556,6 @@ def process_chunkable_results(
             result=chunked_result,
             output_dir=output_dir,
         )
-        if task.chunk_target is not None:
-            _upload_chunk_records(
-                target=task.chunk_target,
-                chunks_by_document=chunks_by_document,
-                output_dir=output_dir,
-            )
         files = os.listdir(output_dir)
         if len(files) == 0:
             raise RuntimeError("No documents were exported.")
@@ -623,10 +565,10 @@ def process_chunkable_results(
             format="zip",
             root_dir=output_dir,
         )
-        if isinstance(task.target, PutTarget):
+        if isinstance(first_target, PutTarget):
             try:
                 with file_path.open("rb") as file_data:
-                    r = httpx.put(str(task.target.url), files={"file": file_data})
+                    r = httpx.put(str(first_target.url), files={"file": file_data})  # type: ignore[union-attr]
                     r.raise_for_status()
                 task_result = RemoteTargetResult()
             except Exception as exc:

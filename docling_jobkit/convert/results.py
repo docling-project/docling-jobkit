@@ -593,8 +593,9 @@ def _process_remote_exportable_results(
         else:
             num_failed += 1
 
+    first_target = task.targets[0] if task.targets else None
     target_factory = get_target_connector_factory(allow_external_plugins)
-    target_mode = target_factory.result_mode(task.target)
+    target_mode = target_factory.result_mode(first_target)  # type: ignore[arg-type]
 
     if target_mode == "presigned":
         if s3_presigned_config is None:
@@ -604,7 +605,7 @@ def _process_remote_exportable_results(
 
         presigned_documents: list[DocumentArtifactItem] = []
         with get_target_processor(
-            task.target,
+            first_target,  # type: ignore[arg-type]
             allow_external_plugins=allow_external_plugins,
             s3_presigned_config=s3_presigned_config,
             task=task,
@@ -663,7 +664,8 @@ def _process_remote_exportable_results(
         # directory, Drive folder, …) when writing. Adding a new storage
         # connector therefore needs no change in this module.
         with get_target_processor(
-            task.target, allow_external_plugins=allow_external_plugins
+            first_target,  # type: ignore[arg-type]
+            allow_external_plugins=allow_external_plugins,
         ) as target_processor:
             for idx, exportable_document in enumerate(exportable_documents):
                 final_document, processed_doc, _ = _process_remote_document(
@@ -703,7 +705,8 @@ def _process_remote_exportable_results(
     else:
         # target_mode == "database": accumulate formats per document then upsert
         with get_target_processor(
-            task.target, allow_external_plugins=allow_external_plugins
+            first_target,  # type: ignore[arg-type]
+            allow_external_plugins=allow_external_plugins,
         ) as target_processor:
             for idx, exportable_document in enumerate(exportable_documents):
                 doc_hash = exportable_document.document_hash or f"doc_{idx}"
@@ -814,10 +817,11 @@ def _process_exportable_results_internal(
     export_doclang = OutputFormat.DOCLANG in conversion_options.to_formats
     export_dclx = OutputFormat.DCLX in conversion_options.to_formats
 
+    first_target = task.targets[0] if task.targets else None
     target_factory = get_target_connector_factory(allow_external_plugins)
     target_mode = (
-        target_factory.result_mode(task.target)
-        if target_factory.supports(task.target)
+        target_factory.result_mode(first_target)  # type: ignore[arg-type]
+        if target_factory.supports(first_target)  # type: ignore[arg-type]
         else None
     )
     if target_mode in {"artifacts", "presigned"}:
@@ -867,7 +871,7 @@ def _process_exportable_results_internal(
             debug_error_details=debug_error_details,
         )
 
-    if len(finalized_documents) == 1 and isinstance(task.target, InBodyTarget):
+    if len(finalized_documents) == 1 and isinstance(first_target, InBodyTarget):
         exportable_document = finalized_documents[0]
 
         content = _export_document_as_content(
@@ -919,7 +923,8 @@ def _process_exportable_results_internal(
 
         if target_mode == "archive":
             with get_target_processor(
-                task.target, allow_external_plugins=allow_external_plugins
+                first_target,  # type: ignore[arg-type]
+                allow_external_plugins=allow_external_plugins,
             ) as target_processor:
                 target_processor.upload_archive(file_path)
             task_result = RemoteTargetResult()

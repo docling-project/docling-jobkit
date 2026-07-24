@@ -48,7 +48,8 @@ JobConfig = build_job_config_model()
 class _JobConfig(Protocol):
     options: ConvertDocumentsOptions
     sources: list[BaseModel]
-    target: BaseModel
+    target: Optional[BaseModel]
+    targets: Optional[list[BaseModel]]
 
 
 class BatchResult(BaseModel):
@@ -138,6 +139,13 @@ def _process_source(
                 async_results = []
                 total_documents = 0
                 try:
+                    # Normalise target / targets to a list, pick the first for
+                    # multiproc batches (each subprocess handles one target).
+                    target_configs = (
+                        config.targets
+                        if config.targets is not None
+                        else [config.target]
+                    )
                     for chunk in chunks_iter:
                         total_documents += len(chunk.refs)
                         progress.update(task, total=total_documents)
@@ -146,7 +154,7 @@ def _process_source(
                                 process_batch,
                                 (
                                     chunk,
-                                    config.target,
+                                    target_configs[0],
                                     config.options,
                                     artifacts_path,
                                     enable_remote_services,
@@ -300,39 +308,40 @@ def process_batch(
         )
         manager = DoclingConverterManager(config=cm_config)
 
-        # Process documents in this batch using factories
-        with get_target_processor(
-            target, allow_external_plugins=allow_external_plugins
-        ) as target_processor:
-            result_processor = ResultsProcessor(
-                target_processor=target_processor,
-                to_formats=[v.value for v in options.to_formats],
-                generate_page_images=options.include_page_images,
-                generate_picture_images=options.include_images,
-            )
+        # Process documents in this batch using factories.
+        # The caller passes a single target config (extracted from config.targets[i]).
+        target_processors = [
+            get_target_processor(target, allow_external_plugins=allow_external_plugins)
+        ]
+        result_processor = ResultsProcessor(
+            target_processors=target_processors,
+            to_formats=[v.value for v in options.to_formats],
+            generate_page_images=options.include_page_images,
+            generate_picture_images=options.include_images,
+        )
 
-            # Fetch documents lazily from the chunk refs (one in flight at a time)
-            with open_chunk_sources(
-                chunk,
-                max_file_size=manager.config.max_file_size,
-                allow_external_plugins=allow_external_plugins,
-            ) as (sources, headers):
-                for item in result_processor.process_documents(
-                    manager.convert_documents(
-                        sources=sources,
-                        options=options,
-                        headers=headers,
-                    )
-                ):
-                    if "SUCCESS" in item:
-                        num_succeeded += 1
-                    else:
-                        num_failed += 1
-                        failed_documents.append(item)
+        # Fetch documents lazily from the chunk refs (one in flight at a time)
+        with open_chunk_sources(
+            chunk,
+            max_file_size=manager.config.max_file_size,
+            allow_external_plugins=allow_external_plugins,
+        ) as (sources, headers):
+            for item in result_processor.process_documents(
+                manager.convert_documents(
+                    sources=sources,
+                    options=options,
+                    headers=headers,
+                )
+            ):
+                if "SUCCESS" in item:
+                    num_succeeded += 1
+                else:
+                    num_failed += 1
+                    failed_documents.append(item)
 
-                    # Send progress update after each document
-                    if progress_queue:
-                        progress_queue.put("document_completed")
+                # Send progress update after each document
+                if progress_queue:
+                    progress_queue.put("document_completed")
 
         processing_time = time.time() - start_time
 

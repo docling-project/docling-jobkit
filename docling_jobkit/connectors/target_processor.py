@@ -1,9 +1,13 @@
+import json
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import BinaryIO, Literal
+from typing import TYPE_CHECKING, BinaryIO, Literal, Optional
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
 
 
 class BaseTargetProcessor(AbstractContextManager, ABC):
@@ -95,3 +99,61 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         Database targets should flush the accumulated row here.  File/object-
         storage targets can leave this as a no-op.
         """
+
+    # ------------------------------------------------------------------
+    # Streaming chunk protocol
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def requires_chunks(cls) -> bool:
+        """Return True when this processor needs per-chunk records.
+
+        ResultsProcessor will activate the chunker and drive the streaming
+        chunk protocol (begin_chunks / consume_chunk / end_chunks) on this
+        processor for every successfully converted document, regardless of
+        whether ``"chunks"`` appears in ``to_formats``.
+
+        File-storage targets should leave this as False and instead rely on
+        ``"chunks"`` being listed in ``to_formats`` to receive chunk output.
+        """
+        return False
+
+    def begin_chunks(self, filename: str, temp_dir: Path) -> None:
+        """Called once before the first chunk of a document is streamed.
+
+        Default: open a temp ``{stem}.chunks.jsonl`` file for writing.
+        DB processors that override ``requires_chunks()`` can use this to
+        initialise per-document state instead.
+        """
+        self._chunk_jsonl_path: Optional[Path] = (
+            temp_dir / f"{Path(filename).stem}.chunks.jsonl"
+        )
+        self._chunk_jsonl_file = self._chunk_jsonl_path.open("w", encoding="utf-8")
+
+    def consume_chunk(self, chunk: "ChunkedDocumentResultItem") -> None:
+        """Called once per chunk as it is produced by the chunker.
+
+        Default: append one JSON line to the temp file opened in
+        ``begin_chunks()``.  DB processors override to call ``upsert_row()``
+        directly so each chunk is written to the store without buffering.
+
+        This method must NEVER re-chunk the document — the chunk list is
+        produced exactly once by ``ResultsProcessor`` and shared across all
+        participating processors.
+        """
+        self._chunk_jsonl_file.write(
+            json.dumps(chunk.model_dump(mode="json"), ensure_ascii=False) + "\n"
+        )
+
+    def end_chunks(self) -> None:
+        """Called after the last chunk of a document has been consumed.
+
+        Default: close the temp file and upload it via ``upload_file()``.
+        DB processors override to close any open resources without uploading.
+        """
+        self._chunk_jsonl_file.close()
+        self.upload_file(
+            filename=self._chunk_jsonl_path,  # type: ignore[arg-type]
+            target_filename=self._chunk_jsonl_path.name,  # type: ignore[union-attr]
+            content_type="application/jsonl",
+        )

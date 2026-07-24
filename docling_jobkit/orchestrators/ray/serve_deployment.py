@@ -176,10 +176,11 @@ def _to_exportable_documents_from_chunk(
 
 
 def _is_s3_fanout_task(task: Task, *, allow_external_plugins: bool = False) -> bool:
+    first_target = task.targets[0] if task.targets else None
     target_factory = get_target_connector_factory(allow_external_plugins)
     target_mode = (
-        target_factory.result_mode(task.target)
-        if target_factory.supports(task.target)
+        target_factory.result_mode(first_target)  # type: ignore[arg-type]
+        if target_factory.supports(first_target)  # type: ignore[arg-type]
         else None
     )
     return (
@@ -397,10 +398,11 @@ def _build_materialization_failure_result(
     # targets get the same RemoteTargetResult envelope on a preflight failure that
     # they get on success. supports() is False for InBody/Zip (service-only
     # targets), which fall through to the in-body ExportResult.
+    first_target = task.targets[0] if task.targets else None
     target_factory = get_target_connector_factory(allow_external_plugins)
     target_mode = (
-        target_factory.result_mode(task.target)
-        if target_factory.supports(task.target)
+        target_factory.result_mode(first_target)  # type: ignore[arg-type]
+        if target_factory.supports(first_target)  # type: ignore[arg-type]
         else None
     )
     if target_mode == "presigned":

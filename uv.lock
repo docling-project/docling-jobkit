@@ -1399,7 +1399,7 @@ wheels = [
 [[package]]
 name = "docling-slim"
 version = "2.115.0"
-source = { git = "https://github.com/docling-project/docling/?rev=feat-chunking-options-and-target#5990e3df8bbce6c1b505b29f1c476814eaacb0ec" }
+source = { git = "https://github.com/docling-project/docling/?rev=feat-chunking-options-and-target#6c28d9012952697bb9d71c0b81435e08dd2e6d78" }
 dependencies = [
     { name = "certifi" },
     { name = "docling-core" },
