@@ -99,6 +99,16 @@ class KafkaTargetProcessor(BaseTargetProcessor):
             )
 
         payload = event.model_dump_json().encode("utf-8")
-        retry_with_backoff(
-            lambda: publish(self._producer, topic, payload, key=correlation_id)
-        )
+        try:
+            retry_with_backoff(
+                lambda: publish(self._producer, topic, payload, key=correlation_id)
+            )
+        except Exception:
+            _log.error(
+                "kafka: failed to publish %s for correlation_id=%s to topic=%s "
+                "after retries; event is lost",
+                type(event).__name__,
+                correlation_id,
+                topic,
+                exc_info=True,
+            )
