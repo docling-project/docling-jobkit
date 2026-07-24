@@ -6,6 +6,7 @@ from docling.datamodel.service.sources import (
     GoogleCloudStorageServiceAccountInfo,
     GoogleDriveCredentials,
 )
+from docling.datamodel.service.targets import InBodyTarget
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.datamodel.task import Task
@@ -18,6 +19,7 @@ def test_dump_model_with_secrets_restores_gcs_credentials():
     task = Task(
         task_id="task-gcs",
         task_type=TaskType.CONVERT,
+        target=InBodyTarget(),
         sources=[
             GoogleCloudStorageSourceRequest(
                 bucket="bucket",
@@ -55,6 +57,7 @@ def test_dump_model_with_secrets_restores_google_drive_credentials():
     task = Task(
         task_id="task-drive",
         task_type=TaskType.CONVERT,
+        target=InBodyTarget(),
         sources=[
             GoogleDriveSourceRequest(
                 path_id="drive-folder-id",

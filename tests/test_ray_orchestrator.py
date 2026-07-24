@@ -337,11 +337,14 @@ async def test_get_stats(orchestrator: RayOrchestrator):
 @pytest.mark.asyncio
 async def test_metadata_field_backward_compatibility():
     """Test that metadata field doesn't break existing code."""
+    from docling.datamodel.service.targets import InBodyTarget
+
     from docling_jobkit.datamodel.task import Task
 
     # Create task without metadata - should use default empty dict
     task = Task(
         task_id="test",
+        target=InBodyTarget(),
         sources=[],
     )
 
@@ -473,7 +476,7 @@ async def test_enqueue_rejects_s3_source_without_remote_target():
             convert_options=ConvertDocumentsOptions(),
         )
 
-    assert isinstance(remote_task.target, S3Target)
+    assert isinstance(remote_task.targets[0], S3Target)
     orch.redis_manager.connect.assert_awaited()
     orch.redis_manager.enqueue_task.assert_awaited_once()
 

@@ -26,9 +26,6 @@ from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling_core.types.doc import ImageRefMode
 
 from docling_jobkit.connectors.artifact_paths import ArtifactType
-from docling_jobkit.connectors.database_target_processor import (
-    BaseDatabaseTargetProcessor,
-)
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.target_field_slots import OUTPUT_FORMAT_MIME
@@ -103,7 +100,7 @@ def stream_chunks_for_document(
         p
         for p in processors
         if _processor_requires_chunks(p)
-        or (chunks_in_formats and not isinstance(p, BaseDatabaseTargetProcessor))
+        or (chunks_in_formats and p.result_mode() != "database")
     ]
     if not chunk_processors:
         return 0

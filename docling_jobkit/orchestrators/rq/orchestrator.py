@@ -22,6 +22,7 @@ from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.requests import FileSourceRequest
+from docling.datamodel.service.targets import InBodyTarget
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
 from docling_jobkit.config.target_config import S3PresignedConfig
@@ -398,6 +399,7 @@ class RQOrchestrator(BaseOrchestrator):
                 "finished_at",
                 "last_update_at",
                 "target",
+                "targets",
                 "sources",
                 "convert_options",
                 "chunking_options",
@@ -407,6 +409,11 @@ class RQOrchestrator(BaseOrchestrator):
             ):
                 if data.get(field_name) is not None:
                     task_kwargs[field_name] = data[field_name]
+            # Backwards compat: tasks stored before the multi-target migration
+            # have neither 'target' nor 'targets'. Default to InBodyTarget so
+            # the validator does not reject legacy Redis entries.
+            if "target" not in task_kwargs and "targets" not in task_kwargs:
+                task_kwargs["targets"] = [InBodyTarget().model_dump()]
             return validate_task(
                 task_kwargs,
                 allow_external_plugins=self.config.allow_external_plugins,
@@ -434,6 +441,7 @@ class RQOrchestrator(BaseOrchestrator):
                 task_id=task_id,
                 task_type=TaskType.CONVERT,
                 task_status=TaskStatus.PENDING,
+                target=InBodyTarget(),
                 processing_meta={
                     "num_docs": 0,
                     "num_processed": 0,
