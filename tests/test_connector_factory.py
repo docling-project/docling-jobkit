@@ -50,6 +50,7 @@ def test_builtin_source_connectors_registered():
         "s3",
         "local_path",
         "google_drive",
+        "kafka",
     }
 
 
@@ -63,6 +64,7 @@ def test_builtin_target_connectors_registered():
         "put",
         "google_drive",
         "presigned_url",
+        "kafka",
     }
 
 
