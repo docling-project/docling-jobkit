@@ -1,5 +1,6 @@
 import logging
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator, Optional
 
@@ -34,7 +35,11 @@ class KafkaSourceProcessor(
         self._consumer: Optional["Consumer"] = None
         self._dlq_producer: Optional["Producer"] = None  # only if dlq_topic is set
         self._backing_processor: Optional[BaseSourceProcessor] = None
-        self._seen_keys: set[str] = set()  # idempotency for this run
+
+        self._seen_keys_maxlen = 100_000  # the max num of keys to keep in memory, to prevent infinite key mem leak
+        self._seen_keys: OrderedDict[str, None] = (
+            OrderedDict()
+        )  # idempotency for this run
 
     @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
@@ -135,6 +140,9 @@ class KafkaSourceProcessor(
                 _log.debug("kafka: skipping duplicate idempotency_key=%s", key)
                 continue
             self._seen_keys.add(key)
+            if len(self._seen_keys) > self._seen_keys_maxlen:
+                self._seen_keys.popitem(last=False)  # evict oldest
+
             count += 1
             _log.debug(
                 "kafka: consumed correlation_id=%s locator=%s",
