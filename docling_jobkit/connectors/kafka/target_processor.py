@@ -84,9 +84,16 @@ class KafkaTargetProcessor(BaseTargetProcessor):
             topic = self._coords.status_topic
             # claim-check: one URI per artifact wrote
             build_uri = getattr(self._backing_config, "build_artifact_uri", None)
-            output_ref = (
-                [build_uri(k) for k in written] if build_uri is not None else []
-            )
+            if build_uri is None:
+                if written:
+                    _log.warning(
+                        "kafka: backing target %s has no build_artifact_uri; "
+                        "output_ref will be empty",
+                        type(self._backing_config).__name__,
+                    )
+                output_ref = []
+            else:
+                output_ref = [build_uri(k) for k in written]
             event = JobStatusEvent(
                 correlation_id=correlation_id, status="succeeded", output_ref=output_ref
             )
