@@ -25,8 +25,8 @@ class KafkaSourceCoordinates(BaseModel):
     ]
 
     max_messages: Annotated[
-        Optional[int], Field(default=None, ge=1, description="Stop after N messages")
-    ]
+        Optional[int], Field(ge=1, description="Stop after N messages")
+    ] = None
 
     idle_timeout_s: Annotated[
         float,
@@ -36,15 +36,14 @@ class KafkaSourceCoordinates(BaseModel):
     dlq_topic: Annotated[
         Optional[str],
         Field(
-            default=None,
             description="Topic for unparsable input messages",
             examples=["docling.jobs.dlq"],
         ),
-    ]
+    ] = None
 
     start_timestamp: Annotated[
-        Optional[float], Field(default=None, description="Replay: seek to an timestamp")
-    ]
+        Optional[float], Field(description="Replay: seek to an timestamp")
+    ] = None
 
     # inner connector the locator is resolved against (holds its own creds)
     backing_processor: TaskSource
@@ -81,11 +80,8 @@ class KafkaTargetCoordinates(BaseModel):
 
     error_topic: Annotated[
         Optional[str],
-        Field(
-            default=None,
-            description="Topic for error events; defaults to status_topic.",
-        ),
-    ]
+        Field(description="Topic for error events; defaults to status_topic."),
+    ] = None
 
     # the processor the locator is resolved against (holds its own creds)
     backing_processor: TaskTarget

@@ -139,7 +139,7 @@ class KafkaSourceProcessor(
             if key in self._seen_keys:
                 _log.debug("kafka: skipping duplicate idempotency_key=%s", key)
                 continue
-            self._seen_keys.add(key)
+            self._seen_keys[key] = None
             if len(self._seen_keys) > self._seen_keys_maxlen:
                 self._seen_keys.popitem(last=False)  # evict oldest
 

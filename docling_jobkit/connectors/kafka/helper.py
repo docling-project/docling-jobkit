@@ -17,7 +17,7 @@ T = TypeVar("T")
 
 
 def build_consumer(client_config: dict[str, str]) -> Consumer:
-    """TODO: add docstring for this method"""
+    """Creates Kafka consumer with default enable.auto.commit and injected user configs"""
     cfg = dict(client_config)
     # disabling autocommit so it only commits offsets after a msg is fully processed
     cfg["enable.auto.commit"] = "false"
@@ -27,6 +27,7 @@ def build_consumer(client_config: dict[str, str]) -> Consumer:
 
 
 def build_producer(client_config: dict[str, str]) -> Producer:
+    """Creates a Kafka producer with user defined configs"""
     return Producer(dict(client_config))
 
 
@@ -73,7 +74,15 @@ def publish(
     key: str | bytes | None = None,
     timeout: float = 10.0,
 ) -> None:
-    """TODO: add docstring for this method"""
+    """Produce a single message and block until delivery is confirmed.
+
+    Registers a delivery callback, then flushes the producer so the call is
+    synchronous: it returns only once the broker has acknowledged the message.
+
+    Raises:
+        KafkaException: if the flush does not drain within ``timeout`` seconds
+            (message unconfirmed), or if the broker reported a delivery error.
+    """
     delivery_error: list[KafkaError] = []
 
     def _on_delivery(err: Optional[KafkaError], _msg) -> None:

@@ -227,7 +227,7 @@ class FileNetSourceProcessor(
             id=metadata["id"],
             name=metadata["name"],
             size=metadata["contentSize"],
-            mime_type=metadata.get("mineType"),
+            mime_type=metadata.get("mimeType"),
             download_url=metadata["downloadUrl"],
         )
 

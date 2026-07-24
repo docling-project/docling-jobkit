@@ -117,7 +117,7 @@ class GoogleDriveSourceProcessor(
         # TODO: in the future when we support multiple files per kafka event we can remove this guard
         if len(infos) != 1:
             raise ValueError(
-                f"locator {locator} did not resolve to a single Drive file (go {len(infos)})"
+                f"locator {locator} did not resolve to a single Drive file (got {len(infos)})"
             )
 
         return self._fetch_document_by_id(infos[0], max_file_size=max_file_size)
