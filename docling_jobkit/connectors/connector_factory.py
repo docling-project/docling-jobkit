@@ -248,7 +248,9 @@ class TargetConnectorFactory(BaseConnectorFactory[BaseTargetProcessor]):
     def __init__(self, plugin_name: str = PLUGIN_GROUP):
         super().__init__("target_connectors", plugin_name)
 
-    def supports(self, config: Mapping[str, Any] | BaseModel) -> bool:
+    def supports(self, config: Mapping[str, Any] | BaseModel | None) -> bool:
+        if config is None:
+            return False
         kind = (
             config.get("kind")
             if isinstance(config, Mapping)
@@ -288,8 +290,10 @@ class TargetConnectorFactory(BaseConnectorFactory[BaseTargetProcessor]):
             ) from exc
 
     def result_mode(
-        self, config: Mapping[str, Any] | BaseModel
+        self, config: Mapping[str, Any] | BaseModel | None
     ) -> Literal["artifacts", "archive", "presigned", "database"]:
+        if config is None:
+            raise TargetConnectorConfigError("result_mode called with no target config")
         normalized = self.validate_config(config)
         return self._classes[type(normalized)].result_mode()
 
