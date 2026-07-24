@@ -216,12 +216,22 @@ class ResultsProcessor:
                                 filename=name_without_ext,
                             )
 
-                        yield f"{doc_hash} - SUCCESS"
+                        outcome = f"{doc_hash} - SUCCESS"
 
                     elif conv_res.status == ConversionStatus.PARTIAL_SUCCESS:
-                        yield f"{conv_res.input.file} - PARTIAL_SUCCESS"
+                        outcome = f"{conv_res.input.file} - PARTIAL_SUCCESS"
                     else:
-                        yield f"{conv_res.input.file} - FAILURE"
+                        outcome = f"{conv_res.input.file} - FAILURE"
+
+                # Per-document completion hook only defined by KafkaTargetProcessor
+                # (to pub its claim-check event); every other target is no-op
+                on_completed = getattr(
+                    self._target_processor, "on_document_completed", None
+                )
+                if on_completed is not None:
+                    on_completed(conv_res)
+
+                yield outcome
 
         finally:
             if self.export_parquet_file and not pd_d.empty:

@@ -111,6 +111,20 @@ class BaseSourceProcessor(
         del max_file_size
         raise NotImplementedError
 
+    def fetch_by_locator(
+        self, locator: str, *, max_file_size: int | None = None
+    ) -> ConverterSource:
+        """Resolve a backend-relative locator to a single ``ConverterSource``.
+
+        Used by the Kafka connector to fetch the document a trigger event points
+        at against its configured connector_config. Only single-document resolution
+        is supported right now, folder/multi-file ingestion could be added later.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support being a Kafka connector "
+            "(no fetch_by_locator)."
+        )
+
     def _make_document_ref(
         self, identifier: FileIdentifierT, source_index: int
     ) -> SourceDocumentRef[FileIdentifierT]:
