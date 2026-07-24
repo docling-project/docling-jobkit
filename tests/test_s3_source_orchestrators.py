@@ -172,7 +172,7 @@ def test_task_json_roundtrip_preserves_s3_secrets_for_source_and_target():
 
     rebuilt_task = Task.model_validate_json(task_json)
     rebuilt_source = rebuilt_task.sources[0]
-    rebuilt_target = rebuilt_task.target
+    rebuilt_target = rebuilt_task.targets[0]
 
     assert type(rebuilt_source) is S3SourceRequest
     assert rebuilt_source.access_key == "minioadmin"

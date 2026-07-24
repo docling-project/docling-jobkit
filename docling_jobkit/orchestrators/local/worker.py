@@ -6,7 +6,10 @@ from typing import TYPE_CHECKING
 
 from docling.datamodel.service.tasks import TaskType
 
-from docling_jobkit.convert.chunking import process_chunkable_results
+from docling_jobkit.convert.chunking import (
+    DocumentChunkerManager,
+    process_chunkable_results,
+)
 from docling_jobkit.convert.manager import DoclingConverterManager
 from docling_jobkit.convert.results import process_exportable_results
 from docling_jobkit.convert.source_expansion import expand_task_sources
@@ -93,6 +96,7 @@ class AsyncLocalWorker:
                         for idx, conv_res in enumerate(conv_results)
                     )
 
+                    chunking_options = cm.parse_chunking_options(task.convert_options)
                     # The real processing will happen here
                     processed_results: DoclingTaskResult
                     if task.task_type == TaskType.CONVERT:
@@ -103,6 +107,8 @@ class AsyncLocalWorker:
                             s3_presigned_config=self.orchestrator.config.s3_presigned_config,
                             callback_invoker=callback_invoker,
                             allow_external_plugins=cm.config.allow_external_plugins,
+                            chunker_manager=DocumentChunkerManager(),
+                            chunking_options=chunking_options,
                         )
                     elif task.task_type == TaskType.CHUNK:
                         processed_results = process_chunkable_results(

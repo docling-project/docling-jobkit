@@ -27,7 +27,7 @@ def build_target_union(allow_external_plugins: bool = False):
 
 def build_job_config_model(allow_external_plugins: bool = False):
     """Build a CLI ``JobConfig``-shaped model whose source/target accept plugins."""
-    from typing import Annotated, Union
+    from typing import Annotated, Optional, Union
 
     from pydantic import ConfigDict, Field, create_model
 
@@ -35,8 +35,10 @@ def build_job_config_model(allow_external_plugins: bool = False):
     from docling.datamodel.service.targets import PresignedUrlTarget, ZipTarget
 
     source_union = build_source_union(allow_external_plugins)
+    target_factory = get_target_connector_factory(allow_external_plugins)
+
     target_types = (
-        *get_target_connector_factory(allow_external_plugins).registered_config_types,
+        *target_factory.registered_config_types,
         ZipTarget,
     )
     target_types = tuple(t for t in target_types if t is not PresignedUrlTarget)
@@ -47,7 +49,9 @@ def build_job_config_model(allow_external_plugins: bool = False):
         __config__=ConfigDict(arbitrary_types_allowed=True),
         options=(ConvertDocumentsOptions, ConvertDocumentsOptions()),
         sources=(list[source_union], ...),  # type: ignore[valid-type]
-        target=(target_union, ...),  # type: ignore[valid-type]
+        # Exactly one of target / targets must be provided (enforced at task level).
+        target=(Optional[target_union], None),  # type: ignore[valid-type]
+        targets=(Optional[list[target_union]], None),  # type: ignore[valid-type]
     )
 
 

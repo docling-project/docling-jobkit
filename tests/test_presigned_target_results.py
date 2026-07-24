@@ -418,13 +418,15 @@ def test_process_exportable_results_returns_remote_target_result_for_s3_target(
     )
     task = _make_task().model_copy(
         update={
-            "target": S3Target(
-                endpoint="s3.example.com",
-                access_key="key",
-                secret_key="secret",
-                bucket="converted-docs",
-                key_prefix="converted/",
-            )
+            "targets": [
+                S3Target(
+                    endpoint="s3.example.com",
+                    access_key="key",
+                    secret_key="secret",
+                    bucket="converted-docs",
+                    key_prefix="converted/",
+                )
+            ]
         }
     )
 
@@ -476,12 +478,14 @@ def test_process_exportable_results_returns_remote_target_result_for_azure_targe
     )
     task = _make_task().model_copy(
         update={
-            "target": AzureBlobTarget(
-                account_name="acct",
-                container="converted-docs",
-                connection_string="UseDevelopmentStorage=true",
-                blob_prefix="converted/",
-            )
+            "targets": [
+                AzureBlobTarget(
+                    account_name="acct",
+                    container="converted-docs",
+                    connection_string="UseDevelopmentStorage=true",
+                    blob_prefix="converted/",
+                )
+            ]
         }
     )
 
@@ -508,10 +512,12 @@ def test_process_exportable_results_returns_remote_target_result_for_gcs_target(
     )
     task = _make_task().model_copy(
         update={
-            "target": GoogleCloudStorageTarget(
-                bucket="converted-docs",
-                key_prefix="converted/",
-            )
+            "targets": [
+                GoogleCloudStorageTarget(
+                    bucket="converted-docs",
+                    key_prefix="converted/",
+                )
+            ]
         }
     )
 
@@ -536,7 +542,7 @@ def test_external_artifact_target_reaches_registered_processor(
     import docling_jobkit.connectors.target_processor_factory as processor_factory_module
     import docling_jobkit.convert.results as results_module
 
-    task = _make_task().model_copy(update={"target": _PluginTarget()})
+    task = _make_task().model_copy(update={"targets": [_PluginTarget()]})
     factory = TargetConnectorFactory()
     factory.register(_PluginTargetProcessor, "test_plugin", "test_plugin.targets")
 
@@ -579,7 +585,7 @@ def test_process_exportable_results_dispatches_put_target_through_factory(
         "docling_jobkit.connectors.http.target_processor.httpx.put", put
     )
     task = _make_task().model_copy(
-        update={"target": PutTarget(url="https://example.com/result")}
+        update={"targets": [PutTarget(url="https://example.com/result")]}
     )
 
     task_result = process_exportable_results(

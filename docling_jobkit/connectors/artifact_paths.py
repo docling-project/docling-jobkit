@@ -2,7 +2,15 @@ from hashlib import sha256
 from typing import Literal
 
 ArtifactType = Literal[
-    "json", "html", "markdown", "text", "doctags", "doclang", "dclx", "resource_bundle"
+    "json",
+    "html",
+    "markdown",
+    "text",
+    "doctags",
+    "doclang",
+    "dclx",
+    "resource_bundle",
+    "chunks",
 ]
 
 

@@ -75,7 +75,7 @@ def test_results_processor_uses_narrow_base_target_processor_contract(tmp_path: 
     with target_processor:
         results = list(
             ResultsProcessor(
-                target_processor=target_processor,
+                target_processors=[target_processor],
                 to_formats=["json", "doctags", "md", "html", "text"],
                 scratch_dir=tmp_path / "scratch",
             ).process_documents([conv_res])

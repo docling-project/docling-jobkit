@@ -85,7 +85,11 @@ class Task(BaseModel):
     task_type: TaskType = TaskType.CONVERT
     task_status: TaskStatus = TaskStatus.PENDING
     sources: list[TaskSource] = []
-    target: TaskTarget = InBodyTarget()
+    # Singular convenience alias — normalised to targets=[target] at validation
+    # time.  Mutually exclusive with targets.  Neither field is deprecated.
+    target: Optional[TaskTarget] = None  # type: ignore[valid-type]
+    # Preferred multi-target form.  At least one entry is required.
+    targets: Optional[list[TaskTarget]] = None  # type: ignore[valid-type]
     options: Annotated[
         Optional[ConvertDocumentsOptions],
         Field(
@@ -127,6 +131,22 @@ class Task(BaseModel):
             )
             values["convert_options"] = values["options"]
         return values
+
+    @model_validator(mode="after")
+    def normalise_targets(self):
+        if self.target is not None and self.targets is not None:
+            raise ValueError("'target' and 'targets' are mutually exclusive")
+        if self.target is not None:
+            # Expand the convenience alias into the list so all downstream code
+            # only ever reads self.targets.  Clear target so it is absent from
+            # serialised output and a round-trip does not see both fields set.
+            self.targets = [self.target]
+            self.target = None
+        if not self.targets:
+            raise ValueError(
+                "At least one target is required. Provide either 'target' or 'targets'."
+            )
+        return self
 
     def set_status(self, status: TaskStatus):
         now = datetime.datetime.now(datetime.timezone.utc)

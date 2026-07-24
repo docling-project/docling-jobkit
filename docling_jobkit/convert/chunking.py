@@ -59,6 +59,10 @@ from docling_jobkit.datamodel.result import (
     ResultType,
     ZipArchiveResult,
 )
+from docling_jobkit.datamodel.target_field_slots import (
+    ChunkFieldSlots,
+    coerce_large_ints,
+)
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.public_errors import TargetWriteError, render_public_error_list
 
@@ -204,22 +208,19 @@ class DocumentChunkerManager:
         filename: str,
         options: BaseChunkerOptions,
     ) -> Iterable[ChunkedDocumentResultItem]:
-        """Chunk a document using chunker from docling-core."""
+        """Chunk a document using chunker from docling-core.
 
+        This is a generator — chunks are yielded one at a time as they are
+        produced by the underlying chunker.  Callers must not materialise the
+        full sequence into a list unless absolutely necessary.
+        """
         chunker = self._get_chunker(options)
 
-        chunks = list(chunker.chunk(document))
-
-        # Convert chunks to response format
-        chunk_items: list[ChunkedDocumentResultItem] = []
-        for i, chunk in enumerate(chunks):
-            page_numbers: List[int] = []
-            metadata: Dict[str, Any] = {}
-
+        for i, chunk in enumerate(chunker.chunk(document)):
             doc_chunk = DocChunk.model_validate(chunk)
 
             # Extract page numbers and doc_items refs
-            page_numbers = []
+            page_numbers: List[int] = []
             doc_items = []
             for item in doc_chunk.meta.doc_items:
                 doc_items.append(item.self_ref)
@@ -230,6 +231,7 @@ class DocumentChunkerManager:
             page_numbers = sorted(set(page_numbers))
 
             # Store additional metadata
+            metadata: Dict[str, Any] = {}
             if doc_chunk.meta.origin:
                 metadata["origin"] = doc_chunk.meta.origin
 
@@ -246,8 +248,7 @@ class DocumentChunkerManager:
             if isinstance(chunker, HybridChunker):
                 num_tokens = chunker.tokenizer.count_tokens(text)
 
-            # Create chunk item
-            chunk_item = ChunkedDocumentResultItem(
+            yield ChunkedDocumentResultItem(
                 filename=filename,
                 chunk_index=i,
                 text=text,
@@ -259,9 +260,6 @@ class DocumentChunkerManager:
                 page_numbers=page_numbers,
                 metadata=metadata,
             )
-            chunk_items.append(chunk_item)
-
-        return chunk_items
 
 
 def _export_document_for_chunking(
@@ -323,6 +321,36 @@ def _export_chunking_result(
         )
 
 
+def _chunk_row_payload(
+    chunk: ChunkedDocumentResultItem,
+    target: ChunkFieldSlots,
+) -> dict[str, Any]:
+    # Serialize metadata to a plain JSON-safe dict.  chunk.metadata may contain
+    # pydantic model instances (e.g. DocumentOrigin) that JSON / opensearchpy
+    # cannot serialise directly.
+    raw_meta: dict[str, Any] = {}
+    for k, v in (chunk.metadata or {}).items():
+        if hasattr(v, "model_dump"):
+            raw_meta[k] = v.model_dump(mode="json")
+        else:
+            raw_meta[k] = v
+
+    if target.coerce_large_ints_to_str:
+        raw_meta = coerce_large_ints(raw_meta)
+
+    row: dict[str, Any] = {
+        target.text_field: chunk.text,
+        target.metadata_field: raw_meta,
+        target.doc_id_field: chunk.filename,
+        target.chunk_index_field: chunk.chunk_index,
+    }
+    if target.page_field is not None:
+        row[target.page_field] = chunk.page_numbers
+    if target.headings_field is not None:
+        row[target.headings_field] = chunk.headings
+    return row
+
+
 def process_chunkable_results(
     task: Task,
     exportable_documents: Iterable[ExportableDocument],
@@ -352,6 +380,7 @@ def process_chunkable_results(
     # We have some results, let's prepare the response
     task_result: ResultType
     chunks: list[ChunkedDocumentResultItem] = []
+    chunks_by_document: dict[str, list[ChunkedDocumentResultItem]] = {}
     documents: list[DocumentResultItem] = []
     num_succeeded = 0
     num_failed = 0
@@ -360,8 +389,10 @@ def process_chunkable_results(
     # TODO: DocumentChunkerManager should be initialized outside for really working as a cache
     chunker_manager = chunker_manager or DocumentChunkerManager()
 
+    # Use the first target for routing decisions in this legacy path.
+    first_target = task.targets[0] if task.targets else None
     output_dir: Optional[Path] = None
-    if not isinstance(task.target, InBodyTarget):
+    if not isinstance(first_target, InBodyTarget):
         output_dir = work_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -379,13 +410,15 @@ def process_chunkable_results(
             and exportable_document.document is not None
         ):
             try:
-                chunks.extend(
+                document_chunks = list(
                     chunker_manager.chunk_document(
                         document=exportable_document.document,
                         filename=filename,
                         options=chunking_options,
                     )
                 )
+                chunks.extend(document_chunks)
+                chunks_by_document[filename] = document_chunks
                 num_succeeded += 1
             except Exception as e:
                 _log.exception(
@@ -446,12 +479,12 @@ def process_chunkable_results(
 
         if task.chunking_export_options.include_converted_doc:
             if (
-                isinstance(task.target, InBodyTarget)
+                isinstance(first_target, InBodyTarget)
                 and conversion_options.image_export_mode == ImageRefMode.REFERENCED
             ):
                 raise RuntimeError("InBodyTarget cannot use REFERENCED image mode.")
 
-            if isinstance(task.target, InBodyTarget):
+            if isinstance(first_target, InBodyTarget):
                 doc_content = _export_document_as_content(
                     exportable_document,
                     export_json=True,
@@ -502,8 +535,7 @@ def process_chunkable_results(
         )
 
     # Export results based on target type and options
-    # Booleans to know what to export
-    if isinstance(task.target, InBodyTarget):
+    if isinstance(first_target, InBodyTarget):
         task_result = ChunkedDocumentResult(
             chunks=chunks,
             documents=documents,
@@ -533,10 +565,10 @@ def process_chunkable_results(
             format="zip",
             root_dir=output_dir,
         )
-        if isinstance(task.target, PutTarget):
+        if isinstance(first_target, PutTarget):
             try:
                 with file_path.open("rb") as file_data:
-                    r = httpx.put(str(task.target.url), files={"file": file_data})
+                    r = httpx.put(str(first_target.url), files={"file": file_data})  # type: ignore[union-attr]
                     r.raise_for_status()
                 task_result = RemoteTargetResult()
             except Exception as exc:
