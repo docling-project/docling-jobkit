@@ -31,11 +31,15 @@ def source_connectors():
         LocalPathSourceProcessor,
     )
     from docling_jobkit.connectors.s3.source_processor import S3SourceProcessor
+    from docling_jobkit.connectors.sharepoint.source_processor import (
+        SharePointSourceProcessor,
+    )
 
     return {
         "source_connectors": [
             HttpSourceProcessor,
             S3SourceProcessor,
+            SharePointSourceProcessor,
             AzureBlobSourceProcessor,
             LocalPathSourceProcessor,
             GoogleDriveSourceProcessor,
