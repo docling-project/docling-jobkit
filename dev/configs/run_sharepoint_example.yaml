@@ -1,0 +1,20 @@
+options:
+  do_ocr: false
+  to_formats:
+    - json
+
+sources:
+  - kind: sharepoint
+    tenant: "contoso.onmicrosoft.com" # Entra tenant id
+    client_id: "" # app registration client ID
+    client_secret: "" # App-only client secret
+    site_url: "" 
+    # optional params
+    document_library: "" #  Library display name, default = site's default library
+    folder_path: "" # folder within library, default is root which recurses subfolders
+    file_ids: [""] # Explicit item ids, if set overrides folder traversal
+    max_num_elements: # set this to cap it to a specific num, default is all
+
+target:
+  kind: local_path
+  path: "./output_documents"
