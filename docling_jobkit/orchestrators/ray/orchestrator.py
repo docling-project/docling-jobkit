@@ -623,7 +623,7 @@ class RayOrchestrator(BaseOrchestrator):
     async def enqueue(
         self,
         sources: list[TaskSource],
-        target: TaskTarget,
+        target: TaskTarget | None = None,
         task_type: TaskType = TaskType.CONVERT,
         options: ConvertDocumentsOptions | None = None,
         convert_options: ConvertDocumentsOptions | None = None,
@@ -631,12 +631,14 @@ class RayOrchestrator(BaseOrchestrator):
         chunking_export_options: ChunkingExportOptions | None = None,
         callbacks: list[CallbackSpec] | None = None,
         metadata: dict[str, Any] | None = None,
+        targets: list[TaskTarget] | None = None,
     ) -> Task:
         """Enqueue a task for processing.
 
         Args:
             sources: List of document sources to process
-            target: Target for processed documents
+            target: Deprecated singular target; use ``targets`` instead.
+            targets: List of targets for processed documents (preferred).
             task_type: Type of task (CONVERT or CHUNK)
             options: Deprecated, use convert_options
             convert_options: Conversion options
@@ -652,7 +654,8 @@ class RayOrchestrator(BaseOrchestrator):
             QueueLimitExceededError: If queue limit exceeded and rejection enabled
             TargetNotAllowedError: If the target kind is not permitted
         """
-        self._validate_target(target)
+        resolved_targets = self._resolve_enqueue_targets(target, targets)
+        self._validate_targets(resolved_targets)
         async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
             # Ensure Redis is connected
             await self.redis_manager.connect()
@@ -674,7 +677,7 @@ class RayOrchestrator(BaseOrchestrator):
             source_factory = get_source_connector_factory(allow_external_plugins)
             _validate_expandable_source_targets(
                 sources,
-                target,
+                resolved_targets[0],
                 task_type,
                 allow_external_plugins=allow_external_plugins,
             )
@@ -697,7 +700,7 @@ class RayOrchestrator(BaseOrchestrator):
                     "task_id": task_id,
                     "task_type": task_type,
                     "sources": ray_sources,
-                    "target": target,
+                    "targets": resolved_targets,
                     "convert_options": convert_options,
                     "chunking_options": chunking_options,
                     "chunking_export_options": chunking_export_options,
