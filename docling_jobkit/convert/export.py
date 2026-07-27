@@ -111,7 +111,12 @@ def stream_chunks_for_document(
         return 0
 
     for p in chunk_processors:
-        p.begin_chunks(filename, temp_dir, chunk_target_key=chunk_target_key)
+        p.begin_chunks(
+            filename,
+            temp_dir,
+            chunk_target_key=chunk_target_key,
+            document_hash=exportable_document.document_hash,
+        )
     n = 0
     try:
         for chunk in chunker_manager.chunk_document(

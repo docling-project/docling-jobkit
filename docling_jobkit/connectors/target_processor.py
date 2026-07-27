@@ -123,6 +123,7 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         filename: str,
         temp_dir: Path,
         chunk_target_key: Optional[str] = None,
+        document_hash: Optional[str] = None,
     ) -> None:
         """Called once before the first chunk of a document is streamed.
 
@@ -135,6 +136,10 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         When omitted the bare filename (``{stem}.chunks.jsonl``) is used,
         which is only correct for database processors that override
         ``end_chunks`` and never call ``upload_file()`` themselves.
+
+        ``document_hash`` is the SHA-256 hex digest of the raw input file bytes.
+        Processors that need stable, content-addressed chunk IDs should store
+        this and combine it with ``chunk_index`` to derive the ID.
         """
         stem = Path(filename).stem
         self._chunk_jsonl_path: Optional[Path] = temp_dir / f"{stem}.chunks.jsonl"
