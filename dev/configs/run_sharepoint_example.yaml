@@ -14,10 +14,10 @@ sources:
     # user_upn: "alice@contoso.com" # OneDrive for Business user (only Entra-backed accounts)
 
     # optional params
-    document_library: "" # library display name (SharePoint only); default = site's default library
-    folder_path: "" # folder within the drive, default is root which recurses subfolders
-    file_ids: [] # explicit item ids, if set overrides folder traversal
-    max_num_elements: # set this to cap it to a specific num, default is all
+    #document_library: "" # library display name (SharePoint only); default = site's default library
+    #folder_path: "" # folder within the drive, default is root which recurses subfolders
+    #file_ids: [] # explicit item ids, if set overrides folder traversal
+    #max_num_elements: # set this to cap it to a specific num, default is all
 
 target:
   kind: local_path
