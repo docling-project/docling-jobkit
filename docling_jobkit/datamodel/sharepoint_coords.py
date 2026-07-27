@@ -1,6 +1,6 @@
 from typing import Annotated, Literal, Optional
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 
 class SharePointCoordinates(BaseModel):
@@ -36,15 +36,33 @@ class SharePointCoordinates(BaseModel):
         ),
     ]
 
+    # optional params
     site_url: Annotated[
-        str,
+        Optional[str],
         Field(
-            description="URL of the SharePoint site to read from.",
+            description=(
+                "URL of the SharePoint site to read from. Resolves to a document "
+                "library (Graph drive) on that site. Exactly one of 'site_url' or "
+                "'user_upn' must be provided."
+            ),
             examples=["https://contoso.sharepoint.com/sites/Marketing"],
         ),
-    ]
+    ] = None
 
-    # optional params
+    user_upn: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description=(
+                "User principal name (email) whose OneDrive for Business is read from "
+                "(resolves to /users/{user_upn}/drive). Exactly one of 'site_url' or "
+                "'user_upn' must be provided. Note: only OneDrive for Business "
+                "(Entra-backed) is accessible with app-only credentials."
+            ),
+            examples=["alice@contoso.com"],
+        ),
+    ] = None
+
     document_library: Annotated[
         Optional[str],
         Field(
@@ -91,6 +109,19 @@ class SharePointCoordinates(BaseModel):
             ),
         ),
     ] = None
+
+    @model_validator(mode="after")
+    def _validate_target(self) -> "SharePointCoordinates":
+        if bool(self.site_url) == bool(self.user_upn):
+            raise ValueError(
+                "Exactly one of 'site_url' or 'user_upn' must be provided."
+            )
+        if self.user_upn and self.document_library:
+            raise ValueError(
+                "'document_library' only applies to 'site_url' (SharePoint); it "
+                "cannot be combined with 'user_upn' (OneDrive)."
+            )
+        return self
 
 
 class TaskSharePointSource(SharePointCoordinates):
