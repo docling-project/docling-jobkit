@@ -82,6 +82,9 @@ gcloudstorage = [
 azure = [
     "azure-storage-blob>=12.19.0",
 ]
+sharepoint = [
+    "office365-rest-python-client>=2.6.2",
+]
 
 [dependency-groups]
 dev = [
@@ -222,6 +225,7 @@ module = [
     "googleapiclient.*",
     "google_auth_oauthlib.*",
     "google.*",
+    "office365.*",
     "ray.*",
     "codeflare_sdk.*",
 ]
