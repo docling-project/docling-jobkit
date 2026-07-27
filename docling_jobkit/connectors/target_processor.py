@@ -118,17 +118,32 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         """
         return False
 
-    def begin_chunks(self, filename: str, temp_dir: Path) -> None:
+    def begin_chunks(
+        self,
+        filename: str,
+        temp_dir: Path,
+        chunk_target_key: Optional[str] = None,
+    ) -> None:
         """Called once before the first chunk of a document is streamed.
 
         Default: open a temp ``{stem}.chunks.jsonl`` file for writing.
         DB processors that override ``requires_chunks()`` can use this to
         initialise per-document state instead.
+
+        ``chunk_target_key``, when provided, is the storage path that
+        ``end_chunks`` will pass to ``upload_file()`` as *target_filename*.
+        When omitted the bare filename (``{stem}.chunks.jsonl``) is used,
+        which is only correct for database processors that override
+        ``end_chunks`` and never call ``upload_file()`` themselves.
         """
-        self._chunk_jsonl_path: Optional[Path] = (
-            temp_dir / f"{Path(filename).stem}.chunks.jsonl"
-        )
+        stem = Path(filename).stem
+        self._chunk_jsonl_path: Optional[Path] = temp_dir / f"{stem}.chunks.jsonl"
         self._chunk_jsonl_file = self._chunk_jsonl_path.open("w", encoding="utf-8")
+        self._chunk_target_key: Optional[str] = (
+            chunk_target_key
+            if chunk_target_key is not None
+            else self._chunk_jsonl_path.name
+        )
 
     def consume_chunk(self, chunk: "ChunkedDocumentResultItem") -> None:
         """Called once per chunk as it is produced by the chunker.
@@ -154,6 +169,6 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         self._chunk_jsonl_file.close()
         self.upload_file(
             filename=self._chunk_jsonl_path,  # type: ignore[arg-type]
-            target_filename=self._chunk_jsonl_path.name,  # type: ignore[union-attr]
+            target_filename=self._chunk_target_key,  # type: ignore[arg-type]
             content_type="application/jsonl",
         )

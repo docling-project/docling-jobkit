@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 from opensearchpy import OpenSearch
 
@@ -85,7 +85,12 @@ class OpenSearchTargetProcessor(BaseDatabaseTargetProcessor[_OpenSearchTarget]):
         """True when this processor is configured as an opensearch_chunks target."""
         return isinstance(self._target, OpenSearchChunkTarget)
 
-    def begin_chunks(self, filename: str, temp_dir: Path) -> None:
+    def begin_chunks(
+        self,
+        filename: str,
+        temp_dir: Path,
+        chunk_target_key: Optional[str] = None,
+    ) -> None:
         """No file needed — each chunk is upserted directly in consume_chunk()."""
 
     def consume_chunk(self, chunk: ChunkedDocumentResultItem) -> None:

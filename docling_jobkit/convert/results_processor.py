@@ -284,6 +284,9 @@ class ResultsProcessor:
                                     processors=processors,
                                     chunks_in_formats=self._chunks_in_formats,
                                     temp_dir=temp_dir,
+                                    chunk_target_key=self._target_key(
+                                        f"chunks/{name_without_ext}.chunks.jsonl"
+                                    ),
                                 )
 
                             yield f"{doc_hash} - SUCCESS"

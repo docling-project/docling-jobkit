@@ -71,6 +71,7 @@ def stream_chunks_for_document(
     processors: list[BaseTargetProcessor],
     chunks_in_formats: bool,
     temp_dir: Path,
+    chunk_target_key: str | None = None,
 ) -> int:
     """Run the streaming chunk protocol across *processors* for one document.
 
@@ -90,6 +91,10 @@ def stream_chunks_for_document(
     - DB processors that override ``requires_chunks()`` always participate.
     - File-storage processors participate only when *chunks_in_formats* is
       True, and only if they are *not* database processors.
+
+    ``chunk_target_key`` is forwarded to ``begin_chunks`` so that file-storage
+    processors write the chunks file under the correct subdirectory path (e.g.
+    ``chunks/bo20/1016445.chunks.jsonl``).  DB processors ignore it.
     """
     if not _is_exportable_status(exportable_document.status):
         return 0
@@ -106,7 +111,7 @@ def stream_chunks_for_document(
         return 0
 
     for p in chunk_processors:
-        p.begin_chunks(filename, temp_dir)
+        p.begin_chunks(filename, temp_dir, chunk_target_key=chunk_target_key)
     n = 0
     try:
         for chunk in chunker_manager.chunk_document(

@@ -650,6 +650,8 @@ def _iter_remote_documents(
             num_failed += 1
 
         if chunk_active:
+            _source_identity = _resolve_source_identity(task, exportable_document, idx)
+            _stem = exportable_document.file.stem
             with tempfile.TemporaryDirectory(dir=work_dir) as _chunk_tmp:
                 stream_chunks_for_document(
                     exportable_document=final_document,
@@ -659,6 +661,7 @@ def _iter_remote_documents(
                     processors=processors,
                     chunks_in_formats=chunks_in_formats,
                     temp_dir=Path(_chunk_tmp),
+                    chunk_target_key=f"{_source_identity.source_key}/{_stem}.chunks.jsonl",
                 )
 
     return processed_docs, num_succeeded, num_partially_succeeded, num_failed
