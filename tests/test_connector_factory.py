@@ -48,6 +48,7 @@ def test_builtin_source_connectors_registered():
         "google_cloud_storage",
         "http",
         "s3",
+        "sharepoint",
         "local_path",
         "google_drive",
     }
