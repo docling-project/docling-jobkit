@@ -7,15 +7,25 @@ from docling.datamodel.service.sources import AzureBlobCoordinates
 
 from docling_jobkit.config.target_config import AzurePresignedConfig
 from docling_jobkit.orchestrators.local.orchestrator import LocalOrchestratorConfig
-from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.rq.orchestrator import RQOrchestratorConfig
 
 
 @pytest.mark.parametrize(
     "config_type",
-    [LocalOrchestratorConfig, RQOrchestratorConfig, RayOrchestratorConfig],
+    [LocalOrchestratorConfig, RQOrchestratorConfig],
 )
 def test_orchestrator_config_round_trips_azure_presigned_config(config_type):
+    _assert_config_round_trip(config_type)
+
+
+def test_ray_config_round_trips_azure_presigned_config():
+    pytest.importorskip("ray")
+    from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
+
+    _assert_config_round_trip(RayOrchestratorConfig)
+
+
+def _assert_config_round_trip(config_type):
     presigned_config = AzurePresignedConfig(
         azure_coords=AzureBlobCoordinates(
             account_name="acct",
