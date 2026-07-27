@@ -15,6 +15,7 @@ from docling.datamodel.service.requests import (
     FileSourceRequest as FileSource,
     S3SourceRequest as S3Coordinates,
 )
+from docling.datamodel.service.sources import AzureBlobCoordinates
 from docling.datamodel.service.targets import (
     AzureBlobTarget,
     GoogleCloudStorageTarget,
@@ -25,7 +26,10 @@ from docling.datamodel.service.targets import (
 from docling_core.types.doc import ImageRefMode
 from docling_core.types.doc.document import DoclingDocument
 
-from docling_jobkit.config.target_config import S3PresignedConfig
+from docling_jobkit.config.target_config import (
+    AzurePresignedConfig,
+    S3PresignedConfig,
+)
 from docling_jobkit.connectors.artifact_paths import hash_path_component
 from docling_jobkit.connectors.connector_factory import TargetConnectorFactory
 from docling_jobkit.connectors.s3.helper import check_target_has_source_converted
@@ -87,6 +91,7 @@ class _FakeDoc(DoclingDocument):
 class _FakeAzureBlobClient:
     def __init__(self, name: str):
         self.name = name
+        self.url = f"https://acct.example/container/{name}"
 
 
 class _FakeAzureContainerClient:
@@ -227,6 +232,21 @@ def _make_s3_presigned_config() -> S3PresignedConfig:
     )
 
 
+def _make_azure_presigned_config() -> AzurePresignedConfig:
+    return AzurePresignedConfig(
+        azure_coords=AzureBlobCoordinates(
+            account_name="acct",
+            container="converted-docs",
+            connection_string=(
+                "DefaultEndpointsProtocol=https;AccountName=acct;"
+                "AccountKey=dGVzdC1rZXk=;BlobEndpoint=https://acct.example;"
+            ),
+            blob_prefix="converted/",
+        ),
+        url_expiration=600,
+    )
+
+
 def _short_hash(value: str) -> str:
     return sha256(value.encode("utf-8")).hexdigest()[:12]
 
@@ -236,7 +256,7 @@ def test_process_exportable_results_requires_presigned_target_config(tmp_path: P
 
     with pytest.raises(
         ValueError,
-        match=r"requires s3_presigned_config",
+        match=r"requires presigned_config",
     ):
         process_exportable_results(
             task=task,
@@ -259,7 +279,7 @@ def test_process_exportable_results_returns_presigned_artifact_result(
         task=_make_task(),
         exportable_documents=[_make_exportable_document()],
         work_dir=tmp_path,
-        s3_presigned_config=_make_s3_presigned_config(),
+        presigned_config=_make_s3_presigned_config(),
     )
 
     assert isinstance(task_result.result, PresignedArtifactResult)
@@ -296,6 +316,69 @@ def test_process_exportable_results_returns_presigned_artifact_result(
     assert all(artifact.url_expires_at is not None for artifact in document.artifacts)
 
 
+def test_process_exportable_results_returns_azure_presigned_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    service_client = _FakeAzureServiceClient()
+    container_client = _FakeAzureContainerClient()
+    uploads: list[dict[str, object]] = []
+    sas_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.azure_blob.helper.get_azure_blob_connection",
+        lambda _coords: (service_client, container_client),
+    )
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.azure_blob.upload_support.upload_azure_blob_file",
+        lambda blob_client, filename, content_type, metadata=None: uploads.append(
+            {
+                "key": blob_client.name,
+                "content": Path(filename).read_bytes(),
+                "content_type": content_type,
+                "metadata": metadata,
+            }
+        ),
+    )
+
+    def _generate_blob_sas(**kwargs):
+        sas_calls.append(kwargs)
+        return "sig=test"
+
+    monkeypatch.setattr("azure.storage.blob.generate_blob_sas", _generate_blob_sas)
+
+    task_result = process_exportable_results(
+        task=_make_task(),
+        exportable_documents=[_make_exportable_document()],
+        work_dir=tmp_path,
+        presigned_config=_make_azure_presigned_config(),
+    )
+
+    assert isinstance(task_result.result, PresignedArtifactResult)
+    document = task_result.result.documents[0]
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    assert len(uploads) == 2
+    assert all(
+        str(upload["key"]).startswith(
+            f"converted/tenant-a/{today}/task-123/{_short_hash('paper.pdf')}/"
+        )
+        for upload in uploads
+    )
+    assert uploads[0]["metadata"] == {
+        "tenant_id": "tenant-a",
+        "user_id": "user-1",
+    }
+    assert len(sas_calls) == len(document.artifacts) == 2
+    for sas_call, artifact in zip(sas_calls, document.artifacts):
+        assert sas_call["account_name"] == "acct"
+        assert sas_call["container_name"] == "converted-docs"
+        assert sas_call["account_key"] == "dGVzdC1rZXk="
+        assert str(sas_call["permission"]) == "r"
+        assert sas_call["expiry"] == artifact.url_expires_at
+        assert str(artifact.uri).startswith("https://acct.example/container/")
+        assert str(artifact.uri).endswith("?sig=test")
+    assert all(artifact.url_expires_at is not None for artifact in document.artifacts)
+
+
 def test_process_exportable_results_omits_default_tenant_id_from_object_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -311,7 +394,7 @@ def test_process_exportable_results_omits_default_tenant_id_from_object_metadata
         task=task,
         exportable_documents=[_make_exportable_document()],
         work_dir=tmp_path,
-        s3_presigned_config=_make_s3_presigned_config(),
+        presigned_config=_make_s3_presigned_config(),
     )
 
     today = datetime.now(timezone.utc).strftime("%Y%m%d")
@@ -338,7 +421,7 @@ def test_process_exportable_results_reuses_presigned_artifact_result_for_multi_d
         task=_make_task(),
         exportable_documents=[_make_exportable_document(), _make_exportable_document()],
         work_dir=tmp_path,
-        s3_presigned_config=_make_s3_presigned_config(),
+        presigned_config=_make_s3_presigned_config(),
     )
 
     assert isinstance(task_result.result, PresignedArtifactResult)
@@ -380,7 +463,7 @@ def test_presigned_target_duplicate_source_uris_share_storage_keys(
             _make_exportable_document(source_uri="paper.pdf", source_index=1),
         ],
         work_dir=tmp_path,
-        s3_presigned_config=_make_s3_presigned_config(),
+        presigned_config=_make_s3_presigned_config(),
     )
 
     assert isinstance(task_result.result, PresignedArtifactResult)
@@ -621,7 +704,7 @@ def test_presigned_callbacks_emit_document_completed_after_uploads(
         ),
         exportable_documents=[_make_exportable_document()],
         work_dir=tmp_path,
-        s3_presigned_config=_make_s3_presigned_config(),
+        presigned_config=_make_s3_presigned_config(),
         callback_invoker=callback_invoker,
     )
 
@@ -662,7 +745,7 @@ def test_document_completed_num_characters_uses_placeholder_image_mode(
         ),
         exportable_documents=[_make_exportable_document()],
         work_dir=tmp_path,
-        s3_presigned_config=_make_s3_presigned_config(),
+        presigned_config=_make_s3_presigned_config(),
         callback_invoker=callback_invoker,
     )
 
@@ -693,7 +776,7 @@ def test_presigned_remote_exports_release_document_references_and_cleanup_temp_d
         task=_make_task(),
         exportable_documents=exportable_documents,
         work_dir=tmp_path,
-        s3_presigned_config=_make_s3_presigned_config(),
+        presigned_config=_make_s3_presigned_config(),
     )
 
     assert all(document.document is None for document in exportable_documents)
@@ -723,7 +806,7 @@ def test_presigned_upload_failure_becomes_failed_document_callback(
         ),
         exportable_documents=[_make_exportable_document()],
         work_dir=tmp_path,
-        s3_presigned_config=_make_s3_presigned_config(),
+        presigned_config=_make_s3_presigned_config(),
         callback_invoker=callback_invoker,
         debug_error_details=True,
     )
@@ -924,7 +1007,7 @@ def test_process_exportable_results_tracks_partial_success_counts(
             _make_exportable_document(status=ConversionStatus.PARTIAL_SUCCESS),
         ],
         work_dir=tmp_path,
-        s3_presigned_config=_make_s3_presigned_config(),
+        presigned_config=_make_s3_presigned_config(),
     )
 
     assert task_result.num_succeeded == 1

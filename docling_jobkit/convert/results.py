@@ -19,7 +19,7 @@ from docling.datamodel.service.callbacks import (
 from docling.datamodel.service.targets import InBodyTarget
 from docling_core.types.doc import ImageRefMode
 
-from docling_jobkit.config.target_config import S3PresignedConfig
+from docling_jobkit.config.target_config import PresignedConfig
 from docling_jobkit.connectors.artifact_paths import (
     hash_path_component,
 )
@@ -560,7 +560,7 @@ def _process_remote_exportable_results(
     task: Task,
     exportable_documents: Iterable[ExportableDocument],
     work_dir: Path,
-    s3_presigned_config: S3PresignedConfig | None,
+    presigned_config: PresignedConfig | None,
     callback_invoker: Optional["CallbackInvoker"],
     debug_error_details: bool,
     total_docs: int,
@@ -597,16 +597,16 @@ def _process_remote_exportable_results(
     target_mode = target_factory.result_mode(task.target)
 
     if target_mode == "presigned":
-        if s3_presigned_config is None:
+        if presigned_config is None:
             raise ValueError(
-                "PresignedUrlTarget requires s3_presigned_config in orchestrator config"
+                "PresignedUrlTarget requires presigned_config in orchestrator config"
             )
 
         presigned_documents: list[DocumentArtifactItem] = []
         with get_target_processor(
             task.target,
             allow_external_plugins=allow_external_plugins,
-            s3_presigned_config=s3_presigned_config,
+            presigned_config=presigned_config,
             task=task,
         ) as base_target_processor:
             target_processor: Any = base_target_processor
@@ -733,7 +733,7 @@ def _process_exportable_results_internal(
     task: Task,
     exportable_documents: Iterable[ExportableDocument],
     work_dir: Path,
-    s3_presigned_config: S3PresignedConfig | None = None,
+    presigned_config: PresignedConfig | None = None,
     callback_invoker: Optional["CallbackInvoker"] = None,
     debug_error_details: bool = False,
     expected_doc_count: Optional[int] = None,
@@ -778,7 +778,7 @@ def _process_exportable_results_internal(
             task=task,
             exportable_documents=exportable_documents,
             work_dir=work_dir,
-            s3_presigned_config=s3_presigned_config,
+            presigned_config=presigned_config,
             callback_invoker=callback_invoker,
             debug_error_details=debug_error_details,
             total_docs=total_docs,
@@ -914,7 +914,7 @@ def process_exportable_results(
     task: Task,
     exportable_documents: Iterable[ExportableDocument],
     work_dir: Path,
-    s3_presigned_config: S3PresignedConfig | None = None,
+    presigned_config: PresignedConfig | None = None,
     callback_invoker: Optional["CallbackInvoker"] = None,
     debug_error_details: bool = False,
     expected_doc_count: Optional[int] = None,
@@ -926,7 +926,7 @@ def process_exportable_results(
         task=task,
         exportable_documents=exportable_documents,
         work_dir=work_dir,
-        s3_presigned_config=s3_presigned_config,
+        presigned_config=presigned_config,
         callback_invoker=callback_invoker,
         debug_error_details=debug_error_details,
         expected_doc_count=expected_doc_count,

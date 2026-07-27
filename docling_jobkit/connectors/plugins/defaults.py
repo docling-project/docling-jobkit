@@ -61,15 +61,15 @@ def target_connectors():
     from docling_jobkit.connectors.local_path.target_processor import (
         LocalPathTargetProcessor,
     )
-    from docling_jobkit.connectors.s3.presigned_target_processor import (
-        S3PresignedTargetProcessor,
+    from docling_jobkit.connectors.presigned_target_processor import (
+        PresignedTargetProcessor,
     )
     from docling_jobkit.connectors.s3.target_processor import S3TargetProcessor
 
     return {
         "target_connectors": [
             S3TargetProcessor,
-            S3PresignedTargetProcessor,
+            PresignedTargetProcessor,
             AzureBlobTargetProcessor,
             LocalPathTargetProcessor,
             HttpPutTargetProcessor,
