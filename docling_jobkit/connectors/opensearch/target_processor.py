@@ -1,9 +1,7 @@
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Optional, Union
-
-from opensearchpy import OpenSearch
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from docling_jobkit.connectors.database_target_processor import (
     BaseDatabaseTargetProcessor,
@@ -15,6 +13,9 @@ from docling_jobkit.connectors.opensearch.models import (
 from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
 from docling_jobkit.datamodel.target_field_slots import FieldMappings
 
+if TYPE_CHECKING:
+    from opensearchpy import OpenSearch
+
 # Both OpenSearch target types inherit FieldMappings so the bound _T=FieldMappings
 # constraint of BaseDatabaseTargetProcessor is satisfied.
 _OpenSearchTarget = Union[OpenSearchDocTarget, OpenSearchChunkTarget]
@@ -23,14 +24,20 @@ _OpenSearchTarget = Union[OpenSearchDocTarget, OpenSearchChunkTarget]
 class OpenSearchTargetProcessor(BaseDatabaseTargetProcessor[_OpenSearchTarget]):
     def __init__(self, target: _OpenSearchTarget) -> None:
         super().__init__(target)
-        self._client: OpenSearch | None = None
+        self._client: "Optional[OpenSearch]" = None
         self._current_document_hash: Optional[str] = None
+
+    @classmethod
+    def check_dependencies(cls) -> None:
+        import opensearchpy  # noqa: F401
 
     @classmethod
     def get_config_types(cls) -> tuple[type[FieldMappings], ...]:
         return (OpenSearchDocTarget, OpenSearchChunkTarget)
 
     def _initialize(self) -> None:
+        from opensearchpy import OpenSearch
+
         kwargs: dict[str, Any] = {
             "hosts": self._target.hosts,
             "use_ssl": self._target.use_ssl,
