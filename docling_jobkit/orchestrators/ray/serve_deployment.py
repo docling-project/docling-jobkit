@@ -739,15 +739,20 @@ class DoclingProcessorConverterDeployment:
                         attempt + 1,
                         max_retries + 1,
                         failure.message if failure is not None else exc,
+                        exc_info=exc,
                     )
                     await asyncio.sleep(retry_delay)
                 else:
+                    # Include the real traceback: the caller re-raises and the
+                    # client only sees the sanitized failure message, so this is
+                    # the last place the root cause is recoverable from logs.
                     _log.error(
                         "Converter replica %s: %s failed after %s attempts: %s",
                         self.replica_id,
                         task_label,
                         max_retries + 1,
                         failure.message if failure is not None else exc,
+                        exc_info=exc,
                     )
 
         raise last_exception or RuntimeError("Converter request failed")
@@ -1121,6 +1126,19 @@ class DoclingProcessorCoordinatorDeployment:
                 },
             )
             error_message = failure.message
+            # The client only receives the sanitized ``failure.message`` (e.g.
+            # "Internal processing error."). Log the real exception with its
+            # traceback here so an operator can actually diagnose the failure;
+            # INTERNAL failures otherwise leave no server-side breadcrumb.
+            _log.error(
+                "Coordinator replica %s: task %s failed (category=%s, phase=%s): %s",
+                self.replica_id,
+                task.task_id,
+                failure.category.value,
+                failure.phase.value,
+                exc,
+                exc_info=exc,
+            )
             terminalization = await self.redis_manager.finalize_task_failure_atomic(
                 tenant_id=tenant_id,
                 task_id=task.task_id,
