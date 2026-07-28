@@ -641,7 +641,9 @@ def test_ray_expandable_source_accepts_builtin_database_target(monkeypatch):
             )
         ],
         AzureBlobTarget(
-            connection_string="UseDevelopmentStorage=true", container="results"
+            account_name="devstoreaccount1",
+            connection_string="UseDevelopmentStorage=true",
+            container="results",
         ),
         TaskType.CONVERT,
     )
