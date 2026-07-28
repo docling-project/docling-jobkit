@@ -557,6 +557,7 @@ def _process_remote_document(
     callback_mode: CallbackMode,
     upload_document: Callable[[SourceIdentity], Any],
     build_failure_result: Callable[[ExportableDocument, SourceIdentity], Any],
+    after_upload: Callable[[ExportableDocument, SourceIdentity], None] | None = None,
 ) -> tuple[ExportableDocument, ProcessedDocsItem, Any]:
     source = _resolve_source_identity(task, exportable_document, response_index)
     document_dir = output_dir / f"{source.source_index:06d}"
@@ -571,6 +572,11 @@ def _process_remote_document(
                 debug_error_details=debug_error_details,
             )
             upload_result = build_failure_result(final_document, source)
+
+        # Run post-upload work (e.g. streaming chunk export) while the document
+        # references are still alive — the finally block below releases them.
+        if after_upload is not None:
+            after_upload(final_document, source)
 
         processed_doc = _build_processed_docs_item(
             final_document,
@@ -629,6 +635,28 @@ def _iter_remote_documents(
         _doc = exportable_document
         _idx = idx
 
+        def _stream_chunks(
+            _final_document: ExportableDocument,
+            _source_identity: SourceIdentity,
+            _ed: ExportableDocument = exportable_document,
+        ) -> None:
+            # Runs before _process_remote_document releases the document
+            # references, so the chunker still sees a live DoclingDocument.
+            if not chunk_active:
+                return
+            _stem = _ed.file.stem
+            with tempfile.TemporaryDirectory(dir=work_dir) as _chunk_tmp:
+                stream_chunks_for_document(
+                    exportable_document=_final_document,
+                    filename=str(_ed.file),
+                    chunker_manager=chunker_manager,  # type: ignore[arg-type]
+                    chunking_options=chunking_options,  # type: ignore[arg-type]
+                    processors=processors,
+                    chunks_in_formats=chunks_in_formats,
+                    temp_dir=Path(_chunk_tmp),
+                    chunk_target_key=f"{_source_identity.source_key}/{_stem}.chunks.jsonl",
+                )
+
         final_document, processed_doc, _ = _process_remote_document(
             task=task,
             exportable_document=exportable_document,
@@ -640,6 +668,7 @@ def _iter_remote_documents(
             callback_mode=callback_mode,
             upload_document=lambda _source: upload_document_fn(_doc, _idx, _source),
             build_failure_result=lambda _failed_document, _source: None,
+            after_upload=_stream_chunks,
         )
         processed_docs.append(processed_doc)
 
@@ -649,21 +678,6 @@ def _iter_remote_documents(
             num_partially_succeeded += 1
         else:
             num_failed += 1
-
-        if chunk_active:
-            _source_identity = _resolve_source_identity(task, exportable_document, idx)
-            _stem = exportable_document.file.stem
-            with tempfile.TemporaryDirectory(dir=work_dir) as _chunk_tmp:
-                stream_chunks_for_document(
-                    exportable_document=final_document,
-                    filename=str(exportable_document.file),
-                    chunker_manager=chunker_manager,  # type: ignore[arg-type]
-                    chunking_options=chunking_options,  # type: ignore[arg-type]
-                    processors=processors,
-                    chunks_in_formats=chunks_in_formats,
-                    temp_dir=Path(_chunk_tmp),
-                    chunk_target_key=f"{_source_identity.source_key}/{_stem}.chunks.jsonl",
-                )
 
     return processed_docs, num_succeeded, num_partially_succeeded, num_failed
 
