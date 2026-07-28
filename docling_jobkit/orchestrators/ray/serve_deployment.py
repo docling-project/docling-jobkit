@@ -980,6 +980,9 @@ class DoclingProcessorCoordinatorDeployment:
         # Lazily-initialized chunker manager for use during slice finalization
         # and single-doc result processing on the coordinator.
         self._chunker_manager: Optional[DocumentChunkerManager] = None
+        # Lazily-initialized converter manager used only to resolve chunking
+        # presets during slice finalization (the coordinator does not convert).
+        self._converter_manager: Optional[DoclingConverterManager] = None
 
         _log.setLevel(self.config.log_level.upper())
 
@@ -1213,6 +1216,26 @@ class DoclingProcessorCoordinatorDeployment:
             self._chunker_manager = DocumentChunkerManager()
         return self._chunker_manager
 
+    def _get_converter_manager(self) -> DoclingConverterManager:
+        if self._converter_manager is None:
+            self._converter_manager = DoclingConverterManager(
+                config=self.converter_manager_config
+            )
+        return self._converter_manager
+
+    def _resolve_chunking_options(
+        self, convert_options: ConvertDocumentsOptions
+    ) -> Any:
+        """Resolve chunking presets to concrete options on the coordinator.
+
+        Mirrors ``DoclingProcessorConverterDeployment._build_task_result`` so the
+        slice-finalization path chunks with the same options the non-sliced path
+        would use. Without this, ``convert_options.chunking_options`` is often
+        ``None`` (the caller only sets a preset), which silently disables chunk
+        export for sliced (large) documents.
+        """
+        return self._get_converter_manager().parse_chunking_options(convert_options)
+
     async def _process_task(
         self, task: Task, workdir: Path
     ) -> DoclingTaskResult | ConverterFailureResult:
@@ -1316,7 +1339,9 @@ class DoclingProcessorCoordinatorDeployment:
                                     self.converter_manager_config.allow_external_plugins
                                 ),
                                 chunker_manager=self._get_chunker_manager(),
-                                chunking_options=convert_options.chunking_options,
+                                chunking_options=self._resolve_chunking_options(
+                                    convert_options
+                                ),
                             )
                     finally:
                         # Release ObjectRefs so plasma can free the slice documents
