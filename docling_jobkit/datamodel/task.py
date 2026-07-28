@@ -143,9 +143,9 @@ class Task(BaseModel):
             self.targets = [self.target]
             self.target = None
         if not self.targets:
-            raise ValueError(
-                "At least one target is required. Provide either 'target' or 'targets'."
-            )
+            # Neither target nor targets was provided — apply the same default
+            # that existed before the multi-target refactor: a single InBodyTarget.
+            self.targets = [InBodyTarget()]
         return self
 
     def set_status(self, status: TaskStatus):
