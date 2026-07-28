@@ -260,7 +260,7 @@ class MaterializedConvertRequest(BaseModel):
 class SourceChunkConvertRequest(BaseModel):
     kind: str = Field(default="source_chunk_convert")
     task: Task = Field(description="Parent task metadata")
-    chunk: DocumentChunk[Any, Any] = Field(
+    chunk: DocumentChunk = Field(
         description="Data-only source chunk to fetch and convert"
     )
     expected_doc_count: int = Field(
