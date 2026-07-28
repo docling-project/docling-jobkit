@@ -609,6 +609,44 @@ def test_ray_expandable_source_accepts_plugin_artifact_target(monkeypatch):
     )
 
 
+def test_ray_expandable_source_accepts_builtin_database_target(monkeypatch):
+    pytest.importorskip("ray")
+    from docling.datamodel.service.targets import AzureBlobTarget
+    from docling.datamodel.service.tasks import TaskType
+
+    from docling_jobkit.orchestrators.ray import orchestrator as ray_orchestrator
+
+    source_factory = get_source_connector_factory()
+    target_factory = get_target_connector_factory()
+    monkeypatch.setattr(
+        ray_orchestrator,
+        "get_source_connector_factory",
+        lambda allow_external_plugins=False: source_factory,
+    )
+    monkeypatch.setattr(
+        ray_orchestrator,
+        "get_target_connector_factory",
+        lambda allow_external_plugins=False: target_factory,
+    )
+
+    ray_orchestrator._validate_expandable_source_targets(
+        [
+            S3SourceRequest(
+                endpoint="127.0.0.1:9000",
+                verify_ssl=False,
+                access_key="minioadmin",
+                secret_key="minioadmin",
+                bucket="source-bucket",
+                key_prefix="incoming/",
+            )
+        ],
+        AzureBlobTarget(
+            connection_string="UseDevelopmentStorage=true", container="results"
+        ),
+        TaskType.CONVERT,
+    )
+
+
 def test_ray_s3_fanout_accepts_plugin_artifact_target(monkeypatch):
     pytest.importorskip("ray")
     from docling.datamodel.service.tasks import TaskType

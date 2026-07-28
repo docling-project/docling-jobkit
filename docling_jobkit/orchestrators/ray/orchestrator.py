@@ -69,11 +69,10 @@ def _validate_expandable_source_targets(
         return
 
     target_factory = get_target_connector_factory(allow_external_plugins)
-    is_artifact_target = (
-        target_factory.supports(target)
-        and target_factory.result_mode(target) == "artifacts"
+    result_mode = (
+        target_factory.result_mode(target) if target_factory.supports(target) else None
     )
-    if task_type != TaskType.CONVERT or not is_artifact_target:
+    if task_type != TaskType.CONVERT or result_mode not in {"artifacts", "database"}:
         raise ValueError(
             "Tasks containing an expandable storage source require a storage target."
         )
