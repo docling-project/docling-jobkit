@@ -34,6 +34,7 @@ from docling_jobkit.convert.export import (
     _cleanup_document_output_dir,
     _is_exportable_status,
     _materialize_document_exports,
+    _processor_requires_chunks,
     _release_exportable_document_references,
     _upload_exportable_document,
     stream_chunks_for_document,
@@ -619,7 +620,7 @@ def _iter_remote_documents(
     num_failed = 0
 
     chunk_active = (
-        (chunks_in_formats or any(p.requires_chunks() for p in processors))
+        (chunks_in_formats or any(_processor_requires_chunks(p) for p in processors))
         and chunker_manager is not None
         and chunking_options is not None
     )
