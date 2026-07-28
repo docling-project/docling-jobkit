@@ -9,9 +9,9 @@ sources:
     client_id: "" # app registration client ID
     client_secret: "" # App-only client secret
 
-    # target: provide either site_url (SharePoint) or user_upn (OneDrive)
+    # target: provide either site_url (SharePoint) or onedrive_user (OneDrive)
     site_url: "https://contoso.sharepoint.com/sites/Marketing" # SharePoint site
-    # user_upn: "alice@contoso.com" # OneDrive for Business user (only Entra-backed accounts)
+    # onedrive_user: "alice@contoso.com" # OneDrive for Business user (only Entra-backed accounts)
 
     # optional params
     #document_library: "" # library display name (SharePoint only); default = site's default library

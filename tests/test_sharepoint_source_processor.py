@@ -57,7 +57,7 @@ def _graph_error(status: int) -> ClientRequestException:
     "kwargs",
     [
         {"site_url": "u"},  # SharePoint
-        {"user_upn": "a@x.com"},  # OneDrive
+        {"onedrive_user": "a@x.com"},  # OneDrive
         {"site_url": "u", "document_library": "Contracts"},
     ],
     ids=["sharepoint_site", "onedrive_user", "site_with_library"],
@@ -66,15 +66,15 @@ def test_coords_accepts_valid_targets(kwargs):
     coords = SharePointCoordinates(
         tenant="t", client_id="c", client_secret=SecretStr("s"), **kwargs
     )
-    assert coords.site_url or coords.user_upn
+    assert coords.site_url or coords.onedrive_user
 
 
 @pytest.mark.parametrize(
     "kwargs, match",
     [
         ({}, "Exactly one"),  # neither
-        ({"site_url": "u", "user_upn": "a@x.com"}, "Exactly one"),  # both
-        ({"user_upn": "a@x.com", "document_library": "D"}, "document_library"),
+        ({"site_url": "u", "onedrive_user": "a@x.com"}, "Exactly one"),  # both
+        ({"onedrive_user": "a@x.com", "document_library": "D"}, "document_library"),
     ],
     ids=["no_target", "both_targets", "library_with_onedrive"],
 )

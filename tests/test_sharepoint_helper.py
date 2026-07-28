@@ -24,12 +24,12 @@ def sp_coords() -> SharePointCoordinates:
 
 @pytest.fixture
 def od_coords() -> SharePointCoordinates:
-    """OneDrive target (user_upn)."""
+    """OneDrive target (onedrive_user)."""
     return SharePointCoordinates(
         tenant="tenant-guid",
         client_id="client-id",
         client_secret=SecretStr("secret"),
-        user_upn="alice@contoso.com",
+        onedrive_user="alice@contoso.com",
     )
 
 

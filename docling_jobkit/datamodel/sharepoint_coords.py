@@ -43,20 +43,20 @@ class SharePointCoordinates(BaseModel):
             description=(
                 "URL of the SharePoint site to read from. Resolves to a document "
                 "library (Graph drive) on that site. Exactly one of 'site_url' or "
-                "'user_upn' must be provided."
+                "'onedrive_user' must be provided."
             ),
             examples=["https://contoso.sharepoint.com/sites/Marketing"],
         ),
     ] = None
 
-    user_upn: Annotated[
+    onedrive_user: Annotated[
         Optional[str],
         Field(
             default=None,
             description=(
                 "User principal name (email) whose OneDrive for Business is read from "
-                "(resolves to /users/{user_upn}/drive). Exactly one of 'site_url' or "
-                "'user_upn' must be provided. Note: only OneDrive for Business "
+                "(resolves to /users/{onedrive_user}/drive). Exactly one of 'site_url' or "
+                "'onedrive_user' must be provided. Note: only OneDrive for Business "
                 "(Entra-backed) is accessible with app-only credentials."
             ),
             examples=["alice@contoso.com"],
@@ -112,14 +112,14 @@ class SharePointCoordinates(BaseModel):
 
     @model_validator(mode="after")
     def _validate_target(self) -> "SharePointCoordinates":
-        if bool(self.site_url) == bool(self.user_upn):
+        if bool(self.site_url) == bool(self.onedrive_user):
             raise ValueError(
-                "Exactly one of 'site_url' or 'user_upn' must be provided."
+                "Exactly one of 'site_url' or 'onedrive_user' must be provided."
             )
-        if self.user_upn and self.document_library:
+        if self.onedrive_user and self.document_library:
             raise ValueError(
                 "'document_library' only applies to 'site_url' (SharePoint); it "
-                "cannot be combined with 'user_upn' (OneDrive)."
+                "cannot be combined with 'onedrive_user' (OneDrive)."
             )
         return self
 

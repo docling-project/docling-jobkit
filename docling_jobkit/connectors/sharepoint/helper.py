@@ -50,13 +50,13 @@ def resolve_drive(client: GraphClient, coords: SharePointCoordinates) -> Drive:
     """Resolve the coordinates to a single Graph drive.
 
     site_url -> a SharePoint document library (either default or user supplied)
-    user_upn -> user's OneDrive for Business
+    onedrive_user -> user's OneDrive for Business
     """
     from docling_jobkit.connectors.errors import SourceConnectorPolicyError
 
     # OneDrive for Business: /users/{upn}/drive — there is no /me under app-only auth.
     if not coords.site_url:
-        return client.users.get_by_principal_name(coords.user_upn).drive
+        return client.users.get_by_principal_name(coords.onedrive_user).drive
 
     site = (
         client.sites.get_by_url(coords.site_url).get().execute_query()
