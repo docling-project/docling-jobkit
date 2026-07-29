@@ -44,9 +44,16 @@ from docling.datamodel.vlm_engine_options import (
 )
 from docling.document_converter import (
     DocumentConverter,
+    ExcelFormatOption,
     FormatOption,
+    HTMLFormatOption,
     ImageFormatOption,
+    OdpFormatOption,
+    OdsFormatOption,
+    OdtFormatOption,
     PdfFormatOption,
+    PowerpointFormatOption,
+    WordFormatOption,
 )
 from docling.models.factories import (
     get_layout_factory,
@@ -473,6 +480,34 @@ class DoclingConverterManager:
                 InputFormat.PDF: pdf_format_option,
                 InputFormat.IMAGE: image_format_option,
             }
+
+            # Propagate picture description/classification/chart-extraction
+            # options to SimplePipeline-based office formats too. Without this,
+            # do_picture_description and friends are silently ignored for
+            # DOCX/PPTX/XLSX/HTML/ODT/ODS/ODP, even though SimplePipeline runs
+            # the same enrichment stage as the PDF pipeline.
+            office_pipeline_options = pdf_format_option.pipeline_options
+            format_options[InputFormat.DOCX] = WordFormatOption(
+                pipeline_options=office_pipeline_options
+            )
+            format_options[InputFormat.PPTX] = PowerpointFormatOption(
+                pipeline_options=office_pipeline_options
+            )
+            format_options[InputFormat.XLSX] = ExcelFormatOption(
+                pipeline_options=office_pipeline_options
+            )
+            format_options[InputFormat.HTML] = HTMLFormatOption(
+                pipeline_options=office_pipeline_options
+            )
+            format_options[InputFormat.ODT] = OdtFormatOption(
+                pipeline_options=office_pipeline_options
+            )
+            format_options[InputFormat.ODS] = OdsFormatOption(
+                pipeline_options=office_pipeline_options
+            )
+            format_options[InputFormat.ODP] = OdpFormatOption(
+                pipeline_options=office_pipeline_options
+            )
 
             return DocumentConverter(format_options=format_options)
 

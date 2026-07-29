@@ -12,6 +12,15 @@ from docling.datamodel.pipeline_options import (
     ProcessingPipeline,
     VlmPipelineOptions,
 )
+from docling.document_converter import (
+    ExcelFormatOption,
+    HTMLFormatOption,
+    OdpFormatOption,
+    OdsFormatOption,
+    OdtFormatOption,
+    PowerpointFormatOption,
+    WordFormatOption,
+)
 from docling.pipeline.vlm_pipeline import VlmPipeline
 from docling_core.types.doc import ImageRefMode, PictureClassificationLabel
 
@@ -347,3 +356,42 @@ def test_image_pipeline_uses_vlm_pipeline_when_requested():
     img_opt = converter.format_to_options[InputFormat.IMAGE]
     assert img_opt.pipeline_cls == VlmPipeline
     assert isinstance(img_opt.pipeline_options, VlmPipelineOptions)
+
+
+def test_picture_description_options_propagate_to_office_formats():
+    """do_picture_description (and the rest of the
+    picture description / classification / chart extraction options) must
+    reach the SimplePipeline-based office formats too, not just PDF/IMAGE.
+    """
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+    opts = ConvertDocumentsOptions(
+        do_picture_description=True,
+        picture_description_api={
+            "url": "http://localhost:8000/v1/chat/completions",
+            "params": {"model": "test-model"},
+        },
+    )
+
+    with pytest.warns(DeprecationWarning):
+        pipeline_opts = m.get_pdf_pipeline_opts(opts)
+
+    converter = m.get_converter(pipeline_opts)
+    pdf_picture_opts = pipeline_opts.pipeline_options.picture_description_options
+
+    office_format_to_option_cls = {
+        InputFormat.DOCX: WordFormatOption,
+        InputFormat.PPTX: PowerpointFormatOption,
+        InputFormat.XLSX: ExcelFormatOption,
+        InputFormat.HTML: HTMLFormatOption,
+        InputFormat.ODT: OdtFormatOption,
+        InputFormat.ODS: OdsFormatOption,
+        InputFormat.ODP: OdpFormatOption,
+    }
+    for input_format, option_cls in office_format_to_option_cls.items():
+        format_option = converter.format_to_options[input_format]
+        assert isinstance(format_option, option_cls)
+        assert format_option.pipeline_options.do_picture_description is True
+        assert (
+            format_option.pipeline_options.picture_description_options
+            == pdf_picture_opts
+        )
