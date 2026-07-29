@@ -111,13 +111,15 @@ class TestHeadingHierarchyTranslation:
     def manager(self):
         return DoclingConverterManager(DoclingConverterManagerConfig())
 
-    def _pipeline_opts(self, manager, heading_hierarchy_options=None):
+    def _pipeline_opts(self, manager, enabled=None, heading_options=None):
         payload = dict(PAYLOAD)
         payload.pop("layout_custom_config")
         payload.pop("table_structure_custom_config")
         payload.pop("ocr_custom_config")
-        if heading_hierarchy_options is not None:
-            payload["heading_hierarchy_options"] = heading_hierarchy_options
+        if enabled is not None:
+            payload["do_pdf_heading_hierarchy"] = enabled
+        if heading_options is not None:
+            payload["pdf_heading_hierarchy_options"] = heading_options
         options = ConvertDocumentsOptions.model_validate(payload)
         return manager.get_pdf_pipeline_opts(options).pipeline_options
 
@@ -129,11 +131,18 @@ class TestHeadingHierarchyTranslation:
         # heading-hierarchy step is not asking for the style signal.
         assert pipeline_opts.generate_parsed_pages is False
 
+    def test_toggle_drives_nested_enabled(self, manager):
+        pipeline_opts = self._pipeline_opts(manager, enabled=True)
+
+        # Callers flip `do_pdf_heading_hierarchy`; the pipeline reads the nested
+        # flag, so the translation has to carry the toggle across.
+        assert pipeline_opts.heading_hierarchy_options.enabled is True
+
     def test_options_forwarded(self, manager):
         pipeline_opts = self._pipeline_opts(
             manager,
-            {
-                "enabled": True,
+            enabled=True,
+            heading_options={
                 "use_bookmarks": False,
                 "max_level": 4,
                 "bookmark_match_threshold": 0.95,
@@ -151,7 +160,7 @@ class TestHeadingHierarchyTranslation:
 
     def test_style_signal_retains_parsed_pages(self, manager):
         pipeline_opts = self._pipeline_opts(
-            manager, {"enabled": True, "use_style": True}
+            manager, enabled=True, heading_options={"use_style": True}
         )
 
         # Style inference reads the parsed PDF cells; docling drops them after
@@ -160,7 +169,7 @@ class TestHeadingHierarchyTranslation:
 
     def test_no_style_signal_leaves_parsed_pages_off(self, manager):
         pipeline_opts = self._pipeline_opts(
-            manager, {"enabled": True, "use_style": False}
+            manager, enabled=True, heading_options={"use_style": False}
         )
 
         assert pipeline_opts.heading_hierarchy_options.enabled is True
