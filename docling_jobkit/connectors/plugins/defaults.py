@@ -68,6 +68,9 @@ def source_connectors():
 
 
 def target_connectors():
+    from docling_jobkit.connectors.astradb.target_processor import (
+        AstraDBTargetProcessor,
+    )
     from docling_jobkit.connectors.azure_blob.target_processor import (
         AzureBlobTargetProcessor,
     )
@@ -102,6 +105,7 @@ def target_connectors():
         GoogleDriveTargetProcessor,
         GoogleCloudStorageTargetProcessor,
         OpenSearchTargetProcessor,
+        AstraDBTargetProcessor,
     ):
         _register_if_available(connectors, cls)
 

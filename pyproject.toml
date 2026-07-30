@@ -85,6 +85,9 @@ azure = [
 opensearch = [
     "opensearch-py>=2.8.0,<3",
 ]
+astradb = [
+    "astrapy>=1.0.0,<2",
+]
 
 [dependency-groups]
 dev = [

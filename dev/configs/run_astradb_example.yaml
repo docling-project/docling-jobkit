@@ -1,0 +1,31 @@
+options:
+  do_ocr: false
+
+sources:
+  - kind: local_path
+    path: input_documents/sample.pdf
+
+# chunking_options:
+#   chunker: hybrid
+#   # TODO: Does this have to match our embedding model on the server end?
+#   tokenizer: "text-embedding-3-small"
+#   max_tokens: 512
+
+target:
+  kind: astradb_chunks
+  api_endpoint: "https://YOUR-DATABASE-ID-REGION.apps.astra.datastax.com"
+  token: "AstraCS:YOUR_TOKEN_HERE"
+  keyspace: "default_keyspace"
+  collection_name: "docling_chunks"
+  vectorize_provider: "openai"
+  vectorize_model: "text-embedding-3-small"
+  # Optional: Provide authentication for the vectorize provider
+  # vectorize_authentication:
+  #   providerKey: "OPENAI_API_KEY"
+  # Field mappings (optional, these are the defaults)
+  text_field: "text"
+  metadata_field: "metadata"
+  doc_id_field: "doc_id"
+  chunk_index_field: "chunk_index"
+  page_field: "page_numbers"
+  headings_field: "headings"
