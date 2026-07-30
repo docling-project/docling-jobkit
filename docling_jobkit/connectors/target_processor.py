@@ -2,7 +2,7 @@ import json
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, Literal, Optional
+from typing import TYPE_CHECKING, BinaryIO, Literal, Optional, TextIO
 
 from pydantic import BaseModel
 
@@ -16,8 +16,14 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
     objects to a storage backend (e.g. S3, local FS, GCS).
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._initialized = False
+        # Streaming chunk protocol state (see begin_chunks/end_chunks below).
+        # Declared here so the protocol methods can read them unconditionally
+        # instead of probing with getattr().
+        self._chunk_jsonl_path: Optional[Path] = None
+        self._chunk_jsonl_file: Optional[TextIO] = None
+        self._chunk_target_key: Optional[str] = None
 
     @classmethod
     def check_dependencies(cls) -> None:
@@ -112,6 +118,15 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         storage targets can leave this as a no-op.
         """
 
+    def abort_document(self, doc_id: str) -> None:
+        """Signal that the current document failed before all uploads landed.
+
+        Called instead of :meth:`end_document`.  Database targets should discard
+        the half-populated row rather than committing it.  File/object-storage
+        targets can leave this as a no-op — objects already written stay written,
+        which is the same at-least-partial behaviour they have always had.
+        """
+
     # ------------------------------------------------------------------
     # Streaming chunk protocol
     # ------------------------------------------------------------------
@@ -164,9 +179,9 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         this and combine it with ``chunk_index`` to derive the ID.
         """
         stem = Path(filename).stem
-        self._chunk_jsonl_path: Optional[Path] = temp_dir / f"{stem}.chunks.jsonl"
+        self._chunk_jsonl_path = temp_dir / f"{stem}.chunks.jsonl"
         self._chunk_jsonl_file = self._chunk_jsonl_path.open("w", encoding="utf-8")
-        self._chunk_target_key: Optional[str] = (
+        self._chunk_target_key = (
             chunk_target_key
             if chunk_target_key is not None
             else self._chunk_jsonl_path.name
@@ -183,6 +198,8 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         produced exactly once by ``ResultsProcessor`` and shared across all
         participating processors.
         """
+        if self._chunk_jsonl_file is None:
+            raise RuntimeError("consume_chunk() called before begin_chunks()")
         self._chunk_jsonl_file.write(
             json.dumps(chunk.model_dump(mode="json"), ensure_ascii=False) + "\n"
         )
@@ -190,12 +207,41 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
     def end_chunks(self) -> None:
         """Called after the last chunk of a document has been consumed.
 
+        Only called when the *complete* chunk stream was produced successfully,
+        so uploading here can never publish a truncated chunk file.
+
         Default: close the temp file and upload it via ``upload_file()``.
         DB processors override to close any open resources without uploading.
         """
+        if self._chunk_jsonl_file is None:
+            return
         self._chunk_jsonl_file.close()
-        self.upload_file(
-            filename=self._chunk_jsonl_path,  # type: ignore[arg-type]
-            target_filename=self._chunk_target_key,  # type: ignore[arg-type]
-            content_type="application/jsonl",
-        )
+        self._chunk_jsonl_file = None
+        try:
+            self.upload_file(
+                filename=self._chunk_jsonl_path,  # type: ignore[arg-type]
+                target_filename=self._chunk_target_key,  # type: ignore[arg-type]
+                content_type="application/jsonl",
+            )
+        finally:
+            self._reset_chunk_state()
+
+    def abort_chunks(self) -> None:
+        """Called instead of ``end_chunks()`` when chunk streaming failed.
+
+        Default: close and delete the temp file *without* uploading, so a
+        document whose chunk generation (or a sibling target's write) blew up
+        never leaves a partial ``.chunks.jsonl`` committed to this target.
+        DB processors override only if they hold state that needs discarding.
+        """
+        if self._chunk_jsonl_file is not None:
+            self._chunk_jsonl_file.close()
+            self._chunk_jsonl_file = None
+        if self._chunk_jsonl_path is not None:
+            self._chunk_jsonl_path.unlink(missing_ok=True)
+        self._reset_chunk_state()
+
+    def _reset_chunk_state(self) -> None:
+        self._chunk_jsonl_path = None
+        self._chunk_jsonl_file = None
+        self._chunk_target_key = None

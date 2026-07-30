@@ -13,6 +13,7 @@ from docling_jobkit.connectors.opensearch.models import (
 )
 from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
 from docling_jobkit.datamodel.target_field_slots import FieldMappings
+from docling_jobkit.public_errors import TargetWriteError
 
 if TYPE_CHECKING:
     from opensearchpy import OpenSearch
@@ -37,6 +38,18 @@ class OpenSearchTargetProcessor(BaseDatabaseTargetProcessor[_OpenSearchTarget]):
         return (OpenSearchDocTarget, OpenSearchChunkTarget)
 
     def _initialize(self) -> None:
+        try:
+            self._build_client()
+        except Exception as exc:
+            # Same contract as the other user-owned targets: a failure to reach
+            # or authenticate against the target surfaces as TargetWriteError so
+            # classify_public_task_failure() reports TARGET_UNAVAILABLE instead
+            # of an opaque internal error.
+            raise TargetWriteError(
+                f"Could not connect to OpenSearch index {self._target.index!r}."
+            ) from exc
+
+    def _build_client(self) -> None:
         from opensearchpy import OpenSearch
 
         kwargs: dict[str, Any] = {
@@ -125,6 +138,16 @@ class OpenSearchTargetProcessor(BaseDatabaseTargetProcessor[_OpenSearchTarget]):
 
     def end_chunks(self) -> None:
         """Nothing to flush — each chunk was written in consume_chunk()."""
+        self._current_document_hash = None
+
+    def abort_chunks(self) -> None:
+        """Nothing buffered to discard — drop the per-document state only.
+
+        Chunks already indexed before the failure stay in the index; they carry
+        deterministic IDs (see ``_stable_chunk_id``), so a re-run overwrites
+        rather than duplicates them on non-serverless clusters.
+        """
+        self._current_document_hash = None
 
     def _is_serverless(self) -> bool:
         auth = self._target.auth
@@ -162,7 +185,17 @@ class OpenSearchTargetProcessor(BaseDatabaseTargetProcessor[_OpenSearchTarget]):
         kwargs: dict[str, Any] = {"index": self._target.index, "body": body}
         if not self._is_serverless():
             kwargs["id"] = document_id
-        self._client.index(**kwargs)
+        try:
+            self._client.index(**kwargs)
+        except Exception as exc:
+            # Raw opensearchpy exceptions are not recognised by
+            # classify_public_task_failure(); wrapping them in TargetWriteError
+            # gives the same TARGET_UNAVAILABLE classification the HTTP PUT
+            # target already produces.
+            raise TargetWriteError(
+                f"Failed to index document into OpenSearch index "
+                f"{self._target.index!r}."
+            ) from exc
 
     @staticmethod
     def _stable_chunk_id(

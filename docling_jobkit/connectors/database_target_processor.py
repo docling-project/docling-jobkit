@@ -6,7 +6,7 @@ from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.datamodel.target_field_slots import (
     OUTPUT_FORMAT_MIME,
     FieldMappings,
-    coerce_large_ints,
+    coerce_large_ints_inplace,
 )
 
 _T = TypeVar("_T", bound=FieldMappings)
@@ -69,6 +69,11 @@ class BaseDatabaseTargetProcessor(BaseTargetProcessor, Generic[_T]):
         self._pending_row = None
         self._pending_doc_id = None
 
+    def abort_document(self, doc_id: str) -> None:
+        """Drop the half-populated row for a document that failed mid-upload."""
+        self._pending_row = None
+        self._pending_doc_id = None
+
     # ------------------------------------------------------------------
     # Upload helpers — accumulate into the pending row when inside a
     # begin_document/end_document bracket; otherwise fall through to the
@@ -79,35 +84,52 @@ class BaseDatabaseTargetProcessor(BaseTargetProcessor, Generic[_T]):
         """Return the format→field mappings from the target config."""
         return self._target.mappings or {}
 
+    def _mapped_field(self, content_type: str) -> Optional[str]:
+        """Row field this *content_type* writes to, or None when it is not stored.
+
+        Resolving this *before* touching the payload lets ``upload_file`` skip
+        reading artifacts the target config does not map at all — previously
+        every exported format was read into memory in full only to be discarded.
+        """
+        format_key = CONTENT_TYPE_TO_FORMAT.get(content_type)
+        if format_key is None:
+            return None  # binary artifact — skip
+        return self._mappings().get(format_key)
+
+    def _store_json(self, field_name: str, parsed: Any) -> None:
+        """Store an exclusively-owned parsed JSON value on the pending row."""
+        assert self._pending_row is not None
+        if self._target.coerce_large_ints_to_str:
+            # In-place: ``parsed`` was just decoded for this call and is owned
+            # here, so rewriting it avoids a second full copy of the document.
+            parsed = coerce_large_ints_inplace(parsed)
+        self._pending_row[field_name] = parsed
+
     def _accumulate(self, content_type: str, obj: "str | bytes | BinaryIO") -> None:
         """Add one format's content to the pending row if mapped."""
         if self._pending_row is None:
             return  # not inside a begin/end bracket — subclass handles directly
 
-        format_key = CONTENT_TYPE_TO_FORMAT.get(content_type)
-        if format_key is None:
-            return  # binary artifact — skip
-
-        field_name = self._mappings().get(format_key)
+        field_name = self._mapped_field(content_type)
         if field_name is None:
-            return  # format not mapped in config — skip
+            return  # unmapped format or binary artifact — skip
 
         if hasattr(obj, "read"):
-            raw: bytes = obj.read()  # type: ignore[union-attr]
-        elif isinstance(obj, str):
-            raw = obj.encode("utf-8")
+            payload: str | bytes = obj.read()  # type: ignore[union-attr]
         else:
-            raw = obj  # type: ignore[assignment]
-
-        text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            payload = obj  # type: ignore[assignment]
 
         if content_type == "application/json":
-            parsed = _json.loads(text)
-            if self._target.coerce_large_ints_to_str:
-                parsed = coerce_large_ints(parsed)
-            self._pending_row[field_name] = parsed
-        else:
-            self._pending_row[field_name] = text
+            # json.loads accepts str and bytes directly — decoding first would
+            # allocate a second full-size copy of the document for nothing.
+            self._store_json(field_name, _json.loads(payload))
+            return
+
+        self._pending_row[field_name] = (
+            payload.decode("utf-8")
+            if isinstance(payload, (bytes, bytearray))
+            else payload
+        )
 
     def upload_file(
         self,
@@ -116,16 +138,28 @@ class BaseDatabaseTargetProcessor(BaseTargetProcessor, Generic[_T]):
         content_type: str,
     ) -> None:
         path = Path(filename)
-        if content_type == "application/json":
-            text = path.read_text(encoding="utf-8")
-            self._accumulate(content_type, text)
-            if self._pending_row is None:
-                self.upload_object(text, target_filename, content_type)
+
+        if self._pending_row is not None:
+            field_name = self._mapped_field(content_type)
+            if field_name is None:
+                return  # not stored by this target — never read the file
+            if content_type == "application/json":
+                # Parse straight off the file handle: the decoder consumes the
+                # stream incrementally, so the document exists once (as the
+                # parsed structure) rather than as text *and* bytes *and* tree.
+                with path.open("rb") as fh:
+                    self._store_json(field_name, _json.load(fh))
+            else:
+                self._pending_row[field_name] = path.read_text(encoding="utf-8")
             return
-        raw = path.read_bytes()
-        self._accumulate(content_type, raw)
-        if self._pending_row is None:
-            self.upload_object(raw, target_filename, content_type)
+
+        # Outside a begin/end bracket the subclass writes the payload directly.
+        if content_type == "application/json":
+            self.upload_object(
+                path.read_text(encoding="utf-8"), target_filename, content_type
+            )
+        else:
+            self.upload_object(path.read_bytes(), target_filename, content_type)
 
     def upload_object(
         self,

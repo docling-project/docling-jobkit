@@ -139,8 +139,11 @@ def _process_source(
                 async_results = []
                 total_documents = 0
                 try:
-                    # Normalise target / targets to a list, pick the first for
-                    # multiproc batches (each subprocess handles one target).
+                    # Normalise target / targets to a list.  The whole list is
+                    # forwarded to every batch: each subprocess opens all targets
+                    # and fans its documents out to them, matching the local CLI
+                    # and the orchestrators.  Passing only targets[0] used to
+                    # drop every additional target without a word.
                     target_configs = (
                         config.targets
                         if config.targets is not None
@@ -154,7 +157,7 @@ def _process_source(
                                 process_batch,
                                 (
                                     chunk,
-                                    target_configs[0],
+                                    target_configs,
                                     config.options,
                                     artifacts_path,
                                     enable_remote_services,
@@ -254,7 +257,7 @@ def _display_summary(
 @allow_interactive_auth()
 def process_batch(
     chunk: DocumentChunk,
-    target: BaseModel,
+    targets: list[BaseModel],
     options: ConvertDocumentsOptions,
     artifacts_path: Optional[Path],
     enable_remote_services: bool,
@@ -278,7 +281,7 @@ def process_batch(
 
     Args:
         chunk: Transport (fetcher-stripped) chunk carrying source + refs
-        target: Target configuration
+        targets: All target configurations; the batch is fanned out to each
         options: Conversion options
         artifacts_path: Optional path to model artifacts
         enable_remote_services: Whether to enable remote services
@@ -308,16 +311,25 @@ def process_batch(
         )
         manager = DoclingConverterManager(config=cm_config)
 
+        # Resolve chunking options exactly as the local CLI does — resolving in
+        # the subprocess keeps the (possibly preset-derived) options out of the
+        # pickled call arguments.  ResultsProcessor decides whether chunking is
+        # actually active, from "chunks" in to_formats or a chunk-hungry target.
+        chunking_options = manager.parse_chunking_options(options)
+
         # Process documents in this batch using factories.
-        # The caller passes a single target config (extracted from config.targets[i]).
+        # Every configured target is opened here so a batch fans out to all of
+        # them, the same way the local CLI and the orchestrators do.
         target_processors = [
-            get_target_processor(target, allow_external_plugins=allow_external_plugins)
+            get_target_processor(t, allow_external_plugins=allow_external_plugins)
+            for t in targets
         ]
         result_processor = ResultsProcessor(
             target_processors=target_processors,
             to_formats=[v.value for v in options.to_formats],
             generate_page_images=options.include_page_images,
             generate_picture_images=options.include_images,
+            chunking_options=chunking_options,
         )
 
         # Fetch documents lazily from the chunk refs (one in flight at a time)

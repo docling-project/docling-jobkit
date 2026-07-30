@@ -12,11 +12,43 @@ _INT64_MIN = -(1 << 63)
 def coerce_large_ints(obj: Any) -> Any:
     """Recursively walk a JSON-like structure and stringify any int that
     falls outside the 64-bit signed long range accepted by OpenSearch /
-    Elasticsearch.  Other types are returned unchanged."""
+    Elasticsearch.  Other types are returned unchanged.
+
+    Builds a new structure; the input is left untouched.  Use this when the
+    caller does not exclusively own *obj* (e.g. values borrowed from a chunk
+    that is fanned out to several targets).  For a freshly parsed structure
+    that the caller owns outright, prefer :func:`coerce_large_ints_inplace`,
+    which avoids a full second copy of the document.
+    """
     if isinstance(obj, dict):
         return {k: coerce_large_ints(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [coerce_large_ints(v) for v in obj]
+    if isinstance(obj, int) and not isinstance(obj, bool):
+        if obj > _INT64_MAX or obj < _INT64_MIN:
+            return str(obj)
+    return obj
+
+
+def coerce_large_ints_inplace(obj: Any) -> Any:
+    """In-place variant of :func:`coerce_large_ints`.
+
+    Rewrites out-of-range ints inside the *existing* containers instead of
+    rebuilding them, so a large parsed document is never duplicated in memory
+    just to fix up a handful of integers.  Returns *obj* (or its replacement
+    when the root itself is an out-of-range int).
+
+    ONLY safe when the caller exclusively owns *obj* — i.e. it was just parsed
+    or built for this call and is not shared with another consumer.
+    """
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            obj[k] = coerce_large_ints_inplace(v)
+        return obj
+    if isinstance(obj, list):
+        for i, v in enumerate(obj):
+            obj[i] = coerce_large_ints_inplace(v)
+        return obj
     if isinstance(obj, int) and not isinstance(obj, bool):
         if obj > _INT64_MAX or obj < _INT64_MIN:
             return str(obj)
@@ -88,4 +120,6 @@ __all__ = [
     "OUTPUT_FORMAT_MIME",
     "ChunkFieldSlots",
     "FieldMappings",
+    "coerce_large_ints",
+    "coerce_large_ints_inplace",
 ]

@@ -12,6 +12,7 @@ are public; the other helpers are internal building blocks (underscore-prefixed)
 that ``convert.results`` reuses directly.
 """
 
+import json
 import logging
 import shutil
 import zipfile
@@ -92,6 +93,13 @@ def stream_chunks_for_document(
     ``chunk_target_key`` is forwarded to ``begin_chunks`` so that file-storage
     processors write the chunks file under the correct subdirectory path (e.g.
     ``chunks/bo20/1016445.chunks.jsonl``).  DB processors ignore it.
+
+    Commit semantics: ``end_chunks()`` (which is what makes a file-storage
+    processor upload its ``.chunks.jsonl``) runs *only* when the whole chunk
+    stream was produced and accepted by every participating processor.  If chunk
+    generation or any processor raises, ``abort_chunks()`` is called instead so
+    no target commits a truncated chunk set, and the exception propagates to the
+    caller's per-document error boundary.
     """
     if not _is_exportable_status(exportable_document.status):
         return 0
@@ -107,15 +115,17 @@ def stream_chunks_for_document(
     if not chunk_processors:
         return 0
 
-    for p in chunk_processors:
-        p.begin_chunks(
-            filename,
-            temp_dir,
-            chunk_target_key=chunk_target_key,
-            document_hash=exportable_document.document_hash,
-        )
+    started: list[BaseTargetProcessor] = []
     n = 0
     try:
+        for p in chunk_processors:
+            p.begin_chunks(
+                filename,
+                temp_dir,
+                chunk_target_key=chunk_target_key,
+                document_hash=exportable_document.document_hash,
+            )
+            started.append(p)
         for chunk in chunker_manager.chunk_document(
             document=exportable_document.document,
             filename=filename,
@@ -124,11 +134,96 @@ def stream_chunks_for_document(
             for p in chunk_processors:
                 p.consume_chunk(chunk)
             n += 1
-    finally:
-        for p in chunk_processors:
-            p.end_chunks()
+    except BaseException:
+        _abort_chunk_streaming(started, filename)
+        raise
 
+    _finish_chunk_streaming(started, filename)
     _log.info("Streamed %d chunks for %s", n, filename)
+    return n
+
+
+def _abort_chunk_streaming(
+    processors: list[BaseTargetProcessor], filename: str
+) -> None:
+    """Discard in-flight chunk state on every processor that was started."""
+    for p in processors:
+        try:
+            p.abort_chunks()
+        except Exception:
+            # Never mask the original streaming failure with a cleanup error.
+            _log.warning(
+                "abort_chunks() failed for target %s on %s",
+                type(p).__name__,
+                filename,
+                exc_info=True,
+            )
+
+
+def _finish_chunk_streaming(
+    processors: list[BaseTargetProcessor], filename: str
+) -> None:
+    """Commit the chunk stream on every processor, surfacing the first failure.
+
+    Every processor gets its ``end_chunks()`` call even when an earlier one
+    failed, so one broken target cannot leave the others holding an open temp
+    file.  The first exception is re-raised so the caller's per-document error
+    boundary records the document as failed.
+    """
+    first_exc: Exception | None = None
+    for p in processors:
+        try:
+            p.end_chunks()
+        except Exception as exc:
+            _log.error(
+                "end_chunks() failed for target %s on %s",
+                type(p).__name__,
+                filename,
+                exc_info=True,
+            )
+            if first_exc is None:
+                first_exc = exc
+    if first_exc is not None:
+        raise first_exc
+
+
+def write_chunks_jsonl(
+    *,
+    exportable_document: ExportableDocument,
+    chunks_path: Path,
+    chunker_manager: "DocumentChunkerManager",
+    chunking_options: BaseChunkerOptions,
+) -> int:
+    """Write one document's chunks as JSON lines to *chunks_path*.
+
+    Shared by the non-streaming chunk outputs (presigned artifacts and the zip
+    archive), which both need a ``{stem}.chunks.jsonl`` file on local disk before
+    handing it to a target.  Chunks are streamed straight to the file handle, so
+    the chunk list is never materialised.
+
+    A partially written file is removed when chunk generation fails, so callers
+    can never publish a truncated chunk set.
+    """
+    document = exportable_document.document
+    if document is None:
+        return 0
+
+    chunks_path.parent.mkdir(parents=True, exist_ok=True)
+    n = 0
+    try:
+        with chunks_path.open("w", encoding="utf-8") as fh:
+            for chunk in chunker_manager.chunk_document(
+                document=document,
+                filename=str(exportable_document.file),
+                options=chunking_options,
+            ):
+                fh.write(
+                    json.dumps(chunk.model_dump(mode="json"), ensure_ascii=False) + "\n"
+                )
+                n += 1
+    except BaseException:
+        chunks_path.unlink(missing_ok=True)
+        raise
     return n
 
 
@@ -341,13 +436,33 @@ def _upload_exportable_document(
         md_page_break_placeholder=md_page_break_placeholder,
         bundle_resources=bundle_resources,
     )
+    _upload_materialized_artifacts(
+        target_processor=target_processor,
+        artifacts=artifacts,
+        target_filename_fn=target_filename_fn,
+    )
+    return artifacts
+
+
+def _upload_materialized_artifacts(
+    *,
+    target_processor: BaseTargetProcessor,
+    artifacts: Iterable[_ExportedArtifactFile],
+    target_filename_fn: Callable[[str], str],
+) -> None:
+    """Push already-materialized artifact files through one target processor.
+
+    Split out from :func:`_upload_exportable_document` so a multi-target fan-out
+    can materialize each document's exports **once** and then hand the same files
+    to every processor, instead of re-running the (expensive, allocation-heavy)
+    export step per target.
+    """
     for artifact in artifacts:
         target_processor.upload_file(
             filename=artifact.path,
             target_filename=target_filename_fn(artifact.target_filename),
             content_type=artifact.mime_type,
         )
-    return artifacts
 
 
 def _release_exportable_document_references(
