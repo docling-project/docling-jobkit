@@ -1,5 +1,4 @@
 import hashlib
-import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -13,8 +12,6 @@ from docling_jobkit.public_errors import TargetWriteError
 
 if TYPE_CHECKING:
     from astrapy import Collection, DataAPIClient
-
-_log = logging.getLogger(__name__)
 
 
 class AstraDBTargetProcessor(BaseDatabaseTargetProcessor[AstraDBChunkTarget]):
@@ -53,10 +50,6 @@ class AstraDBTargetProcessor(BaseDatabaseTargetProcessor[AstraDBChunkTarget]):
             # Try to get existing collection first, create if it doesn't exist
             try:
                 self._collection = db.get_collection(self._target.collection_name)
-                _log.info(
-                    "AstraDB: using existing collection '%s'",
-                    self._target.collection_name,
-                )
             except Exception:
                 # Collection doesn't exist, create it
                 self._collection = db.create_collection(
@@ -64,19 +57,7 @@ class AstraDBTargetProcessor(BaseDatabaseTargetProcessor[AstraDBChunkTarget]):
                     service=vectorize_config,
                     check_exists=False,
                 )
-                _log.info(
-                    "AstraDB: created new collection '%s'",
-                    self._target.collection_name,
-                )
 
-            _log.info(
-                "AstraDB: connected to collection '%s' in keyspace '%s' "
-                "with vectorize provider '%s' model '%s'",
-                self._target.collection_name,
-                self._target.keyspace,
-                self._target.vectorize_provider,
-                self._target.vectorize_model,
-            )
         except Exception as exc:
             raise TargetWriteError(
                 f"Could not connect to AstraDB collection "
@@ -193,6 +174,8 @@ class AstraDBTargetProcessor(BaseDatabaseTargetProcessor[AstraDBChunkTarget]):
     # Database target protocol (unused here)
     # ------------------------------------------------------------------
 
+    # I don't like this...
+    # AstraDB target is a "DatabaseTargetProcessor", but is entirely chunk-centric
     def upsert_row(self, row: dict[str, Any]) -> None:
         """Not used — AstraDB target only supports chunks, not full documents."""
         raise NotImplementedError(
