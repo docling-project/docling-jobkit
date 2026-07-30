@@ -953,7 +953,7 @@ class DoclingConverterManager:
 
                 # Validate engine is allowed
                 if allowed_engines is not None and hasattr(options, "engine_options"):
-                    engine_type = getattr(options.engine_options, "engine_type")
+                    engine_type = options.engine_options.engine_type
                     self._validate_engine_allowed(engine_type, allowed_engines)
 
                 return options
@@ -974,8 +974,7 @@ class DoclingConverterManager:
             if allowed_engines is not None and hasattr(
                 preset_options, "engine_options"
             ):
-                engine_options = getattr(preset_options, "engine_options")
-                engine_type = getattr(engine_options, "engine_type")
+                engine_type = preset_options.engine_options.engine_type
                 self._validate_engine_allowed(engine_type, allowed_engines)
 
             return preset_options

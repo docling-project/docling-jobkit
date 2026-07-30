@@ -330,7 +330,7 @@ def _chunk_row_payload(
     # cannot serialise directly.
     raw_meta: dict[str, Any] = {}
     for k, v in (chunk.metadata or {}).items():
-        if hasattr(v, "model_dump"):
+        if isinstance(v, BaseModel):
             raw_meta[k] = v.model_dump(mode="json")
         else:
             raw_meta[k] = v

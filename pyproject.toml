@@ -109,7 +109,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-docling-slim = { git = "https://github.com/docling-project/docling/", rev = "feat-chunking-options-and-target" }
+docling-slim = { git = "https://github.com/docling-project/docling/", rev = "main" }
 # docling-slim = { git = "https://github.com/docling-project/docling/", branch = "main" }
 # docling-slim = { path = "../docling", editable = true }
 

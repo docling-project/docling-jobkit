@@ -130,6 +130,16 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         """
         return False
 
+    def instance_requires_chunks(self) -> bool:
+        """Instance-level counterpart of :meth:`requires_chunks`.
+
+        Defaults to the class-level flag.  Processors whose chunk participation
+        is determined by the runtime target config (e.g.
+        ``OpenSearchTargetProcessor``, which serves both ``opensearch_doc`` and
+        ``opensearch_chunks``) override this to inspect ``self._target``.
+        """
+        return self.requires_chunks()
+
     def begin_chunks(
         self,
         filename: str,

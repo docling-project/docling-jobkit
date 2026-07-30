@@ -7,6 +7,7 @@ from docling_jobkit.connectors.database_target_processor import (
     BaseDatabaseTargetProcessor,
 )
 from docling_jobkit.connectors.opensearch.models import (
+    OpenSearchAWSIAMAuth,
     OpenSearchChunkTarget,
     OpenSearchDocTarget,
 )
@@ -127,17 +128,19 @@ class OpenSearchTargetProcessor(BaseDatabaseTargetProcessor[_OpenSearchTarget]):
 
     def _is_serverless(self) -> bool:
         auth = self._target.auth
-        return (
-            auth is not None and auth.kind == "aws_iam" and auth.service == "aoss"  # type: ignore[union-attr]
-        )
+        return isinstance(auth, OpenSearchAWSIAMAuth) and auth.service == "aoss"
 
     def upsert_row(self, row: dict[str, Any]) -> None:
         # Use the pre-existing doc-ID field in the row when available (deterministic
         # upsert semantics), otherwise fall back to the pending doc-ID captured by
         # begin_document, then finally to a hash of the row content.
-        id_field = getattr(self._target, "id_field", None)
-        if id_field is not None and id_field in row:
-            row_id = str(row[id_field])
+        # Only OpenSearchDocTarget declares ``id_field``; chunk targets derive
+        # their IDs via _stable_chunk_id() and never reach this method.
+        if (
+            isinstance(self._target, OpenSearchDocTarget)
+            and self._target.id_field in row
+        ):
+            row_id = str(row[self._target.id_field])
         elif self._pending_doc_id is not None:
             row_id = self._pending_doc_id
         else:
@@ -149,6 +152,13 @@ class OpenSearchTargetProcessor(BaseDatabaseTargetProcessor[_OpenSearchTarget]):
             raise RuntimeError("OpenSearchTargetProcessor is not initialized")
         # OpenSearch Serverless (AOSS) does not allow caller-specified document
         # IDs on index/create operations — omit the id in that case.
+        #
+        # CAVEAT: because AOSS auto-generates IDs, the deterministic IDs derived
+        # by _stable_chunk_id()/upsert_row() cannot be used there. Re-ingesting
+        # the same document/chunk therefore INSERTS a new record instead of
+        # upserting over the previous one, i.e. idempotent re-ingestion produces
+        # duplicates on Serverless. This limitation does not apply to managed
+        # Amazon OpenSearch Service ('es') or self-hosted clusters.
         kwargs: dict[str, Any] = {"index": self._target.index, "body": body}
         if not self._is_serverless():
             kwargs["id"] = document_id

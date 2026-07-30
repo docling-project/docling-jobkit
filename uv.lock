@@ -1314,9 +1314,9 @@ requires-dist = [
     { name = "azure-storage-blob", marker = "extra == 'azure'", specifier = ">=12.19.0" },
     { name = "boto3", specifier = "~=1.35" },
     { name = "codeflare-sdk", marker = "python_full_version >= '3.11' and python_full_version < '3.14' and extra == 'ray'", specifier = ">=0.20.0" },
-    { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", git = "https://github.com/docling-project/docling/?rev=feat-chunking-options-and-target" },
-    { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", git = "https://github.com/docling-project/docling/?rev=feat-chunking-options-and-target" },
-    { name = "docling-slim", extras = ["standard"], git = "https://github.com/docling-project/docling/?rev=feat-chunking-options-and-target" },
+    { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", git = "https://github.com/docling-project/docling/?rev=main" },
+    { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", git = "https://github.com/docling-project/docling/?rev=main" },
+    { name = "docling-slim", extras = ["standard"], git = "https://github.com/docling-project/docling/?rev=main" },
     { name = "google-api-python-client", marker = "extra == 'gdrive'", specifier = ">=2.183.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'gdrive'", specifier = ">=1.2.2" },
     { name = "google-cloud-storage", marker = "extra == 'gcloudstorage'", specifier = ">=2.10.0" },
@@ -1398,8 +1398,8 @@ wheels = [
 
 [[package]]
 name = "docling-slim"
-version = "2.115.0"
-source = { git = "https://github.com/docling-project/docling/?rev=feat-chunking-options-and-target#6c28d9012952697bb9d71c0b81435e08dd2e6d78" }
+version = "2.116.0"
+source = { git = "https://github.com/docling-project/docling/?rev=main#e7f9e605fdcbfbd30405970953acae34353631f0" }
 dependencies = [
     { name = "certifi" },
     { name = "docling-core" },

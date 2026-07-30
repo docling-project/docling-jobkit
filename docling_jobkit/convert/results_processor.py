@@ -28,7 +28,10 @@ from docling_core.types.doc.labels import DocItemLabel
 
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.convert.chunking import DocumentChunkerManager
-from docling_jobkit.convert.export import stream_chunks_for_document
+from docling_jobkit.convert.export import (
+    _processor_requires_chunks,
+    stream_chunks_for_document,
+)
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
 
 _log = logging.getLogger(__name__)
@@ -52,28 +55,6 @@ _CLASSIFIER_LABELS = [
     "signature",
     "stamp",
 ]
-
-
-def _processor_requires_chunks(p: BaseTargetProcessor) -> bool:
-    """True when *p* should receive the streaming chunk protocol.
-
-    Checks the class-level ``requires_chunks()`` flag first, then falls back
-    to an optional ``instance_requires_chunks()`` method for processors whose
-    chunk participation is determined by the runtime target config (e.g.
-    ``OpenSearchTargetProcessor`` which serves both ``opensearch_doc`` and
-    ``opensearch_chunks``).
-
-    .. deprecated::
-        Prefer ``export.stream_chunks_for_document`` which contains its own
-        equivalent helper.  This function is kept for backward compatibility
-        with code that calls it directly.
-    """
-    if p.requires_chunks():
-        return True
-    instance_check = getattr(p, "instance_requires_chunks", None)
-    if callable(instance_check):
-        return bool(instance_check())
-    return False
 
 
 class ResultsProcessor:

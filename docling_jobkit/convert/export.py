@@ -51,15 +51,12 @@ def _is_exportable_status(status: ConversionStatus) -> bool:
 def _processor_requires_chunks(p: BaseTargetProcessor) -> bool:
     """True when *p* should receive the streaming chunk protocol.
 
-    Mirrors the same helper in ``convert/results_processor.py`` so the decision
-    logic is not duplicated between the CLI and orchestrator paths.
+    Delegates to ``BaseTargetProcessor.instance_requires_chunks()`` which
+    defaults to the class-level ``requires_chunks()`` flag but can be overridden
+    by processors whose chunk participation depends on the runtime target config
+    (e.g. ``OpenSearchTargetProcessor``).
     """
-    if p.requires_chunks():
-        return True
-    instance_check = getattr(p, "instance_requires_chunks", None)
-    if callable(instance_check):
-        return bool(instance_check())
-    return False
+    return p.instance_requires_chunks()
 
 
 def stream_chunks_for_document(
