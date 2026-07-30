@@ -5,11 +5,14 @@ sources:
   - kind: local_path
     path: input_documents/sample.pdf
 
-# chunking_options:
-#   chunker: hybrid
-#   # TODO: Does this have to match our embedding model on the server end?
-#   tokenizer: "text-embedding-3-small"
-#   max_tokens: 512
+chunking_options:
+  chunker: hybrid
+  # This must be compatible with whaterver embedding model is set for your AstraDB collection
+  # (If generating embeddings server-side)
+  tokenizer: "intfloat/e5-large-unsupervised"
+  # Hybrid chunker does not enforce this as a hard limit for some reason
+  # If chunks are oversized and being rejected, reduce this number
+  max_tokens: 512
 
 target:
   kind: astradb_chunks
@@ -17,8 +20,8 @@ target:
   token: "AstraCS:YOUR_TOKEN_HERE"
   keyspace: "default_keyspace"
   collection_name: "docling_chunks"
-  vectorize_provider: "openai"
-  vectorize_model: "text-embedding-3-small"
+  vectorize_provider: "nvidia"
+  vectorize_model: "nvidia/nv-embedqa-e5-v5"
   # Optional: Provide authentication for the vectorize provider
   # vectorize_authentication:
   #   providerKey: "OPENAI_API_KEY"
