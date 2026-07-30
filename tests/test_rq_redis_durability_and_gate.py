@@ -35,6 +35,7 @@ def _make_task(
         task_id=task_id,
         task_type="convert",
         task_status=status,
+        target=InBodyTarget(),
         processing_meta={
             "num_docs": 0,
             "num_processed": 0,

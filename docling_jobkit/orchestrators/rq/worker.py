@@ -15,7 +15,10 @@ from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.sources import FileSource
 from docling.datamodel.service.tasks import TaskType
 
-from docling_jobkit.convert.chunking import process_chunkable_results
+from docling_jobkit.convert.chunking import (
+    DocumentChunkerManager,
+    process_chunkable_results,
+)
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
@@ -165,6 +168,10 @@ def _run_docling_task(
             for idx, conv_res in enumerate(conv_results)
         )
 
+        chunking_options = conversion_manager.parse_chunking_options(
+            task.convert_options
+        )
+        chunker_manager = DocumentChunkerManager()
         processed_results: DoclingTaskResult
         with phase_cm("process_results"):
             if task.task_type == TaskType.CONVERT:
@@ -179,6 +186,8 @@ def _run_docling_task(
                         allow_external_plugins=(
                             orchestrator_config.allow_external_plugins
                         ),
+                        chunker_manager=chunker_manager,
+                        chunking_options=chunking_options,
                     )
             elif task.task_type == TaskType.CHUNK:
                 with phase_cm("process_chunk_results"):
