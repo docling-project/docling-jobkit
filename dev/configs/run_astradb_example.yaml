@@ -1,18 +1,17 @@
 options:
   do_ocr: false
+  chunking_options:
+    chunker: hybrid
+    # This must be compatible with whaterver embedding model is set for your AstraDB collection
+    # (If generating embeddings server-side)
+    tokenizer: "intfloat/e5-large-unsupervised"
+    # Hybrid chunker does not enforce this as a hard limit for some reason
+    # If chunks are oversized and being rejected, reduce this number
+    max_tokens: 512
 
 sources:
   - kind: local_path
     path: input_documents/sample.pdf
-
-chunking_options:
-  chunker: hybrid
-  # This must be compatible with whaterver embedding model is set for your AstraDB collection
-  # (If generating embeddings server-side)
-  tokenizer: "intfloat/e5-large-unsupervised"
-  # Hybrid chunker does not enforce this as a hard limit for some reason
-  # If chunks are oversized and being rejected, reduce this number
-  max_tokens: 512
 
 target:
   kind: astradb_chunks

@@ -63,6 +63,20 @@ def test_get_config_types():
 
 
 def test_initialization(astradb_target, mock_astrapy):
+    # Mock get_collection to raise exception (collection doesn't exist)
+    mock_astrapy["db"].get_collection.side_effect = Exception("Collection not found")
+
+    processor = AstraDBTargetProcessor(astradb_target)
+
+    with processor:
+        mock_astrapy["client_cls"].assert_called_once()
+
+
+def test_initialization_existing_collection(astradb_target, mock_astrapy):
+    # Mock get_collection to succeed (collection already exists)
+    mock_existing_collection = Mock()
+    mock_astrapy["db"].get_collection.return_value = mock_existing_collection
+
     processor = AstraDBTargetProcessor(astradb_target)
 
     with processor:
@@ -73,10 +87,16 @@ def test_initialization(astradb_target, mock_astrapy):
             keyspace=astradb_target.keyspace,
         )
 
-        mock_astrapy["db"].create_collection.assert_called_once()
-        call_args = mock_astrapy["db"].create_collection.call_args
-        assert call_args[0][0] == astradb_target.collection_name
-        assert call_args[1]["check_exists"] is True
+        # Should try to get existing collection
+        mock_astrapy["db"].get_collection.assert_called_once_with(
+            astradb_target.collection_name
+        )
+
+        # Should NOT create collection since it already exists
+        mock_astrapy["db"].create_collection.assert_not_called()
+
+        # Should use the existing collection
+        assert processor._collection == mock_existing_collection
 
 
 def test_initialization_failure(astradb_target, mock_astrapy):
