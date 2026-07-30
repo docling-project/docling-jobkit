@@ -197,7 +197,6 @@ class AstraDBTargetProcessor(BaseDatabaseTargetProcessor[AstraDBChunkTarget]):
         """Not used — AstraDB target only supports chunks, not full documents."""
         raise NotImplementedError(
             "AstraDB target only supports chunks, not full documents. "
-            "Use 'astradb_chunks' target kind and enable chunking in your task."
         )
 
 
