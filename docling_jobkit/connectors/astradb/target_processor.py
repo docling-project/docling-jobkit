@@ -150,7 +150,9 @@ class AstraDBTargetProcessor(BaseDatabaseTargetProcessor[AstraDBChunkTarget]):
         """
         self._current_document_hash = None
 
-    # ── Helper methods ────────────────────────────────────────────
+    # ------------------------------------------------------------------
+    # Helper methods
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _stable_chunk_id(
