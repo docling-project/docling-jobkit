@@ -68,9 +68,6 @@ def source_connectors():
 
 
 def target_connectors():
-    from docling_jobkit.connectors.azure_blob.presigned_target_processor import (
-        AzureBlobPresignedTargetProcessor,
-    )
     from docling_jobkit.connectors.azure_blob.target_processor import (
         AzureBlobTargetProcessor,
     )
@@ -89,8 +86,8 @@ def target_connectors():
     from docling_jobkit.connectors.opensearch.target_processor import (
         OpenSearchTargetProcessor,
     )
-    from docling_jobkit.connectors.s3.presigned_target_processor import (
-        S3PresignedTargetProcessor,
+    from docling_jobkit.connectors.presigned_target_processor import (
+        PresignedTargetProcessor,
     )
     from docling_jobkit.connectors.s3.target_processor import S3TargetProcessor
 
@@ -100,9 +97,8 @@ def target_connectors():
     ]
     for cls in (
         S3TargetProcessor,
-        S3PresignedTargetProcessor,
+        PresignedTargetProcessor,
         AzureBlobTargetProcessor,
-        AzureBlobPresignedTargetProcessor,
         GoogleDriveTargetProcessor,
         GoogleCloudStorageTargetProcessor,
         OpenSearchTargetProcessor,
