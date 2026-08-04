@@ -27,6 +27,10 @@ class AzureBlobTargetProcessor(BaseTargetProcessor):
         self._coords = coords
 
     @classmethod
+    def check_dependencies(cls) -> None:
+        from azure.storage.blob import BlobServiceClient  # noqa: F401
+
+    @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
         return (AzureBlobTarget,)
 

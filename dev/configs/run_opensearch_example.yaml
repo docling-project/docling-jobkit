@@ -1,0 +1,55 @@
+options:
+  do_ocr: false
+  to_formats: ["json", "md"]
+  # Chunking is activated automatically by the opensearch_chunks target below.
+  # Add "chunks" to to_formats if you also want .chunks.jsonl written to file targets.
+
+sources:
+  - kind: s3
+    endpoint: s3.us-east-1.amazonaws.com
+    access_key: YOUR_ACCESS_KEY_ID
+    secret_key: "YOUR_SECRET_ACCESS_KEY"
+    bucket: your-input-bucket
+    key_prefix: documents/
+
+targets:
+  - kind: opensearch_doc
+    hosts:
+      - https://search-my-cluster.us-east-1.es.amazonaws.com
+    index: docling-docs
+    use_ssl: true
+    verify_certs: true
+    # --- Option A: AWS IAM authentication ---
+    auth:
+      kind: aws_iam
+      region: us-east-1
+      aws_access_key_id: YOUR_ACCESS_KEY_ID
+      aws_secret_access_key: "YOUR_SECRET_ACCESS_KEY"
+      # assume_role_arn: arn:aws:iam::123456789012:role/OpenSearchAccessRole  # optional
+    # --- Option B: basic username/password authentication ---
+    # auth:
+    #   kind: basic
+    #   username: admin
+    #   password: "your-password"
+    mappings:
+      MARKDOWN: text
+      JSON: doc_json
+
+  - kind: opensearch_chunks
+    hosts:
+      - https://search-my-cluster.us-east-1.es.amazonaws.com
+    index: docling-chunks
+    use_ssl: true
+    verify_certs: true
+    # --- Option A: AWS IAM authentication ---
+    auth:
+      kind: aws_iam
+      region: us-east-1
+      aws_access_key_id: YOUR_ACCESS_KEY_ID
+      aws_secret_access_key: "YOUR_SECRET_ACCESS_KEY"
+      # assume_role_arn: arn:aws:iam::123456789012:role/OpenSearchAccessRole  # optional
+    # --- Option B: basic username/password authentication ---
+    # auth:
+    #   kind: basic
+    #   username: admin
+    #   password: "your-password"

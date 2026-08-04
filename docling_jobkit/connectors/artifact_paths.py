@@ -5,7 +5,15 @@ from typing import Literal
 from docling_jobkit.datamodel.task import Task
 
 ArtifactType = Literal[
-    "json", "html", "markdown", "text", "doctags", "doclang", "dclx", "resource_bundle"
+    "json",
+    "html",
+    "markdown",
+    "text",
+    "doctags",
+    "doclang",
+    "dclx",
+    "resource_bundle",
+    "chunks",
 ]
 
 

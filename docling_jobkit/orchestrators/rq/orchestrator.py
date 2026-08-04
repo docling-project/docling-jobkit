@@ -22,6 +22,7 @@ from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.requests import FileSourceRequest
+from docling.datamodel.service.targets import InBodyTarget
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
 from docling_jobkit.config.target_config import PresignedConfig
@@ -154,7 +155,7 @@ class RQOrchestrator(BaseOrchestrator):
     async def enqueue(
         self,
         sources: list[TaskSource],
-        target: TaskTarget,
+        target: TaskTarget | None = None,
         task_type: TaskType = TaskType.CONVERT,
         options: ConvertDocumentsOptions | None = None,
         convert_options: ConvertDocumentsOptions | None = None,
@@ -162,8 +163,10 @@ class RQOrchestrator(BaseOrchestrator):
         chunking_export_options: ChunkingExportOptions | None = None,
         callbacks: list[CallbackSpec] | None = None,
         metadata: dict[str, Any] | None = None,
+        targets: list[TaskTarget] | None = None,
     ) -> Task:
-        self._validate_target(target)
+        resolved_targets = self._resolve_enqueue_targets(target, targets)
+        self._validate_targets(resolved_targets)
         async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
             if options is not None and convert_options is None:
                 convert_options = options
@@ -197,7 +200,7 @@ class RQOrchestrator(BaseOrchestrator):
                     "convert_options": convert_options,
                     "chunking_options": chunking_options,
                     "chunking_export_options": chunking_export_options,
-                    "target": target,
+                    "targets": resolved_targets,
                     "callbacks": callbacks or [],
                     "metadata": metadata or {},
                 },
@@ -398,6 +401,7 @@ class RQOrchestrator(BaseOrchestrator):
                 "finished_at",
                 "last_update_at",
                 "target",
+                "targets",
                 "sources",
                 "convert_options",
                 "chunking_options",
@@ -407,6 +411,11 @@ class RQOrchestrator(BaseOrchestrator):
             ):
                 if data.get(field_name) is not None:
                     task_kwargs[field_name] = data[field_name]
+            # Backwards compat: tasks stored before the multi-target migration
+            # have neither 'target' nor 'targets'. Default to InBodyTarget so
+            # the validator does not reject legacy Redis entries.
+            if "target" not in task_kwargs and "targets" not in task_kwargs:
+                task_kwargs["targets"] = [InBodyTarget().model_dump()]
             return validate_task(
                 task_kwargs,
                 allow_external_plugins=self.config.allow_external_plugins,
@@ -434,6 +443,7 @@ class RQOrchestrator(BaseOrchestrator):
                 task_id=task_id,
                 task_type=TaskType.CONVERT,
                 task_status=TaskStatus.PENDING,
+                target=InBodyTarget(),
                 processing_meta={
                     "num_docs": 0,
                     "num_processed": 0,
