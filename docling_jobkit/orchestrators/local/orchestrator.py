@@ -61,7 +61,7 @@ class LocalOrchestrator(BaseOrchestrator):
     async def enqueue(
         self,
         sources: list[TaskSource],
-        target: TaskTarget,
+        target: TaskTarget | None = None,
         task_type: TaskType = TaskType.CONVERT,
         options: ConvertDocumentsOptions | None = None,
         convert_options: ConvertDocumentsOptions | None = None,
@@ -69,6 +69,7 @@ class LocalOrchestrator(BaseOrchestrator):
         chunking_export_options: ChunkingExportOptions | None = None,
         callbacks: list[CallbackSpec] | None = None,
         metadata: dict[str, Any] | None = None,
+        targets: list[TaskTarget] | None = None,
     ) -> Task:
         if options is not None and convert_options is None:
             convert_options = options
@@ -78,7 +79,8 @@ class LocalOrchestrator(BaseOrchestrator):
                 DeprecationWarning,
                 stacklevel=2,
             )
-        self._validate_target(target)
+        resolved_targets = self._resolve_enqueue_targets(target, targets)
+        self._validate_targets(resolved_targets)
         task_id = str(uuid.uuid4())
         chunking_export_options = chunking_export_options or ChunkingExportOptions()
         task = validate_task(
@@ -89,7 +91,7 @@ class LocalOrchestrator(BaseOrchestrator):
                 "convert_options": convert_options,
                 "chunking_options": chunking_options,
                 "chunking_export_options": chunking_export_options,
-                "target": target,
+                "targets": resolved_targets,
                 "callbacks": callbacks or [],
             },
             allow_external_plugins=self.cm.config.allow_external_plugins,

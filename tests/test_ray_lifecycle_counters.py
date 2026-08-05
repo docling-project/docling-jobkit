@@ -17,6 +17,7 @@ pytest.importorskip("msgpack")
 pytest.importorskip("redis")
 
 from docling.datamodel.service.requests import AnyHttpSourceRequest as HttpSource
+from docling.datamodel.service.targets import InBodyTarget
 
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
@@ -197,6 +198,7 @@ def _manager() -> tuple[RedisStateManager, _FakeRedis]:
 def _task(task_id: str, n_sources: int = 1) -> Task:
     return Task(
         task_id=task_id,
+        target=InBodyTarget(),
         sources=[
             HttpSource(url=f"https://example.com/doc-{i}.pdf") for i in range(n_sources)
         ],

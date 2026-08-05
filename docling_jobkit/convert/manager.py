@@ -33,6 +33,11 @@ from docling.datamodel.pipeline_options import (
     normalize_pdf_backend,
 )
 from docling.datamodel.pipeline_options_vlm_model import ApiVlmOptions, InlineVlmOptions
+from docling.datamodel.service.chunking import (
+    ChunkingOptionType,
+    HierarchicalChunkerOptions,
+    HybridChunkerOptions,
+)
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.vlm_engine_options import (
     ApiVlmEngineOptions,
@@ -60,6 +65,27 @@ from docling.models.inference_engines.vlm.base import VlmEngineType
 from docling.pipeline.vlm_pipeline import VlmPipeline
 
 _log = logging.getLogger(__name__)
+
+# Chunking presets defined in jobkit
+CHUNKING_PRESET_GRANITE_EMBEDDING_278M = "granite_embedding_278m"
+CHUNKING_PRESET_MULTILINGUAL_E5_LARGE = "multilingual_e5_large"
+CHUNKING_PRESET_MINILM_L6 = "minilm_l6"
+CHUNKING_PRESET_HIERARCHICAL = "hierarchical"
+
+CHUNKING_PRESETS: dict[str, HybridChunkerOptions | HierarchicalChunkerOptions] = {
+    CHUNKING_PRESET_GRANITE_EMBEDDING_278M: HybridChunkerOptions(
+        tokenizer="ibm-granite/granite-embedding-278m-multilingual"
+    ),
+    CHUNKING_PRESET_MULTILINGUAL_E5_LARGE: HybridChunkerOptions(
+        tokenizer="intfloat/multilingual-e5-large"
+    ),
+    CHUNKING_PRESET_MINILM_L6: HybridChunkerOptions(
+        tokenizer="sentence-transformers/all-MiniLM-L6-v2"
+    ),
+    CHUNKING_PRESET_HIERARCHICAL: HierarchicalChunkerOptions(),
+}
+
+DEFAULT_CHUNKING_PRESET = CHUNKING_PRESET_GRANITE_EMBEDDING_278M
 
 
 # Type definitions for preset registries
@@ -89,6 +115,13 @@ class CodeFormulaCustomPresetInfo(TypedDict):
 
     source: Literal["custom"]
     options: CodeFormulaVlmOptions
+
+
+class ChunkingCustomPresetInfo(TypedDict):
+    """Info for a custom chunking preset."""
+
+    source: Literal["custom"]
+    options: Any
 
 
 # Registry-specific types
@@ -136,10 +169,14 @@ OcrPresetInfo = Union[DoclingPresetInfo, OcrCustomPresetInfo]
 TableStructurePresetInfo = Union[DoclingPresetInfo, TableStructureCustomPresetInfo]
 
 # Generic preset info type for shared functions
+ChunkingPresetInfo = Union[DoclingPresetInfo, ChunkingCustomPresetInfo]
+
+
 AnyPresetInfo = Union[
     VlmPresetInfo,
     PictureDescriptionPresetInfo,
     CodeFormulaPresetInfo,
+    ChunkingPresetInfo,
     LayoutPresetInfo,
     PictureClassificationPresetInfo,
     OcrPresetInfo,
@@ -353,6 +390,19 @@ class DoclingConverterManagerConfig(BaseModel):
     custom_ocr_presets: dict[str, Any] = Field(
         default_factory=dict,
         description="Custom OCR presets. Maps preset ID to OCR options.",
+    )
+
+    default_chunking_preset: str = Field(
+        default=DEFAULT_CHUNKING_PRESET,
+        description='Default chunking preset to use when user specifies "default".',
+    )
+    allowed_chunking_presets: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed chunking preset IDs. None means all are allowed.",
+    )
+    custom_chunking_presets: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Custom chunking presets. Maps preset ID to chunking options.",
     )
     allowed_ocr_kinds: Optional[list[str]] = Field(
         default=None,
@@ -658,6 +708,33 @@ class DoclingConverterManager:
                 "options": preset_options,
             }
 
+        # Chunking Registry
+        self.chunking_preset_registry: dict[str, ChunkingPresetInfo] = {}
+
+        self.chunking_preset_registry["default"] = {
+            "source": "docling",
+            "preset_id": self.config.default_chunking_preset,
+        }
+
+        if self.config.allowed_chunking_presets is None:
+            for preset_id in CHUNKING_PRESETS:
+                self.chunking_preset_registry[preset_id] = {
+                    "source": "docling",
+                    "preset_id": preset_id,
+                }
+        else:
+            for preset_id in self.config.allowed_chunking_presets:
+                self.chunking_preset_registry[preset_id] = {
+                    "source": "docling",
+                    "preset_id": preset_id,
+                }
+
+        for preset_id, preset_options in self.config.custom_chunking_presets.items():
+            self.chunking_preset_registry[preset_id] = {
+                "source": "custom",
+                "options": preset_options,
+            }
+
         # Table Structure Registry
         self.table_structure_preset_registry: dict[str, TableStructurePresetInfo] = {}
 
@@ -876,7 +953,7 @@ class DoclingConverterManager:
 
                 # Validate engine is allowed
                 if allowed_engines is not None and hasattr(options, "engine_options"):
-                    engine_type = getattr(options.engine_options, "engine_type")
+                    engine_type = options.engine_options.engine_type
                     self._validate_engine_allowed(engine_type, allowed_engines)
 
                 return options
@@ -897,8 +974,7 @@ class DoclingConverterManager:
             if allowed_engines is not None and hasattr(
                 preset_options, "engine_options"
             ):
-                engine_options = getattr(preset_options, "engine_options")
-                engine_type = getattr(engine_options, "engine_type")
+                engine_type = preset_options.engine_options.engine_type
                 self._validate_engine_allowed(engine_type, allowed_engines)
 
             return preset_options
@@ -1113,6 +1189,32 @@ class DoclingConverterManager:
             )
 
         return None
+
+    def parse_chunking_options(
+        self, request: ConvertDocumentsOptions
+    ) -> ChunkingOptionType | None:
+        if request.chunking_options is not None:
+            return request.chunking_options
+
+        preset_id = request.chunking_preset or "default"
+        preset_info = self.chunking_preset_registry.get(preset_id)
+        if preset_info is None:
+            allowed = ", ".join(self.chunking_preset_registry.keys())
+            raise ValueError(
+                f"Chunking preset '{preset_id}' is not allowed. Allowed presets: {allowed}"
+            )
+
+        if preset_info["source"] == "custom":
+            result = preset_info["options"]
+        else:
+            resolved_preset_id = preset_info["preset_id"]
+            result = CHUNKING_PRESETS[resolved_preset_id].model_copy(deep=True)
+
+        # Clear preset first so the mutual-exclusion validator doesn't fire
+        # when we subsequently assign chunking_options.
+        request.chunking_preset = None
+        request.chunking_options = result
+        return result
 
     def _parse_table_structure_options(self, request: ConvertDocumentsOptions) -> Any:
         """Parse table structure options - preset OR custom config OR legacy fields."""
@@ -1745,6 +1847,7 @@ class DoclingConverterManager:
         options: ConvertDocumentsOptions,
         headers: Optional[dict[str, Any]] = None,
     ) -> Iterable[ConversionResult]:
+        self.parse_chunking_options(options)
         pdf_format_option = self.get_pdf_pipeline_opts(options)
         converter = self.get_converter(pdf_format_option)
         with self._cache_lock:

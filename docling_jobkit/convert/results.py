@@ -1,7 +1,9 @@
 import logging
 import shutil
+import tempfile
 import time
 from collections.abc import Callable, Iterable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -16,6 +18,7 @@ from docling.datamodel.service.callbacks import (
     ProgressSetNumDocs,
     ProgressUpdateProcessed,
 )
+from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling.datamodel.service.targets import InBodyTarget
 from docling_core.types.doc import ImageRefMode
 
@@ -30,8 +33,11 @@ from docling_jobkit.convert.export import (
     _cleanup_document_output_dir,
     _is_exportable_status,
     _materialize_document_exports,
+    _processor_requires_chunks,
     _release_exportable_document_references,
-    _upload_exportable_document,
+    _upload_materialized_artifacts,
+    stream_chunks_for_document,
+    write_chunks_jsonl,
 )
 from docling_jobkit.datamodel.exportable_document import (
     ExportableDocument,
@@ -55,6 +61,7 @@ from docling_jobkit.public_errors import (
 )
 
 if TYPE_CHECKING:
+    from docling_jobkit.convert.chunking import DocumentChunkerManager
     from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
 
 _log = logging.getLogger(__name__)
@@ -381,6 +388,8 @@ def _upload_document_as_presigned_artifact(
     export_dclx: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
+    chunker_manager: Optional["DocumentChunkerManager"] = None,
+    chunking_options: Optional[BaseChunkerOptions] = None,
 ) -> DocumentArtifactItem:
     source = _resolve_source_identity(task, exportable_document, response_index)
     document_dir = output_dir / f"{source.source_index:06d}"
@@ -406,6 +415,30 @@ def _upload_document_as_presigned_artifact(
             mime_type=artifact.mime_type,
         )
 
+    # 5c: upload {stem}.chunks.jsonl as an additional presigned artifact so the
+    # caller receives a presigned URL for it alongside the other format URLs.
+    if (
+        chunker_manager is not None
+        and chunking_options is not None
+        and _is_exportable_status(exportable_document.status)
+        and exportable_document.document is not None
+    ):
+        chunks_filename = f"{exportable_document.file.stem}.chunks.jsonl"
+        chunks_path = document_dir / chunks_filename
+        write_chunks_jsonl(
+            exportable_document=exportable_document,
+            chunks_path=chunks_path,
+            chunker_manager=chunker_manager,
+            chunking_options=chunking_options,
+        )
+        target_processor.upload_artifact_file(
+            source=source,
+            artifact_type="chunks",
+            path=chunks_path,
+            target_filename=chunks_filename,
+            mime_type="application/jsonl",
+        )
+
     return target_processor.build_document_artifact_item(
         source=source,
         filename=exportable_document.file.name,
@@ -416,13 +449,60 @@ def _upload_document_as_presigned_artifact(
     )
 
 
-def _upload_document_via_processor(
+def _resolve_target_modes(
+    target_factory: Any,
+    targets: list[Any],
+) -> list[str | None]:
+    """Result mode of every target, ``None`` for targets the factory doesn't own.
+
+    ``None`` covers the in-process results (``InBodyTarget``, ``ZipTarget``)
+    which are handled outside the remote-target pipeline.
+    """
+    return [
+        target_factory.result_mode(t) if target_factory.supports(t) else None
+        for t in targets
+    ]
+
+
+def _validate_target_modes(
+    targets: list[Any],
+    target_modes: list[str | None],
+) -> None:
+    """Reject target combinations the result pipeline cannot honour.
+
+    ``artifacts`` and ``database`` targets fan out freely and in any mix — each
+    one is driven by its own ``result_mode()``.  Every other mode produces a
+    single task-level result object (a presigned URL list, a zip archive, an
+    inline body) that has no meaning alongside a second target, so combining
+    them is refused up front rather than silently dropping targets — which is
+    what the previous ``targets[0]``-only routing did.
+    """
+    if len(targets) < 2:
+        return
+    fan_out_modes = {"artifacts", "database"}
+    offenders = [
+        (target, mode)
+        for target, mode in zip(targets, target_modes)
+        if mode not in fan_out_modes
+    ]
+    if offenders:
+        names = ", ".join(
+            f"{type(target).__name__} (mode={mode or 'in-process'})"
+            for target, mode in offenders
+        )
+        raise ValueError(
+            f"Target(s) {names} cannot be combined with other targets: only "
+            f"storage and database targets support multi-target fan-out."
+        )
+
+
+def _fan_out_document_to_processors(
     *,
-    task: Task,
     exportable_document: ExportableDocument,
-    response_index: int,
-    output_dir: Path,
-    target_processor: BaseTargetProcessor,
+    source: SourceIdentity,
+    document_dir: Path,
+    processors: list[BaseTargetProcessor],
+    doc_id: str,
     export_json: bool,
     export_html: bool,
     export_md: bool,
@@ -432,21 +512,30 @@ def _upload_document_via_processor(
     export_dclx: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
-    target_filename_fn: Callable[[SourceIdentity, str], str] | None = None,
 ) -> None:
-    """Shared upload loop used by all non-presigned remote target processors.
+    """Materialize one document's exports **once** and route them to every target.
 
-    *target_filename_fn* is an optional callback
-    ``(source, artifact_filename) -> target_filename`` that lets callers control
-    the final target path.  When omitted the raw ``artifact.target_filename`` is
-    used as-is.
+    Each processor is driven according to *its own* ``result_mode()`` rather than
+    a single mode inferred from ``targets[0]``:
+
+    - ``database`` processors are bracketed by ``begin_document`` /
+      ``end_document`` so all formats merge into one row, and receive the bare
+      artifact filename (the row, not a path, is the addressable unit).
+    - every other (storage) processor receives ``<source_key>/<artifact>``,
+      the layout all user-owned storage targets already use.
+
+    Deciding per target is what makes a mixed target list behave identically no
+    matter which order the targets were declared in: with a single inferred mode,
+    ``[s3, opensearch_doc]`` never opened a document bracket and silently indexed
+    nothing, while ``[opensearch_doc, s3]`` wrote S3 objects with a flat layout.
+
+    Exports are materialized once for all targets — the previous code re-ran the
+    full export step per processor, paying the CPU and peak-allocation cost of
+    every format N times for N targets.
     """
-    source = _resolve_source_identity(task, exportable_document, response_index)
-    document_dir = output_dir / f"{source.source_index:06d}"
-    _upload_exportable_document(
-        target_processor=target_processor,
-        exportable_document=exportable_document,
-        document_dir=document_dir,
+    artifacts = _materialize_document_exports(
+        exportable_document,
+        document_dir,
         export_json=export_json,
         export_html=export_html,
         export_md=export_md,
@@ -456,56 +545,42 @@ def _upload_document_via_processor(
         export_dclx=export_dclx,
         image_export_mode=image_export_mode,
         md_page_break_placeholder=md_page_break_placeholder,
-        target_filename_fn=(
-            (lambda fn: target_filename_fn(source, fn))
-            if target_filename_fn is not None
-            else (lambda fn: fn)
-        ),
+        bundle_resources=True,
     )
+    if not artifacts:
+        return
 
+    # Resource bundles are zip archives of the other artifacts; database targets
+    # store text/JSON formats and cannot decode them.
+    db_artifacts = [a for a in artifacts if a.artifact_type != "resource_bundle"]
 
-def _upload_document_to_storage_target(
-    *,
-    task: Task,
-    exportable_document: ExportableDocument,
-    response_index: int,
-    output_dir: Path,
-    target_processor: BaseTargetProcessor,
-    export_json: bool,
-    export_html: bool,
-    export_md: bool,
-    export_txt: bool,
-    export_doctags: bool,
-    export_doclang: bool,
-    export_dclx: bool,
-    image_export_mode: ImageRefMode,
-    md_page_break_placeholder: str,
-) -> None:
-    """Upload one document to any storage target via ``get_target_processor``.
+    def _storage_key(artifact_filename: str) -> str:
+        return f"{source.source_key}/{artifact_filename}"
 
-    Used for every user-owned storage target (S3, local path, Google Drive, …):
-    the per-source artifact layout (``<source_key>/<artifact>``) is identical, and
-    each target processor applies its own prefix/root when writing.
-    """
-    _upload_document_via_processor(
-        task=task,
-        exportable_document=exportable_document,
-        response_index=response_index,
-        output_dir=output_dir,
-        target_processor=target_processor,
-        export_json=export_json,
-        export_html=export_html,
-        export_md=export_md,
-        export_txt=export_txt,
-        export_doctags=export_doctags,
-        export_doclang=export_doclang,
-        export_dclx=export_dclx,
-        image_export_mode=image_export_mode,
-        md_page_break_placeholder=md_page_break_placeholder,
-        target_filename_fn=lambda source, artifact_filename: (
-            f"{source.source_key}/{artifact_filename}"
-        ),
-    )
+    def _database_key(artifact_filename: str) -> str:
+        return artifact_filename
+
+    for processor in processors:
+        if processor.result_mode() == "database":
+            processor.begin_document(doc_id)
+            try:
+                _upload_materialized_artifacts(
+                    target_processor=processor,
+                    artifacts=db_artifacts,
+                    target_filename_fn=_database_key,
+                )
+            except BaseException:
+                # Do not flush a half-populated row: the document failed, and
+                # end_document() is what commits it.
+                processor.abort_document(doc_id)
+                raise
+            processor.end_document(doc_id)
+        else:
+            _upload_materialized_artifacts(
+                target_processor=processor,
+                artifacts=artifacts,
+                target_filename_fn=_storage_key,
+            )
 
 
 def _process_remote_document(
@@ -520,6 +595,7 @@ def _process_remote_document(
     callback_mode: CallbackMode,
     upload_document: Callable[[SourceIdentity], Any],
     build_failure_result: Callable[[ExportableDocument, SourceIdentity], Any],
+    after_upload: Callable[[ExportableDocument, SourceIdentity], None] | None = None,
 ) -> tuple[ExportableDocument, ProcessedDocsItem, Any]:
     source = _resolve_source_identity(task, exportable_document, response_index)
     document_dir = output_dir / f"{source.source_index:06d}"
@@ -527,6 +603,13 @@ def _process_remote_document(
     try:
         try:
             upload_result = upload_document(source)
+            # Post-upload work (e.g. streaming chunk export) runs while the
+            # document references are still alive — the finally block below
+            # releases them.  It shares this document's error boundary: a chunk
+            # target that is unreachable must fail *this document*, exactly like
+            # a failed format upload, instead of aborting the whole task.
+            if after_upload is not None:
+                after_upload(final_document, source)
         except Exception as exc:
             final_document = _build_failed_exportable_document(
                 exportable_document,
@@ -555,6 +638,90 @@ def _process_remote_document(
         _cleanup_document_output_dir(document_dir)
 
 
+def _iter_remote_documents(
+    *,
+    task: Task,
+    exportable_documents: Iterable[ExportableDocument],
+    processors: list[BaseTargetProcessor],
+    upload_document_fn: Callable[[ExportableDocument, int, SourceIdentity], Any],
+    output_dir: Path,
+    work_dir: Path,
+    total_docs: int,
+    callback_invoker: Optional["CallbackInvoker"],
+    debug_error_details: bool,
+    callback_mode: CallbackMode,
+    chunks_in_formats: bool,
+    chunker_manager: Optional["DocumentChunkerManager"],
+    chunking_options: Optional[BaseChunkerOptions],
+) -> tuple[list[ProcessedDocsItem], int, int, int]:
+    """Shared document-iteration loop for the artifacts and database target modes.
+
+    Iterates *exportable_documents*, calls *upload_document_fn* for each one,
+    then runs the streaming chunk protocol when active.  Returns
+    ``(processed_docs, num_succeeded, num_partially_succeeded, num_failed)``.
+    """
+    processed_docs: list[ProcessedDocsItem] = []
+    num_succeeded = 0
+    num_partially_succeeded = 0
+    num_failed = 0
+
+    chunk_active = (
+        (chunks_in_formats or any(_processor_requires_chunks(p) for p in processors))
+        and chunker_manager is not None
+        and chunking_options is not None
+    )
+
+    for idx, exportable_document in enumerate(exportable_documents):
+        _doc = exportable_document
+        _idx = idx
+
+        def _stream_chunks(
+            _final_document: ExportableDocument,
+            _source_identity: SourceIdentity,
+            _ed: ExportableDocument = exportable_document,
+        ) -> None:
+            # Runs before _process_remote_document releases the document
+            # references, so the chunker still sees a live DoclingDocument.
+            if not chunk_active:
+                return
+            _stem = _ed.file.stem
+            with tempfile.TemporaryDirectory(dir=work_dir) as _chunk_tmp:
+                stream_chunks_for_document(
+                    exportable_document=_final_document,
+                    filename=str(_ed.file),
+                    chunker_manager=chunker_manager,  # type: ignore[arg-type]
+                    chunking_options=chunking_options,  # type: ignore[arg-type]
+                    processors=processors,
+                    chunks_in_formats=chunks_in_formats,
+                    temp_dir=Path(_chunk_tmp),
+                    chunk_target_key=f"{_source_identity.source_key}/{_stem}.chunks.jsonl",
+                )
+
+        final_document, processed_doc, _ = _process_remote_document(
+            task=task,
+            exportable_document=exportable_document,
+            response_index=idx,
+            total_docs=total_docs,
+            output_dir=output_dir,
+            callback_invoker=callback_invoker,
+            debug_error_details=debug_error_details,
+            callback_mode=callback_mode,
+            upload_document=lambda _source: upload_document_fn(_doc, _idx, _source),
+            build_failure_result=lambda _failed_document, _source: None,
+            after_upload=_stream_chunks,
+        )
+        processed_docs.append(processed_doc)
+
+        if final_document.status == ConversionStatus.SUCCESS:
+            num_succeeded += 1
+        elif final_document.status == ConversionStatus.PARTIAL_SUCCESS:
+            num_partially_succeeded += 1
+        else:
+            num_failed += 1
+
+    return processed_docs, num_succeeded, num_partially_succeeded, num_failed
+
+
 def _process_remote_exportable_results(
     *,
     task: Task,
@@ -576,25 +743,25 @@ def _process_remote_exportable_results(
     md_page_break_placeholder: str,
     start_time: float,
     allow_external_plugins: bool,
+    chunker_manager: Optional["DocumentChunkerManager"] = None,
+    chunking_options: Optional[BaseChunkerOptions] = None,
 ) -> _ProcessedExportResults:
     output_dir = work_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
-    processed_docs: list[ProcessedDocsItem] = []
-    num_succeeded = 0
-    num_partially_succeeded = 0
-    num_failed = 0
 
-    def _record_status(exportable_document: ExportableDocument) -> None:
-        nonlocal num_succeeded, num_partially_succeeded, num_failed
-        if exportable_document.status == ConversionStatus.SUCCESS:
-            num_succeeded += 1
-        elif exportable_document.status == ConversionStatus.PARTIAL_SUCCESS:
-            num_partially_succeeded += 1
-        else:
-            num_failed += 1
+    # Chunk activation: same two-signal rule as ResultsProcessor.
+    chunks_in_formats: bool = "chunks" in (
+        [f.value for f in (task.convert_options.to_formats or [])]
+        if task.convert_options
+        else []
+    )
 
+    first_target = task.targets[0] if task.targets else None
+    all_targets = task.targets or []
     target_factory = get_target_connector_factory(allow_external_plugins)
-    target_mode = target_factory.result_mode(task.target)
+    target_modes = _resolve_target_modes(target_factory, all_targets)
+    _validate_target_modes(all_targets, target_modes)
+    target_mode = target_modes[0] if target_modes else None
 
     if target_mode == "presigned":
         if s3_presigned_config is None:
@@ -603,82 +770,31 @@ def _process_remote_exportable_results(
             )
 
         presigned_documents: list[DocumentArtifactItem] = []
+        processed_docs: list[ProcessedDocsItem] = []
+        num_succeeded = num_partially_succeeded = num_failed = 0
+        # Presigned is always a single target (the presigned config is global),
+        # so we keep a single processor here.
         with get_target_processor(
-            task.target,
+            first_target,  # type: ignore[arg-type]
             allow_external_plugins=allow_external_plugins,
             s3_presigned_config=s3_presigned_config,
             task=task,
         ) as base_target_processor:
             target_processor: Any = base_target_processor
+            chunk_active = chunks_in_formats and chunker_manager and chunking_options
             for idx, exportable_document in enumerate(exportable_documents):
-                final_document, processed_doc, artifact_item = _process_remote_document(
-                    task=task,
-                    exportable_document=exportable_document,
-                    response_index=idx,
-                    total_docs=total_docs,
-                    output_dir=output_dir,
-                    callback_invoker=callback_invoker,
-                    debug_error_details=debug_error_details,
-                    callback_mode=callback_mode,
-                    upload_document=lambda _source: (
-                        _upload_document_as_presigned_artifact(
-                            task=task,
-                            exportable_document=exportable_document,
-                            response_index=idx,
-                            output_dir=output_dir,
-                            target_processor=target_processor,
-                            export_json=export_json,
-                            export_html=export_html,
-                            export_md=export_md,
-                            export_txt=export_txt,
-                            export_doctags=export_doctags,
-                            export_doclang=export_doclang,
-                            export_dclx=export_dclx,
-                            image_export_mode=image_export_mode,
-                            md_page_break_placeholder=md_page_break_placeholder,
-                        )
-                    ),
-                    build_failure_result=lambda failed_document, source: (
-                        target_processor.build_document_artifact_item(
-                            source=source,
-                            filename=failed_document.file.name,
-                            status=failed_document.status,
-                            errors=failed_document.errors,
-                            timings=failed_document.timings,
-                        )
-                    ),
-                )
-                processed_docs.append(processed_doc)
-                presigned_documents.append(artifact_item)
-                _record_status(final_document)
+                _doc = exportable_document
+                _idx = idx
 
-        if not presigned_documents and not processed_docs:
-            raise RuntimeError("No documents were generated by Docling.")
-
-        task_result: ResultType = PresignedArtifactResult(documents=presigned_documents)
-    elif target_mode == "artifacts":
-        # Every user-owned storage target is handled identically through the
-        # connector factory: the per-source artifact path is computed here and
-        # the target processor applies its own prefix/root (S3 key_prefix, local
-        # directory, Drive folder, …) when writing. Adding a new storage
-        # connector therefore needs no change in this module.
-        with get_target_processor(
-            task.target, allow_external_plugins=allow_external_plugins
-        ) as target_processor:
-            for idx, exportable_document in enumerate(exportable_documents):
-                final_document, processed_doc, _ = _process_remote_document(
-                    task=task,
-                    exportable_document=exportable_document,
-                    response_index=idx,
-                    total_docs=total_docs,
-                    output_dir=output_dir,
-                    callback_invoker=callback_invoker,
-                    debug_error_details=debug_error_details,
-                    callback_mode=callback_mode,
-                    upload_document=lambda _source: _upload_document_to_storage_target(
+                def _upload_presigned(
+                    _source: SourceIdentity,
+                    _d: ExportableDocument = _doc,
+                    _i: int = _idx,
+                ) -> DocumentArtifactItem:
+                    return _upload_document_as_presigned_artifact(
                         task=task,
-                        exportable_document=exportable_document,
-                        response_index=idx,
+                        exportable_document=_d,
+                        response_index=_i,
                         output_dir=output_dir,
                         target_processor=target_processor,
                         export_json=export_json,
@@ -690,18 +806,105 @@ def _process_remote_exportable_results(
                         export_dclx=export_dclx,
                         image_export_mode=image_export_mode,
                         md_page_break_placeholder=md_page_break_placeholder,
-                    ),
-                    build_failure_result=lambda _failed_document, _source: None,
+                        chunker_manager=chunker_manager if chunk_active else None,
+                        chunking_options=chunking_options if chunk_active else None,
+                    )
+
+                def _build_presigned_failure(
+                    failed_document: ExportableDocument, source: SourceIdentity
+                ) -> DocumentArtifactItem:
+                    return target_processor.build_document_artifact_item(
+                        source=source,
+                        filename=failed_document.file.name,
+                        status=failed_document.status,
+                        errors=failed_document.errors,
+                        timings=failed_document.timings,
+                    )
+
+                final_document, processed_doc, artifact_item = _process_remote_document(
+                    task=task,
+                    exportable_document=exportable_document,
+                    response_index=idx,
+                    total_docs=total_docs,
+                    output_dir=output_dir,
+                    callback_invoker=callback_invoker,
+                    debug_error_details=debug_error_details,
+                    callback_mode=callback_mode,
+                    upload_document=_upload_presigned,
+                    build_failure_result=_build_presigned_failure,
                 )
                 processed_docs.append(processed_doc)
-                _record_status(final_document)
+                presigned_documents.append(artifact_item)
+                if final_document.status == ConversionStatus.SUCCESS:
+                    num_succeeded += 1
+                elif final_document.status == ConversionStatus.PARTIAL_SUCCESS:
+                    num_partially_succeeded += 1
+                else:
+                    num_failed += 1
+
+        if not presigned_documents:
+            raise RuntimeError("No documents were generated by Docling.")
+
+        task_result: ResultType = PresignedArtifactResult(documents=presigned_documents)
+    else:
+        # target_mode is "artifacts" or "database".  Both are handled by the same
+        # loop: every target is opened simultaneously via ExitStack, and each
+        # document is materialized once then routed to each processor according
+        # to that processor's own result_mode() (see
+        # _fan_out_document_to_processors).  Mixed lists therefore behave the
+        # same in either declaration order.
+        with ExitStack() as stack:
+            processors = [
+                stack.enter_context(
+                    get_target_processor(
+                        t, allow_external_plugins=allow_external_plugins
+                    )
+                )
+                for t in all_targets
+            ]
+
+            def _upload_to_all_targets(
+                doc: ExportableDocument, idx: int, source: SourceIdentity
+            ) -> None:
+                _fan_out_document_to_processors(
+                    exportable_document=doc,
+                    source=source,
+                    document_dir=output_dir / f"{source.source_index:06d}",
+                    processors=processors,
+                    doc_id=doc.document_hash or f"doc_{idx}",
+                    export_json=export_json,
+                    export_html=export_html,
+                    export_md=export_md,
+                    export_txt=export_txt,
+                    export_doctags=export_doctags,
+                    export_doclang=export_doclang,
+                    export_dclx=export_dclx,
+                    image_export_mode=image_export_mode,
+                    md_page_break_placeholder=md_page_break_placeholder,
+                )
+
+            processed_docs, num_succeeded, num_partially_succeeded, num_failed = (
+                _iter_remote_documents(
+                    task=task,
+                    exportable_documents=exportable_documents,
+                    processors=processors,
+                    upload_document_fn=_upload_to_all_targets,
+                    output_dir=output_dir,
+                    work_dir=work_dir,
+                    total_docs=total_docs,
+                    callback_invoker=callback_invoker,
+                    debug_error_details=debug_error_details,
+                    callback_mode=callback_mode,
+                    chunks_in_formats=chunks_in_formats,
+                    chunker_manager=chunker_manager,
+                    chunking_options=chunking_options,
+                )
+            )
 
         if not processed_docs:
             raise RuntimeError("No documents were generated by Docling.")
 
         task_result = RemoteTargetResult()
-    else:
-        raise TypeError(f"Unsupported remote target type: {type(task.target)!r}")
 
     processing_time = time.monotonic() - start_time
     _log.info(f"Processed {len(processed_docs)} docs in {processing_time:.2f} seconds.")
@@ -740,6 +943,8 @@ def _process_exportable_results_internal(
     start_time: Optional[float] = None,
     callback_mode: CallbackMode = CallbackMode.FULL,
     allow_external_plugins: bool = False,
+    chunker_manager: Optional["DocumentChunkerManager"] = None,
+    chunking_options: Optional[BaseChunkerOptions] = None,
 ) -> _ProcessedExportResults:
     conversion_options = task.convert_options
     if conversion_options is None:
@@ -766,14 +971,19 @@ def _process_exportable_results_internal(
     export_doctags = OutputFormat.DOCTAGS in conversion_options.to_formats
     export_doclang = OutputFormat.DOCLANG in conversion_options.to_formats
     export_dclx = OutputFormat.DCLX in conversion_options.to_formats
+    chunks_in_formats: bool = "chunks" in [
+        f.value for f in conversion_options.to_formats
+    ]
 
+    first_target = task.targets[0] if task.targets else None
+    all_targets = task.targets or []
     target_factory = get_target_connector_factory(allow_external_plugins)
-    target_mode = (
-        target_factory.result_mode(task.target)
-        if target_factory.supports(task.target)
-        else None
-    )
-    if target_mode in {"artifacts", "presigned"}:
+    target_modes = _resolve_target_modes(target_factory, all_targets)
+    # Refuse unsupported combinations here too, so the failure is reported before
+    # any conversion output is written rather than after the first target.
+    _validate_target_modes(all_targets, target_modes)
+    target_mode = target_modes[0] if target_modes else None
+    if target_mode in {"artifacts", "presigned", "database"}:
         return _process_remote_exportable_results(
             task=task,
             exportable_documents=exportable_documents,
@@ -794,6 +1004,8 @@ def _process_exportable_results_internal(
             md_page_break_placeholder=conversion_options.md_page_break_placeholder,
             start_time=start_time,
             allow_external_plugins=allow_external_plugins,
+            chunker_manager=chunker_manager,
+            chunking_options=chunking_options,
         )
 
     finalized_documents = list(exportable_documents)
@@ -820,7 +1032,9 @@ def _process_exportable_results_internal(
             debug_error_details=debug_error_details,
         )
 
-    if len(finalized_documents) == 1 and isinstance(task.target, InBodyTarget):
+    if len(finalized_documents) == 1 and isinstance(first_target, InBodyTarget):
+        # 5a: "chunks" in to_formats with InBodyTarget — silently skip chunk
+        # output; inline responses are not suited to returning chunk lists.
         exportable_document = finalized_documents[0]
 
         content = _export_document_as_content(
@@ -834,6 +1048,11 @@ def _process_exportable_results_internal(
             image_mode=conversion_options.image_export_mode,
             md_page_break_placeholder=conversion_options.md_page_break_placeholder,
         )
+        if chunks_in_formats:
+            _log.debug(
+                "Chunk export requested but target is InBodyTarget — skipped for task %s",
+                task.task_id,
+            )
         task_result = DocumentResultItem(
             document=content,
             status=exportable_document.status,
@@ -859,6 +1078,23 @@ def _process_exportable_results_internal(
             md_page_break_placeholder=conversion_options.md_page_break_placeholder,
         )
 
+        # 5b: write {stem}.chunks.jsonl into output_dir before archiving so
+        # it ends up inside the zip alongside the other format files.
+        if chunks_in_formats and chunker_manager and chunking_options:
+            for exportable_document in finalized_documents:
+                if not _is_exportable_status(exportable_document.status):
+                    continue
+                if exportable_document.document is None:
+                    continue
+                write_chunks_jsonl(
+                    exportable_document=exportable_document,
+                    chunks_path=(
+                        output_dir / f"{exportable_document.file.stem}.chunks.jsonl"
+                    ),
+                    chunker_manager=chunker_manager,
+                    chunking_options=chunking_options,
+                )
+
         files = list(output_dir.iterdir())
         if len(files) == 0:
             raise RuntimeError("No documents were exported.")
@@ -872,7 +1108,8 @@ def _process_exportable_results_internal(
 
         if target_mode == "archive":
             with get_target_processor(
-                task.target, allow_external_plugins=allow_external_plugins
+                first_target,  # type: ignore[arg-type]
+                allow_external_plugins=allow_external_plugins,
             ) as target_processor:
                 target_processor.upload_archive(file_path)
             task_result = RemoteTargetResult()
@@ -921,6 +1158,8 @@ def process_exportable_results(
     start_time: Optional[float] = None,
     callback_mode: CallbackMode = CallbackMode.FULL,
     allow_external_plugins: bool = False,
+    chunker_manager: Optional["DocumentChunkerManager"] = None,
+    chunking_options: Optional[BaseChunkerOptions] = None,
 ) -> DoclingTaskResult:
     processed = _process_exportable_results_internal(
         task=task,
@@ -933,6 +1172,8 @@ def process_exportable_results(
         start_time=start_time,
         callback_mode=callback_mode,
         allow_external_plugins=allow_external_plugins,
+        chunker_manager=chunker_manager,
+        chunking_options=chunking_options,
     )
 
     return processed.task_result

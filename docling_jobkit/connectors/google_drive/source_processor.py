@@ -33,6 +33,10 @@ class GoogleDriveSourceProcessor(
         self._coords = coords
 
     @classmethod
+    def check_dependencies(cls) -> None:
+        from googleapiclient.discovery import build  # noqa: F401
+
+    @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
         return (GoogleDriveSourceRequest,)
 

@@ -1,0 +1,33 @@
+options:
+  do_ocr: false
+  chunking_options:
+    chunker: hybrid
+    # This must be compatible with whaterver embedding model is set for your AstraDB collection
+    # (If generating embeddings server-side)
+    tokenizer: "intfloat/e5-large-unsupervised"
+    # Hybrid chunker does not enforce this as a hard limit for some reason
+    # If chunks are oversized and being rejected, reduce this number
+    max_tokens: 512
+
+sources:
+  - kind: local_path
+    path: input_documents/sample.pdf
+
+target:
+  kind: astradb_chunks
+  api_endpoint: "https://YOUR-DATABASE-ID-REGION.apps.astra.datastax.com"
+  token: "AstraCS:YOUR_TOKEN_HERE"
+  keyspace: "default_keyspace"
+  collection_name: "docling_chunks"
+  vectorize_provider: "nvidia"
+  vectorize_model: "nvidia/nv-embedqa-e5-v5"
+  # Optional: Provide authentication for the vectorize provider
+  # vectorize_authentication:
+  #   providerKey: "OPENAI_API_KEY"
+  # Field mappings (optional, these are the defaults)
+  text_field: "text"
+  metadata_field: "metadata"
+  doc_id_field: "doc_id"
+  chunk_index_field: "chunk_index"
+  page_field: "page_numbers"
+  headings_field: "headings"
