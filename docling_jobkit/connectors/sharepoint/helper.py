@@ -21,6 +21,37 @@ _DEFAULT_PAGE_SIZE = 200  # NOTE: should we allow the user to toggle this?
 # for upload
 _SIMPLE_UPLOAD_MAX_BYTES = 4 * 1024 * 1024  # simple upload for office365 caps at 4 MB
 _RESUMABLE_CHUNK_BYTES = 4 * 1024 * 1024  # each chunk should also be 4 MB each
+_UPLOAD_MAX_RETRY = 3  # execute_query_retry attempts for folder/upload calls
+_UPLOAD_RETRY_DELAY_S = 3
+
+
+def _on_retry_failure(attempt: int, exc: Exception) -> None:
+    """failure_callback for execute_query_retry.
+
+    Logs each failed attempt and re-raises on the final one. ``execute_query_retry``
+    neither re-raises nor signals a status on exhaustion, so without this a persistent
+    failure would be silently swallowed and reported as a successful upload.
+    """
+    if attempt >= _UPLOAD_MAX_RETRY:
+        _log.error("SharePoint request failed after %d attempts: %s", attempt, exc)
+        raise exc
+
+    _log.warning(
+        "SharePoint request failed (attempt %d/%d); retrying in %ds: %s",
+        attempt,
+        _UPLOAD_MAX_RETRY,
+        _UPLOAD_RETRY_DELAY_S,
+        exc,
+    )
+
+
+def _execute_with_retry(client_object: "DriveItem") -> None:
+    """Run pending queries on client_object with bounded retry + logging."""
+    client_object.execute_query_retry(
+        max_retry=_UPLOAD_MAX_RETRY,
+        timeout_secs=_UPLOAD_RETRY_DELAY_S,
+        failure_callback=_on_retry_failure,
+    )
 
 
 def is_sharepoint_authentication_error(exc: BaseException) -> bool:
@@ -174,10 +205,13 @@ def get_or_create_folder(drive: Drive, folder_path: str | None) -> DriveItem:
             folder = child.get().execute_query()
         except ClientRequestException as exc:
             if exc.response is not None and exc.response.status_code == 404:
-                folder = folder.create_folder(
+                _log.debug("Creating missing folder segment %r", part)
+                created = folder.create_folder(
                     part,
                     conflict_behavior=ConflictBehavior.Fail,  # type: ignore[arg-type]
-                ).execute_query_retry()
+                )
+                _execute_with_retry(created)
+                folder = created
             else:
                 raise
 
@@ -193,25 +227,33 @@ def upload_file(
     """Upload the local file at local_path to base_folder/target_filename"""
     dest_folder, name = resolve_destination(base_folder, target_filename)
     folder = get_or_create_folder(drive, dest_folder)
-    if os.path.getsize(local_path) <= _SIMPLE_UPLOAD_MAX_BYTES:
+    size = os.path.getsize(local_path)
+    where = dest_folder or "<root>"
+
+    if size <= _SIMPLE_UPLOAD_MAX_BYTES:
+        _log.debug("Uploading %r (%d bytes) to %s [simple]", name, size, where)
         with open(local_path, "rb") as fh:
-            folder.upload(name, fh.read()).execute_query_retry()
+            _execute_with_retry(folder.upload(name, fh.read()))
         return
 
     # resumable_upload names the item after the source basename; when the target
     # leaf differs, upload from a correctly-named temp copy.
     if os.path.basename(os.fspath(local_path)) == name:
-        folder.resumable_upload(
-            os.fspath(local_path), chunk_size=_RESUMABLE_CHUNK_BYTES
-        ).execute_query_retry()
+        _log.debug("Uploading %r (%d bytes) to %s [resumable]", name, size, where)
+        _execute_with_retry(
+            folder.resumable_upload(
+                os.fspath(local_path), chunk_size=_RESUMABLE_CHUNK_BYTES
+            )
+        )
         return
 
+    _log.info("Uploading %r (%d bytes) to %s [resumable, temp copy]", name, size, where)
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = os.path.join(tmp, name)
         shutil.copyfile(local_path, tmp_path)
-        folder.resumable_upload(
-            tmp_path, chunk_size=_RESUMABLE_CHUNK_BYTES
-        ).execute_query_retry()
+        _execute_with_retry(
+            folder.resumable_upload(tmp_path, chunk_size=_RESUMABLE_CHUNK_BYTES)
+        )
 
 
 def upload_object(
@@ -233,13 +275,14 @@ def upload_object(
     folder = get_or_create_folder(drive, dest_folder)
 
     if len(content) <= _SIMPLE_UPLOAD_MAX_BYTES:
-        folder.upload(name, content).execute_query_retry()
+        _execute_with_retry(folder.upload(name, content))
         return
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = os.path.join(tmp, name)
         with open(tmp_path, "wb") as fh:
             fh.write(content)
-        folder.resumable_upload(
-            tmp_path, chunk_size=_RESUMABLE_CHUNK_BYTES
-        ).execute_query_retry()
+
+        _execute_with_retry(
+            folder.resumable_upload(tmp_path, chunk_size=_RESUMABLE_CHUNK_BYTES)
+        )
