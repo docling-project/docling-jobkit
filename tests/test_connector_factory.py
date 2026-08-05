@@ -65,6 +65,7 @@ def test_builtin_target_connectors_registered():
         "presigned_url",
         "opensearch_doc",
         "opensearch_chunks",
+        "astradb_chunks",
     }
 
 
