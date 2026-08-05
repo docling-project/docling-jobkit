@@ -1,3 +1,5 @@
+import os
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -188,3 +190,174 @@ def test_is_unavailable_error_covers_connection_and_timeout():
 def test_predicates_ignore_unrelated_exceptions():
     assert helper.is_sharepoint_authentication_error(ValueError()) is False
     assert helper.is_sharepoint_unavailable_error(ValueError()) is False
+
+
+# upload helpers tests
+
+
+@pytest.mark.parametrize(
+    "base_folder, target_filename, expected",
+    [
+        (None, "doc.json", (None, "doc.json")),
+        ("out", "doc.json", ("out", "doc.json")),
+        ("out", "json/doc.json", ("out/json", "doc.json")),
+        ("/a/", "p/q/f.png", ("a/p/q", "f.png")),
+        (None, "pages/1/img.png", ("pages/1", "img.png")),
+    ],
+)
+def test_resolve_destination(base_folder, target_filename, expected):
+    assert helper.resolve_destination(base_folder, target_filename) == expected
+
+
+def test_get_or_create_folder_returns_root_for_empty_path():
+    drive = MagicMock()
+    assert helper.get_or_create_folder(drive, None) is drive.root
+    drive.root.get_by_path.assert_not_called()
+
+
+def test_get_or_create_folder_returns_existing():
+    drive = MagicMock()
+    existing = MagicMock(name="existing")
+    drive.root.get_by_path.return_value.get.return_value.execute_query.return_value = (
+        existing
+    )
+
+    result = helper.get_or_create_folder(drive, "out")
+
+    assert result is existing
+    drive.root.get_by_path.assert_called_once_with("out")
+    drive.root.create_folder.assert_not_called()
+
+
+def test_get_or_create_folder_creates_missing_and_returns_created():
+    drive = MagicMock()
+    child = drive.root.get_by_path.return_value
+    child.get.return_value.execute_query.side_effect = _graph_error(404)
+    created = MagicMock(name="created")
+    drive.root.create_folder.return_value = created
+
+    result = helper.get_or_create_folder(drive, "out")
+
+    drive.root.create_folder.assert_called_once()
+    created.execute_query_retry.assert_called_once()
+    # the created folder — not its parent — must be returned
+    assert result is created
+
+
+def test_get_or_create_folder_reraises_non_404():
+    drive = MagicMock()
+    drive.root.get_by_path.return_value.get.return_value.execute_query.side_effect = (
+        _graph_error(403)
+    )
+    with pytest.raises(ClientRequestException):
+        helper.get_or_create_folder(drive, "out")
+
+
+def test_on_retry_failure_swallows_then_reraises_on_final_attempt():
+    exc = _graph_error(403)
+    # non-final attempt only logs, so the retry loop keeps going
+    helper._on_retry_failure(1, exc)
+    # final attempt re-raises so a persistent failure is not silently swallowed
+    with pytest.raises(ClientRequestException):
+        helper._on_retry_failure(helper._UPLOAD_MAX_RETRY, exc)
+
+
+def test_upload_file_simple_uploads_bytes(tmp_path):
+    drive = MagicMock()
+    folder = MagicMock()
+    src = tmp_path / "src.json"
+    src.write_bytes(b"hello")
+
+    with patch.object(helper, "get_or_create_folder", return_value=folder) as goc:
+        helper.upload_file(drive, src, "out", "json/doc.json")
+
+    goc.assert_called_once_with(drive, "out/json")
+    folder.upload.assert_called_once_with("doc.json", b"hello")
+    folder.upload.return_value.execute_query_retry.assert_called_once()
+    folder.resumable_upload.assert_not_called()
+
+
+def test_upload_file_large_same_name_uses_resumable(tmp_path, monkeypatch):
+    monkeypatch.setattr(helper, "_SIMPLE_UPLOAD_MAX_BYTES", 2)
+    drive = MagicMock()
+    folder = MagicMock()
+    src = tmp_path / "doc.json"
+    src.write_bytes(b"1234567")
+
+    with patch.object(helper, "get_or_create_folder", return_value=folder):
+        helper.upload_file(drive, src, None, "doc.json")
+
+    folder.upload.assert_not_called()
+    folder.resumable_upload.assert_called_once()
+    (path_arg,), _ = folder.resumable_upload.call_args
+    assert os.path.basename(path_arg) == "doc.json"
+
+
+def test_upload_file_large_differing_name_copies_to_target_leaf(tmp_path, monkeypatch):
+    monkeypatch.setattr(helper, "_SIMPLE_UPLOAD_MAX_BYTES", 2)
+    drive = MagicMock()
+    folder = MagicMock()
+    src = tmp_path / "tmp_random.json"  # basename != target leaf
+    src.write_bytes(b"1234567")
+
+    captured = {}
+
+    def _capture(path, chunk_size):
+        captured["basename"] = os.path.basename(path)
+        captured["content"] = open(path, "rb").read()
+        return MagicMock()
+
+    folder.resumable_upload.side_effect = _capture
+
+    with patch.object(helper, "get_or_create_folder", return_value=folder):
+        helper.upload_file(drive, src, "out", "json/doc.json")
+
+    assert captured["basename"] == "doc.json"  # uploaded under the target leaf
+    assert captured["content"] == b"1234567"  # copied bytes intact
+
+
+@pytest.mark.parametrize(
+    "obj, expected",
+    [("hi", b"hi"), (b"hi", b"hi"), (bytearray(b"hi"), b"hi")],
+    ids=["str", "bytes", "bytearray"],
+)
+def test_upload_object_normalizes_to_bytes(obj, expected):
+    drive = MagicMock()
+    folder = MagicMock()
+
+    with patch.object(helper, "get_or_create_folder", return_value=folder) as goc:
+        helper.upload_object(drive, obj, None, "doc.txt")
+
+    goc.assert_called_once_with(drive, None)
+    folder.upload.assert_called_once_with("doc.txt", expected)
+
+
+def test_upload_object_reads_file_like():
+    drive = MagicMock()
+    folder = MagicMock()
+
+    with patch.object(helper, "get_or_create_folder", return_value=folder):
+        helper.upload_object(drive, BytesIO(b"data"), "out", "bin/x.bin")
+
+    folder.upload.assert_called_once_with("x.bin", b"data")
+
+
+def test_upload_object_large_uses_resumable(monkeypatch):
+    monkeypatch.setattr(helper, "_SIMPLE_UPLOAD_MAX_BYTES", 2)
+    drive = MagicMock()
+    folder = MagicMock()
+    captured = {}
+
+    def _capture(path, chunk_size):
+        captured["basename"] = os.path.basename(path)
+        captured["content"] = open(path, "rb").read()
+        return MagicMock()
+
+    folder.resumable_upload.side_effect = _capture
+
+    with patch.object(helper, "get_or_create_folder", return_value=folder):
+        helper.upload_object(drive, b"1234567", "out", "json/big.json")
+
+    folder.upload.assert_not_called()
+    assert captured["basename"] == "big.json"
+    assert captured["content"] == b"1234567"
