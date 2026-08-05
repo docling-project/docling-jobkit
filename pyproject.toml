@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "docling-jobkit"
-version = "3.1.0"  # DO NOT EDIT, updated automatically
+version = "3.2.0"  # DO NOT EDIT, updated automatically
 description = "Running a distributed job processing documents with Docling."
 readme = "README.md"
 license = "MIT"
@@ -42,7 +42,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "docling-slim[standard]>=2.113.0,<3.0.0",
+    "docling-slim[standard]>=2.117.0,<3.0.0",
     "pydantic~=2.10",
     "pydantic-settings~=2.4",
     "boto3~=1.35",
@@ -84,6 +84,12 @@ azure = [
 ]
 kafka = [
     "confluent-kafka>=2.15.0",
+]
+opensearch = [
+    "opensearch-py>=2.8.0,<3",
+]
+astradb = [
+    "astrapy>=1.0.0,<2",
 ]
 
 [dependency-groups]
@@ -227,6 +233,7 @@ module = [
     "google.*",
     "ray.*",
     "codeflare_sdk.*",
+    "opensearchpy.*",
 ]
 ignore_missing_imports = true
 

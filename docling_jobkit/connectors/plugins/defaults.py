@@ -6,11 +6,30 @@ Registered under the ``docling_jobkit`` setuptools entry-point group (see
 
 Imports are deferred into the functions so that merely loading this module (which
 happens for every entry-point scan) stays cheap and never pulls optional, heavy
-SDKs at import time. Every connector module keeps its optional SDK imports
-(azure, gcloudstorage, gdrive) inside the methods that use them, so importing the
-processor classes here is safe even when those extras are not installed; the
-extra is only required when a connector is actually instantiated and used.
+SDKs at import time. Every connector class exposes a :meth:`check_dependencies`
+classmethod that performs a lightweight probe import of its required SDK. That
+check is called here before registration so that connectors whose optional extra
+is not installed are silently skipped (with an INFO-level log message) rather
+than raising an error at startup.
 """
+
+import logging
+
+_log = logging.getLogger(__name__)
+
+
+def _register_if_available(connectors: list, cls) -> None:
+    """Append *cls* to *connectors* if its dependencies are present."""
+    try:
+        cls.check_dependencies()
+        connectors.append(cls)
+    except ImportError as exc:
+        _log.info(
+            "Connector %r skipped — optional dependency not installed (%s). "
+            "Install the matching extra to enable it.",
+            cls.__name__,
+            exc,
+        )
 
 
 def source_connectors():
@@ -33,21 +52,27 @@ def source_connectors():
     )
     from docling_jobkit.connectors.s3.source_processor import S3SourceProcessor
 
-    return {
-        "source_connectors": [
-            HttpSourceProcessor,
-            S3SourceProcessor,
-            AzureBlobSourceProcessor,
-            LocalPathSourceProcessor,
-            GoogleDriveSourceProcessor,
-            FileNetSourceProcessor,
-            GoogleCloudStorageSourceProcessor,
-            KafkaSourceProcessor,
-        ]
-    }
+    connectors = [
+        HttpSourceProcessor,
+        LocalPathSourceProcessor,
+        FileNetSourceProcessor,
+    ]
+    for cls in (
+        S3SourceProcessor,
+        AzureBlobSourceProcessor,
+        GoogleDriveSourceProcessor,
+        GoogleCloudStorageSourceProcessor,
+        KafkaSourceProcessor,
+    ):
+        _register_if_available(connectors, cls)
+
+    return {"source_connectors": connectors}
 
 
 def target_connectors():
+    from docling_jobkit.connectors.astradb.target_processor import (
+        AstraDBTargetProcessor,
+    )
     from docling_jobkit.connectors.azure_blob.target_processor import (
         AzureBlobTargetProcessor,
     )
@@ -60,24 +85,30 @@ def target_connectors():
     from docling_jobkit.connectors.http.target_processor import (
         HttpPutTargetProcessor,
     )
-    from docling_jobkit.connectors.kafka.target_processor import KafkaTargetProcessor
     from docling_jobkit.connectors.local_path.target_processor import (
         LocalPathTargetProcessor,
+    )
+    from docling_jobkit.connectors.opensearch.target_processor import (
+        OpenSearchTargetProcessor,
     )
     from docling_jobkit.connectors.s3.presigned_target_processor import (
         S3PresignedTargetProcessor,
     )
     from docling_jobkit.connectors.s3.target_processor import S3TargetProcessor
 
-    return {
-        "target_connectors": [
-            S3TargetProcessor,
-            S3PresignedTargetProcessor,
-            AzureBlobTargetProcessor,
-            LocalPathTargetProcessor,
-            HttpPutTargetProcessor,
-            GoogleDriveTargetProcessor,
-            GoogleCloudStorageTargetProcessor,
-            KafkaTargetProcessor,
-        ]
-    }
+    connectors = [
+        LocalPathTargetProcessor,
+        HttpPutTargetProcessor,
+    ]
+    for cls in (
+        S3TargetProcessor,
+        S3PresignedTargetProcessor,
+        AzureBlobTargetProcessor,
+        GoogleDriveTargetProcessor,
+        GoogleCloudStorageTargetProcessor,
+        OpenSearchTargetProcessor,
+        AstraDBTargetProcessor,
+    ):
+        _register_if_available(connectors, cls)
+
+    return {"target_connectors": connectors}

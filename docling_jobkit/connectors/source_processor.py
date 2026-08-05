@@ -59,6 +59,18 @@ class BaseSourceProcessor(
         self._initialized = False  # Track whether the processor is ready
 
     @classmethod
+    def check_dependencies(cls) -> None:
+        """Probe that all optional runtime dependencies for this connector are installed.
+
+        Override in connectors that require an optional extra (e.g. ``azure``,
+        ``gdrive``, ``gcloudstorage``).  Raise :exc:`ImportError` if a required
+        package is missing — ``defaults.py`` will catch this and skip registration,
+        logging an INFO message that tells the operator which extra to install.
+
+        The default implementation is a no-op (connector has no optional deps).
+        """
+
+    @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
         """Config (pydantic) models this processor accepts.
 

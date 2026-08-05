@@ -50,6 +50,10 @@ class S3SourceProcessor(BaseSourceProcessor[S3Coordinates, S3FileIdentifier]):
         self._coords = coords
 
     @classmethod
+    def check_dependencies(cls) -> None:
+        import boto3  # noqa: F401
+
+    @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
         return (S3SourceRequest,)
 
