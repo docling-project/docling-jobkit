@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from office365.graph_client import GraphClient
     from office365.onedrive.drives.drive import Drive
 
-from docling_jobkit.datamodel.sharepoint_coords import SharePointCoordinates
+from docling_jobkit.datamodel.sharepoint_coords import SharePointConnection
 
 _log = logging.getLogger(__name__)
 _DEFAULT_PAGE_SIZE = 200  # NOTE: should we allow the user to toggle this?
@@ -37,7 +37,7 @@ def is_sharepoint_unavailable_error(exc: BaseException) -> bool:
     )
 
 
-def get_client(coords: SharePointCoordinates) -> GraphClient:
+def get_client(coords: SharePointConnection) -> GraphClient:
     """build the sharepoint connection client with the client creds"""
     from office365.graph_client import GraphClient
 
@@ -46,7 +46,7 @@ def get_client(coords: SharePointCoordinates) -> GraphClient:
     )
 
 
-def resolve_drive(client: GraphClient, coords: SharePointCoordinates) -> Drive:
+def resolve_drive(client: GraphClient, coords: SharePointConnection) -> Drive:
     """Resolve the coordinates to a single Graph drive.
 
     site_url -> a SharePoint document library (either default or user supplied)
@@ -56,7 +56,7 @@ def resolve_drive(client: GraphClient, coords: SharePointCoordinates) -> Drive:
 
     # OneDrive for Business: /users/{upn}/drive — there is no /me under app-only auth.
     if not coords.site_url:
-        assert coords.onedrive_user is not None  # validated by SharePointCoordinates
+        assert coords.onedrive_user is not None  # validated by SharePointConnection
         return client.users.get_by_principal_name(coords.onedrive_user).drive
 
     site = (

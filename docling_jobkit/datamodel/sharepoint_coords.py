@@ -3,7 +3,15 @@ from typing import Annotated, Literal, Optional
 from pydantic import BaseModel, Field, SecretStr, model_validator
 
 
-class SharePointCoordinates(BaseModel):
+class SharePointConnection(BaseModel):
+    """Shared connection + drive-targeting fields for the SharePoint connectors.
+
+    Source and target both authenticate app-only against a single Graph drive
+    (a SharePoint document library or a user's OneDrive for Business). Read-side
+    fields (folder_path/file_ids/max_num_elements) and the write-side destination
+    live on the respective subclasses.
+    """
+
     tenant: Annotated[
         str,
         Field(
@@ -76,6 +84,23 @@ class SharePointCoordinates(BaseModel):
         ),
     ] = None
 
+    @model_validator(mode="after")
+    def _validate_target(self) -> "SharePointConnection":
+        if bool(self.site_url) == bool(self.onedrive_user):
+            raise ValueError(
+                "Exactly one of 'site_url' or 'onedrive_user' must be provided."
+            )
+        if self.onedrive_user and self.document_library:
+            raise ValueError(
+                "'document_library' only applies to 'site_url' (SharePoint); it "
+                "cannot be combined with 'onedrive_user' (OneDrive)."
+            )
+        return self
+
+
+class SharePointSourceCoordinates(SharePointConnection):
+    """Source Connector specific fields"""
+
     folder_path: Annotated[
         Optional[str],
         Field(
@@ -110,22 +135,35 @@ class SharePointCoordinates(BaseModel):
         ),
     ] = None
 
-    @model_validator(mode="after")
-    def _validate_target(self) -> "SharePointCoordinates":
-        if bool(self.site_url) == bool(self.onedrive_user):
-            raise ValueError(
-                "Exactly one of 'site_url' or 'onedrive_user' must be provided."
-            )
-        if self.onedrive_user and self.document_library:
-            raise ValueError(
-                "'document_library' only applies to 'site_url' (SharePoint); it "
-                "cannot be combined with 'onedrive_user' (OneDrive)."
-            )
-        return self
+
+class SharePointTargetCoordinates(SharePointConnection):
+    """Target connector specific fields"""
+
+    folder_path: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description=(
+                "Destination folder path within the document library to write to. "
+                "Created if it does not exist. If omitted, the drive root is used."
+            ),
+            examples=["/docling-output"],
+        ),
+    ] = None
 
 
-class TaskSharePointSource(SharePointCoordinates):
+class TaskSharePointSource(SharePointSourceCoordinates):
     kind: Literal["sharepoint"] = "sharepoint"
 
 
-__all__ = ["SharePointCoordinates", "TaskSharePointSource"]
+class TaskSharePointTarget(SharePointTargetCoordinates):
+    kind: Literal["sharepoint"] = "sharepoint"
+
+
+__all__ = [
+    "SharePointConnection",
+    "SharePointSourceCoordinates",
+    "SharePointTargetCoordinates",
+    "TaskSharePointSource",
+    "TaskSharePointTarget",
+]

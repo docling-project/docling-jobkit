@@ -17,7 +17,7 @@ from docling_jobkit.convert.materialization import (
     normalize_max_file_size,
 )
 from docling_jobkit.datamodel.sharepoint_coords import (
-    SharePointCoordinates,
+    SharePointSourceCoordinates,
     TaskSharePointSource,
 )
 
@@ -48,9 +48,9 @@ class SharePointFileIdentifier(BaseModel):
 
 
 class SharePointSourceProcessor(
-    BaseSourceProcessor[SharePointCoordinates, SharePointFileIdentifier]
+    BaseSourceProcessor[SharePointSourceCoordinates, SharePointFileIdentifier]
 ):
-    def __init__(self, coords: SharePointCoordinates):
+    def __init__(self, coords: SharePointSourceCoordinates):
         super().__init__(coords)
         self._coords = coords
 
