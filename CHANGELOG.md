@@ -1,3 +1,13 @@
+## [v3.2.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.2.0) - 2026-07-30
+
+### Feature
+
+* Add database targets, multi-targets and streaming chunk pipeline ([#206](https://github.com/docling-project/docling-jobkit/issues/206)) ([`5926d60`](https://github.com/docling-project/docling-jobkit/commit/5926d60213c1012e504b93fa59cbbe3841029b3b))
+
+### Fix
+
+* Allow custom model configs on multiproc CLI ([#210](https://github.com/docling-project/docling-jobkit/issues/210)) ([`477b433`](https://github.com/docling-project/docling-jobkit/commit/477b4336fce267513ebb90f9ea97add4d5a16e75))
+
 ## [v3.1.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.1.0) - 2026-07-24
 
 ### Feature

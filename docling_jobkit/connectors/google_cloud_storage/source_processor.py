@@ -49,6 +49,10 @@ class GoogleCloudStorageSourceProcessor(
         self._coords = coords
 
     @classmethod
+    def check_dependencies(cls) -> None:
+        from google.cloud import storage  # noqa: F401
+
+    @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
         return (GoogleCloudStorageSourceRequest,)
 

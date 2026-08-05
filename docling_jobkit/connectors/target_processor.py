@@ -1,9 +1,13 @@
+import json
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import BinaryIO, Literal
+from typing import TYPE_CHECKING, BinaryIO, Literal, Optional, TextIO
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
 
 
 class BaseTargetProcessor(AbstractContextManager, ABC):
@@ -12,8 +16,26 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
     objects to a storage backend (e.g. S3, local FS, GCS).
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._initialized = False
+        # Streaming chunk protocol state (see begin_chunks/end_chunks below).
+        # Declared here so the protocol methods can read them unconditionally
+        # instead of probing with getattr().
+        self._chunk_jsonl_path: Optional[Path] = None
+        self._chunk_jsonl_file: Optional[TextIO] = None
+        self._chunk_target_key: Optional[str] = None
+
+    @classmethod
+    def check_dependencies(cls) -> None:
+        """Probe that all optional runtime dependencies for this connector are installed.
+
+        Override in connectors that require an optional extra (e.g. ``opensearch``,
+        ``azure``, ``gdrive``).  Raise :exc:`ImportError` if a required package is
+        missing — ``defaults.py`` will catch this and skip registration, logging an
+        INFO message that tells the operator which extra to install.
+
+        The default implementation is a no-op (connector has no optional deps).
+        """
 
     @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
@@ -28,7 +50,7 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
         )
 
     @classmethod
-    def result_mode(cls) -> Literal["artifacts", "archive", "presigned"]:
+    def result_mode(cls) -> Literal["artifacts", "archive", "presigned", "database"]:
         return "artifacts"
 
     def __enter__(self):
@@ -80,3 +102,146 @@ class BaseTargetProcessor(AbstractContextManager, ABC):
 
     def upload_archive(self, filename: Path) -> None:
         self.upload_file(filename, filename.name, "application/zip")
+
+    def begin_document(self, doc_id: str) -> None:
+        """Signal the start of a new document's uploads.
+
+        Processors that accumulate multiple format uploads into a single record
+        (e.g. database targets) should override this to initialise per-document
+        state.  File/object-storage targets can leave this as a no-op.
+        """
+
+    def end_document(self, doc_id: str) -> None:
+        """Signal that all uploads for the current document are complete.
+
+        Database targets should flush the accumulated row here.  File/object-
+        storage targets can leave this as a no-op.
+        """
+
+    def abort_document(self, doc_id: str) -> None:
+        """Signal that the current document failed before all uploads landed.
+
+        Called instead of :meth:`end_document`.  Database targets should discard
+        the half-populated row rather than committing it.  File/object-storage
+        targets can leave this as a no-op — objects already written stay written,
+        which is the same at-least-partial behaviour they have always had.
+        """
+
+    # ------------------------------------------------------------------
+    # Streaming chunk protocol
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def requires_chunks(cls) -> bool:
+        """Return True when this processor needs per-chunk records.
+
+        ResultsProcessor will activate the chunker and drive the streaming
+        chunk protocol (begin_chunks / consume_chunk / end_chunks) on this
+        processor for every successfully converted document, regardless of
+        whether ``"chunks"`` appears in ``to_formats``.
+
+        File-storage targets should leave this as False and instead rely on
+        ``"chunks"`` being listed in ``to_formats`` to receive chunk output.
+        """
+        return False
+
+    def instance_requires_chunks(self) -> bool:
+        """Instance-level counterpart of :meth:`requires_chunks`.
+
+        Defaults to the class-level flag.  Processors whose chunk participation
+        is determined by the runtime target config (e.g.
+        ``OpenSearchTargetProcessor``, which serves both ``opensearch_doc`` and
+        ``opensearch_chunks``) override this to inspect ``self._target``.
+        """
+        return self.requires_chunks()
+
+    def begin_chunks(
+        self,
+        filename: str,
+        temp_dir: Path,
+        chunk_target_key: Optional[str] = None,
+        document_hash: Optional[str] = None,
+    ) -> None:
+        """Called once before the first chunk of a document is streamed.
+
+        Default: open a temp ``{stem}.chunks.jsonl`` file for writing.
+        DB processors that override ``requires_chunks()`` can use this to
+        initialise per-document state instead.
+
+        ``chunk_target_key``, when provided, is the storage path that
+        ``end_chunks`` will pass to ``upload_file()`` as *target_filename*.
+        When omitted the bare filename (``{stem}.chunks.jsonl``) is used,
+        which is only correct for database processors that override
+        ``end_chunks`` and never call ``upload_file()`` themselves.
+
+        ``document_hash`` is the SHA-256 hex digest of the raw input file bytes.
+        Processors that need stable, content-addressed chunk IDs should store
+        this and combine it with ``chunk_index`` to derive the ID.
+        """
+        stem = Path(filename).stem
+        self._chunk_jsonl_path = temp_dir / f"{stem}.chunks.jsonl"
+        self._chunk_jsonl_file = self._chunk_jsonl_path.open("w", encoding="utf-8")
+        self._chunk_target_key = (
+            chunk_target_key
+            if chunk_target_key is not None
+            else self._chunk_jsonl_path.name
+        )
+
+    def consume_chunk(self, chunk: "ChunkedDocumentResultItem") -> None:
+        """Called once per chunk as it is produced by the chunker.
+
+        Default: append one JSON line to the temp file opened in
+        ``begin_chunks()``.  DB processors override to call ``upsert_row()``
+        directly so each chunk is written to the store without buffering.
+
+        This method must NEVER re-chunk the document — the chunk list is
+        produced exactly once by ``ResultsProcessor`` and shared across all
+        participating processors.
+        """
+        if self._chunk_jsonl_file is None:
+            raise RuntimeError("consume_chunk() called before begin_chunks()")
+        self._chunk_jsonl_file.write(
+            json.dumps(chunk.model_dump(mode="json"), ensure_ascii=False) + "\n"
+        )
+
+    def end_chunks(self) -> None:
+        """Called after the last chunk of a document has been consumed.
+
+        Only called when the *complete* chunk stream was produced successfully,
+        so uploading here can never publish a truncated chunk file.
+
+        Default: close the temp file and upload it via ``upload_file()``.
+        DB processors override to close any open resources without uploading.
+        """
+        if self._chunk_jsonl_file is None:
+            return
+        self._chunk_jsonl_file.close()
+        self._chunk_jsonl_file = None
+        try:
+            self.upload_file(
+                filename=self._chunk_jsonl_path,  # type: ignore[arg-type]
+                target_filename=self._chunk_target_key,  # type: ignore[arg-type]
+                content_type="application/jsonl",
+            )
+        finally:
+            self._reset_chunk_state()
+
+    def abort_chunks(self) -> None:
+        """Called instead of ``end_chunks()`` when chunk streaming failed.
+
+        Default: close and delete the temp file *without* uploading, so a
+        document whose chunk generation (or a sibling target's write) blew up
+        never leaves a partial ``.chunks.jsonl`` committed to this target.
+        DB processors override only if they hold state that needs discarding.
+        """
+        if self._chunk_jsonl_file is not None:
+            self._chunk_jsonl_file.close()
+            self._chunk_jsonl_file = None
+        if self._chunk_jsonl_path is not None:
+            self._chunk_jsonl_path.unlink(missing_ok=True)
+        self._reset_chunk_state()
+
+    def _reset_chunk_state(self) -> None:
+        self._chunk_jsonl_path = None
+        self._chunk_jsonl_file = None
+        self._chunk_target_key = None

@@ -1,5 +1,6 @@
 import datetime
 import logging
+import warnings
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -49,26 +50,60 @@ class BaseOrchestrator(ABC):
     def bind_notifier(self, notifier: "BaseNotifier"):
         self.notifier = notifier
 
-    def _validate_target(self, target: TaskTarget) -> None:
-        """Reject targets whose ``kind`` is not permitted by this orchestrator.
+    def _validate_targets(self, targets: list[TaskTarget]) -> None:
+        """Reject any target whose ``kind`` is not permitted by this orchestrator.
 
         Called at the top of each concrete ``enqueue`` so a disallowed target
         fails fast with a clear, non-retryable error before the task is queued.
         """
         if self.allowed_target_kinds is None:
             return
-        kind = getattr(target, "kind", None)
-        if kind not in self.allowed_target_kinds:
-            raise TargetNotAllowedError(
-                f"Target kind {kind!r} is not permitted by this orchestrator. "
-                f"Allowed kinds: {sorted(self.allowed_target_kinds)}"
+        for target in targets:
+            kind = getattr(target, "kind", None)
+            if kind not in self.allowed_target_kinds:
+                raise TargetNotAllowedError(
+                    f"Target kind {kind!r} is not permitted by this orchestrator. "
+                    f"Allowed kinds: {sorted(self.allowed_target_kinds)}"
+                )
+
+    def _validate_target(self, target: TaskTarget) -> None:
+        """Backwards-compatible single-target variant of ``_validate_targets``."""
+        self._validate_targets([target])
+
+    @staticmethod
+    def _resolve_enqueue_targets(
+        target: TaskTarget | None,
+        targets: list[TaskTarget] | None,
+    ) -> list[TaskTarget]:
+        """Normalise the ``target`` / ``targets`` enqueue arguments into a list.
+
+        Callers may pass either the legacy singular ``target`` keyword or the
+        preferred plural ``targets`` list.  Passing both is an error.  Passing
+        neither is also an error (Task validation would catch it anyway, but
+        failing early produces a clearer message).
+        """
+        if target is not None and targets is not None:
+            raise ValueError(
+                "'target' and 'targets' are mutually exclusive in enqueue()"
             )
+        if target is not None:
+            warnings.warn(
+                "Passing 'target' to enqueue() is deprecated; use 'targets=[...]' instead.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            return [target]
+        if targets is not None:
+            return targets
+        raise ValueError(
+            "At least one target is required. Provide either 'target' or 'targets'."
+        )
 
     @abstractmethod
     async def enqueue(
         self,
         sources: list[TaskSource],
-        target: TaskTarget,
+        target: TaskTarget | None = None,
         task_type: TaskType = TaskType.CONVERT,
         options: ConvertDocumentsOptions | None = None,
         convert_options: ConvertDocumentsOptions | None = None,
@@ -76,6 +111,7 @@ class BaseOrchestrator(ABC):
         chunking_export_options: ChunkingExportOptions | None = None,
         callbacks: list[CallbackSpec] | None = None,
         metadata: dict[str, Any] | None = None,
+        targets: list[TaskTarget] | None = None,
     ) -> Task:
         pass
 

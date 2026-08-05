@@ -176,10 +176,11 @@ def _to_exportable_documents_from_chunk(
 
 
 def _is_s3_fanout_task(task: Task, *, allow_external_plugins: bool = False) -> bool:
+    first_target = task.targets[0] if task.targets else None
     target_factory = get_target_connector_factory(allow_external_plugins)
     target_mode = (
-        target_factory.result_mode(task.target)
-        if target_factory.supports(task.target)
+        target_factory.result_mode(first_target)  # type: ignore[arg-type]
+        if target_factory.supports(first_target)  # type: ignore[arg-type]
         else None
     )
     return (
@@ -397,10 +398,11 @@ def _build_materialization_failure_result(
     # targets get the same RemoteTargetResult envelope on a preflight failure that
     # they get on success. supports() is False for InBody/Zip (service-only
     # targets), which fall through to the in-body ExportResult.
+    first_target = task.targets[0] if task.targets else None
     target_factory = get_target_connector_factory(allow_external_plugins)
     target_mode = (
-        target_factory.result_mode(task.target)
-        if target_factory.supports(task.target)
+        target_factory.result_mode(first_target)  # type: ignore[arg-type]
+        if target_factory.supports(first_target)  # type: ignore[arg-type]
         else None
     )
     if target_mode == "presigned":
@@ -559,6 +561,8 @@ def _finalize_slice_results(
     start_time: float,
     debug_error_details: bool,
     allow_external_plugins: bool,
+    chunker_manager: Optional[DocumentChunkerManager] = None,
+    chunking_options: Any = None,
 ) -> DoclingTaskResult:
     """Fetch child slice outputs, merge them, and build the parent task result."""
     # This is the only place where full slice documents enter the coordinator's
@@ -574,6 +578,8 @@ def _finalize_slice_results(
         start_time=start_time,
         debug_error_details=debug_error_details,
         allow_external_plugins=allow_external_plugins,
+        chunker_manager=chunker_manager,
+        chunking_options=chunking_options,
     )
 
 
@@ -733,15 +739,20 @@ class DoclingProcessorConverterDeployment:
                         attempt + 1,
                         max_retries + 1,
                         failure.message if failure is not None else exc,
+                        exc_info=exc,
                     )
                     await asyncio.sleep(retry_delay)
                 else:
+                    # Include the real traceback: the caller re-raises and the
+                    # client only sees the sanitized failure message, so this is
+                    # the last place the root cause is recoverable from logs.
                     _log.error(
                         "Converter replica %s: %s failed after %s attempts: %s",
                         self.replica_id,
                         task_label,
                         max_retries + 1,
                         failure.message if failure is not None else exc,
+                        exc_info=exc,
                     )
 
         raise last_exception or RuntimeError("Converter request failed")
@@ -773,6 +784,11 @@ class DoclingProcessorConverterDeployment:
         with tempfile.TemporaryDirectory(**temp_dir_kwargs) as temp_dir:
             workdir = Path(temp_dir)
             if task.task_type == TaskType.CONVERT:
+                chunking_options = None
+                if task.convert_options is not None:
+                    chunking_options = self.cm.parse_chunking_options(
+                        task.convert_options
+                    )
                 processed = _process_exportable_results_internal(
                     task=task,
                     exportable_documents=exportable_documents,
@@ -786,6 +802,8 @@ class DoclingProcessorConverterDeployment:
                     allow_external_plugins=(
                         self.converter_manager_config.allow_external_plugins
                     ),
+                    chunker_manager=self._get_chunker_manager(),
+                    chunking_options=chunking_options,
                 )
                 task_result = processed.task_result
                 processed_docs = processed.processed_docs
@@ -964,6 +982,12 @@ class DoclingProcessorCoordinatorDeployment:
         self._slice_finalization_semaphore = asyncio.Semaphore(
             self.config.max_concurrent_coordinator_slice_finalizations
         )
+        # Lazily-initialized chunker manager for use during slice finalization
+        # and single-doc result processing on the coordinator.
+        self._chunker_manager: Optional[DocumentChunkerManager] = None
+        # Lazily-initialized converter manager used only to resolve chunking
+        # presets during slice finalization (the coordinator does not convert).
+        self._converter_manager: Optional[DoclingConverterManager] = None
 
         _log.setLevel(self.config.log_level.upper())
 
@@ -1102,6 +1126,19 @@ class DoclingProcessorCoordinatorDeployment:
                 },
             )
             error_message = failure.message
+            # The client only receives the sanitized ``failure.message`` (e.g.
+            # "Internal processing error."). Log the real exception with its
+            # traceback here so an operator can actually diagnose the failure;
+            # INTERNAL failures otherwise leave no server-side breadcrumb.
+            _log.error(
+                "Coordinator replica %s: task %s failed (category=%s, phase=%s): %s",
+                self.replica_id,
+                task.task_id,
+                failure.category.value,
+                failure.phase.value,
+                exc,
+                exc_info=exc,
+            )
             terminalization = await self.redis_manager.finalize_task_failure_atomic(
                 tenant_id=tenant_id,
                 task_id=task.task_id,
@@ -1191,6 +1228,31 @@ class DoclingProcessorCoordinatorDeployment:
                     task.task_id,
                     follow_up_exc,
                 )
+
+    def _get_chunker_manager(self) -> DocumentChunkerManager:
+        if self._chunker_manager is None:
+            self._chunker_manager = DocumentChunkerManager()
+        return self._chunker_manager
+
+    def _get_converter_manager(self) -> DoclingConverterManager:
+        if self._converter_manager is None:
+            self._converter_manager = DoclingConverterManager(
+                config=self.converter_manager_config
+            )
+        return self._converter_manager
+
+    def _resolve_chunking_options(
+        self, convert_options: ConvertDocumentsOptions
+    ) -> Any:
+        """Resolve chunking presets to concrete options on the coordinator.
+
+        Mirrors ``DoclingProcessorConverterDeployment._build_task_result`` so the
+        slice-finalization path chunks with the same options the non-sliced path
+        would use. Without this, ``convert_options.chunking_options`` is often
+        ``None`` (the caller only sets a preset), which silently disables chunk
+        export for sliced (large) documents.
+        """
+        return self._get_converter_manager().parse_chunking_options(convert_options)
 
     async def _process_task(
         self, task: Task, workdir: Path
@@ -1293,6 +1355,10 @@ class DoclingProcessorCoordinatorDeployment:
                                 debug_error_details=self.config.debug_error_details,
                                 allow_external_plugins=(
                                     self.converter_manager_config.allow_external_plugins
+                                ),
+                                chunker_manager=self._get_chunker_manager(),
+                                chunking_options=self._resolve_chunking_options(
+                                    convert_options
                                 ),
                             )
                     finally:
