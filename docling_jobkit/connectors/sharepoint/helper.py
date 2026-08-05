@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import logging
+import os
+import shutil
+import tempfile
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Iterator
+from pathlib import PurePosixPath
+from typing import TYPE_CHECKING, Any, BinaryIO, Iterator
 
 if TYPE_CHECKING:
     from office365.graph_client import GraphClient
+    from office365.onedrive.driveitems.driveItem import DriveItem
     from office365.onedrive.drives.drive import Drive
 
 from docling_jobkit.datamodel.sharepoint_coords import SharePointConnection
 
 _log = logging.getLogger(__name__)
 _DEFAULT_PAGE_SIZE = 200  # NOTE: should we allow the user to toggle this?
+
+# for upload
+_SIMPLE_UPLOAD_MAX_BYTES = 4 * 1024 * 1024  # simple upload for office365 caps at 4 MB
+_RESUMABLE_CHUNK_BYTES = 4 * 1024 * 1024  # each chunk should also be 4 MB each
 
 
 def is_sharepoint_authentication_error(exc: BaseException) -> bool:
@@ -129,3 +138,108 @@ def download_item(client: GraphClient, drive: Drive, item_id: str) -> BytesIO:
     buffer.seek(0)
 
     return buffer
+
+
+def resolve_destination(
+    base_folder: str | None, target_filename: str
+) -> tuple[str | None, str]:
+    """Split target_filename into into (destination_folder, leaf), prefixing base_folder
+
+    e.g. base_folder='out', target_filename='json/doc.json' -> ('out/json', 'doc.json').
+    """
+    target = PurePosixPath(target_filename)
+    parts: list[str] = []
+
+    if base_folder:
+        parts.append(base_folder.strip("/"))
+    if str(target.parent) != ".":
+        parts.append(str(target.parent))
+
+    return "/".join(p for p in parts if p) or None, target.name
+
+
+def get_or_create_folder(drive: Drive, folder_path: str | None) -> DriveItem:
+    """Return the destination folder for uploads, creating any missing path segments."""
+    from office365.onedrive.driveitems.conflict_behavior import ConflictBehavior
+    from office365.runtime.client_request_exception import ClientRequestException
+
+    folder = drive.root
+    if not folder_path:
+        return folder
+
+    for part in PurePosixPath(folder_path.strip("/")).parts:
+        # return the child folder name under parent and create if absent
+        child = folder.get_by_path(part)
+        try:
+            folder = child.get().execute_query()
+        except ClientRequestException as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                folder = folder.create_folder(
+                    part,
+                    conflict_behavior=ConflictBehavior.Fail,  # type: ignore[arg-type]
+                ).execute_query_retry()
+            else:
+                raise
+
+    return folder
+
+
+def upload_file(
+    drive: Drive,
+    local_path: str | os.PathLike,
+    base_folder: str | None,
+    target_filename: str,
+) -> None:
+    """Upload the local file at local_path to base_folder/target_filename"""
+    dest_folder, name = resolve_destination(base_folder, target_filename)
+    folder = get_or_create_folder(drive, dest_folder)
+    if os.path.getsize(local_path) <= _SIMPLE_UPLOAD_MAX_BYTES:
+        with open(local_path, "rb") as fh:
+            folder.upload(name, fh.read()).execute_query_retry()
+        return
+
+    # resumable_upload names the item after the source basename; when the target
+    # leaf differs, upload from a correctly-named temp copy.
+    if os.path.basename(os.fspath(local_path)) == name:
+        folder.resumable_upload(
+            os.fspath(local_path), chunk_size=_RESUMABLE_CHUNK_BYTES
+        ).execute_query_retry()
+        return
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = os.path.join(tmp, name)
+        shutil.copyfile(local_path, tmp_path)
+        folder.resumable_upload(
+            tmp_path, chunk_size=_RESUMABLE_CHUNK_BYTES
+        ).execute_query_retry()
+
+
+def upload_object(
+    drive: Drive,
+    obj: str | bytes | BinaryIO,
+    base_folder: str | None,
+    target_filename: str,
+) -> None:
+    """Upload in-memory object to base_folder/target_filename"""
+    if isinstance(obj, (bytes, bytearray)):
+        content = bytes(obj)
+    elif isinstance(obj, str):
+        content = obj.encode()
+    else:
+        data = obj.read()
+        content = data.encode() if isinstance(data, str) else data
+
+    dest_folder, name = resolve_destination(base_folder, target_filename)
+    folder = get_or_create_folder(drive, dest_folder)
+
+    if len(content) <= _SIMPLE_UPLOAD_MAX_BYTES:
+        folder.upload(name, content).execute_query_retry()
+        return
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = os.path.join(tmp, name)
+        with open(tmp_path, "wb") as fh:
+            fh.write(content)
+        folder.resumable_upload(
+            tmp_path, chunk_size=_RESUMABLE_CHUNK_BYTES
+        ).execute_query_retry()
