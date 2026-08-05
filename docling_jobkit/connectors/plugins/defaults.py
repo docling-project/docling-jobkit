@@ -97,6 +97,9 @@ def target_connectors():
         S3PresignedTargetProcessor,
     )
     from docling_jobkit.connectors.s3.target_processor import S3TargetProcessor
+    from docling_jobkit.connectors.sharepoint.target_processor import (
+        SharePointTargetProcessor,
+    )
 
     connectors = [
         LocalPathTargetProcessor,
@@ -110,6 +113,7 @@ def target_connectors():
         GoogleCloudStorageTargetProcessor,
         OpenSearchTargetProcessor,
         AstraDBTargetProcessor,
+        SharePointTargetProcessor,
     ):
         _register_if_available(connectors, cls)
 

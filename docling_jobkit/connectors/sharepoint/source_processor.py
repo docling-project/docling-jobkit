@@ -8,6 +8,10 @@ from typing_extensions import override
 from docling.datamodel.base_models import DocumentStream
 
 from docling_jobkit.connectors.errors import map_connector_authentication_errors
+from docling_jobkit.connectors.sharepoint.helper import (
+    is_sharepoint_authentication_error,
+    is_sharepoint_unavailable_error,
+)
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     SourceDocumentRef,
@@ -22,22 +26,6 @@ from docling_jobkit.datamodel.sharepoint_coords import (
 )
 
 _log = logging.getLogger(__name__)
-
-
-def _is_authentication_error(exc: BaseException) -> bool:
-    from docling_jobkit.connectors.sharepoint.helper import (
-        is_sharepoint_authentication_error,
-    )
-
-    return is_sharepoint_authentication_error(exc)
-
-
-def _is_unavailable_error(exc: BaseException) -> bool:
-    from docling_jobkit.connectors.sharepoint.helper import (
-        is_sharepoint_unavailable_error,
-    )
-
-    return is_sharepoint_unavailable_error(exc)
 
 
 class SharePointFileIdentifier(BaseModel):
@@ -60,10 +48,10 @@ class SharePointSourceProcessor(
 
     @map_connector_authentication_errors(
         "SharePoint",
-        _is_authentication_error,
+        is_sharepoint_authentication_error,
         source=True,
         source_kind="sharepoint",
-        is_unavailable_error=_is_unavailable_error,
+        is_unavailable_error=is_sharepoint_unavailable_error,
     )
     def _initialize(self):
         from docling_jobkit.connectors.sharepoint.helper import (
@@ -81,10 +69,10 @@ class SharePointSourceProcessor(
 
     @map_connector_authentication_errors(
         "SharePoint",
-        _is_authentication_error,
+        is_sharepoint_authentication_error,
         source=True,
         source_kind="sharepoint",
-        is_unavailable_error=_is_unavailable_error,
+        is_unavailable_error=is_sharepoint_unavailable_error,
     )
     def _list_document_ids(self) -> Iterator[SharePointFileIdentifier]:
         """List document IDs based on source configuration."""
@@ -111,10 +99,10 @@ class SharePointSourceProcessor(
 
     @map_connector_authentication_errors(
         "SharePoint",
-        _is_authentication_error,
+        is_sharepoint_authentication_error,
         source=True,
         source_kind="sharepoint",
-        is_unavailable_error=_is_unavailable_error,
+        is_unavailable_error=is_sharepoint_unavailable_error,
     )
     def _fetch_document_by_id(
         self, identifier: SharePointFileIdentifier, *, max_file_size: int | None = None
