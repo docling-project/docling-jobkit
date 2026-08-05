@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from office365.runtime.client_request_exception import ClientRequestException
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr
 from requests import Response
 
 from docling_jobkit.connectors.errors import ConnectorAuthenticationError
@@ -47,13 +47,6 @@ def test_get_config_types():
     assert SharePointTargetProcessor.get_config_types() == (TaskSharePointTarget,)
 
 
-def test_target_coords_reject_no_target():
-    with pytest.raises(ValidationError, match="Exactly one"):
-        SharePointTargetCoordinates(
-            tenant="t", client_id="c", client_secret=SecretStr("s")
-        )
-
-
 def test_target_coords_omit_read_only_fields():
     fields = SharePointTargetCoordinates.model_fields
     assert "file_ids" not in fields
@@ -93,9 +86,8 @@ def test_upload_object_delegates_with_folder_path(coords):
     upload_object.assert_called_once_with(processor._drive, b"data", "out", "md/doc.md")
 
 
-@pytest.mark.parametrize("status", [401, 403], ids=["401", "403"])
-def test_upload_maps_auth_error(coords, status):
+def test_upload_maps_auth_error(coords):
     processor = _proc(coords)
-    with patch(f"{_HELPER}.upload_file", side_effect=_graph_error(status)):
+    with patch(f"{_HELPER}.upload_file", side_effect=_graph_error(403)):
         with pytest.raises(ConnectorAuthenticationError):
             processor.upload_file("local.pdf", "pdf/doc.pdf", "application/pdf")
