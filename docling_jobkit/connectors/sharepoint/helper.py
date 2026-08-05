@@ -56,6 +56,7 @@ def resolve_drive(client: GraphClient, coords: SharePointCoordinates) -> Drive:
 
     # OneDrive for Business: /users/{upn}/drive — there is no /me under app-only auth.
     if not coords.site_url:
+        assert coords.onedrive_user is not None  # validated by SharePointCoordinates
         return client.users.get_by_principal_name(coords.onedrive_user).drive
 
     site = (
