@@ -17,15 +17,15 @@ from docling_jobkit.connectors.sharepoint.source_processor import (
     SharePointSourceProcessor,
 )
 from docling_jobkit.convert.materialization import SourceLimitExceededError
-from docling_jobkit.datamodel.sharepoint_coords import SharePointCoordinates
+from docling_jobkit.datamodel.sharepoint_coords import SharePointSourceCoordinates
 
 _HELPER = "docling_jobkit.connectors.sharepoint.helper"
 
 
 @pytest.fixture
-def sp_coords() -> SharePointCoordinates:
+def sp_coords() -> SharePointSourceCoordinates:
     """SharePoint target (site_url)."""
-    return SharePointCoordinates(
+    return SharePointSourceCoordinates(
         tenant="tenant-guid",
         client_id="client-id",
         client_secret=SecretStr("secret"),
@@ -33,7 +33,7 @@ def sp_coords() -> SharePointCoordinates:
     )
 
 
-def _proc(coords: SharePointCoordinates) -> SharePointSourceProcessor:
+def _proc(coords: SharePointSourceCoordinates) -> SharePointSourceProcessor:
     processor = SharePointSourceProcessor(coords)
     processor._client = MagicMock()
     processor._drive = MagicMock()
@@ -63,7 +63,7 @@ def _graph_error(status: int) -> ClientRequestException:
     ids=["sharepoint_site", "onedrive_user", "site_with_library"],
 )
 def test_coords_accepts_valid_targets(kwargs):
-    coords = SharePointCoordinates(
+    coords = SharePointSourceCoordinates(
         tenant="t", client_id="c", client_secret=SecretStr("s"), **kwargs
     )
     assert coords.site_url or coords.onedrive_user
@@ -80,7 +80,7 @@ def test_coords_accepts_valid_targets(kwargs):
 )
 def test_coords_rejects_invalid_targets(kwargs, match):
     with pytest.raises(ValidationError, match=match):
-        SharePointCoordinates(
+        SharePointSourceCoordinates(
             tenant="t", client_id="c", client_secret=SecretStr("s"), **kwargs
         )
 
