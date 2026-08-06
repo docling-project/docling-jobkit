@@ -1,0 +1,109 @@
+options:
+  do_ocr: false
+
+sources:
+  - kind: kafka
+    topic: docling.jobs
+    # optional Kafka source settings, defaults shown
+    # max_messages: 100            # stop after N messages
+    # idle_timeout_s: 5            # …or after this long idle
+    # dlq_topic: docling.jobs.dlq  # route unparseable/failed messages here
+    # start_timestamp: 1784845000        # replay: seek to timestamp
+    client_config: 
+      bootstrap.servers: broker:9092
+      group.id: docling-jobkit
+      # auth config (uncomment as needed)
+      # security.protocol: SASL_SSL
+      # sasl.mechanisms: SCRAM-SHA-512
+      # sasl.username: your-user
+      # sasl.password: your-pass
+    backing_processor: # replace this with the connector of your choice (gdrive, azure, filenet, etc)
+      kind: local_path
+      path: ./input_documents/
+      recursive: true
+      
+      # google drive connector example
+      #kind: google_drive
+      #path_id: 11hLBXPtv1jCfnAEFFU7VPbXD8EM-W9iE
+      #token_path: "./dev/google_drive/google_drive_token.json" 
+      #credentials_path: "./dev/google_drive/google_drive_credentials.json" 
+
+      # google cloud storage example
+      #kind: google_cloud_storage
+      #bucket: your-bucket-name
+      #key_prefix: target/
+      #project: my-gcp-project
+      #service_account_key:
+      #  type: service_account
+      #  project_id: my-gcp-project
+      #  private_key_id: 2aca9ed8...
+      #  private_key: "-----BEGIN PRIVATE KEY-----\nMIIEv...\n-----END PRIVATE KEY-----\n"
+      #  client_email: my-sa@my-gcp-project.iam.gserviceaccount.com
+      #  client_id: "111274397167470984881"
+      #  auth_uri: https://accounts.google.com/o/oauth2/auth
+      #  token_uri: https://oauth2.googleapis.com/token
+      #  auth_provider_x509_cert_url: https://www.googleapis.com/oauth2/v1/certs
+      #  client_x509_cert_url: https://www.googleapis.com/robot/v1/metadata/x509/my-sa%40...
+      #  universe_domain: googleapis.com
+
+      # filenet example
+      #kind: filenet
+      #base_url: "https://{host}/content-services-graphql"
+      #username: "user"
+      #api_key: "key"
+      #repository_id: "OS1"
+      #folder_id: "/my-folder" # optional, will grab all files from folder. folder_id guid works here as well
+      #max_num_elements: 10
+
+      # Azure example
+      #kind: azure_blob
+      #account_name: "storage-account"
+      #container: "input"
+      #connection_string: "DefaultEndpointsProtocol=https;AccountName=your-account-name;AccountKey=your-account-key;EndpointSuffix=core.windows.net"
+      #max_num_elements: 10 # can remove to get all blobs
+
+target:
+  kind: kafka
+  status_topic: docling.results
+  # error_topic: docling.errors    # optional; defaults to status_topic with status=failed
+  client_config:
+    bootstrap.servers: broker:9092
+    # auth config (uncomment as needed)
+    # security.protocol: SASL_SSL
+    # sasl.mechanisms: SCRAM-SHA-512
+    # sasl.username: your-user
+    # sasl.password: your-pass
+  backing_processor: # replace this with the connector of your choice (gdrive, azure, filenet, etc)
+    kind: local_path
+    path: ./output_documents/
+
+    # google drive connector example
+    #kind: google_drive
+    #path_id: 11hLBXPtv1jCfnAEFFU7VPbXD8EM-W9iE
+    #token_path: "./dev/google_drive/google_drive_token.json" 
+    #credentials_path: "./dev/google_drive/google_drive_credentials.json" 
+
+    # google cloud storage example
+    #kind: google_cloud_storage
+    #bucket: your-bucket-name
+    #key_prefix: target/
+    #project: my-gcp-project
+    #service_account_key:
+    #  type: service_account
+    #  project_id: my-gcp-project
+    #  private_key_id: 2aca9ed8...
+    #  private_key: "-----BEGIN PRIVATE KEY-----\nMIIEv...\n-----END PRIVATE KEY-----\n"
+    #  client_email: my-sa@my-gcp-project.iam.gserviceaccount.com
+    #  client_id: "111274397167470984881"
+    #  auth_uri: https://accounts.google.com/o/oauth2/auth
+    #  token_uri: https://oauth2.googleapis.com/token
+    #  auth_provider_x509_cert_url: https://www.googleapis.com/oauth2/v1/certs
+    #  client_x509_cert_url: https://www.googleapis.com/robot/v1/metadata/x509/my-sa%40...
+    #  universe_domain: googleapis.com
+
+    # Azure example
+    #kind: azure_blob
+    #account_name: "storage-account"
+    #container: "input"
+    #connection_string: "DefaultEndpointsProtocol=https;AccountName=your-account-name;AccountKey=your-account-key;EndpointSuffix=core.windows.net"
+    #max_num_elements: 10 # can remove to get all blobs

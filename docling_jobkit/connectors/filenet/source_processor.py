@@ -217,3 +217,35 @@ class FileNetSourceProcessor(
     ) -> Iterator[DocumentStream]:
         for doc_id in self._list_document_ids():
             yield self._fetch_document_by_id(doc_id, max_file_size=max_file_size)
+
+    @override
+    def fetch_by_locator(
+        self, locator: str, *, max_file_size: int | None = None
+    ) -> DocumentStream:
+        # locator is the FileNet document ID?
+        # Use list_docs_by_id to fetch metadata for the single document
+        docs = list(list_docs_by_id(self._coords, self._auth_header, [locator]))
+
+        if not docs:
+            raise ValueError(f"Document with ID '{locator}' not found in FileNet")
+
+        metadata = docs[0]
+
+        # Extract content element info
+        content_elements = metadata.get("contentElements", [])
+        if not content_elements:
+            raise ValueError(f"Document '{locator}' has no content elements")
+
+        download_url = content_elements[0].get("downloadUrl")
+        if not download_url:
+            raise ValueError(f"Document '{locator}' has no download URL")
+
+        identifier = FileNetFileIdentifier(
+            id=metadata["id"],
+            name=metadata["name"],
+            size=int(metadata.get("contentSize", 0)),
+            mime_type=metadata.get("mimeType"),
+            download_url=download_url,
+        )
+
+        return self._fetch_document_by_id(identifier, max_file_size=max_file_size)

@@ -160,3 +160,12 @@ class LocalPathSourceProcessor(
                 identifier,
                 max_file_size=max_file_size,
             )
+
+    @override
+    def fetch_by_locator(
+        self, locator: str, *, max_file_size: int | None = None
+    ) -> DocumentStream:
+        return self._fetch_document_by_id(
+            LocalPathFileIdentifier(path=self._source.path / locator, size=0),
+            max_file_size=max_file_size,
+        )

@@ -46,6 +46,7 @@ def source_connectors():
         GoogleDriveSourceProcessor,
     )
     from docling_jobkit.connectors.http.source_processor import HttpSourceProcessor
+    from docling_jobkit.connectors.kafka.source_processor import KafkaSourceProcessor
     from docling_jobkit.connectors.local_path.source_processor import (
         LocalPathSourceProcessor,
     )
@@ -61,6 +62,7 @@ def source_connectors():
         AzureBlobSourceProcessor,
         GoogleDriveSourceProcessor,
         GoogleCloudStorageSourceProcessor,
+        KafkaSourceProcessor,
     ):
         _register_if_available(connectors, cls)
 
