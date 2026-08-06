@@ -1319,6 +1319,10 @@ rq = [
     { name = "msgpack" },
     { name = "rq" },
 ]
+sharepoint = [
+    { name = "office365-rest-python-client", version = "2.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "office365-rest-python-client", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
 vlm = [
     { name = "docling-slim", extra = ["models-vlm-inline"] },
 ]
@@ -1361,6 +1365,8 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "msgpack", marker = "extra == 'ray'", specifier = "~=1.1" },
     { name = "msgpack", marker = "extra == 'rq'", specifier = "~=1.1" },
+    { name = "office365-rest-python-client", marker = "python_full_version >= '3.11' and extra == 'sharepoint'", specifier = ">=2.6.2" },
+    { name = "office365-rest-python-client", marker = "python_full_version < '3.11' and extra == 'sharepoint'", specifier = ">=2.6.2,<3.0.0" },
     { name = "opensearch-py", marker = "extra == 'opensearch'", specifier = ">=2.8.0,<3" },
     { name = "pandas", specifier = "~=2.2" },
     { name = "psutil", marker = "extra == 'ray'", specifier = ">=6.0.0" },
@@ -1371,7 +1377,7 @@ requires-dist = [
     { name = "rq", marker = "extra == 'rq'", specifier = "~=2.4" },
     { name = "typer", specifier = ">=0.12.5,<1" },
 ]
-provides-extras = ["vlm", "onnxruntime", "rq", "ray", "gdrive", "gcloudstorage", "azure", "opensearch", "astradb"]
+provides-extras = ["vlm", "onnxruntime", "rq", "ray", "gdrive", "gcloudstorage", "azure", "opensearch", "astradb", "sharepoint"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3097,6 +3103,20 @@ wheels = [
 ]
 
 [[package]]
+name = "msal"
+version = "1.37.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "pyjwt", extra = ["crypto"] },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9a/99/d840198ecf6e8057bbc937f129ae940404485d736cda73253bbff9537f01/msal-1.37.0.tar.gz", hash = "sha256:1b1672a33ee467c1d70b341bb16cafd51bb3c817147a95b93263794b03971bec", size = 182444, upload-time = "2026-05-29T19:49:05.561Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/b0/d807279f4b55d16d1f120d5ac4344c6e39b56732e2a224d40bded7fd67ad/msal-1.37.0-py3-none-any.whl", hash = "sha256:dd17e95a7c71bce75e8108113438ba7c4a086b3bcad4f57a8c09b7af3d753c2d", size = 123725, upload-time = "2026-05-29T19:49:04.335Z" },
+]
+
+[[package]]
 name = "msgpack"
 version = "1.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3802,6 +3822,52 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/0b/5f/19930f824ffeb0ad4372da4812c50edbd1434f678c90c2733e1188edfc63/oauthlib-3.3.1.tar.gz", hash = "sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9", size = 185918, upload-time = "2025-06-19T22:48:08.269Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/be/9c/92789c596b8df838baa98fa71844d84283302f7604ed565dafe5a6b5041a/oauthlib-3.3.1-py3-none-any.whl", hash = "sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1", size = 160065, upload-time = "2025-06-19T22:48:06.508Z" },
+]
+
+[[package]]
+name = "office365-rest-python-client"
+version = "2.6.2"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version < '3.11' and sys_platform == 'darwin'",
+    "python_full_version < '3.11' and sys_platform != 'darwin'",
+]
+dependencies = [
+    { name = "msal", marker = "python_full_version < '3.11'" },
+    { name = "pytz", marker = "python_full_version < '3.11'" },
+    { name = "requests", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bc/04/6dce2d581c54a8e55a3b128cf79a93821a68a62bb9a956e65476c5bb247e/office365_rest_python_client-2.6.2.tar.gz", hash = "sha256:ce27f5a1c0cc3ff97041ccd9b386145692be4c64739f243f7d6ac3edbe0a3c46", size = 659460, upload-time = "2025-05-11T10:24:21.895Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3a/a4/611155711f8af347875c15b8b83f5fd9e978bd4de45f90085b9a583b684d/Office365_REST_Python_Client-2.6.2-py3-none-any.whl", hash = "sha256:06fc6829c39b503897caa9d881db419d7f97a8e4f1c95c4c2d12db36ea6c955d", size = 1337139, upload-time = "2025-05-11T10:24:18.926Z" },
+]
+
+[[package]]
+name = "office365-rest-python-client"
+version = "3.0.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version == '3.13.*' and sys_platform == 'darwin'",
+    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
+    "python_full_version == '3.11.*' and sys_platform == 'darwin'",
+    "python_full_version == '3.13.*' and sys_platform != 'darwin'",
+    "python_full_version == '3.12.*' and sys_platform != 'darwin'",
+    "python_full_version == '3.11.*' and sys_platform != 'darwin'",
+    "python_full_version >= '3.15' and sys_platform == 'darwin'",
+    "python_full_version == '3.14.*' and sys_platform == 'darwin'",
+    "python_full_version >= '3.15' and sys_platform != 'darwin'",
+    "python_full_version == '3.14.*' and sys_platform != 'darwin'",
+]
+dependencies = [
+    { name = "msal", marker = "python_full_version >= '3.11'" },
+    { name = "pytz", marker = "python_full_version >= '3.11'" },
+    { name = "requests", marker = "python_full_version >= '3.11'" },
+    { name = "typing-extensions", marker = "python_full_version >= '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/79/63/6ccc58f2e20c770b9409ea5a4794aa8515e1158b23df2dd2bfe90b04aacd/office365_rest_python_client-3.0.0.tar.gz", hash = "sha256:3f95d29794ee0adc58e0b16f6574257c885c74af108e1789e4b3c286bc2ce5ac", size = 949771, upload-time = "2026-08-02T11:54:01.716Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/09/70/3abd5a09c4213fc57c2b563b599ebaa05aa51a2f9b74e68c681a881f4e95/office365_rest_python_client-3.0.0-py3-none-any.whl", hash = "sha256:3432a9780febe0aa571543d21288d97ef9e0a0287aa0a5047523a65557e41932", size = 2860038, upload-time = "2026-08-02T11:53:59.863Z" },
 ]
 
 [[package]]
@@ -4822,9 +4888,17 @@ wheels = [
 name = "pyjwt"
 version = "2.13.0"
 source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
 sdist = { url = "https://files.pythonhosted.org/packages/3b/81/58d0ac84e1ef3a3843791d6954d94c0b33d526c75eeb1efbce9d0a4c4077/pyjwt-2.13.0.tar.gz", hash = "sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423", size = 107515, upload-time = "2026-05-21T19:54:36.618Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a3/5e/ecf12fdb62546d64385c158514e9b2b671f7832108ef2ecd2020ce0af2d1/pyjwt-2.13.0-py3-none-any.whl", hash = "sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728", size = 31274, upload-time = "2026-05-21T19:54:35.362Z" },
+]
+
+[package.optional-dependencies]
+crypto = [
+    { name = "cryptography" },
 ]
 
 [[package]]
