@@ -86,6 +86,11 @@ class GoogleDriveSourceProcessor(
         for info in get_source_files_infos(self._service, self._coords):
             yield info
 
+    def _count_documents(self) -> int:
+        from docling_jobkit.connectors.google_drive.helper import get_source_files_infos
+
+        return sum(1 for _ in get_source_files_infos(self._service, self._coords))
+
     def _fetch_document_by_id(
         self,
         info: GoogleDriveFileIdentifier,
