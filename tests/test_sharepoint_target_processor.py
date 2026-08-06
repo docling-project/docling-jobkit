@@ -68,23 +68,26 @@ def test_upload_resolves_destination_from_folder_path(
     folder = MagicMock()
 
     with (
-        patch(f"{_HELPER}.get_or_create_folder", return_value=folder) as get_or_create,
+        patch(f"{_HELPER}.get_or_create_folder") as get_or_create,
+        patch(f"{_HELPER}.folder_handle", return_value=folder) as handle,
         patch(f"{_HELPER}.{helper_name}") as upload,
     ):
         getattr(processor, method)(payload, "json/doc.json", "application/json")
 
     # coords.folder_path ("out") is prefixed onto the artifact's relative key
     get_or_create.assert_called_once_with(processor._drive, "out/json")
+    handle.assert_called_once_with(processor._drive, "out/json")
     upload.assert_called_once_with(folder, payload, "doc.json")
 
 
-def test_folder_handles_are_cached_across_uploads(sp_target_coords):
+def test_folder_creation_is_walked_once_per_destination(sp_target_coords):
     """get_or_create_folder costs a round-trip per path segment and runs on every
     artifact — including once per page image — so it must not repeat per upload."""
     processor = _proc(sp_target_coords)
 
     with (
         patch(f"{_HELPER}.get_or_create_folder") as get_or_create,
+        patch(f"{_HELPER}.folder_handle") as handle,
         patch(f"{_HELPER}.upload_object"),
     ):
         processor.upload_object(b"a", "images/one.png", "image/png")
@@ -95,24 +98,30 @@ def test_folder_handles_are_cached_across_uploads(sp_target_coords):
         "out/images",
         "out/json",
     ]
+    # the handle itself is rebuilt per upload — it costs no request, and sharing one
+    # would retain a children entry per uploaded artifact for the whole batch
+    assert handle.call_count == 3
 
 
-def test_finalize_drops_cached_handles(sp_target_coords):
+def test_finalize_forgets_which_folders_were_ensured(sp_target_coords):
     processor = _proc(sp_target_coords)
     with (
         patch(f"{_HELPER}.get_or_create_folder"),
+        patch(f"{_HELPER}.folder_handle"),
         patch(f"{_HELPER}.upload_object"),
     ):
         processor.upload_object(b"a", "json/doc.json", "application/json")
 
+    assert processor._ensured_folders == {"out/json"}
     processor._finalize()
-    assert processor._folder_cache == {}
+    assert processor._ensured_folders == set()
 
 
 def test_upload_maps_auth_error(sp_target_coords, graph_error):
     processor = _proc(sp_target_coords)
     with (
         patch(f"{_HELPER}.get_or_create_folder"),
+        patch(f"{_HELPER}.folder_handle"),
         patch(f"{_HELPER}.upload_file", side_effect=graph_error(403)),
     ):
         with pytest.raises(ConnectorAuthenticationError):

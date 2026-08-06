@@ -106,14 +106,18 @@ def test_list_folder_items_yields_file_meta(folder_path):
     root = _drive_item("root", "root", children=files)
     drive = MagicMock()
     drive.root = root
-    root.get_by_path.return_value = _drive_item("sub", "sub", children=files)
+    # a starting subfolder is resolved to its id first: ``children`` off a
+    # path-addressed handle builds a doubled slash into the URL
+    root.get_by_path.return_value.get.return_value.execute_query.return_value = (
+        _drive_item("sub", "sub", children=files)
+    )
 
     metas = list(helper.list_folder_items(drive, folder_path))
 
     assert [m["id"] for m in metas] == ["1", "2"]
     assert metas[1]["size"] == 20
     if folder_path:
-        root.get_by_path.assert_called_once_with(folder_path)
+        root.get_by_path.assert_called_once_with(folder_path.strip("/"))
     else:
         root.get_by_path.assert_not_called()
 
@@ -228,23 +232,43 @@ def test_resolve_destination(base_folder, target_filename, expected):
     assert helper.resolve_destination(base_folder, target_filename) == expected
 
 
+@pytest.mark.parametrize("folder_path", [None, ""], ids=["none", "empty"])
+def test_folder_handle_for_empty_path_is_the_root(folder_path):
+    drive = MagicMock()
+    assert helper.folder_handle(drive, folder_path) is drive.root
+    drive.root.get_by_path.assert_not_called()
+
+
+def test_folder_handle_is_path_addressed_and_unresolved():
+    """Uploads must hang off an unresolved handle.
+
+    ``get()`` mutates an item's path from ``/root:/out/json:/`` to ``/items/{id}``, and
+    the child address built for the upload then becomes ``/items/{id}:/doc.json:/``,
+    which Graph rejects with a 400 ("Resource not found for the segment '{id}:'").
+    """
+    drive = MagicMock()
+
+    handle = helper.folder_handle(drive, "/out/json/")
+
+    drive.root.get_by_path.assert_called_once_with("out/json")
+    assert handle is drive.root.get_by_path.return_value
+    handle.get.assert_not_called()
+
+
 def test_get_or_create_folder_returns_root_for_empty_path():
     drive = MagicMock()
     assert helper.get_or_create_folder(drive, None) is drive.root
     drive.root.get_by_path.assert_not_called()
 
 
-def test_get_or_create_folder_returns_existing():
+def test_get_or_create_folder_returns_an_unresolved_handle_not_the_resolved_item():
     drive = MagicMock()
-    existing = MagicMock(name="existing")
-    drive.root.get_by_path.return_value.get.return_value.execute_query.return_value = (
-        existing
-    )
+    resolved = drive.root.get_by_path.return_value.get.return_value.execute_query()
 
     result = helper.get_or_create_folder(drive, "out")
 
-    assert result is existing
-    drive.root.get_by_path.assert_called_once_with("out")
+    assert result is drive.root.get_by_path.return_value
+    assert result is not resolved
     drive.root.create_folder.assert_not_called()
 
 
@@ -261,8 +285,10 @@ def test_get_or_create_folder_looks_every_segment_up_from_the_root():
 
     helper.get_or_create_folder(drive, "out/json")
 
+    # one lookup per accumulated prefix, then the handle that gets returned
     assert [c.args[0] for c in drive.root.get_by_path.call_args_list] == [
         "out",
+        "out/json",
         "out/json",
     ]
     # never chained off the item resolved for the previous segment
@@ -278,27 +304,24 @@ def test_get_or_create_folder_creates_under_the_resolved_parent(graph_error):
     lookup.get.return_value.execute_query.side_effect = [parent, graph_error(404)]
     parent.create_folder.return_value = created
 
-    result = helper.get_or_create_folder(drive, "out/json")
+    helper.get_or_create_folder(drive, "out/json")
 
     parent.create_folder.assert_called_once()
     assert parent.create_folder.call_args.args[0] == "json"
     drive.root.create_folder.assert_not_called()
-    assert result is created
 
 
-def test_get_or_create_folder_creates_missing_and_returns_created(graph_error):
+def test_get_or_create_folder_creates_missing_segment(graph_error):
     drive = MagicMock()
     child = drive.root.get_by_path.return_value
     child.get.return_value.execute_query.side_effect = graph_error(404)
     created = MagicMock(name="created")
     drive.root.create_folder.return_value = created
 
-    result = helper.get_or_create_folder(drive, "out")
+    helper.get_or_create_folder(drive, "out")
 
     drive.root.create_folder.assert_called_once()
     created.execute_query_retry.assert_called_once()
-    # the created folder — not its parent — must be returned
-    assert result is created
 
 
 def test_get_or_create_folder_adopts_folder_created_concurrently(graph_error):
@@ -311,7 +334,11 @@ def test_get_or_create_folder_adopts_folder_created_concurrently(graph_error):
     created.execute_query_retry.side_effect = graph_error(409)
     drive.root.create_folder.return_value = created
 
-    assert helper.get_or_create_folder(drive, "out") is adopted
+    helper.get_or_create_folder(drive, "out")
+
+    # the 409 was swallowed by re-fetching the winner's folder, not propagated
+    assert child.get.return_value.execute_query.call_count == 2
+    assert adopted is not None
 
 
 def test_get_or_create_folder_reraises_non_404(graph_error):

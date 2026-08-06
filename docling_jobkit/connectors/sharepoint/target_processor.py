@@ -24,7 +24,7 @@ class SharePointTargetProcessor(BaseTargetProcessor):
     def __init__(self, coords: SharePointTargetCoordinates):
         super().__init__()
         self._coords = coords
-        self._folder_cache: dict[Optional[str], "DriveItem"] = {}
+        self._ensured_folders: set[Optional[str]] = set()
 
     @classmethod
     def check_dependencies(cls) -> None:
@@ -45,7 +45,7 @@ class SharePointTargetProcessor(BaseTargetProcessor):
             resolve_drive,
         )
 
-        self._folder_cache = {}
+        self._ensured_folders = set()
         self._client = get_client(self._coords)
         try:
             self._drive = resolve_drive(self._client, self._coords)
@@ -60,18 +60,24 @@ class SharePointTargetProcessor(BaseTargetProcessor):
         check_connection(self._client, self._drive)
 
     def _finalize(self):
-        self._folder_cache = {}
+        self._ensured_folders = set()
 
     def _resolve_target(self, target_filename: str) -> tuple["DriveItem", str]:
         """Resolve *target_filename* into its (destination folder, leaf name).
 
         ``get_or_create_folder`` costs one Graph round-trip per path segment, and the
         results processor calls ``upload_*`` once per artifact — including once per
-        page image — so without this cache a single document re-resolves the same
-        handful of folders dozens of times. Folders are only ever created here, never
-        removed, so a handle stays valid for as long as the processor is open.
+        page image — so without memoisation a single document re-walks the same handful
+        of folders dozens of times. Folders are only ever created here, never removed,
+        so "this path exists" holds for as long as the processor is open.
+
+        What is memoised is the *path*, not the handle: building a handle costs no
+        request, while holding one leaks — ``DriveItem.upload()`` appends to its
+        ``children`` collection, so a shared handle would retain an entry per uploaded
+        artifact for the whole batch.
         """
         from docling_jobkit.connectors.sharepoint.helper import (
+            folder_handle,
             get_or_create_folder,
             resolve_destination,
         )
@@ -79,12 +85,11 @@ class SharePointTargetProcessor(BaseTargetProcessor):
         dest_folder, name = resolve_destination(
             self._coords.folder_path, target_filename
         )
-        folder = self._folder_cache.get(dest_folder)
-        if folder is None:
-            folder = get_or_create_folder(self._drive, dest_folder)
-            self._folder_cache[dest_folder] = folder
+        if dest_folder not in self._ensured_folders:
+            get_or_create_folder(self._drive, dest_folder)
+            self._ensured_folders.add(dest_folder)
 
-        return folder, name
+        return folder_handle(self._drive, dest_folder), name
 
     @map_connector_authentication_errors(
         "SharePoint", is_sharepoint_authentication_error

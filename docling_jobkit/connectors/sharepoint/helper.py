@@ -171,8 +171,16 @@ def list_folder_items(
     Stops after *limit* files. The cap is honoured during the walk rather than by
     truncating afterwards, so a capped run never enumerates the whole library.
     """
-    root = drive.root
-    pending = [root.get_by_path(folder_path) if folder_path else root]
+    # Resolved to its id first: ``children`` off a path-addressed handle builds
+    # ``/root:/Reports:://children`` (note the doubled slash), whereas an id-addressed
+    # item gives the clean ``/items/{id}/children``. Items yielded by a listing are
+    # already id-addressed, so only the starting folder needs this.
+    start = (
+        drive.root.get_by_path(folder_path.strip("/")).get().execute_query()
+        if folder_path
+        else drive.root
+    )
+    pending = [start]
     yielded = 0
 
     while pending:
@@ -232,27 +240,46 @@ def resolve_destination(
     return "/".join(p for p in parts if p) or None, target.name
 
 
+def folder_handle(drive: Drive, folder_path: str | None) -> DriveItem:
+    """A path-addressed handle for *folder_path*. Costs no request.
+
+    Always addressed from the drive root, and deliberately **not** resolved with
+    ``get()``. Resolving mutates an item's resource path from path-addressed
+    (``/root:/out/json:/``) to id-addressed (``/items/{id}``), and every child address
+    built from it afterwards becomes ``/items/{id}:/name:/…`` — which Graph rejects
+    with a 400, "Resource not found for the segment '{id}:'". Handing back an
+    unresolved handle keeps uploads on the canonical
+    ``/root:/out/json/doc.json:/content`` form.
+
+    Because building one is free, callers should make a fresh handle per upload rather
+    than holding one: ``DriveItem.upload()`` appends to the handle's ``children``
+    collection, so a shared handle accumulates an entry per uploaded artifact for as
+    long as it is alive.
+    """
+    if not folder_path:
+        return drive.root
+    return drive.root.get_by_path(folder_path.strip("/"))
+
+
 def get_or_create_folder(drive: Drive, folder_path: str | None) -> DriveItem:
-    """Return the destination folder for uploads, creating any missing path segments.
+    """Ensure every segment of *folder_path* exists; return a handle to the leaf.
 
     Each segment is looked up as a full path *from the drive root*, never by chaining
-    ``get_by_path`` onto the previously resolved item. Resolving an item mutates its
-    resource path from path-addressed (``/root:/out:/``) to id-addressed
-    (``/items/{id}``), and hanging another path segment off that yields
-    ``/items/{id}:/json:/``, which Graph rejects with a 400 ("Resource not found for
-    the segment '{id}:'"). That only bites once the parent already exists — on the
-    very first run the same malformed request 404s and is mistaken for "missing", so
-    the folder gets created and everything looks fine until the second run.
+    ``get_by_path`` onto the previously resolved item — see :func:`folder_handle` for
+    why that breaks. The lookups resolve to id-addressed items, which is what creation
+    needs (``/items/{id}/children`` is the correct POST target), but the handle handed
+    back to callers is a fresh unresolved one.
 
-    Creation still goes through the resolved parent, whose id-addressed
-    ``/items/{id}/children`` is the correct target for a POST.
+    Note the failure mode this avoids is silent on a first run: the malformed request
+    404s, which reads as "folder missing", so the tree is created and everything looks
+    fine until a later run finds the parent already there and gets a 400 instead.
     """
     from office365.runtime.client_request_exception import ClientRequestException
 
-    parent = drive.root
     if not folder_path:
-        return parent
+        return drive.root
 
+    parent = drive.root
     parts = PurePosixPath(folder_path.strip("/")).parts
     for index, part in enumerate(parts):
         lookup = drive.root.get_by_path("/".join(parts[: index + 1]))
@@ -264,7 +291,7 @@ def get_or_create_folder(drive: Drive, folder_path: str | None) -> DriveItem:
             _log.debug("Creating missing folder segment %r", part)
             parent = _create_folder(parent, lookup, part)
 
-    return parent
+    return folder_handle(drive, folder_path)
 
 
 def _create_folder(parent: "DriveItem", child: "DriveItem", part: str) -> "DriveItem":
