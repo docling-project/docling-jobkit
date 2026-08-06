@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional, cast
 
 import ray
+from pydantic import BaseModel
 from ray import ObjectRef, serve
 
 from docling.datamodel.base_models import (
@@ -173,6 +174,42 @@ def _to_exportable_documents_from_chunk(
             )
         )
     return exportable
+
+
+def _count_documents_for_task(
+    task: Task, *, allow_external_plugins: bool = False
+) -> int | None:
+    """Return the total document count for a single-source expandable task.
+
+    Opens the source processor for each non-stream source and calls
+    ``count_documents()``.  Returns ``None`` when the task has no sources,
+    when every source returns ``None`` (i.e. the connector does not support
+    pre-listing), or when the source is a raw ``DocumentStream`` (already
+    materialised — caller should use ``len(task.sources)`` directly).
+
+    The result is used as ``expected_doc_count`` so that progress callbacks
+    report the correct ``total_docs`` for multi-document connectors that go
+    through the passthrough path (Azure Blob, Local Path, FileNet, GCS,
+    Google Drive, SharePoint).
+    """
+    total: int | None = None
+    for source in task.sources:
+        if isinstance(source, DocumentStream):
+            # Already a single materialised document; contributes 1.
+            total = (total or 0) + 1
+            continue
+        if not isinstance(source, BaseModel):
+            continue
+        with get_source_processor(
+            source, allow_external_plugins=allow_external_plugins
+        ) as proc:
+            n = proc.count_documents()
+        if n is None:
+            # This source cannot pre-count; bail out — we cannot give a
+            # reliable total if any source is opaque.
+            return None
+        total = (total or 0) + n
+    return total
 
 
 def _is_s3_fanout_task(task: Task, *, allow_external_plugins: bool = False) -> bool:
@@ -639,6 +676,7 @@ class DoclingProcessorConverterDeployment:
                 lambda: self._build_task_result(
                     request.task,
                     exportable,
+                    expected_doc_count=request.expected_doc_count,
                     start_time=request_start,
                 )
             )
@@ -1382,8 +1420,24 @@ class DoclingProcessorCoordinatorDeployment:
             finally:
                 del artifact_ref
         else:
+            # Pre-count documents so the converter can emit callbacks with the
+            # correct total_docs. This runs in the coordinator's event loop via
+            # asyncio.to_thread because source listing (e.g. Azure Blob, GCS)
+            # involves synchronous network I/O.
+            expected_doc_count = await asyncio.to_thread(
+                lambda: _count_documents_for_task(
+                    task,
+                    allow_external_plugins=(
+                        self.converter_manager_config.allow_external_plugins
+                    ),
+                )
+            )
             converter_result = await self._run_single_converter_call(
-                task, PassthroughTaskRequest(task=task)
+                task,
+                PassthroughTaskRequest(
+                    task=task,
+                    expected_doc_count=expected_doc_count,
+                ),
             )
             if isinstance(converter_result, ConverterFailureResult):
                 return converter_result

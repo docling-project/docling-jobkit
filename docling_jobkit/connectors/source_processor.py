@@ -143,6 +143,18 @@ class BaseSourceProcessor(
     def _count_documents(self) -> int | None:
         return None
 
+    def count_documents(self) -> int | None:
+        """Return the total number of documents this source exposes, or ``None``
+        if the connector cannot determine the count without consuming the
+        document stream.  Requires the processor to be open (i.e. called inside
+        a ``with`` block).
+        """
+        if not self._initialized:
+            raise RuntimeError(
+                "Processor not initialized. Use 'with' to open it first."
+            )
+        return self._count_documents()
+
     def fetch_converter_source_by_ref(
         self,
         ref: SourceDocumentRef[FileIdentifierT],

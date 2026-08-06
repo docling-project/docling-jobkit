@@ -247,6 +247,10 @@ class SlicePlan(BaseModel):
 class PassthroughTaskRequest(BaseModel):
     kind: str = Field(default="passthrough_task")
     task: Task = Field(description="Original parent task")
+    expected_doc_count: Optional[int] = Field(
+        default=None,
+        description="Pre-counted document total for callbacks; None means fall back to len(task.sources)",
+    )
 
 
 class MaterializedConvertRequest(BaseModel):

@@ -97,6 +97,20 @@ class GoogleCloudStorageSourceProcessor(
                 self._coords.key_prefix,
             )
 
+    def _count_documents(self) -> int:
+        count = 0
+        max_num = self._coords.max_num_elements
+        for blob in self._client.list_blobs(
+            self._coords.bucket,
+            prefix=self._coords.key_prefix,
+        ):
+            if blob.name.endswith("/"):
+                continue
+            if max_num is not None and count >= max_num:
+                return max_num
+            count += 1
+        return count
+
     @override
     def _make_document_ref(
         self, identifier: GoogleCloudStorageFileIdentifier, source_index: int

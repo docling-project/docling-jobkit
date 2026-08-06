@@ -121,6 +121,16 @@ class SharePointSourceProcessor(
         source_kind="sharepoint",
         is_unavailable_error=is_sharepoint_unavailable_error,
     )
+    def _count_documents(self) -> int:
+        return sum(1 for _ in self._list_document_ids())
+
+    @map_connector_authentication_errors(
+        "SharePoint",
+        is_sharepoint_authentication_error,
+        source=True,
+        source_kind="sharepoint",
+        is_unavailable_error=is_sharepoint_unavailable_error,
+    )
     def _fetch_document_by_id(
         self, identifier: SharePointFileIdentifier, *, max_file_size: int | None = None
     ) -> DocumentStream:
