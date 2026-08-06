@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+from itertools import islice
 from typing import Iterator
 
 from pydantic import BaseModel
@@ -7,7 +8,10 @@ from typing_extensions import override
 
 from docling.datamodel.base_models import DocumentStream
 
-from docling_jobkit.connectors.errors import map_connector_authentication_errors
+from docling_jobkit.connectors.errors import (
+    SourceConnectorPolicyError,
+    map_connector_authentication_errors,
+)
 from docling_jobkit.connectors.sharepoint.helper import (
     is_sharepoint_authentication_error,
     is_sharepoint_unavailable_error,
@@ -43,6 +47,10 @@ class SharePointSourceProcessor(
         self._coords = coords
 
     @classmethod
+    def check_dependencies(cls) -> None:
+        from office365.graph_client import GraphClient  # noqa: F401
+
+    @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
         return (TaskSharePointSource,)
 
@@ -55,13 +63,21 @@ class SharePointSourceProcessor(
     )
     def _initialize(self):
         from docling_jobkit.connectors.sharepoint.helper import (
+            SharePointDriveNotFoundError,
             check_connection,
             get_client,
             resolve_drive,
         )
 
         self._client = get_client(self._coords)
-        self._drive = resolve_drive(self._client, self._coords)
+        try:
+            self._drive = resolve_drive(self._client, self._coords)
+        except SharePointDriveNotFoundError as exc:
+            # The shared helper stays neutral so the target connector can classify
+            # the same failure as a target config error instead.
+            raise SourceConnectorPolicyError(
+                str(exc), source_kind="sharepoint"
+            ) from exc
         check_connection(self._client, self._drive)
 
     def _finalize(self):
@@ -81,20 +97,21 @@ class SharePointSourceProcessor(
             list_items_by_id,
         )
 
+        max_num = self._coords.max_num_elements
         if self._coords.file_ids:
-            metas = list_items_by_id(self._client, self._drive, self._coords.file_ids)
+            metas: Iterator[dict] = list_items_by_id(
+                self._client, self._drive, self._coords.file_ids
+            )
+            if max_num is not None:
+                metas = islice(metas, max_num)
         else:
+            # Pushed into the walk rather than applied afterwards, so a capped run
+            # stops enumerating instead of listing the whole library and truncating.
             metas = list_folder_items(
-                self._client, self._drive, self._coords.folder_path
+                self._drive, self._coords.folder_path, limit=max_num
             )
 
-        yielded = 0
-        max_num = self._coords.max_num_elements
         for meta in metas:
-            if max_num is not None and yielded >= max_num:
-                return
-            yielded += 1
-
             yield SharePointFileIdentifier(**meta)
 
     @map_connector_authentication_errors(

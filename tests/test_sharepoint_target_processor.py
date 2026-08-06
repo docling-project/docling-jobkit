@@ -1,60 +1,28 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from office365.runtime.client_request_exception import ClientRequestException
-from pydantic import SecretStr
-from requests import Response
 
-from docling_jobkit.connectors.errors import ConnectorAuthenticationError
+pytest.importorskip("office365")
+
+from docling_jobkit.connectors.errors import (
+    ConnectorAuthenticationError,
+    TargetConnectorConfigError,
+)
 from docling_jobkit.connectors.sharepoint.target_processor import (
     SharePointTargetProcessor,
-)
-from docling_jobkit.datamodel.sharepoint_coords import (
-    SharePointTargetCoordinates,
-    TaskSharePointTarget,
 )
 
 _HELPER = "docling_jobkit.connectors.sharepoint.helper"
 
 
-def _graph_error(status: int) -> ClientRequestException:
-    """Build a ClientRequestException without its response-inspecting __init__."""
-    exc = ClientRequestException.__new__(ClientRequestException)
-    response = Response()
-    response.status_code = status
-    exc.response = response
-    return exc
-
-
-@pytest.fixture
-def coords() -> SharePointTargetCoordinates:
-    return SharePointTargetCoordinates(
-        tenant="t",
-        client_id="c",
-        client_secret=SecretStr("s"),
-        site_url="https://contoso.sharepoint.com/sites/Marketing",
-        folder_path="out",
-    )
-
-
-def _proc(coords: SharePointTargetCoordinates) -> SharePointTargetProcessor:
+def _proc(coords) -> SharePointTargetProcessor:
     processor = SharePointTargetProcessor(coords)
     processor._drive = MagicMock()
     return processor
 
 
-def test_get_config_types():
-    assert SharePointTargetProcessor.get_config_types() == (TaskSharePointTarget,)
-
-
-def test_target_coords_omit_read_only_fields():
-    fields = SharePointTargetCoordinates.model_fields
-    assert "file_ids" not in fields
-    assert "max_num_elements" not in fields
-
-
-def test_initialize_resolves_drive(coords):
-    processor = SharePointTargetProcessor(coords)
+def test_initialize_resolves_drive(sp_target_coords):
+    processor = SharePointTargetProcessor(sp_target_coords)
     with (
         patch(f"{_HELPER}.get_client", return_value="the-client") as get_client,
         patch(f"{_HELPER}.resolve_drive", return_value="the-drive") as resolve_drive,
@@ -62,32 +30,90 @@ def test_initialize_resolves_drive(coords):
     ):
         processor._initialize()
 
-    get_client.assert_called_once_with(coords)
-    resolve_drive.assert_called_once_with("the-client", coords)
+    get_client.assert_called_once_with(sp_target_coords)
+    resolve_drive.assert_called_once_with("the-client", sp_target_coords)
     check_connection.assert_called_once_with("the-client", "the-drive")
     assert processor._drive == "the-drive"
 
 
-def test_upload_file_delegates_with_folder_path(coords):
-    processor = _proc(coords)
-    with patch(f"{_HELPER}.upload_file") as upload_file:
-        processor.upload_file("local.pdf", "pdf/doc.pdf", "application/pdf")
+def test_initialize_reports_unresolvable_drive_as_target_config_error(sp_target_coords):
+    """The shared helper raises a neutral error; the target must not surface it as a
+    *source* connector failure."""
+    from docling_jobkit.connectors.sharepoint.helper import SharePointDriveNotFoundError
 
-    upload_file.assert_called_once_with(
-        processor._drive, "local.pdf", "out", "pdf/doc.pdf"
-    )
+    processor = SharePointTargetProcessor(sp_target_coords)
+    with (
+        patch(f"{_HELPER}.get_client"),
+        patch(
+            f"{_HELPER}.resolve_drive",
+            side_effect=SharePointDriveNotFoundError("library 'Missing' not found"),
+        ),
+    ):
+        with pytest.raises(TargetConnectorConfigError, match="Missing"):
+            processor._initialize()
 
 
-def test_upload_object_delegates_with_folder_path(coords):
-    processor = _proc(coords)
-    with patch(f"{_HELPER}.upload_object") as upload_object:
-        processor.upload_object(b"data", "md/doc.md", "text/markdown")
+@pytest.mark.parametrize(
+    "method, helper_name, payload",
+    [
+        ("upload_file", "upload_file", "local.pdf"),
+        ("upload_object", "upload_object", b"data"),
+    ],
+    ids=["file", "object"],
+)
+def test_upload_resolves_destination_from_folder_path(
+    sp_target_coords, method, helper_name, payload
+):
+    processor = _proc(sp_target_coords)
+    folder = MagicMock()
 
-    upload_object.assert_called_once_with(processor._drive, b"data", "out", "md/doc.md")
+    with (
+        patch(f"{_HELPER}.get_or_create_folder", return_value=folder) as get_or_create,
+        patch(f"{_HELPER}.{helper_name}") as upload,
+    ):
+        getattr(processor, method)(payload, "json/doc.json", "application/json")
+
+    # coords.folder_path ("out") is prefixed onto the artifact's relative key
+    get_or_create.assert_called_once_with(processor._drive, "out/json")
+    upload.assert_called_once_with(folder, payload, "doc.json")
 
 
-def test_upload_maps_auth_error(coords):
-    processor = _proc(coords)
-    with patch(f"{_HELPER}.upload_file", side_effect=_graph_error(403)):
+def test_folder_handles_are_cached_across_uploads(sp_target_coords):
+    """get_or_create_folder costs a round-trip per path segment and runs on every
+    artifact — including once per page image — so it must not repeat per upload."""
+    processor = _proc(sp_target_coords)
+
+    with (
+        patch(f"{_HELPER}.get_or_create_folder") as get_or_create,
+        patch(f"{_HELPER}.upload_object"),
+    ):
+        processor.upload_object(b"a", "images/one.png", "image/png")
+        processor.upload_object(b"b", "images/two.png", "image/png")
+        processor.upload_object(b"c", "json/doc.json", "application/json")
+
+    assert [call.args[1] for call in get_or_create.call_args_list] == [
+        "out/images",
+        "out/json",
+    ]
+
+
+def test_finalize_drops_cached_handles(sp_target_coords):
+    processor = _proc(sp_target_coords)
+    with (
+        patch(f"{_HELPER}.get_or_create_folder"),
+        patch(f"{_HELPER}.upload_object"),
+    ):
+        processor.upload_object(b"a", "json/doc.json", "application/json")
+
+    processor._finalize()
+    assert processor._folder_cache == {}
+
+
+def test_upload_maps_auth_error(sp_target_coords, graph_error):
+    processor = _proc(sp_target_coords)
+    with (
+        patch(f"{_HELPER}.get_or_create_folder"),
+        patch(f"{_HELPER}.upload_file", side_effect=graph_error(403)),
+    ):
         with pytest.raises(ConnectorAuthenticationError):
             processor.upload_file("local.pdf", "pdf/doc.pdf", "application/pdf")

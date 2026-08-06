@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 from docling_jobkit.datamodel.sharepoint_coords import SharePointConnection
 
 _log = logging.getLogger(__name__)
-_DEFAULT_PAGE_SIZE = 200  # NOTE: should we allow the user to toggle this?
+_DEFAULT_PAGE_SIZE = 200
 
 # for upload
 _SIMPLE_UPLOAD_MAX_BYTES = 4 * 1024 * 1024  # simple upload for office365 caps at 4 MB
@@ -24,14 +24,47 @@ _RESUMABLE_CHUNK_BYTES = 4 * 1024 * 1024  # each chunk should also be 4 MB each
 _UPLOAD_MAX_RETRY = 3  # execute_query_retry attempts for folder/upload calls
 _UPLOAD_RETRY_DELAY_S = 3
 
+# Statuses where replaying the identical request cannot change the outcome. 429
+# (throttled) and 423 (locked) are deliberately absent — those are what retrying is
+# for. Failing fast here keeps a bad credential from burning _UPLOAD_MAX_RETRY *
+# _UPLOAD_RETRY_DELAY_S seconds on every single artifact upload, and lets the caller
+# handle a 409 folder-creation race while it is still cheap.
+_NON_RETRYABLE_STATUS = frozenset({400, 401, 403, 404, 409})
+
+
+class SharePointDriveNotFoundError(LookupError):
+    """The coordinates do not resolve to a reachable Graph drive.
+
+    Deliberately connector-neutral: ``resolve_drive`` is shared by the source and the
+    target processor, so each one translates this into the error family core expects
+    (``SourceConnectorPolicyError`` vs ``TargetConnectorConfigError``) instead of the
+    helper picking one and misattributing the other.
+    """
+
+
+def _status_of(exc: BaseException) -> int | None:
+    """HTTP status behind a Graph error, or None if *exc* is not one."""
+    from office365.runtime.client_request_exception import ClientRequestException
+
+    if isinstance(exc, ClientRequestException) and exc.response is not None:
+        return exc.response.status_code
+    return None
+
 
 def _on_retry_failure(attempt: int, exc: Exception) -> None:
     """failure_callback for execute_query_retry.
 
-    Logs each failed attempt and re-raises on the final one. ``execute_query_retry``
-    neither re-raises nor signals a status on exhaustion, so without this a persistent
-    failure would be silently swallowed and reported as a successful upload.
+    Logs each failed attempt and re-raises when retrying is pointless — either
+    because the status is terminal or because the attempts are exhausted.
+    ``execute_query_retry`` neither re-raises nor signals a status on exhaustion, so
+    without this a persistent failure would be silently swallowed and reported as a
+    successful upload.
     """
+    status = _status_of(exc)
+    if status in _NON_RETRYABLE_STATUS:
+        _log.debug("SharePoint request failed with terminal status %s: %s", status, exc)
+        raise exc
+
     if attempt >= _UPLOAD_MAX_RETRY:
         _log.error("SharePoint request failed after %d attempts: %s", attempt, exc)
         raise exc
@@ -55,26 +88,16 @@ def _execute_with_retry(client_object: "DriveItem") -> None:
 
 
 def is_sharepoint_authentication_error(exc: BaseException) -> bool:
-    from office365.runtime.client_request_exception import ClientRequestException
-
-    return (
-        isinstance(exc, ClientRequestException)
-        and exc.response is not None
-        and exc.response.status_code in (401, 403)
-    )
+    return _status_of(exc) in (401, 403)
 
 
 def is_sharepoint_unavailable_error(exc: BaseException) -> bool:
-    from office365.runtime.client_request_exception import ClientRequestException
     from requests import ConnectionError, Timeout
 
     if isinstance(exc, (ConnectionError, Timeout)):
         return True
-    return (
-        isinstance(exc, ClientRequestException)
-        and exc.response is not None
-        and exc.response.status_code >= 500
-    )
+    status = _status_of(exc)
+    return status is not None and status >= 500
 
 
 def get_client(coords: SharePointConnection) -> GraphClient:
@@ -92,16 +115,12 @@ def resolve_drive(client: GraphClient, coords: SharePointConnection) -> Drive:
     site_url -> a SharePoint document library (either default or user supplied)
     onedrive_user -> user's OneDrive for Business
     """
-    from docling_jobkit.connectors.errors import SourceConnectorPolicyError
-
     # OneDrive for Business: /users/{upn}/drive — there is no /me under app-only auth.
     if not coords.site_url:
         assert coords.onedrive_user is not None  # validated by SharePointConnection
         return client.users.get_by_principal_name(coords.onedrive_user).drive
 
-    site = (
-        client.sites.get_by_url(coords.site_url).get().execute_query()
-    )  # maybe retry + exp backoff?
+    site = client.sites.get_by_url(coords.site_url).get().execute_query()
     if not coords.document_library:
         return site.drive
 
@@ -110,10 +129,9 @@ def resolve_drive(client: GraphClient, coords: SharePointConnection) -> Drive:
         if drive.name == coords.document_library:
             return drive
 
-    raise SourceConnectorPolicyError(
+    raise SharePointDriveNotFoundError(
         f"Document library '{coords.document_library}' not found on site "
-        f"'{coords.site_url}'.",
-        source_kind="sharepoint",
+        f"'{coords.site_url}'."
     )
 
 
@@ -131,17 +149,42 @@ def _to_file_meta(item: Any) -> dict[str, Any]:
     }
 
 
-def list_folder_items(
-    client: GraphClient, drive: Drive, folder_path: str | None
-) -> Iterator[dict[str, Any]]:
-    """Yield file metadata for every file under folder_path (recursively)"""
-    root = drive.root
-    folder = root.get_by_path(folder_path) if folder_path else root
-    files = folder.get_files(recursive=True, page_size=_DEFAULT_PAGE_SIZE)
+def _iter_children(folder: "DriveItem") -> Iterator[Any]:
+    """Yield the children of *folder* one server page at a time.
 
-    client.execute_query()
-    for item in files:
-        yield _to_file_meta(item)
+    ``get_files(recursive=True)`` and ``get_all()`` both drain every page inside a
+    single ``execute_query()`` and accumulate the whole result set before the caller
+    sees anything. Iterating a collection in *paged* mode instead fetches page N+1
+    only when page N has been consumed, so abandoning the loop early stops the
+    enumeration instead of paying for the rest of the library.
+    """
+    collection = folder.children.paged(_DEFAULT_PAGE_SIZE)
+    collection.get().execute_query()
+    yield from collection
+
+
+def list_folder_items(
+    drive: Drive, folder_path: str | None, *, limit: int | None = None
+) -> Iterator[dict[str, Any]]:
+    """Yield file metadata for every file under folder_path (recursively).
+
+    Stops after *limit* files. The cap is honoured during the walk rather than by
+    truncating afterwards, so a capped run never enumerates the whole library.
+    """
+    root = drive.root
+    pending = [root.get_by_path(folder_path) if folder_path else root]
+    yielded = 0
+
+    while pending:
+        for item in _iter_children(pending.pop()):
+            if item.is_folder:
+                pending.append(item)
+                continue
+
+            yield _to_file_meta(item)
+            yielded += 1
+            if limit is not None and yielded >= limit:
+                return
 
 
 def list_items_by_id(
@@ -190,56 +233,109 @@ def resolve_destination(
 
 
 def get_or_create_folder(drive: Drive, folder_path: str | None) -> DriveItem:
-    """Return the destination folder for uploads, creating any missing path segments."""
+    """Return the destination folder for uploads, creating any missing path segments.
+
+    Each segment is looked up as a full path *from the drive root*, never by chaining
+    ``get_by_path`` onto the previously resolved item. Resolving an item mutates its
+    resource path from path-addressed (``/root:/out:/``) to id-addressed
+    (``/items/{id}``), and hanging another path segment off that yields
+    ``/items/{id}:/json:/``, which Graph rejects with a 400 ("Resource not found for
+    the segment '{id}:'"). That only bites once the parent already exists — on the
+    very first run the same malformed request 404s and is mistaken for "missing", so
+    the folder gets created and everything looks fine until the second run.
+
+    Creation still goes through the resolved parent, whose id-addressed
+    ``/items/{id}/children`` is the correct target for a POST.
+    """
+    from office365.runtime.client_request_exception import ClientRequestException
+
+    parent = drive.root
+    if not folder_path:
+        return parent
+
+    parts = PurePosixPath(folder_path.strip("/")).parts
+    for index, part in enumerate(parts):
+        lookup = drive.root.get_by_path("/".join(parts[: index + 1]))
+        try:
+            parent = lookup.get().execute_query()
+        except ClientRequestException as exc:
+            if _status_of(exc) != 404:
+                raise
+            _log.debug("Creating missing folder segment %r", part)
+            parent = _create_folder(parent, lookup, part)
+
+    return parent
+
+
+def _create_folder(parent: "DriveItem", child: "DriveItem", part: str) -> "DriveItem":
+    """Create the *part* segment under *parent*, tolerating a concurrent creator.
+
+    Every worker exporting into the same destination races to create the same folder
+    tree, so the check-then-create above is inherently lossy: the loser gets a 409 and
+    must adopt the winner's folder rather than fail the upload. ``Fail`` (rather than
+    ``Replace``) is kept so an existing folder's contents are never clobbered.
+    """
     from office365.onedrive.driveitems.conflict_behavior import ConflictBehavior
     from office365.runtime.client_request_exception import ClientRequestException
 
-    folder = drive.root
-    if not folder_path:
-        return folder
+    created = parent.create_folder(
+        part,
+        conflict_behavior=ConflictBehavior.Fail,  # type: ignore[arg-type]
+    )
+    try:
+        _execute_with_retry(created)
+    except ClientRequestException as exc:
+        if _status_of(exc) != 409:
+            raise
+        _log.debug("Folder segment %r created concurrently; adopting it", part)
+        return child.get().execute_query()
 
-    for part in PurePosixPath(folder_path.strip("/")).parts:
-        # return the child folder name under parent and create if absent
-        child = folder.get_by_path(part)
-        try:
-            folder = child.get().execute_query()
-        except ClientRequestException as exc:
-            if exc.response is not None and exc.response.status_code == 404:
-                _log.debug("Creating missing folder segment %r", part)
-                created = folder.create_folder(
-                    part,
-                    conflict_behavior=ConflictBehavior.Fail,  # type: ignore[arg-type]
-                )
-                _execute_with_retry(created)
-                folder = created
-            else:
-                raise
+    return created
 
-    return folder
+
+def _stage_as(src: str | os.PathLike, dst: str) -> None:
+    """Materialize *src* at *dst* as cheaply as the filesystem allows.
+
+    A hard link costs nothing; copying is the fallback for a cross-device temp dir and
+    can mean duplicating hundreds of megabytes (the parquet export writes 500 MB
+    files), so it is worth trying the link first.
+    """
+    try:
+        os.link(src, dst)
+    except OSError:
+        shutil.copyfile(src, dst)
+
+
+def _drain_into(fh: BinaryIO, head: bytes, rest: BinaryIO | None) -> None:
+    """Write *head* then the remainder of *rest* to *fh* in bounded steps."""
+    fh.write(head)
+    if rest is None:
+        return
+
+    while True:
+        block = rest.read(_RESUMABLE_CHUNK_BYTES)
+        if not block:
+            return
+        fh.write(block.encode() if isinstance(block, str) else block)
 
 
 def upload_file(
-    drive: Drive,
-    local_path: str | os.PathLike,
-    base_folder: str | None,
-    target_filename: str,
+    folder: "DriveItem", local_path: str | os.PathLike, target_name: str
 ) -> None:
-    """Upload the local file at local_path to base_folder/target_filename"""
-    dest_folder, name = resolve_destination(base_folder, target_filename)
-    folder = get_or_create_folder(drive, dest_folder)
+    """Upload the local file at local_path into the already-resolved *folder*."""
     size = os.path.getsize(local_path)
-    where = dest_folder or "<root>"
 
     if size <= _SIMPLE_UPLOAD_MAX_BYTES:
-        _log.debug("Uploading %r (%d bytes) to %s [simple]", name, size, where)
+        _log.debug("Uploading %r (%d bytes) [simple]", target_name, size)
         with open(local_path, "rb") as fh:
-            _execute_with_retry(folder.upload(name, fh.read()))
+            _execute_with_retry(folder.upload(target_name, fh.read()))
         return
 
-    # resumable_upload names the item after the source basename; when the target
-    # leaf differs, upload from a correctly-named temp copy.
-    if os.path.basename(os.fspath(local_path)) == name:
-        _log.debug("Uploading %r (%d bytes) to %s [resumable]", name, size, where)
+    # resumable_upload streams the file off disk in chunks but names the item after
+    # the source basename; when the target leaf differs, upload from a staged copy
+    # carrying the right name.
+    if os.path.basename(os.fspath(local_path)) == target_name:
+        _log.debug("Uploading %r (%d bytes) [resumable]", target_name, size)
         _execute_with_retry(
             folder.resumable_upload(
                 os.fspath(local_path), chunk_size=_RESUMABLE_CHUNK_BYTES
@@ -247,42 +343,40 @@ def upload_file(
         )
         return
 
-    _log.info("Uploading %r (%d bytes) to %s [resumable, temp copy]", name, size, where)
+    _log.info("Uploading %r (%d bytes) [resumable, staged]", target_name, size)
     with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = os.path.join(tmp, name)
-        shutil.copyfile(local_path, tmp_path)
+        tmp_path = os.path.join(tmp, target_name)
+        _stage_as(local_path, tmp_path)
         _execute_with_retry(
             folder.resumable_upload(tmp_path, chunk_size=_RESUMABLE_CHUNK_BYTES)
         )
 
 
 def upload_object(
-    drive: Drive,
-    obj: str | bytes | BinaryIO,
-    base_folder: str | None,
-    target_filename: str,
+    folder: "DriveItem", obj: str | bytes | BinaryIO, target_name: str
 ) -> None:
-    """Upload in-memory object to base_folder/target_filename"""
+    """Upload an in-memory object into the already-resolved *folder*."""
     if isinstance(obj, (bytes, bytearray)):
-        content = bytes(obj)
+        head, rest = bytes(obj), None
     elif isinstance(obj, str):
-        content = obj.encode()
+        head, rest = obj.encode(), None
     else:
-        data = obj.read()
-        content = data.encode() if isinstance(data, str) else data
+        # Read only up to the simple-upload cap. Anything larger is spilled to disk
+        # and streamed back from there, so a big file-like is never materialized in
+        # full on top of the copy the caller already holds.
+        chunk = obj.read(_SIMPLE_UPLOAD_MAX_BYTES + 1)
+        head = chunk.encode() if isinstance(chunk, str) else chunk
+        rest = obj if len(head) > _SIMPLE_UPLOAD_MAX_BYTES else None
 
-    dest_folder, name = resolve_destination(base_folder, target_filename)
-    folder = get_or_create_folder(drive, dest_folder)
-
-    if len(content) <= _SIMPLE_UPLOAD_MAX_BYTES:
-        _execute_with_retry(folder.upload(name, content))
+    if rest is None and len(head) <= _SIMPLE_UPLOAD_MAX_BYTES:
+        _execute_with_retry(folder.upload(target_name, head))
         return
 
     with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = os.path.join(tmp, name)
+        tmp_path = os.path.join(tmp, target_name)
         with open(tmp_path, "wb") as fh:
-            fh.write(content)
-
+            _drain_into(fh, head, rest)
+        del head  # released before the staged copy is streamed back off disk
         _execute_with_retry(
             folder.resumable_upload(tmp_path, chunk_size=_RESUMABLE_CHUNK_BYTES)
         )

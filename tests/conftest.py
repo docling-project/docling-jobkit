@@ -1,17 +1,90 @@
 """Shared test fixtures and utilities for docling-jobkit tests."""
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
+import pytest
 import pytest_asyncio
 from aiohttp import web
+from pydantic import SecretStr
 
 from docling_jobkit.datamodel.callback import ProgressKind
+from docling_jobkit.datamodel.sharepoint_coords import (
+    SharePointConnection,
+    SharePointSourceCoordinates,
+    SharePointTargetCoordinates,
+)
 
 
 def pytest_configure(config):
     """Configure logging for tests."""
     logging.getLogger("docling").setLevel(logging.INFO)
+
+
+# ---------------------------------------------------------------------------
+# SharePoint / OneDrive
+#
+# The coords models are pure pydantic, but ``graph_error`` needs the office365 SDK,
+# so that import stays inside the factory — importing it here would break collection
+# of the whole suite for anyone without the ``sharepoint`` extra.
+# ---------------------------------------------------------------------------
+
+_SP_CREDS = {"tenant": "tenant-guid", "client_id": "client-id"}
+
+
+@pytest.fixture
+def graph_error() -> Callable[[int], Exception]:
+    """Build a ClientRequestException carrying *status*, bypassing its __init__."""
+    from office365.runtime.client_request_exception import ClientRequestException
+    from requests import Response
+
+    def _make(status: int) -> ClientRequestException:
+        exc = ClientRequestException.__new__(ClientRequestException)
+        response = Response()
+        response.status_code = status
+        exc.response = response
+        return exc
+
+    return _make
+
+
+@pytest.fixture
+def sp_connection() -> SharePointConnection:
+    """Connection coords pointing at a SharePoint site."""
+    return SharePointConnection(
+        **_SP_CREDS,
+        client_secret=SecretStr("secret"),
+        site_url="https://contoso.sharepoint.com/sites/Marketing",
+    )
+
+
+@pytest.fixture
+def od_connection() -> SharePointConnection:
+    """Connection coords pointing at a user's OneDrive for Business."""
+    return SharePointConnection(
+        **_SP_CREDS,
+        client_secret=SecretStr("secret"),
+        onedrive_user="alice@contoso.com",
+    )
+
+
+@pytest.fixture
+def sp_source_coords() -> SharePointSourceCoordinates:
+    return SharePointSourceCoordinates(
+        **_SP_CREDS,
+        client_secret=SecretStr("secret"),
+        site_url="https://contoso.sharepoint.com/sites/Marketing",
+    )
+
+
+@pytest.fixture
+def sp_target_coords() -> SharePointTargetCoordinates:
+    return SharePointTargetCoordinates(
+        **_SP_CREDS,
+        client_secret=SecretStr("secret"),
+        site_url="https://contoso.sharepoint.com/sites/Marketing",
+        folder_path="out",
+    )
 
 
 class CallbackServer:
