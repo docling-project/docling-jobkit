@@ -1675,6 +1675,23 @@ class DoclingConverterManager:
         if new_code_formula_options is not None:
             pipeline_options.code_formula_options = new_code_formula_options
 
+        # `do_pdf_heading_hierarchy` is the request-level switch, while the nested
+        # options carry only the fine-tuning, so the pipeline's own `enabled` flag
+        # is derived from the switch here.
+        pipeline_options.heading_hierarchy_options = (
+            request.pdf_heading_hierarchy_options.model_copy(
+                update={"enabled": request.do_pdf_heading_hierarchy}, deep=True
+            )
+        )
+        # Style-based inference reads the parsed PDF cells, which the pipeline drops
+        # after assembly unless they are explicitly retained. Without them docling
+        # silently skips the style signal, so opt in on the caller's behalf.
+        if (
+            request.do_pdf_heading_hierarchy
+            and request.pdf_heading_hierarchy_options.use_style
+        ):
+            pipeline_options.generate_parsed_pages = True
+
         # Forward the definition of the following attributes, if they are not none
         for attr in (
             "queue_max_size",
