@@ -1,3 +1,9 @@
+## [v3.3.1](https://github.com/docling-project/docling-jobkit/releases/tag/v3.3.1) - 2026-08-06
+
+### Fix
+
+* Count of total docs in multiple connectors ([#216](https://github.com/docling-project/docling-jobkit/issues/216)) ([`c3c2079`](https://github.com/docling-project/docling-jobkit/commit/c3c2079ba349a120e2b6a46219b11af5fc0dd3ae))
+
 ## [v3.3.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.3.0) - 2026-08-06
 
 ### Feature
