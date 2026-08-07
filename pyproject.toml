@@ -61,16 +61,19 @@ onnxruntime = [
 # asr = [
 #     "docling[asr]~=2.53",
 # ]
+# kfp = [
+#     "kfp[kubernetes]>=2.10.0",
+# ]
 rq = [
     "rq~=2.4",
     "msgpack~=1.1",
 ]
 ray = [
-    "ray[serve]~=2.52 ; python_version < '3.14'",
+    "ray[serve]~=2.54 ; python_version < '3.14'",
     "redis[hiredis]>=4.2,<8.0.0",
     "msgpack~=1.1",
     "psutil>=6.0.0",
-    "codeflare-sdk>=0.20.0; python_version >= '3.11' and python_version < '3.14'",
+    "codeflare-sdk>=0.37.0; python_version >= '3.11' and python_version < '3.14'",
 ]
 gdrive = [
     "google-api-python-client>=2.183.0",
@@ -95,6 +98,7 @@ sharepoint = [
     "office365-rest-python-client>=2.6.2; python_version >= '3.11'",
 ]
 
+
 [dependency-groups]
 dev = [
     "coverage>=7.8.0",
@@ -105,7 +109,7 @@ dev = [
     "pytest-check~=2.4",
     "pytest-cov>=6.1.1",
     "python-semantic-release~=7.32",
-    "ray[serve]~=2.52 ; python_version < '3.14'",
+    "ray[serve]~=2.54 ; python_version < '3.14'",
     "redis[hiredis]>=4.2,<8.0.0",
     "msgpack~=1.1",
     "psutil>=6.0.0",
@@ -124,6 +128,13 @@ dev = [
 
 [tool.uv]
 package = true
+
+# conflicts = [
+#     [
+#         { extra = "ray" },
+#         { extra = "kfp" },
+#     ],
+# ]
 
 [tool.hatch.build.targets.sdist]
 include = ["docling_jobkit"]
@@ -228,6 +239,8 @@ module = [
     "easyocr.*",
     "tesserocr.*",
     "rapidocr_onnxruntime.*",
+    # "kfp.*",
+    # "kfp_server_api.*",
     "pandas.*",
     "msgpack.*",
     "mlx_vlm.*",
