@@ -97,6 +97,9 @@ sharepoint = [
     "office365-rest-python-client>=2.6.2,<3.0.0; python_version < '3.11'",
     "office365-rest-python-client>=2.6.2; python_version >= '3.11'",
 ]
+spark=[
+    "pyspark[connect]>=4.2,<5",
+]
 
 [dependency-groups]
 dev = [
@@ -242,6 +245,7 @@ module = [
     "codeflare_sdk.*",
     "opensearchpy.*",
     "confluent_kafka.*",
+    "pyspark.*",
 ]
 ignore_missing_imports = true
 
