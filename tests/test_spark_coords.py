@@ -32,6 +32,14 @@ def test_source_defaults_and_kind():
     assert src.auth is None  # omitted auth → local/no-auth
 
 
+def test_user_id_on_connection_without_auth():
+    # user_id is a connection-level field (multi-tenant Spark Connect), so it
+    # is settable even when no auth block is present.
+    src = _src(user_id="alice")
+    assert src.user_id == "alice"
+    assert src.auth is None
+
+
 def test_content_column_is_required():
     with pytest.raises(ValidationError):
         TaskSparkSource(host="h", table="t", port=15002)  # type: ignore
@@ -69,6 +77,17 @@ def test_doc_target_defaults():
     assert t.kind == "spark_doc"
     assert t.doc_id_field == "doc_id"
     assert t.flush_batch_size == 100
+
+
+def test_doc_target_table_format_override():
+    t = SparkDocTarget(
+        host="h",
+        table="cat.db.out",
+        mappings={"MARKDOWN": "text"},
+        table_format="parquet",
+        port=9090,
+    )
+    assert t.table_format == "parquet"
 
 
 def test_chunk_target_defaults():

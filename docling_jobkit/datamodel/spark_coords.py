@@ -7,16 +7,7 @@ from docling_jobkit.datamodel.target_field_slots import ChunkFieldSlots, FieldMa
 # Auth Coordinates
 
 
-class SparkAuthBase(BaseModel):
-    """Fields shared by all authenticated Spark Connect variants"""
-
-    user_id: Annotated[
-        Optional[str],
-        Field(description="Optional Spark Connect user id for session management"),
-    ] = None
-
-
-class TokenAuth(SparkAuthBase):
+class TokenAuth(BaseModel):
     """Bearer-token auth for generic Spark Connect endpoint"""
 
     kind: Literal["token"] = "token"
@@ -26,7 +17,7 @@ class TokenAuth(SparkAuthBase):
     ]
 
 
-class DatabricksAuth(SparkAuthBase):
+class DatabricksAuth(BaseModel):
     """Databricks personal-access-token auth (PAT)"""
 
     kind: Literal["databricks"] = "databricks"
@@ -58,6 +49,14 @@ class SparkConnection(BaseModel):
     port: Annotated[
         int, Field(description="Spark Connect port.", examples=[443, 15002])
     ]
+
+    user_id: Annotated[
+        Optional[str],
+        Field(
+            description="Spark Connect session user id for multi-tenant clusters; "
+            "available even without auth."
+        ),
+    ] = None
 
     auth: Annotated[
         Optional[SparkAuth],
@@ -102,6 +101,14 @@ class SparkDocTarget(SparkConnection, FieldMappings):
 
     table: Annotated[str, Field(description="Destination Delta table to save doc to.")]
 
+    table_format: Annotated[
+        str,
+        Field(
+            description="Destination table storage format; 'delta' -> idempotent "
+            "MERGE upsert, non-delta -> append (at-least-once)."
+        ),
+    ] = "delta"
+
     doc_id_field: Annotated[
         str,
         Field(description="Column used as the MERGE upsert key and document id."),
@@ -124,6 +131,14 @@ class SparkChunkTarget(SparkConnection, ChunkFieldSlots):
             examples=["main.docling.doc_chunks"],
         ),
     ]
+
+    table_format: Annotated[
+        str,
+        Field(
+            description="Destination table storage format; 'delta' -> idempotent "
+            "MERGE upsert, non-delta -> append (at-least-once)."
+        ),
+    ] = "delta"
 
     chunk_id_field: Annotated[
         str,
