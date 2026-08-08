@@ -53,6 +53,9 @@ def source_connectors():
     from docling_jobkit.connectors.sharepoint.source_processor import (
         SharePointSourceProcessor,
     )
+    from docling_jobkit.connectors.snowflake.source_processor import (
+        SnowflakeSourceProcessor,
+    )
 
     connectors = [
         HttpSourceProcessor,
@@ -65,6 +68,7 @@ def source_connectors():
         GoogleDriveSourceProcessor,
         GoogleCloudStorageSourceProcessor,
         SharePointSourceProcessor,
+        SnowflakeSourceProcessor,
     ):
         _register_if_available(connectors, cls)
 

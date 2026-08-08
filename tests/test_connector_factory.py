@@ -51,6 +51,7 @@ def test_builtin_source_connectors_registered():
         "sharepoint",
         "local_path",
         "google_drive",
+        "snowflake",
     }
 
 

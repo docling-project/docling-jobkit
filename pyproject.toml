@@ -97,6 +97,9 @@ sharepoint = [
     "office365-rest-python-client>=2.6.2,<3.0.0; python_version < '3.11'",
     "office365-rest-python-client>=2.6.2; python_version >= '3.11'",
 ]
+snowflake = [
+    "snowflake-connector-python>=3.6,<4",
+]
 
 [dependency-groups]
 dev = [
