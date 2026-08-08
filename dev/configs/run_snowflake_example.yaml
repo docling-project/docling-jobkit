@@ -1,0 +1,21 @@
+options:
+  do_ocr: false
+  to_formats:
+    - json
+
+sources:
+  - kind: snowflake
+    account: "xy12345"
+    user: "me"
+    password: "changeme" # or use private_key / private_key_path instead
+    warehouse: "MY_WH"
+    database: "MY_DB"
+    db_schema: "PUBLIC"
+    stage: "MY_STAGE"
+    # prefix: "incoming/"
+    # pattern: ".*[.]pdf"
+    max_num_elements: 10
+
+target:
+  kind: local_path
+  path: "./output_documents"
