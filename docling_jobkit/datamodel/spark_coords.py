@@ -80,7 +80,6 @@ class SparkSourceCoordinates(SparkConnection):
         str, Field(description="name of the column holding the raw document bytes")
     ]
 
-    # NOTE: maybe make this required?
     filename_column: Annotated[
         Optional[str],
         Field(
@@ -91,6 +90,16 @@ class SparkSourceCoordinates(SparkConnection):
 
     max_num_elements: Annotated[
         Optional[int], Field(description="Optional cap on documents processed.")
+    ] = None
+
+    partition_column: Annotated[
+        Optional[str],
+        Field(
+            description=(
+                "Only needed for distributed mode (multi-proc/ray)"
+                "can be found with DESCRIBE DETAIL <table>"
+            )
+        ),
     ] = None
 
 

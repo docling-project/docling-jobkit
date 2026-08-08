@@ -44,9 +44,10 @@ targets:
       MARKDOWN: text
       JSON: doc_json
     # optional params
+    # partition_column: ingest_date  # table's partition column, only needed for distributed modes
     # doc_id_field: doc_id  # used as Merge upsert key and id, defaults to doc_id
     # flush_batch_size: 100 # num of rows per batch write, defaults to 100
-
+    
   - kind: spark_chunks
     host: my-spark-host
     port: 443
