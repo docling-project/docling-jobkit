@@ -53,6 +53,7 @@ def source_connectors():
     from docling_jobkit.connectors.sharepoint.source_processor import (
         SharePointSourceProcessor,
     )
+    from docling_jobkit.connectors.spark.source_processor import SparkSourceProcessor
 
     connectors = [
         HttpSourceProcessor,
@@ -65,6 +66,7 @@ def source_connectors():
         GoogleDriveSourceProcessor,
         GoogleCloudStorageSourceProcessor,
         SharePointSourceProcessor,
+        SparkSourceProcessor,
     ):
         _register_if_available(connectors, cls)
 
