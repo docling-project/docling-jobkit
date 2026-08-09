@@ -49,6 +49,7 @@ def test_builtin_source_connectors_registered():
         "http",
         "s3",
         "sharepoint",
+        "spark",
         "local_path",
         "google_drive",
     }
