@@ -29,7 +29,9 @@ def test_source_defaults_and_kind():
     assert src.port == 15002
     assert src.filename_column is None
     assert src.max_num_elements is None
+    assert src.partition_column is None
     assert src.auth is None  # omitted auth → local/no-auth
+    assert src.user_id is None
 
 
 def test_user_id_on_connection_without_auth():

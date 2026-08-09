@@ -1,0 +1,254 @@
+import logging
+from unittest.mock import MagicMock
+
+import pytest
+
+pytest.importorskip("pyspark")
+
+from pyspark.sql import Row
+
+from docling.datamodel.base_models import DocumentStream
+
+from docling_jobkit.connectors.errors import SourceConnectorAuthenticationError
+from docling_jobkit.connectors.source_processor import DocumentChunk, SourceDocumentRef
+from docling_jobkit.connectors.spark import SparkRowID, SparkSourceProcessor
+from docling_jobkit.convert.materialization import SourceLimitExceededError
+from docling_jobkit.datamodel.spark_coords import TaskSparkSource
+
+
+@pytest.fixture(autouse=True)
+def _stub_spark_functions(monkeypatch):
+    import pyspark.sql.functions as F
+
+    monkeypatch.setattr(F, "col", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(F, "sha2", lambda *a, **k: MagicMock())
+
+
+def _coords(**overrides) -> TaskSparkSource:
+    # source coords are exactly table/content_column/filename_column/
+    # max_num_elements/partition_column (no prefix filter, no id_column).
+    base = {
+        "host": "h",
+        "port": 15002,
+        "table": "cat.db.docs",
+        "content_column": "content",
+        "filename_column": "doc_name",
+    }
+
+    return TaskSparkSource(**{**base, **overrides})
+
+
+def _chainable_df(rows) -> MagicMock:
+    """MagicMock DataFrame whose filter/select/limit/orderBy are chainable and
+    whose toLocalIterator/count reflect `rows`."""
+    mocked_df = MagicMock()
+    for op in ("filter", "select", "limit", "orderBy"):
+        getattr(mocked_df, op).return_value = mocked_df
+    mocked_df.toLocalIterator.return_value = iter(rows)
+    mocked_df.count.return_value = len(rows)
+
+    return mocked_df
+
+
+def _proc(coords, rows) -> SparkSourceProcessor:
+    """Processor whose `_df` is the projected/limited DataFrame.
+
+    Serves both single-driver mode (`rows` are content rows) and the
+    coordinator enumeration in distributed mode (`rows` are id rows).
+    """
+    proc = SparkSourceProcessor(coords)
+    proc._df = _chainable_df(rows)
+    proc._spark = MagicMock()
+    proc._initialized = True
+
+    return proc
+
+
+def _partition_proc(coords, partition_rows) -> tuple[SparkSourceProcessor, MagicMock]:
+    """Distributed processor with an empty partition cache whose
+    `spark.table(...)` returns a pruned partition DataFrame yielding
+    `partition_rows`. Returns (proc, spark) so callers can assert read counts."""
+    proc = SparkSourceProcessor(coords)
+    proc._initialized = True
+    proc._cached_partition = None
+    proc._partition_cache = {}
+    spark = MagicMock()
+    spark.table.return_value = _chainable_df(partition_rows)
+    proc._spark = spark
+
+    return proc, spark
+
+
+@pytest.mark.parametrize(
+    "overrides, expected",
+    [({}, False), ({"partition_column": "dt"}, True)],
+    ids=["no_partition_column", "with_partition_column"],
+)
+def test_is_expandable(overrides, expected):
+    assert SparkSourceProcessor.is_expandable(_coords(**overrides)) is expected
+
+
+def test_fetch_yields_documentstreams_with_names_and_bytes():
+    proc = _proc(
+        _coords(),
+        [
+            Row(content=b"PDF1", doc_name="a.pdf"),
+            Row(content=b"PDF2", doc_name="b.pdf"),
+        ],
+    )
+    docs = list(proc._fetch_documents())
+
+    assert all(isinstance(d, DocumentStream) for d in docs)
+    assert [d.name for d in docs] == ["a.pdf", "b.pdf"]
+    assert docs[0].stream.read() == b"PDF1"
+
+
+def test_fetch_synthesizes_name_when_no_filename_column():
+    proc = _proc(_coords(filename_column=None), [Row(content=b"X")])
+    (doc,) = proc._fetch_documents()
+
+    assert doc.name == "row-0.bin"
+
+
+def test_fetch_skips_null_content():
+    proc = _proc(
+        _coords(),
+        [
+            Row(content=None, doc_name="empty.pdf"),
+            Row(content=b"PDF", doc_name="ok.pdf"),
+        ],
+    )
+    docs = list(proc._fetch_documents())
+
+    assert [d.name for d in docs] == ["ok.pdf"]  # null row dropped
+    assert docs[0].stream.read() == b"PDF"
+
+
+def test_fetch_rejects_oversized():
+    proc = _proc(_coords(), [Row(content=b"0123456789", doc_name="big.pdf")])
+    with pytest.raises(SourceLimitExceededError):
+        list(proc._fetch_documents(max_file_size=8))
+
+
+def test_single_driver_logs_once(caplog):
+    proc = _proc(_coords(), [Row(content=b"PDF", doc_name="a.pdf")])
+    with caplog.at_level(logging.INFO):
+        list(proc._fetch_documents())
+
+    assert any("partition_column" in r.message for r in caplog.records)
+
+
+def test_count_documents():
+    proc = _proc(_coords(), [Row(content=b"a", doc_name="a.pdf")])
+    assert proc._count_documents() == 1
+
+
+def test_initialize_maps_auth_error(monkeypatch):
+    proc = SparkSourceProcessor(_coords())
+
+    def _boom(_conn):
+        raise RuntimeError("StatusCode.UNAUTHENTICATED: bad token")
+
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.spark.source_processor.get_spark_session", _boom
+    )
+    with pytest.raises(SourceConnectorAuthenticationError):
+        proc._initialize()
+
+
+def test_list_document_ids_enumerates_partition_and_hash():
+    # Coordinator yields (partition_value, row_key, filename_or_None) — no blobs.
+    proc = _proc(
+        _coords(partition_column="dt"),
+        [
+            Row(dt="2024-01-01", row_key="h1", doc_name="a.pdf"),
+            Row(dt="2024-01-01", row_key="h2", doc_name="b.pdf"),
+            Row(dt="2024-01-02", row_key="h3", doc_name=None),
+        ],
+    )
+    assert list(proc._list_document_ids()) == [
+        ("2024-01-01", "h1", "a.pdf"),
+        ("2024-01-01", "h2", "b.pdf"),
+        ("2024-01-02", "h3", None),
+    ]
+
+
+def test_make_document_ref_keys_on_partition_and_row_key():
+    proc = SparkSourceProcessor(_coords(partition_column="dt"))
+    ref = proc._make_document_ref(SparkRowID("2024-01-01", "h1", "a.pdf"), 0)
+
+    assert isinstance(ref, SourceDocumentRef)
+    assert ref.id == SparkRowID("2024-01-01", "h1", "a.pdf")
+    assert ref.source_uri == "cat.db.docs#2024-01-01"
+    assert ref.filename == "a.pdf"
+
+
+@pytest.mark.parametrize(
+    "row, expected_name",
+    [
+        (("2024-01-01", "h1", "a.pdf"), "a.pdf"),
+        (("2024-01-02", "h3", None), "h3.bin"),
+    ],
+    ids=["explicit_filename", "synthesized_from_row_key"],
+)
+def test_make_document_ref_filename(row, expected_name):
+    proc = SparkSourceProcessor(_coords(partition_column="dt"))
+
+    assert proc._make_document_ref(row, (row[1] and 0) or 0).filename == expected_name
+
+
+def test_iterate_document_chunks_one_per_partition():
+    proc = _proc(
+        _coords(partition_column="dt"),
+        [
+            Row(dt="2024-01-01", row_key="h1", doc_name="a.pdf"),
+            Row(dt="2024-01-01", row_key="h2", doc_name="b.pdf"),
+            Row(dt="2024-01-02", row_key="h3", doc_name="c.pdf"),
+        ],
+    )
+    chunks = list(proc.iterate_document_chunks(chunk_size=1000))
+
+    assert all(isinstance(c, DocumentChunk) for c in chunks)
+    assert len(chunks) == 2  # two distinct partitions
+    assert [len(c.refs) for c in chunks] == [2, 1]
+
+
+def test_iterate_document_chunks_raises_without_partition_column():
+    """multiproc must fail loudly, not degrade silently."""
+    proc = _proc(_coords(), [])
+
+    with pytest.raises(Exception, match="partition_column"):
+        list(proc.iterate_document_chunks(chunk_size=1000))
+
+
+def test_fetch_document_by_id_reads_partition_once_and_caches():
+    # First fetch reads the pruned partition and caches it; a second fetch of a
+    # sibling row in the same partition must NOT re-read.
+    proc, spark = _partition_proc(
+        _coords(partition_column="dt"),
+        [
+            Row(row_key="h1", _content=b"PDF1", _name="a.pdf"),
+            Row(row_key="h2", _content=b"PDF2", _name="b.pdf"),
+        ],
+    )
+
+    d1 = proc._fetch_document_by_id(SparkRowID("2024-01-01", "h1"))
+    assert isinstance(d1, DocumentStream)
+    assert d1.name == "a.pdf"
+    assert d1.stream.read() == b"PDF1"
+    assert proc._cached_partition == "2024-01-01"
+    assert spark.table.call_count == 1  # one pruned read
+
+    d2 = proc._fetch_document_by_id(SparkRowID("2024-01-01", "h2"))
+    assert d2.stream.read() == b"PDF2"
+    assert spark.table.call_count == 1  # cache hit — no re-read
+
+
+def test_fetch_document_by_id_enforces_max_file_size():
+    proc, _ = _partition_proc(
+        _coords(partition_column="dt"),
+        [Row(row_key="h1", _content=b"0123456789", _name="big.pdf")],
+    )
+
+    with pytest.raises(SourceLimitExceededError):
+        proc._fetch_document_by_id(SparkRowID("2024-01-01", "h1"), max_file_size=8)
