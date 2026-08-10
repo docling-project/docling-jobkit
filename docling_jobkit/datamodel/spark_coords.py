@@ -23,7 +23,14 @@ class DatabricksAuth(BaseModel):
     kind: Literal["databricks"] = "databricks"
 
     token: Annotated[
-        SecretStr, Field(description="Databricks personal access token (PAT)")
+        SecretStr,
+        Field(
+            description=(
+                "Databricks personal access token (PAT)"
+                "To get this, click on your profile on top right -> settings -> Developer"
+                "-> Access tokens -> manage -> generate new token"
+            )
+        ),
     ]
 
     cluster_id: Annotated[
@@ -43,7 +50,11 @@ class SparkConnection(BaseModel):
     """Shared Spark Connect connection settings for source and targets."""
 
     host: Annotated[
-        str, Field(description="Spark Connect gRPC host (or Databricks workspace host)")
+        str,
+        Field(
+            description="Spark Connect gRPC host (or Databricks workspace host)",
+            examples=["localhost", "https://adb-<id>.azuredatabricks.net"],
+        ),
     ]
 
     port: Annotated[
@@ -128,7 +139,7 @@ class SparkDocTarget(SparkConnection, FieldMappings):
     ] = 100
 
 
-class SparkChunkTarget(SparkConnection, ChunkFieldSlots):
+class SparkChunkTarget(SparkConnection, FieldMappings, ChunkFieldSlots):
     """One delta row per RAG chunk"""
 
     kind: Literal["spark_chunks"] = "spark_chunks"
