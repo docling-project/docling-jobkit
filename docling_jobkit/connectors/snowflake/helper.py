@@ -1,9 +1,14 @@
 import gzip
+import json
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
-from docling_jobkit.connectors.snowflake.models import SnowflakeCoordinates
+from docling_jobkit.connectors.snowflake.models import (
+    SnowflakeConnectionCoordinates,
+    SnowflakeCoordinates,
+    SnowflakeDocTarget,
+)
 
 if TYPE_CHECKING:
     from snowflake.connector import SnowflakeConnection
@@ -55,7 +60,9 @@ def _load_private_key_der(pem: str, passphrase: str | None) -> bytes:
     )
 
 
-def get_snowflake_connection(coords: SnowflakeCoordinates) -> "SnowflakeConnection":
+def get_snowflake_connection(
+    coords: SnowflakeConnectionCoordinates,
+) -> "SnowflakeConnection":
     import snowflake.connector
 
     kwargs: dict[str, object] = {
@@ -152,6 +159,63 @@ def download_stage_file(
     return data, display_name
 
 
+def table_ref(target: SnowflakeDocTarget) -> str:
+    """Fully-qualified 'db.schema.table' reference."""
+    return f"{target.database}.{target.db_schema}.{target.table}"
+
+
+def _to_bind_value(value: Any) -> Any:
+    """JSON-mapped fields arrive as parsed dict/list; the driver can only bind
+    scalars, so serialize those back to a string before binding."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    return value
+
+
+def upsert_document_row(
+    connection: "SnowflakeConnection",
+    target: SnowflakeDocTarget,
+    row: dict[str, Any],
+) -> None:
+    """Upsert one document row via MERGE, keyed on target.id_field.
+
+    Column names come from the deployer-configured `mappings`/`id_field`, not
+    from converted document content, so they're interpolated as identifiers
+    rather than bound as values -- same trust boundary as any other target
+    connector's field-mapping-driven schema. Left unquoted (like stage_ref/
+    table_ref) so Snowflake's own identifier folding applies: unquoted DDL
+    (the common case, e.g. `create table t (doc_id varchar)`) is stored
+    upper-cased, and unquoted references fold the same way on lookup, so a
+    lower-case config value still matches. Quoting here would instead force
+    exact-case matching against a name nothing actually normalized to.
+    """
+    id_field = target.id_field
+    if id_field not in row:
+        raise ValueError(f"Row is missing id field {id_field!r}; cannot upsert.")
+
+    columns = list(row.keys())
+    select_list = ", ".join(f"%s AS {c}" for c in columns)
+    update_list = ", ".join(f"t.{c} = s.{c}" for c in columns if c != id_field)
+    insert_columns = ", ".join(columns)
+    insert_values = ", ".join(f"s.{c}" for c in columns)
+
+    # No non-id columns (e.g. an empty `mappings`) -> nothing to update on a
+    # match, so the MERGE only needs an insert branch.
+    when_matched = f"WHEN MATCHED THEN UPDATE SET {update_list} " if update_list else ""
+
+    sql = (
+        f"MERGE INTO {table_ref(target)} AS t "
+        f"USING (SELECT {select_list}) AS s "
+        f"ON t.{id_field} = s.{id_field} "
+        f"{when_matched}"
+        f"WHEN NOT MATCHED THEN INSERT ({insert_columns}) VALUES ({insert_values})"
+    )
+    values = [_to_bind_value(row[c]) for c in columns]
+
+    with connection.cursor() as cur:
+        cur.execute(sql, values)
+
+
 __all__ = [
     "download_stage_file",
     "get_snowflake_connection",
@@ -160,4 +224,6 @@ __all__ = [
     "list_stage_files",
     "relative_path_from_list_name",
     "stage_ref",
+    "table_ref",
+    "upsert_document_row",
 ]

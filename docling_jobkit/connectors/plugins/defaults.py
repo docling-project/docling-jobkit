@@ -107,6 +107,9 @@ def target_connectors():
     from docling_jobkit.connectors.sharepoint.target_processor import (
         SharePointTargetProcessor,
     )
+    from docling_jobkit.connectors.snowflake.target_processor import (
+        SnowflakeTargetProcessor,
+    )
 
     connectors = [
         LocalPathTargetProcessor,
@@ -122,6 +125,7 @@ def target_connectors():
         AstraDBTargetProcessor,
         SharePointTargetProcessor,
         KafkaTargetProcessor,
+        SnowflakeTargetProcessor,
     ):
         _register_if_available(connectors, cls)
 

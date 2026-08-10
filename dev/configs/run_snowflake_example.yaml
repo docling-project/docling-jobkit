@@ -17,5 +17,18 @@ sources:
     max_num_elements: 10
 
 target:
-  kind: local_path
-  path: "./output_documents"
+  kind: snowflake_doc
+  account: "xy12345"
+  user: "me"
+  password: "changeme"
+  warehouse: "MY_WH"
+  database: "MY_DB"
+  db_schema: "PUBLIC"
+  table: "MY_TABLE"
+  id_field: "doc_id"
+  mappings:
+    JSON: "CONTENT_JSON"
+    TEXT: "CONTENT_TEXT"
+    MARKDOWN: "CONTENT_MD"
+
+  # kind: snowflake_chunk

@@ -2,8 +2,12 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, SecretStr, model_validator
 
+from docling_jobkit.datamodel.target_field_slots import FieldMappings
 
-class SnowflakeCoordinates(BaseModel):
+
+class SnowflakeConnectionCoordinates(BaseModel):
+    """Shared connection/auth fields for every Snowflake source/target mode."""
+
     account: Annotated[
         str,
         Field(
@@ -59,7 +63,7 @@ class SnowflakeCoordinates(BaseModel):
         str,
         Field(
             description=(
-                "Warehouse used to run the LIST/GET stage operations. "
+                "Warehouse used to run the SQL operations. "
                 "Must be running or set to auto-resume."
             )
         ),
@@ -67,14 +71,30 @@ class SnowflakeCoordinates(BaseModel):
 
     database: Annotated[
         str,
-        Field(description="Database that owns the stage."),
+        Field(description="Database that owns the stage/table."),
     ]
 
     db_schema: Annotated[
         str,
-        Field(description="Schema that owns the stage."),
+        Field(description="Schema that owns the stage/table."),
     ]
 
+    @model_validator(mode="after")
+    def _check_auth(self) -> "SnowflakeConnectionCoordinates":
+        has_password = self.password is not None
+        has_key = self.private_key is not None
+        if not has_password and not has_key:
+            raise ValueError(
+                "Provide either 'password' or 'private_key' for authentication."
+            )
+        if has_password and has_key:
+            raise ValueError(
+                "Provide only one authentication method: 'password' or a private key."
+            )
+        return self
+
+
+class SnowflakeCoordinates(SnowflakeConnectionCoordinates):
     stage: Annotated[
         str,
         Field(
@@ -115,23 +135,38 @@ class SnowflakeCoordinates(BaseModel):
         ),
     ] = None
 
-    @model_validator(mode="after")
-    def _check_auth(self) -> "SnowflakeCoordinates":
-        has_password = self.password is not None
-        has_key = self.private_key is not None
-        if not has_password and not has_key:
-            raise ValueError(
-                "Provide either 'password' or 'private_key' for authentication."
-            )
-        if has_password and has_key:
-            raise ValueError(
-                "Provide only one authentication method: 'password' or a private key."
-            )
-        return self
-
 
 class TaskSnowflakeSource(SnowflakeCoordinates):
     kind: Literal["snowflake"] = "snowflake"
 
 
-__all__ = ["SnowflakeCoordinates", "TaskSnowflakeSource"]
+class SnowflakeDocTarget(SnowflakeConnectionCoordinates, FieldMappings):
+    """Writes one row per document into a Snowflake table (upsert by id_field)."""
+
+    kind: Literal["snowflake_doc"] = "snowflake_doc"
+
+    table: Annotated[
+        str,
+        Field(
+            description="Name of the table to write document rows into.",
+            examples=["DOCUMENTS"],
+        ),
+    ]
+
+    id_field: Annotated[
+        str,
+        Field(
+            default="doc_id",
+            description=(
+                "Column used as the row's unique key for upsert (MERGE) semantics."
+            ),
+        ),
+    ] = "doc_id"
+
+
+__all__ = [
+    "SnowflakeConnectionCoordinates",
+    "SnowflakeCoordinates",
+    "SnowflakeDocTarget",
+    "TaskSnowflakeSource",
+]

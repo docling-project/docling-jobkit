@@ -70,6 +70,7 @@ def test_builtin_target_connectors_registered():
         "opensearch_chunks",
         "astradb_chunks",
         "sharepoint",
+        "snowflake_doc",
     }
 
 
