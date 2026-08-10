@@ -9,7 +9,10 @@ from typing_extensions import override
 
 from docling.datamodel.base_models import DocumentStream
 
-from docling_jobkit.connectors.errors import map_connector_authentication_errors
+from docling_jobkit.connectors.errors import (
+    SourceConnectorConfigError,
+    map_connector_authentication_errors,
+)
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     DocumentChunk,
@@ -82,15 +85,21 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
         from pyspark.sql.functions import col
 
         self._spark = get_spark_session(self._coords)
+        if not self._spark.catalog.tableExists(self._coords.table):
+            raise SourceConnectorConfigError(
+                f"Spark source table {self._coords.table!r} not found, verify the "
+                f"catalog.schema.table name and that it exists on the cluster."
+            )
+
         coords_df = self._spark.table(self._coords.table)
         _log.info("Spark source resolved table %s", self._coords.table)
 
-        content_non_null_df = coords_df.filter(
+        non_null_limited_df = coords_df.filter(
             col(self._coords.content_column).isNotNull()
         )
 
         if self._coords.max_num_elements is not None:
-            non_null_limited_df = content_non_null_df.limit(
+            non_null_limited_df = non_null_limited_df.limit(
                 self._coords.max_num_elements
             )
 
