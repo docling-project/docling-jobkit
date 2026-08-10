@@ -70,6 +70,8 @@ def test_builtin_target_connectors_registered():
         "opensearch_chunks",
         "astradb_chunks",
         "sharepoint",
+        "spark_doc",
+        "spark_chunks",
     }
 
 
