@@ -99,6 +99,7 @@ sharepoint = [
 ]
 spark=[
     "pyspark[connect]>=4.2,<5",
+    "databricks-sql-connector>=4.4.0,<5"
 ]
 
 [dependency-groups]
