@@ -129,6 +129,14 @@ dev = [
 [tool.uv]
 package = true
 
+# Ray Serve's internal proto handling (ray/serve/_private/config.py) breaks
+# against protobuf's newer upb-based API - AttributeError: FieldDescriptor
+# object has no attribute 'label'. Ray's own metadata only weakly declares
+# protobuf>=3.20.3, which doesn't reflect this runtime incompatibility.
+override-dependencies = [
+  "protobuf<7",
+]
+
 # conflicts = [
 #     [
 #         { extra = "ray" },
