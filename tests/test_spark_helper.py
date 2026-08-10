@@ -31,9 +31,12 @@ def test_remote_url_with_token_and_ssl():
     assert "use_ssl=true" in url
 
 
-def test_remote_url_databricks_includes_cluster():
+def test_remote_url_databricks_classic_includes_cluster():
     url = build_remote_url(
-        _conn(port=443, auth={"kind": "databricks", "token": "T0K", "cluster_id": "c1"})
+        _conn(
+            port=443,
+            auth={"kind": "databricks_classic", "token": "T0K", "cluster_id": "c1"},
+        )
     )
 
     assert "token=T0K" in url

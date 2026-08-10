@@ -17,10 +17,10 @@ class TokenAuth(BaseModel):
     ]
 
 
-class DatabricksAuth(BaseModel):
-    """Databricks personal-access-token auth (PAT)"""
+class DatabricksClassicAuth(BaseModel):
+    """Databricks CLASSIC (all-purpose/job) cluster over Spark Connect."""
 
-    kind: Literal["databricks"] = "databricks"
+    kind: Literal["databricks_classic"] = "databricks_classic"
 
     token: Annotated[
         SecretStr,
@@ -38,8 +38,34 @@ class DatabricksAuth(BaseModel):
     ]
 
 
+class DatabricksServerlessAuth(BaseModel):
+    """Databricks SERVERLESS SQL warehouse over databricks-sql-connector (DBAPI)."""
+
+    kind: Literal["databricks_serverless"] = "databricks_serverless"
+
+    token: Annotated[
+        SecretStr,
+        Field(
+            description=(
+                "Databricks personal access token (PAT)"
+                "To get this, click on your profile on top right -> settings -> Developer"
+                "-> Access tokens -> manage -> generate new token"
+            )
+        ),
+    ]
+
+    http_path: Annotated[
+        str,
+        Field(
+            description="Serverless SQL warehouse HTTP path, e.g. /sql/1.0/warehouses/<id> "
+            "(SQL Warehouse -> Connection details).",
+            examples=["/sql/1.0/warehouses/abc123"],
+        ),
+    ]
+
+
 SparkAuth = Annotated[
-    Union[TokenAuth, DatabricksAuth],
+    Union[TokenAuth, DatabricksClassicAuth, DatabricksServerlessAuth],
     Field(discriminator="kind"),
 ]
 
@@ -178,7 +204,8 @@ class TaskSparkSource(SparkSourceCoordinates):
 
 
 __all__ = [
-    "DatabricksAuth",
+    "DatabricksClassicAuth",
+    "DatabricksServerlessAuth",
     "SparkAuth",
     "SparkChunkTarget",
     "SparkConnection",

@@ -2,7 +2,8 @@ import pytest
 from pydantic import SecretStr, ValidationError
 
 from docling_jobkit.datamodel.spark_coords import (
-    DatabricksAuth,
+    DatabricksClassicAuth,
+    DatabricksServerlessAuth,
     SparkChunkTarget,
     SparkDocTarget,
     TaskSparkSource,
@@ -51,13 +52,29 @@ def test_content_column_is_required():
     "auth, expected_type",
     [
         ({"kind": "token", "token": "abc"}, TokenAuth),
-        ({"kind": "databricks", "token": "abc", "cluster_id": "c1"}, DatabricksAuth),
+        (
+            {"kind": "databricks_classic", "token": "abc", "cluster_id": "c1"},
+            DatabricksClassicAuth,
+        ),
+        (
+            {
+                "kind": "databricks_serverless",
+                "token": "abc",
+                "http_path": "/sql/1.0/warehouses/w1",
+            },
+            DatabricksServerlessAuth,
+        ),
     ],
-    ids=["token", "databricks"],
+    ids=["token", "classic", "serverless"],
 )
 def test_auth_discriminated_union(auth, expected_type):
     src = _src(auth=auth)
     assert isinstance(src.auth, expected_type)
+
+
+def test_serverless_requires_http_path():
+    with pytest.raises(ValidationError):
+        _src(auth={"kind": "databricks_serverless", "token": "abc"})
 
 
 def test_token_is_secret():

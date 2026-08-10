@@ -4,7 +4,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any, Iterable, Sequence
 
-from docling_jobkit.datamodel.spark_coords import DatabricksAuth, SparkConnection
+from docling_jobkit.datamodel.spark_coords import DatabricksClassicAuth, SparkConnection
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
@@ -42,7 +42,7 @@ def build_remote_url(conn: SparkConnection) -> str:
     if conn.auth is not None:
         params.append(f"token={conn.auth.token.get_secret_value()}")
         params.append("use_ssl=true")
-        if isinstance(conn.auth, DatabricksAuth):
+        if isinstance(conn.auth, DatabricksClassicAuth):
             params.append(f"x-databricks-cluster-id={conn.auth.cluster_id}")
     if not params:
         return base
