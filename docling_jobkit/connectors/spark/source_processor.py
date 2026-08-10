@@ -19,10 +19,10 @@ from docling_jobkit.connectors.source_processor import (
     SourceDocumentRef,
 )
 from docling_jobkit.connectors.spark import (
-    get_spark_session,
     is_spark_authentication_error,
     is_spark_unavailable_error,
 )
+from docling_jobkit.connectors.spark.backend_factory import get_backend
 from docling_jobkit.convert.materialization import (
     SourceLimitExceededError,
     normalize_max_file_size,
@@ -82,60 +82,52 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
 
     @_map_spark_source_errors
     def _initialize(self) -> None:
-        from pyspark.sql.functions import col
-
-        self._spark = get_spark_session(self._coords)
-        if not self._spark.catalog.tableExists(self._coords.table):
+        self._backend = get_backend(self._coords)
+        if not self._backend.table_exists(self._coords.table):
             raise SourceConnectorConfigError(
                 f"Spark source table {self._coords.table!r} not found, verify the "
                 f"catalog.schema.table name and that it exists on the cluster."
             )
 
-        coords_df = self._spark.table(self._coords.table)
         _log.info("Spark source resolved table %s", self._coords.table)
-
-        non_null_limited_df = coords_df.filter(
-            col(self._coords.content_column).isNotNull()
-        )
-
-        if self._coords.max_num_elements is not None:
-            non_null_limited_df = non_null_limited_df.limit(
-                self._coords.max_num_elements
-            )
-
-        self._df = non_null_limited_df
         self._cached_partition = None
         self._partition_cache = {}
 
     def _finalize(self) -> None:
+        if self._backend is not None:
+            self._backend.close()
+
         self._cached_partition = None
         self._partition_cache = {}
 
     @_map_spark_source_errors
     def _count_documents(self) -> int:
-        count = int(self._df.count())
+        count = self._backend.count_documents(
+            self._coords.table,
+            self._coords.content_column,
+            self._coords.max_num_elements,
+        )
         _log.debug("Spark source counted %d document(s)", count)
 
         return count
 
     @_map_spark_source_errors
     def _list_document_ids(self) -> Iterator[SparkRowID]:
-        """TODO: add docstring emphasizing the difference between this and typical"""
-        from pyspark.sql.functions import col, sha2
+        """Enumerate row identifiers ordered by partition.
 
-        partition_col = self._partition_col
-        content_col = self._coords.content_column
-        name_col = self._coords.filename_column
-
-        selects = [col(partition_col), sha2(col(content_col), 256).alias("row_key")]
-        if name_col:
-            selects.append(col(name_col))
-
-        spark_df = self._df.select(*selects).orderBy(col(partition_col))
-        for row in spark_df.toLocalIterator():
-            filename = row[name_col] if name_col else None
-
-            yield SparkRowID(row[partition_col], row["row_key"], filename)
+        Unlike a typical source (one opaque id per document), each id is a
+        (partition_value, sha2 row_key, filename) triple, and rows arrive
+        grouped by partition so iterate_document_chunks can emit one chunk per
+        partition without re-sorting.
+        """
+        for partition_value, row_key, filename in self._backend.enumerate_row_keys(
+            self._coords.table,
+            self._coords.content_column,
+            self._partition_col,
+            self._coords.filename_column,
+            self._coords.max_num_elements,
+        ):
+            yield SparkRowID(partition_value, row_key, filename)
 
     @override
     def _make_document_ref(
@@ -164,7 +156,7 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
         chunk_index = 0
         source_index = 0
         current_partition: object = object()
-        current_ids: list = []  # TODO: add list typing
+        current_ids: list[SparkRowID] = []
 
         def _emit(ids: list, idx: int, start: int) -> DocumentChunk:
             refs = [
@@ -193,33 +185,21 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
     def _fetch_document_by_id(
         self, identifier: SparkRowID, *, max_file_size: int | None = None
     ) -> DocumentStream:
-        from pyspark.sql.functions import col, sha2
-
+        # Rows arrive grouped by partition: on the first access to a partition,
+        # cache the whole partition keyed by row_key, then serve siblings from
+        # the cache, one backend read per partition instead of per document.
         partition_value, row_key, _ = identifier
         if self._cached_partition != partition_value:
-            partition_col = self._partition_col
-            content_col = self._coords.content_column
-            name_col = self._coords.filename_column
-
-            selects = [
-                sha2(col(content_col), 256).alias("row_key"),
-                col(content_col).alias("_content"),
-            ]
-            if name_col:
-                selects.append(col(name_col).alias("_name"))
-
-            partition_df = (
-                self._spark.table(self._coords.table)
-                .filter(col(partition_col) == partition_value)  # type: ignore[arg-type]
-                .filter(col(content_col).isNotNull())
-                .select(*selects)
-            )
-            cache: dict = {}
-            for row in partition_df.toLocalIterator():
-                name = (row["_name"] if name_col else None) or f"{row['row_key']}.bin"
-                cache[row["row_key"]] = (row["_content"], name)
-
-            self._partition_cache = cache
+            self._partition_cache = {
+                rk: (data, name or f"{rk}.bin")
+                for rk, data, name in self._backend.read_partition(
+                    self._coords.table,
+                    self._coords.content_column,
+                    self._partition_col,
+                    partition_value,
+                    self._coords.filename_column,
+                )
+            }
             self._cached_partition = partition_value
 
         data, name = self._partition_cache[row_key]
@@ -241,29 +221,30 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
                 "Under a distributed orchestrator set partition_column for per-partition reads."
             )
         limit = normalize_max_file_size(max_file_size)
-        content_col = self._coords.content_column
-        name_col = self._coords.filename_column
 
         yielded = 0
         skipped_null = 0
-        for index, row in enumerate(self._df.toLocalIterator()):
-            data = row[content_col]
+        documents = self._backend.stream_documents(
+            self._coords.table,
+            self._coords.content_column,
+            self._coords.filename_column,
+            self._coords.max_num_elements,
+        )
+        for index, (data, fname) in enumerate(documents):
             # Skip None or empty byte rows
             if not data:
                 skipped_null += 1
-                _log.warning(
-                    "Skipping row %d: %s is null/empty", index, content_col
-                )  # NOTE: this might spam logs?
+                _log.warning("Skipping row %d: content is null/empty", index)
                 continue
 
             if limit is not None and len(data) > limit:
-                name = row[name_col] if name_col else f"row-{index}"
+                name = fname if fname else f"row-{index}"
 
                 raise SourceLimitExceededError(
                     f"Source {name!r} exceeds max_file_size={limit} bytes"
                 )
 
-            name = (row[name_col] if name_col else None) or f"row-{index}.bin"
+            name = fname or f"row-{index}.bin"
             yielded += 1
 
             yield DocumentStream(name=name, stream=BytesIO(data))

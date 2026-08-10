@@ -3,25 +3,17 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import Any, Optional, Union
 
 from docling_jobkit.connectors.database_target_processor import (
     BaseDatabaseTargetProcessor,
 )
 from docling_jobkit.connectors.errors import map_connector_authentication_errors
-from docling_jobkit.connectors.spark import (
-    build_row_schema,
-    get_spark_session,
-    is_spark_authentication_error,
-    merge_with_retry,
-    normalize_row,
-)
+from docling_jobkit.connectors.spark import is_spark_authentication_error, normalize_row
+from docling_jobkit.connectors.spark.backend_factory import SparkBackend, get_backend
 from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
 from docling_jobkit.datamodel.spark_coords import SparkChunkTarget, SparkDocTarget
 from docling_jobkit.datamodel.target_field_slots import FieldMappings
-
-if TYPE_CHECKING:
-    from pyspark.sql import SparkSession
 
 _log = logging.getLogger(__name__)
 
@@ -37,24 +29,23 @@ _map_spark_target_errors = map_connector_authentication_errors(
 class SparkTargetProcessor(BaseDatabaseTargetProcessor[_SparkTarget]):
     def __init__(self, target: _SparkTarget) -> None:
         super().__init__(target)
-        self._spark: Optional[SparkSession] = None
+        self._backend: SparkBackend | None = None
         self._buffer: list[dict[str, Any]] = []
-        # unique per-instance view name to prevent co-resident doc/chunk processors
-        # in same sessions from clobbering each other's MERGE source
-        self._view = f"_docling_spark_merge_src{id(self)}"
         self._document_hash: Optional[str] = None
-
-    @property
-    def _session(self) -> SparkSession:
-        if self._spark is None:
-            raise RuntimeError("SparkTargetProcessor is not initialized")
-        return self._spark
 
     @property
     def _row(self) -> dict[str, Any]:
         if self._pending_row is None:
             raise RuntimeError("no active document; begin_document() was not called")
         return self._pending_row
+
+    @property
+    def _active_backend(self) -> SparkBackend:
+        if self._backend is None:
+            raise RuntimeError(
+                "Spark target not connected; _initialize() was not called"
+            )
+        return self._backend
 
     @classmethod
     def check_dependencies(cls) -> None:
@@ -66,8 +57,8 @@ class SparkTargetProcessor(BaseDatabaseTargetProcessor[_SparkTarget]):
 
     @_map_spark_target_errors
     def _initialize(self) -> None:
-        self._spark = get_spark_session(self._target)
-        exists = self._session.catalog.tableExists(self._target.table)
+        self._backend = get_backend(self._target)
+        exists = self._backend.table_exists(self._target.table)
         _log.info(
             "Spark target connected; table %s %s",
             self._target.table,
@@ -76,7 +67,10 @@ class SparkTargetProcessor(BaseDatabaseTargetProcessor[_SparkTarget]):
 
     def _finalize(self) -> None:
         self._flush()
-        self._spark = None
+        if self._backend is not None:
+            self._backend.close()
+
+        self._backend = None
         self._buffer = []
 
     def _columns(self) -> list[str]:
@@ -183,26 +177,22 @@ class SparkTargetProcessor(BaseDatabaseTargetProcessor[_SparkTarget]):
             if isinstance(self._target, SparkChunkTarget)
             else set()
         )
-        new_df = self._session.createDataFrame(
-            rows, schema=build_row_schema(self._columns(), int_cols)
+        key = (
+            self._target.chunk_id_field
+            if isinstance(self._target, SparkChunkTarget)
+            else self._target.doc_id_field
         )
-        table = self._target.table
-        fmt = self._target.table_format
-        # Delta + existing table -> idempotent MERGE; otherwise append (which also
-        # create-if-missing's a fresh delta or non-delta table).
-        if fmt == "delta" and self._session.catalog.tableExists(table):
-            key = (
-                self._target.chunk_id_field
-                if isinstance(self._target, SparkChunkTarget)
-                else self._target.doc_id_field
-            )
-            _log.info("Spark target merging %d row(s) into %s", len(rows), table)
-            merge_with_retry(self._session, new_df, table, self._view, key)
-        else:
-            _log.info(
-                "Spark target appending %d row(s) to %s (format=%s)",
-                len(rows),
-                table,
-                fmt,
-            )
-            new_df.write.format(fmt).mode("append").saveAsTable(table)
+        _log.info(
+            "Spark target writing %d row(s) to %s (format=%s)",
+            len(rows),
+            self._target.table,
+            self._target.table_format,
+        )
+        self._active_backend.write_rows(
+            self._target.table,
+            self._columns(),
+            int_cols,
+            rows,
+            key=key,
+            table_format=self._target.table_format,
+        )
