@@ -102,7 +102,8 @@ class SparkTargetProcessor(BaseDatabaseTargetProcessor[_SparkTarget]):
 
     def begin_document(self, doc_id: str) -> None:
         super().begin_document(doc_id)
-        self._row[self._target.doc_id_field] = doc_id
+        if isinstance(self._target, SparkDocTarget):
+            self._row[self._target.doc_id_field] = doc_id
 
     def upsert_row(self, row: dict[str, Any]) -> None:
         self._add_row(row)

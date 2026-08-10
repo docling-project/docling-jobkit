@@ -118,6 +118,16 @@ def test_chunk_consume_normalizes_row(make_proc, chunk_item) -> None:
     assert len(row["chunk_id"]) == 64  # sha-256 hex
 
 
+def test_chunk_target_document_bracket_writes_no_row(make_proc) -> None:
+    """to verify that it doesnt write an extra row for doc bracket"""
+    proc = make_proc(_chunk_target(flush_batch_size=1000))
+
+    proc.begin_document("deadbeefhash")
+    proc.end_document("deadbeefhash")
+
+    assert proc._buffer == []
+
+
 def test_chunk_id_is_deterministic_across_instances(make_proc, chunk_item) -> None:
     def _chunk_id() -> str:
         proc = make_proc(_chunk_target(flush_batch_size=1000))
