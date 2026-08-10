@@ -179,15 +179,8 @@ def upsert_document_row(
 ) -> None:
     """Upsert one document row via MERGE, keyed on target.id_field.
 
-    Column names come from the deployer-configured `mappings`/`id_field`, not
-    from converted document content, so they're interpolated as identifiers
-    rather than bound as values -- same trust boundary as any other target
-    connector's field-mapping-driven schema. Left unquoted (like stage_ref/
-    table_ref) so Snowflake's own identifier folding applies: unquoted DDL
-    (the common case, e.g. `create table t (doc_id varchar)`) is stored
-    upper-cased, and unquoted references fold the same way on lookup, so a
-    lower-case config value still matches. Quoting here would instead force
-    exact-case matching against a name nothing actually normalized to.
+    Left unquoted (like stage_ref/ table_ref) so Snowflake's own
+    identifier folding applies: unquoted DDL
     """
     id_field = target.id_field
     if id_field not in row:
