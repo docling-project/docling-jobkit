@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
+import re
 import time
-from typing import TYPE_CHECKING, Any, Iterable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Sequence
 
 from docling_jobkit.datamodel.spark_coords import DatabricksClassicAuth, SparkConnection
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
     from pyspark.sql.types import StructType
+
+# Strict allowlist for table/column identifiers: validate, then backtick-quote.
+# Anything outside this charset is rejected rather than escaped.
+_IDENT = re.compile(r"^[A-Za-z0-9_.]+$")
 
 
 def is_spark_authentication_error(exc: BaseException) -> bool:
@@ -88,6 +93,19 @@ def build_row_schema(columns: Sequence[str], int_columns: Iterable[str]) -> Stru
     )
 
 
+def retry_on_merge_conflict(fn: Callable[[], Any], max_retries: int = 3) -> None:
+    """Run `fn` (a MERGE), retrying with backoff on Delta concurrency conflicts."""
+    for attempt in range(max_retries):
+        try:
+            fn()
+            return
+        except Exception as exc:
+            if is_merge_conflict(exc) and attempt < max_retries - 1:
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            raise
+
+
 def merge_with_retry(
     spark: SparkSession,
     df: DataFrame,
@@ -107,12 +125,59 @@ def merge_with_retry(
         f"WHEN NOT MATCHED THEN INSERT *"
     )
 
-    for attempt in range(max_retries):
-        try:
-            spark.sql(sql)
-            return
-        except Exception as exc:
-            if is_merge_conflict(exc) and attempt < max_retries - 1:
-                time.sleep(0.5 * (attempt + 1))
-                continue
-            raise
+    retry_on_merge_conflict(lambda: spark.sql(sql), max_retries)
+
+
+# helper SQL builer methods for databricks sql serverless path
+
+
+def quote_identifier(name: str) -> str:
+    """Validate a table/column identifier and backtick-quote each dotted part."""
+    if not name or not _IDENT.match(name):
+        raise ValueError(f"invalid SQL identifier: {name!r}")
+
+    return ".".join(f"`{part}`" for part in name.split("."))
+
+
+def staging_name(table: str, token: str) -> str:
+    """A per-instance staging table in the target's schema (catalog.schema._docling_stg_<token>)."""
+    parts = table.split(".")
+    parts[-1] = f"_docling_stg_{token}"
+
+    return ".".join(parts)
+
+
+def _col_types(columns: Sequence[str], int_columns: set[str]) -> str:
+    return ", ".join(
+        f"{quote_identifier(c)} {'BIGINT' if c in int_columns else 'STRING'}"
+        for c in columns
+    )
+
+
+def create_table_sql(
+    table: str, columns: Sequence[str], int_columns: set[str], table_format: str
+) -> str:
+    """CREATE TABLE IF NOT EXISTS with all-string/BIGINT columns and the given format."""
+    using = "DELTA" if table_format == "delta" else table_format.upper()
+    return (
+        f"CREATE TABLE IF NOT EXISTS {quote_identifier(table)} "
+        f"({_col_types(columns, int_columns)}) USING {using}"
+    )
+
+
+def insert_sql(table: str, columns: Sequence[str]) -> str:
+    """Parameter-bound INSERT (VALUES uses `?` placeholders, never interpolated data)."""
+    cols = ", ".join(quote_identifier(c) for c in columns)
+    marks = ", ".join(["?"] * len(columns))
+    return f"INSERT INTO {quote_identifier(table)} ({cols}) VALUES ({marks})"
+
+
+def merge_sql(table: str, staging: str, key: str) -> str:
+    """Static idempotent MERGE template keyed on `key` (never varies with data)."""
+    key_ref = quote_identifier(key)
+    return (
+        f"MERGE INTO {quote_identifier(table)} t USING {quote_identifier(staging)} s "
+        f"ON t.{key_ref} = s.{key_ref} "
+        f"WHEN MATCHED THEN UPDATE SET * "
+        f"WHEN NOT MATCHED THEN INSERT *"
+    )
