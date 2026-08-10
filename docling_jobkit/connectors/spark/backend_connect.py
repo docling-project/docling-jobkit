@@ -26,7 +26,7 @@ class SparkConnectBackend:
         self._spark: SparkSession = get_spark_session(conn)
 
     def close(self) -> None:
-        """TODO: 1 line docstring"""
+        """No-op: SparkSession lifecycle is managed externally."""
 
     def _non_null_limted(
         self, table: str, content_column: str, max_num_elements: int | None
