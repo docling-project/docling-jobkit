@@ -2,7 +2,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, SecretStr, model_validator
 
-from docling_jobkit.datamodel.target_field_slots import FieldMappings
+from docling_jobkit.datamodel.target_field_slots import ChunkFieldSlots, FieldMappings
 
 
 class SnowflakeConnectionCoordinates(BaseModel):
@@ -164,7 +164,35 @@ class SnowflakeDocTarget(SnowflakeConnectionCoordinates, FieldMappings):
     ] = "doc_id"
 
 
+class SnowflakeChunkTarget(
+    SnowflakeConnectionCoordinates, FieldMappings, ChunkFieldSlots
+):
+    """Writes one row per chunk into a Snowflake table (upsert by chunk_id_field)."""
+
+    kind: Literal["snowflake_chunks"] = "snowflake_chunks"
+
+    table: Annotated[
+        str,
+        Field(
+            description="Name of the table to write chunk rows into.",
+            examples=["CHUNKS"],
+        ),
+    ]
+
+    chunk_id_field: Annotated[
+        str,
+        Field(
+            default="chunk_id",
+            description=(
+                "Column used as the chunk row's unique key for upsert "
+                "(MERGE) semantics."
+            ),
+        ),
+    ] = "chunk_id"
+
+
 __all__ = [
+    "SnowflakeChunkTarget",
     "SnowflakeConnectionCoordinates",
     "SnowflakeCoordinates",
     "SnowflakeDocTarget",

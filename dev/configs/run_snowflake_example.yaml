@@ -1,7 +1,11 @@
 options:
   do_ocr: false
-  to_formats:
+  to_formats: # for doc
     - json
+  chunking_options: # for chunk
+    chunker: hybrid
+    tokenizer: "{model}"
+    max_tokens: 512
 
 sources:
   - kind: snowflake
@@ -16,19 +20,34 @@ sources:
     # pattern: ".*[.]pdf"
     max_num_elements: 10
 
-target:
-  kind: snowflake_doc
-  account: "xy12345"
-  user: "me"
-  password: "changeme"
-  warehouse: "MY_WH"
-  database: "MY_DB"
-  db_schema: "PUBLIC"
-  table: "MY_TABLE"
-  id_field: "doc_id"
-  mappings:
-    JSON: "CONTENT_JSON"
-    TEXT: "CONTENT_TEXT"
-    MARKDOWN: "CONTENT_MD"
+targets:
+  - kind: snowflake_doc
+    account: "xy12345"
+    user: "me"
+    password: "changeme"
+    warehouse: "MY_WH"
+    database: "MY_DB"
+    db_schema: "PUBLIC"
+    table: "MY_DOCS"
+    id_field: "doc_id"
+    mappings:
+      JSON: "CONTENT_JSON"
+      TEXT: "CONTENT_TEXT"
+      MARKDOWN: "CONTENT_MD"
 
-  # kind: snowflake_chunk
+  - kind: snowflake_chunks
+    account: "xy12345"
+    user: "me"
+    password: "changeme"
+    warehouse: "MY_WH"
+    database: "MY_DB"
+    db_schema: "PUBLIC"
+    table: "MY_CHUNKS"
+    chunk_id_field: "chunk_id"       # default shown explicitly
+    doc_id_field: "doc_id"           # default
+    chunk_index_field: "chunk_index" # default
+    text_field: "text"               # default
+    metadata_field: "metadata"       # default
+    page_field: "page_numbers"       # optional -- omit to skip this column
+    headings_field: "headings"       # optional -- omit to skip this column
+    # mappings: {}                   # leave unset -- see the NotImplementedError note above

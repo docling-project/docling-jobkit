@@ -5,10 +5,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterator
 
 from docling_jobkit.connectors.snowflake.models import (
+    SnowflakeChunkTarget,
     SnowflakeConnectionCoordinates,
     SnowflakeCoordinates,
     SnowflakeDocTarget,
 )
+
+_TableTarget = SnowflakeDocTarget | SnowflakeChunkTarget
 
 if TYPE_CHECKING:
     from snowflake.connector import SnowflakeConnection
@@ -159,7 +162,7 @@ def download_stage_file(
     return data, display_name
 
 
-def table_ref(target: SnowflakeDocTarget) -> str:
+def table_ref(target: _TableTarget) -> str:
     """Fully-qualified 'db.schema.table' reference."""
     return f"{target.database}.{target.db_schema}.{target.table}"
 
@@ -172,17 +175,24 @@ def _to_bind_value(value: Any) -> Any:
     return value
 
 
-def upsert_document_row(
+def upsert_table_row(
     connection: "SnowflakeConnection",
-    target: SnowflakeDocTarget,
+    target: _TableTarget,
+    id_field: str,
     row: dict[str, Any],
 ) -> None:
-    """Upsert one document row via MERGE, keyed on target.id_field.
+    """Upsert one row via MERGE, keyed on id_field.
 
-    Left unquoted (like stage_ref/ table_ref) so Snowflake's own
-    identifier folding applies: unquoted DDL
+    Shared by the document target (id_field) and chunk target
+    (chunk_id_field) -- the row shape differs, the MERGE mechanics don't, so
+    the caller passes whichever field name applies.
+
+    Left unquoted (like stage_ref/table_ref) so Snowflake's own identifier
+    folding applies: unquoted DDL upper-cases column names by default, and
+    unquoted references fold the same way, so a lower-case config value
+    still matches. Quoting would instead force exact-case matching against
+    a name nothing actually normalized to.
     """
-    id_field = target.id_field
     if id_field not in row:
         raise ValueError(f"Row is missing id field {id_field!r}; cannot upsert.")
 
@@ -218,5 +228,5 @@ __all__ = [
     "relative_path_from_list_name",
     "stage_ref",
     "table_ref",
-    "upsert_document_row",
+    "upsert_table_row",
 ]

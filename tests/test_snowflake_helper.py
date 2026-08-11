@@ -13,7 +13,6 @@ from docling_jobkit.connectors.snowflake.helper import (
     relative_path_from_list_name,
     stage_ref,
     table_ref,
-    upsert_document_row,
 )
 from docling_jobkit.connectors.snowflake.models import (
     SnowflakeCoordinates,
