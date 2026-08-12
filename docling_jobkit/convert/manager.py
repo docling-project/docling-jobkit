@@ -67,9 +67,10 @@ from docling.models.factories import (
 )
 
 # metrics
-import os
-from docling.datamodel.settings import settings
-settings.debug.profile_pipeline_timings = bool(os.environ.get("DOCLING_SERVE_ENG_RAY_GENERATE_METRICS", False))
+# import os
+# from docling.datamodel.settings import settings
+#settings.debug.profile_pipeline_timings = bool(os.environ.get("DOCLING_SERVE_ENG_RAY_GENERATE_METRICS", False))
+#settings.debug.profile_pipeline_timings = bool(os.environ.get("DOCLING_DEBUG_GENERATE_METRICS", False))
 
 # Note: PictureClassificationFactory will be imported when available in docling
 # from docling.backend.picture_classification_factory import PictureClassificationFactory
