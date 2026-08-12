@@ -16,6 +16,7 @@ from docling_jobkit.connectors.snowflake.helper import (
     is_snowflake_unavailable_error,
     list_stage_files,
     relative_path_from_list_name,
+    with_retry,
 )
 from docling_jobkit.connectors.snowflake.models import (
     SnowflakeCoordinates,
@@ -57,7 +58,7 @@ class SnowflakeSourceProcessor(
 
     @classmethod
     def check_dependencies(cls) -> None:
-        import snowflake.connector  # noqa: F401
+        import snowflake.snowpark  # noqa: F401
 
     @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
@@ -65,7 +66,7 @@ class SnowflakeSourceProcessor(
 
     @_map_snowflake_source_errors
     def _initialize(self):
-        self._connection = get_snowflake_connection(self._coords)
+        self._session = get_snowflake_connection(self._coords)
         _log.info(
             "Connected to Snowflake stage: %s.%s.%s",
             self._coords.database,
@@ -74,14 +75,14 @@ class SnowflakeSourceProcessor(
         )
 
     def _finalize(self):
-        self._connection.close()
+        self._session.close()
 
     @_map_snowflake_source_errors
     def _list_document_ids(self) -> Iterator[SnowflakeFileIdentifier]:
         yielded = 0
         max_num_elements = self._coords.max_num_elements
 
-        for row in list_stage_files(self._connection, self._coords):
+        for row in list_stage_files(self._session, self._coords):
             if max_num_elements is not None and yielded >= max_num_elements:
                 return
 
@@ -99,7 +100,7 @@ class SnowflakeSourceProcessor(
         total = 0
         max_num_elements = self._coords.max_num_elements
 
-        for _ in list_stage_files(self._connection, self._coords):
+        for _ in list_stage_files(self._session, self._coords):
             if max_num_elements is not None and total >= max_num_elements:
                 return max_num_elements
             total += 1
@@ -142,8 +143,14 @@ class SnowflakeSourceProcessor(
             identifier.relative_path,
         )
 
-        data, display_name = download_stage_file(
-            self._connection, self._coords, identifier.relative_path
+        # Download with retry on transient failures
+        def _download():
+            return download_stage_file(
+                self._session, self._coords, identifier.relative_path
+            )
+
+        data, display_name = with_retry(
+            _download, f"download {identifier.relative_path}"
         )
         return DocumentStream(name=display_name, stream=BytesIO(data))
 

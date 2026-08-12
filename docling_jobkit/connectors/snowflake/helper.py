@@ -1,8 +1,9 @@
 import gzip
 import json
-import tempfile
+import logging
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterator, TypeVar
 
 from docling_jobkit.connectors.snowflake.models import (
     SnowflakeChunkTarget,
@@ -11,21 +12,19 @@ from docling_jobkit.connectors.snowflake.models import (
     SnowflakeDocTarget,
 )
 
+_log = logging.getLogger(__name__)
+
 _TableTarget = SnowflakeDocTarget | SnowflakeChunkTarget
+_T = TypeVar("_T")
+
+_MAX_RETRIES = 3
+_BACKOFF_BASE = 1.0
 
 if TYPE_CHECKING:
-    from snowflake.connector import SnowflakeConnection
+    from snowflake.snowpark import Session
 
 
 def is_snowflake_authentication_error(exc: BaseException) -> bool:
-    """Classify SDK exceptions raised while connecting/authenticating.
-
-    snowflake-connector-python layers its exceptions: ProgrammingError and
-    OperationalError both subclass DatabaseError but signal SQL/execution and
-    transient-network failures respectively, not bad credentials. A bare
-    DatabaseError (or ForbiddenError) is what connect() raises for an invalid
-    account/user/password/key/role combination.
-    """
     from snowflake.connector.errors import (
         DatabaseError,
         ForbiddenError,
@@ -39,24 +38,73 @@ def is_snowflake_authentication_error(exc: BaseException) -> bool:
 
 
 def is_snowflake_unavailable_error(exc: BaseException) -> bool:
-    # HttpError is a transport-level failure at connect() (e.g. a malformed
-    # account identifier resolves to a 404), not a DatabaseError subclass, so
-    # it needs its own check rather than falling out of the auth classifier.
     from snowflake.connector.errors import HttpError, OperationalError
 
     return isinstance(exc, (OperationalError, HttpError))
 
 
-def _load_private_key_der(pem: str, passphrase: str | None) -> bytes:
+def _is_retryable_error(exc: BaseException) -> bool:
+    if is_snowflake_unavailable_error(exc):
+        return True
+
+    # Check for rate limiting/quota errors in message
+    from snowflake.connector.errors import ProgrammingError
+
+    if isinstance(exc, ProgrammingError):
+        msg = str(exc).lower()
+        if any(keyword in msg for keyword in ("quota", "throttl", "rate limit")):
+            return True
+
+    return False
+
+
+def with_retry(
+    operation: Callable[[], _T],
+    operation_name: str,
+    max_retries: int = _MAX_RETRIES,
+) -> _T:
+    for attempt in range(max_retries + 1):
+        try:
+            return operation()
+        except Exception as exc:
+            is_last_attempt = attempt == max_retries
+
+            if not _is_retryable_error(exc) or is_last_attempt:
+                raise
+
+            wait = _BACKOFF_BASE * (2**attempt)
+            _log.warning(
+                "Transient error in %s (attempt %d/%d): %s. Retrying in %.1fs...",
+                operation_name,
+                attempt + 1,
+                max_retries,
+                exc,
+                wait,
+            )
+            time.sleep(wait)
+
+    # Type checker needs explicit raise (unreachable but required for type safety)
+    raise RuntimeError("Retry loop exhausted")
+
+
+def _load_private_key_der(pem_data: str, passphrase: str | None = None) -> bytes:
+    """Convert PEM-encoded private key to DER format (Snowflake requirement).
+
+    Snowflake expects private keys in base64-encoded DER format, not PEM.
+    """
     from cryptography.hazmat.backends import default_backend
     from cryptography.hazmat.primitives import serialization
 
-    key = serialization.load_pem_private_key(
-        pem.encode("utf-8"),
-        password=passphrase.encode("utf-8") if passphrase else None,
+    pem_bytes = pem_data.encode("utf-8")
+    passphrase_bytes = passphrase.encode("utf-8") if passphrase else None
+
+    private_key = serialization.load_pem_private_key(
+        pem_bytes,
+        password=passphrase_bytes,
         backend=default_backend(),
     )
-    return key.private_bytes(
+
+    return private_key.private_bytes(
         encoding=serialization.Encoding.DER,
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
@@ -65,10 +113,11 @@ def _load_private_key_der(pem: str, passphrase: str | None) -> bytes:
 
 def get_snowflake_connection(
     coords: SnowflakeConnectionCoordinates,
-) -> "SnowflakeConnection":
-    import snowflake.connector
+) -> "Session":
+    """Create a Snowpark session from connection coordinates."""
+    from snowflake.snowpark import Session
 
-    kwargs: dict[str, object] = {
+    config: dict[str, Any] = {
         "account": coords.account,
         "user": coords.user,
         "warehouse": coords.warehouse,
@@ -76,47 +125,51 @@ def get_snowflake_connection(
         "schema": coords.db_schema,
     }
     if coords.role:
-        kwargs["role"] = coords.role
+        config["role"] = coords.role
 
     if coords.password is not None:
-        kwargs["password"] = coords.password.get_secret_value()
+        config["password"] = coords.password.get_secret_value()
     else:
-        assert coords.private_key is not None  # enforced by SnowflakeCoordinates
-        kwargs["private_key"] = _load_private_key_der(
-            coords.private_key.get_secret_value(),
+        if coords.private_key is None:
+            raise ValueError("Either password or private_key must be provided")
+
+        # Snowflake/Snowpark expects DER format, not PEM
+        pem_key = coords.private_key.get_secret_value()
+        passphrase = (
             coords.private_key_passphrase.get_secret_value()
             if coords.private_key_passphrase
-            else None,
+            else None
         )
+        der_key = _load_private_key_der(pem_key, passphrase)
+        config["private_key"] = der_key
 
-    return snowflake.connector.connect(**kwargs)
+    return Session.builder.configs(config).create()
 
 
 def stage_ref(coords: SnowflakeCoordinates) -> str:
-    """Fully-qualified 'db.schema.stage' reference (without the leading '@')."""
     return f"{coords.database}.{coords.db_schema}.{coords.stage}"
 
 
 def list_stage_files(
-    connection: "SnowflakeConnection",
+    session: "Session",
     coords: SnowflakeCoordinates,
 ) -> Iterator[dict[str, object]]:
-    """Yield raw LIST result rows (name, size, md5, last_modified) as dicts."""
-    from snowflake.connector import DictCursor
-
     path = f"@{stage_ref(coords)}"
     if coords.prefix:
         path = f"{path}/{coords.prefix.lstrip('/')}"
 
     sql = f"LIST '{path}'"
     if coords.pattern:
-        escaped_pattern = coords.pattern.replace("'", "''")
-        sql += f" PATTERN = '{escaped_pattern}'"
+        if "'" in coords.pattern or "\\" in coords.pattern:
+            raise ValueError(
+                f"Snowflake PATTERN cannot contain single quotes or backslashes: {coords.pattern!r}"
+            )
+        sql += f" PATTERN = '{coords.pattern}'"
 
-    with connection.cursor(DictCursor) as cur:
-        cur.execute(sql)
-        for row in cur:
-            yield row  # type: ignore[misc]
+    # Snowpark returns DataFrame; convert rows to dicts
+    df_ = session.sql(sql)
+    for row in df_.collect():
+        yield row.as_dict()
 
 
 def relative_path_from_list_name(name: str) -> str:
@@ -125,79 +178,93 @@ def relative_path_from_list_name(name: str) -> str:
 
 
 def download_stage_file(
-    connection: "SnowflakeConnection",
+    session: "Session",
     coords: SnowflakeCoordinates,
     relative_path: str,
 ) -> tuple[bytes, str]:
-    """Download one file from the stage and return (bytes, display_filename).
+    """Download one file from stage via Snowpark's in-memory streaming.
+    Snowpark provides an in-memory file streaming API (session.file.get_stream)
+    snowflake-connector-python did not provide in-memory file streaming
 
-    GET is the only download primitive snowflake-connector-python exposes, and
-    it only writes to a local directory. There is no in-memory API. This
-    downloads into a temp directory, reads the single resulting file
-    into memory, and removes the temp directory immediately: one file on disk
-    at a time, never a whole batch. Probably not ideal.
-
-    Snowflake's PUT defaults to AUTO_COMPRESS=TRUE and renames compressed
-    files with a '.gz' suffix at upload time, so that suffix reliably (it is
-    server-reported, not guessed) indicates the file needs decompressing here.
+    Snowflake's PUT defaults to AUTO_COMPRESS=TRUE and adds '.gz' suffix at upload
+    time, so that suffix reliably indicates the file needs decompressing here.
+    We use decompress=False and manually handle decompression based on filename.
     """
-    remote = f"'@{stage_ref(coords)}/{relative_path}'"
+    stage_path = f"@{stage_ref(coords)}/{relative_path}"
 
-    with tempfile.TemporaryDirectory(prefix="docling-jobkit-snowflake-") as tmpdir:
-        local_uri = f"{Path(tmpdir).as_uri()}/"
-        with connection.cursor() as cur:
-            cur.execute(f"GET {remote} {local_uri}")
+    # Snowpark streams file directly into memory - no temp files needed
+    # Use decompress=False to get raw bytes, then manually decompress if .gz
+    file_stream = session.file.get_stream(stage_path, decompress=False)
+    try:
+        data = file_stream.read()
+    finally:
+        file_stream.close()
 
-        downloaded = list(Path(tmpdir).iterdir())
-        if not downloaded:
-            raise FileNotFoundError(f"Snowflake GET produced no file for {remote}")
-        local_file = downloaded[0]
-        data = local_file.read_bytes()
-
-    display_name = local_file.name
+    # Manually decompress if filename indicates gzip compression
+    display_name = Path(relative_path).name
     if display_name.endswith(".gz"):
         data = gzip.decompress(data)
-        display_name = display_name[: -len(".gz")]
+        display_name = display_name[:-3]  # ".gz"
 
     return data, display_name
 
 
 def table_ref(target: _TableTarget) -> str:
-    """Fully-qualified 'db.schema.table' reference."""
     return f"{target.database}.{target.db_schema}.{target.table}"
 
 
-def _to_bind_value(value: Any) -> Any:
-    """JSON-mapped fields arrive as parsed dict/list; the driver can only bind
-    scalars, so serialize those back to a string before binding."""
+def _to_sql_literal(value: Any) -> str:
+    """Convert a Python value to a SQL literal string."""
     if isinstance(value, (dict, list)):
-        return json.dumps(value)
-    return value
+        # JSON types: serialize and wrap in single quotes, escaping internal quotes
+        json_str = json.dumps(value)
+        escaped = json_str.replace("'", "''")
+        return f"'{escaped}'"
+    elif isinstance(value, str):
+        # String: escape single quotes and wrap
+        escaped = value.replace("'", "''")
+        return f"'{escaped}'"
+    elif value is None:
+        return "NULL"
+    elif isinstance(value, bool):
+        # Boolean: TRUE/FALSE (before int check since bool is subclass of int)
+        return "TRUE" if value else "FALSE"
+    elif isinstance(value, (int, float)):
+        # Numeric: use as-is
+        return str(value)
+    else:
+        # Default: convert to string and escape
+        escaped = str(value).replace("'", "''")
+        return f"'{escaped}'"
 
 
-def upsert_table_row(
-    connection: "SnowflakeConnection",
+def upsert_table_rows(
+    session: "Session",
     target: _TableTarget,
     id_field: str,
-    row: dict[str, Any],
+    rows: list[dict[str, Any]],
 ) -> None:
-    """Upsert one row via MERGE, keyed on id_field.
+    """Upsert many rows in a single multi-row MERGE, keyed on id_field."""
+    if not rows:
+        return
 
-    Shared by the document target (id_field) and chunk target
-    (chunk_id_field) -- the row shape differs, the MERGE mechanics don't, so
-    the caller passes whichever field name applies.
-
-    Left unquoted (like stage_ref/table_ref) so Snowflake's own identifier
-    folding applies: unquoted DDL upper-cases column names by default, and
-    unquoted references fold the same way, so a lower-case config value
-    still matches. Quoting would instead force exact-case matching against
-    a name nothing actually normalized to.
-    """
-    if id_field not in row:
+    columns = list(rows[0].keys())
+    for row in rows:
+        if set(row.keys()) != set(columns):
+            raise ValueError(
+                f"All rows in a batch must have the same columns. "
+                f"Expected {set(columns)}, got {set(row.keys())}"
+            )
+    if id_field not in columns:
         raise ValueError(f"Row is missing id field {id_field!r}; cannot upsert.")
 
-    columns = list(row.keys())
-    select_list = ", ".join(f"%s AS {c}" for c in columns)
+    # Build VALUES clause with SQL-formatted literals
+    values_rows = []
+    for row in rows:
+        formatted_values = [_to_sql_literal(row[c]) for c in columns]
+        values_rows.append(f"({', '.join(formatted_values)})")
+    values_clause = ", ".join(values_rows)
+
     update_list = ", ".join(f"t.{c} = s.{c}" for c in columns if c != id_field)
     insert_columns = ", ".join(columns)
     insert_values = ", ".join(f"s.{c}" for c in columns)
@@ -208,15 +275,26 @@ def upsert_table_row(
 
     sql = (
         f"MERGE INTO {table_ref(target)} AS t "
-        f"USING (SELECT {select_list}) AS s "
+        f"USING (VALUES {values_clause}) AS s ({', '.join(columns)}) "
         f"ON t.{id_field} = s.{id_field} "
         f"{when_matched}"
         f"WHEN NOT MATCHED THEN INSERT ({insert_columns}) VALUES ({insert_values})"
     )
-    values = [_to_bind_value(row[c]) for c in columns]
 
-    with connection.cursor() as cur:
-        cur.execute(sql, values)
+    # Execute without bind parameters since values are already formatted into SQL
+    session.sql(sql).collect()
+
+    _log.debug("Upserted %d rows to table %s", len(rows), table_ref(target))
+
+
+def upsert_table_row(
+    session: "Session",
+    target: _TableTarget,
+    id_field: str,
+    row: dict[str, Any],
+) -> None:
+    """Upsert a single row"""
+    upsert_table_rows(session, target, id_field, [row])
 
 
 __all__ = [
@@ -229,4 +307,6 @@ __all__ = [
     "stage_ref",
     "table_ref",
     "upsert_table_row",
+    "upsert_table_rows",
+    "with_retry",
 ]

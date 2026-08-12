@@ -40,7 +40,7 @@ def test_get_config_types():
 def test_list_document_ids_respects_max_num_elements(coords):
     capped = coords.model_copy(update={"max_num_elements": 2})
     processor = SnowflakeSourceProcessor(capped)
-    processor._connection = MagicMock()
+    processor._session = MagicMock()
 
     rows = [
         {"name": "STG/a.pdf", "size": 10, "last_modified": "t1"},
@@ -61,7 +61,7 @@ def test_list_document_ids_respects_max_num_elements(coords):
 def test_count_documents_clips_to_max_num_elements(coords):
     capped = coords.model_copy(update={"max_num_elements": 2})
     processor = SnowflakeSourceProcessor(capped)
-    processor._connection = MagicMock()
+    processor._session = MagicMock()
 
     rows = [{"name": f"STG/{i}.pdf"} for i in range(5)]
     with patch(
@@ -91,7 +91,7 @@ def test_fetch_document_by_id_rejects_oversized_before_download(coords):
 
 def test_fetch_document_by_id_wraps_downloaded_bytes(coords):
     processor = SnowflakeSourceProcessor(coords)
-    processor._connection = MagicMock()
+    processor._session = MagicMock()
     identifier = SnowflakeFileIdentifier(relative_path="a.pdf", size=10)
 
     with patch(
@@ -107,7 +107,7 @@ def test_fetch_document_by_id_wraps_downloaded_bytes(coords):
 
 def test_fetch_documents_iterates_list_then_fetch(coords):
     processor = SnowflakeSourceProcessor(coords)
-    processor._connection = MagicMock()
+    processor._session = MagicMock()
 
     ids = [
         SnowflakeFileIdentifier(relative_path="a.pdf", size=1),

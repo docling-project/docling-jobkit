@@ -11,7 +11,11 @@ sources:
   - kind: snowflake
     account: "xy12345"
     user: "me"
-    password: "changeme" # or use private_key / private_key_path instead
+    password: "changeme" # or use private_key
+    # private_key: |
+    #   -----BEGIN RSA PRIVATE KEY-----
+    #   {key contents}
+    #   -----END RSA PRIVATE KEY-----
     warehouse: "MY_WH"
     database: "MY_DB"
     db_schema: "PUBLIC"
@@ -25,6 +29,10 @@ targets:
     account: "xy12345"
     user: "me"
     password: "changeme"
+    # private_key: |
+    #   -----BEGIN RSA PRIVATE KEY-----
+    #   {key contents}
+    #   -----END RSA PRIVATE KEY-----
     warehouse: "MY_WH"
     database: "MY_DB"
     db_schema: "PUBLIC"
@@ -39,6 +47,10 @@ targets:
     account: "xy12345"
     user: "me"
     password: "changeme"
+    # private_key: |
+    #   -----BEGIN RSA PRIVATE KEY-----
+    #   {key contents}
+    #   -----END RSA PRIVATE KEY-----
     warehouse: "MY_WH"
     database: "MY_DB"
     db_schema: "PUBLIC"
@@ -50,4 +62,4 @@ targets:
     metadata_field: "metadata"       # default
     page_field: "page_numbers"       # optional -- omit to skip this column
     headings_field: "headings"       # optional -- omit to skip this column
-    # mappings: {}                   # leave unset -- see the NotImplementedError note above
+    # mappings: {}                   # leave unset

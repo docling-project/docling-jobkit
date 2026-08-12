@@ -7,9 +7,12 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 from docling_jobkit.connectors.database_target_processor import (
     BaseDatabaseTargetProcessor,
 )
+from docling_jobkit.connectors.errors import map_connector_authentication_errors
 from docling_jobkit.connectors.snowflake.helper import (
     get_snowflake_connection,
+    is_snowflake_authentication_error,
     upsert_table_row,
+    upsert_table_rows,
 )
 from docling_jobkit.connectors.snowflake.models import (
     SnowflakeChunkTarget,
@@ -20,7 +23,7 @@ from docling_jobkit.datamodel.target_field_slots import FieldMappings
 from docling_jobkit.public_errors import TargetWriteError
 
 if TYPE_CHECKING:
-    from snowflake.connector import SnowflakeConnection
+    from snowflake.snowpark import Session
 
 _log = logging.getLogger(__name__)
 
@@ -28,33 +31,42 @@ _log = logging.getLogger(__name__)
 # constraint of BaseDatabaseTargetProcessor is satisfied.
 _SnowflakeTarget = Union[SnowflakeDocTarget, SnowflakeChunkTarget]
 
+_map_snowflake_target_errors = map_connector_authentication_errors(
+    "Snowflake",
+    is_snowflake_authentication_error,
+    source=False,
+)
+
 
 class SnowflakeTargetProcessor(BaseDatabaseTargetProcessor[_SnowflakeTarget]):
     def __init__(self, target: _SnowflakeTarget) -> None:
         super().__init__(target)
-        self._connection: Optional["SnowflakeConnection"] = None
+        self._session: Optional["Session"] = None
         self._current_document_hash: Optional[str] = None
+        self._chunk_buffer: list[dict[str, Any]] = []
 
     @classmethod
     def check_dependencies(cls) -> None:
-        import snowflake.connector  # noqa: F401
+        import snowflake.snowpark  # noqa: F401
 
     @classmethod
     def get_config_types(cls) -> tuple[type[FieldMappings], ...]:
         return (SnowflakeDocTarget, SnowflakeChunkTarget)
 
+    @_map_snowflake_target_errors
     def _initialize(self) -> None:
-        try:
-            self._connection = get_snowflake_connection(self._target)
-        except Exception as exc:
-            raise TargetWriteError(
-                f"Could not connect to Snowflake table {self._target.table!r}."
-            ) from exc
+        self._session = get_snowflake_connection(self._target)
+        _log.info(
+            "Connected to Snowflake table: %s.%s.%s",
+            self._target.database,
+            self._target.db_schema,
+            self._target.table,
+        )
 
     def _finalize(self) -> None:
-        if self._connection is not None:
-            self._connection.close()
-            self._connection = None
+        if self._session is not None:
+            self._session.close()
+            self._session = None
 
     # Whole-doc
 
@@ -65,9 +77,10 @@ class SnowflakeTargetProcessor(BaseDatabaseTargetProcessor[_SnowflakeTarget]):
             # fields which always go through consume_chunk().
             raise NotImplementedError(
                 "snowflake_chunks does not support whole-document `mappings` "
-                "in addition to chunks yet -- only chunk fields are written."
+                "in addition to chunks yet - only chunk fields are written."
             )
-        assert self._connection is not None
+        if self._session is None:
+            raise RuntimeError("SnowflakeTargetProcessor not initialized")
 
         id_field = self._target.id_field
         if id_field in row:
@@ -79,7 +92,7 @@ class SnowflakeTargetProcessor(BaseDatabaseTargetProcessor[_SnowflakeTarget]):
         row = {**row, id_field: row_id}
 
         try:
-            upsert_table_row(self._connection, self._target, id_field, row)
+            upsert_table_row(self._session, self._target, id_field, row)
         except Exception as exc:
             raise TargetWriteError(
                 f"Failed to write document row to Snowflake table "
@@ -99,11 +112,14 @@ class SnowflakeTargetProcessor(BaseDatabaseTargetProcessor[_SnowflakeTarget]):
         chunk_target_key: Optional[str] = None,
         document_hash: Optional[str] = None,
     ) -> None:
-        """No file needed -- each chunk is upserted directly in consume_chunk()."""
+        """Start buffering chunk rows for a new document."""
         self._current_document_hash = document_hash
+        self._chunk_buffer = []
 
     def consume_chunk(self, chunk: ChunkedDocumentResultItem) -> None:
-        """Upsert one chunk row into Snowflake immediately."""
+        """Buffer one chunk row; the document's chunks are upserted together
+        as a single multi-row MERGE in end_chunks() rather than one MERGE
+        per chunk. Per-chunk MERGE very slow."""
         from docling_jobkit.convert.chunking import _chunk_row_payload
 
         if not isinstance(self._target, SnowflakeChunkTarget):
@@ -111,34 +127,59 @@ class SnowflakeTargetProcessor(BaseDatabaseTargetProcessor[_SnowflakeTarget]):
                 f"snowflake_chunks processor requires a SnowflakeChunkTarget, "
                 f"got {type(self._target)!r}"
             )
-        assert self._connection is not None
 
         row = _chunk_row_payload(chunk, self._target)
-        chunk_id_field = self._target.chunk_id_field
-        row[chunk_id_field] = self._stable_chunk_id(
+        row[self._target.chunk_id_field] = self._stable_chunk_id(
             binary_hash=self._current_document_hash,
             filename=chunk.filename,
             chunk_index=chunk.chunk_index,
         )
-
-        try:
-            upsert_table_row(self._connection, self._target, chunk_id_field, row)
-        except Exception as exc:
-            raise TargetWriteError(
-                f"Failed to write chunk row to Snowflake table {self._target.table!r}."
-            ) from exc
+        self._chunk_buffer.append(row)
 
     def end_chunks(self) -> None:
-        """Nothing to flush -- each chunk was written in consume_chunk()."""
-        self._current_document_hash = None
+        """Flush the document's buffered chunk rows as one multi-row MERGE.
+
+        A single MERGE succeeds or fails as a unit, so this is atomic per
+        document: either every chunk lands, or none do.
+        """
+        try:
+            if self._chunk_buffer:
+                if self._session is None:
+                    raise RuntimeError("SnowflakeTargetProcessor not initialized")
+                if not isinstance(self._target, SnowflakeChunkTarget):
+                    raise TypeError(
+                        f"Expected SnowflakeChunkTarget for chunk operations, got {type(self._target)}"
+                    )
+
+                _log.debug(
+                    "Flushing %d chunk rows to Snowflake table %s",
+                    len(self._chunk_buffer),
+                    self._target.table,
+                )
+
+                try:
+                    upsert_table_rows(
+                        self._session,
+                        self._target,
+                        self._target.chunk_id_field,
+                        self._chunk_buffer,
+                    )
+                except Exception as exc:
+                    raise TargetWriteError(
+                        f"Failed to write chunk rows to Snowflake table "
+                        f"{self._target.table!r}."
+                    ) from exc
+        finally:
+            self._chunk_buffer = []
+            self._current_document_hash = None
 
     def abort_chunks(self) -> None:
-        """Nothing buffered to discard -- drop the per-document state only.
+        """Discard the document's buffered chunk rows.
 
-        Chunks already written before the failure stay in the table; they
-        carry deterministic IDs (see _stable_chunk_id), so a re-run overwrites
-        rather than duplicates them.
+        Nothing is written until end_chunks() flushes, so an abort here
+        means none of this document's chunks reach the table.
         """
+        self._chunk_buffer = []
         self._current_document_hash = None
 
     # Helpers
