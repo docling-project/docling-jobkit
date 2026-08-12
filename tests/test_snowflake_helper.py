@@ -116,19 +116,25 @@ def test_get_snowflake_connection_uses_private_key():
         db_schema="SCH",
         stage="STG",
     )
-    with patch("snowflake.snowpark.Session.builder") as mock_builder:
+    with (
+        patch("snowflake.snowpark.Session.builder") as mock_builder,
+        patch(
+            "docling_jobkit.connectors.snowflake.helper._load_private_key_der"
+        ) as mock_load_key,
+    ):
         mock_session = MagicMock()
         mock_builder.configs.return_value.create.return_value = mock_session
+        mock_load_key.return_value = b"fake_der_bytes"
 
         result = get_snowflake_connection(coords)
 
     config = mock_builder.configs.call_args[0][0]
-    assert (
-        config["private_key"]
-        == "-----BEGIN PRIVATE KEY-----\nkey data\n-----END PRIVATE KEY-----"
-    )
+    assert config["private_key"] == b"fake_der_bytes"
     assert "password" not in config
     assert result == mock_session
+    mock_load_key.assert_called_once_with(
+        "-----BEGIN PRIVATE KEY-----\nkey data\n-----END PRIVATE KEY-----", None
+    )
 
 
 # Listing
