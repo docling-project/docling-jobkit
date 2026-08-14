@@ -1,0 +1,23 @@
+# Test locally against dev/docker-compose.kafka.yaml:
+#   docker compose -f dev/docker-compose.kafka.yaml up -d
+#   docling-jobkit-local dev/configs/run_kafka_chunks_example.yaml
+
+options:
+  do_ocr: false
+
+sources:
+  - kind: local_path
+    path: ./input_documents/
+    recursive: true
+
+target:
+  kind: kafka_chunks
+  bootstrap_servers:
+    - localhost:29092  # host-reachable listener from docker-compose.kafka.yaml
+  topic: docling.chunks
+  key_mode: doc_id  # all chunks of a document land in one partition, ordered
+  # auth:
+  #   kind: sasl
+  #   mechanism: SCRAM-SHA-512
+  #   username: your-username
+  #   password: "your-password"

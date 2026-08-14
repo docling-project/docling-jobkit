@@ -88,6 +88,9 @@ opensearch = [
 astradb = [
     "astrapy>=1.0.0,<2",
 ]
+kafka = [
+    "confluent-kafka>=2.5.0,<3",
+]
 sharepoint = [
     # v3.0.0 imports `Self` from `typing` (stdlib), which only exists on Python >=3.11.
     # Pin <3.0.0 until upstream fixes the backport to use typing_extensions.
@@ -238,6 +241,7 @@ module = [
     "ray.*",
     "codeflare_sdk.*",
     "opensearchpy.*",
+    "confluent_kafka.*",
 ]
 ignore_missing_imports = true
 
