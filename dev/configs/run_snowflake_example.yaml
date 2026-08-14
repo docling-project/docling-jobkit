@@ -55,11 +55,10 @@ targets:
     database: "MY_DB"
     db_schema: "PUBLIC"
     table: "MY_CHUNKS"
-    chunk_id_field: "chunk_id"       # default shown explicitly
+    chunk_id_field: "chunk_id"       # default
     doc_id_field: "doc_id"           # default
     chunk_index_field: "chunk_index" # default
     text_field: "text"               # default
     metadata_field: "metadata"       # default
-    page_field: "page_numbers"       # optional -- omit to skip this column
-    headings_field: "headings"       # optional -- omit to skip this column
-    # mappings: {}                   # leave unset
+    page_field: "page_numbers"       # optional
+    headings_field: "headings"       # optional
