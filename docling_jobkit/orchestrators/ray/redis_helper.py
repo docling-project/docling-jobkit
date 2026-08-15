@@ -14,6 +14,7 @@ from redis.asyncio import Redis
 from redis.asyncio.connection import ConnectionPool
 from redis.exceptions import WatchError
 
+from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.responses import PublicFailureInfo
 from docling.datamodel.service.tasks import TaskType
 
@@ -874,14 +875,25 @@ class RedisStateManager:
 
                 # 4. Create processing state
                 now_timestamp = datetime.datetime.now(datetime.timezone.utc).timestamp()
-                pipe.hset(
-                    dispatch_key,
-                    mapping={
-                        "tenant_id": tenant_id,
-                        "dispatched_at": str(now_timestamp),
-                        "task_size": str(task_size),
-                    },
-                )
+                dispatch_state = {
+                    "tenant_id": tenant_id,
+                    "dispatched_at": str(now_timestamp),
+                    "task_size": str(task_size),
+                }
+                if front_task.callbacks:
+                    # The task payload leaves the queue here, so this hash is the
+                    # last place the callback specs survive. Reconciliation needs
+                    # them to notify a client whose replica died without ever
+                    # reporting. Kept out of the long-lived task:{id} metadata
+                    # hash on purpose: callback headers can carry credentials, and
+                    # this key is TTL-bounded and deleted at terminalization.
+                    dispatch_state["callbacks"] = json.dumps(
+                        [
+                            dump_model_with_secrets(callback)
+                            for callback in front_task.callbacks
+                        ]
+                    )
+                pipe.hset(dispatch_key, mapping=dispatch_state)
                 pipe.expire(dispatch_key, self.processing_ttl)
 
                 # 5. Bump the monotonic dispatched counter (atomic with the
@@ -1221,6 +1233,23 @@ class RedisStateManager:
         if not state:
             return {}
         return {k.decode("utf-8"): v.decode("utf-8") for k, v in state.items()}
+
+    @staticmethod
+    def decode_dispatch_callbacks(dispatch_hash: dict) -> list[CallbackSpec]:
+        """Read the callback specs persisted by dispatch_task_atomic.
+
+        Returns an empty list for tasks without callbacks, for dispatch hashes
+        written before this field existed, and for unparseable payloads — a
+        client notification is best-effort and must never block reconciliation.
+        """
+        raw = dispatch_hash.get("callbacks")
+        if not raw:
+            return []
+        try:
+            return [CallbackSpec.model_validate(entry) for entry in json.loads(raw)]
+        except (ValueError, ValidationError) as exc:
+            _log.warning("Could not decode persisted callbacks: %s", exc)
+            return []
 
     async def write_task_execution_lease(
         self, task_id: str, tenant_id: str, replica_id: str

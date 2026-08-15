@@ -7,6 +7,8 @@ from whichever component actually terminalized it durably.
 """
 
 import asyncio
+import datetime
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -30,15 +32,21 @@ from docling.datamodel.service.responses import (
     PublicFailureInfo,
 )
 from docling.datamodel.service.targets import InBodyTarget
+from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.ray.dispatcher import RayTaskDispatcher
-from docling_jobkit.orchestrators.ray.models import TaskTerminalizationResult
+from docling_jobkit.orchestrators.ray.models import (
+    RedisTaskMetadata,
+    TaskTerminalizationResult,
+)
+from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 from docling_jobkit.orchestrators.ray.serve_deployment import (
     DoclingProcessorCoordinatorDeployment,
 )
+from docling_jobkit.orchestrators.serialization import dump_model_with_secrets
 
 
 class _RecordingInvoker:
@@ -145,6 +153,19 @@ def _make_coordinator(
     )
     deployment.redis_manager = manager  # type: ignore[assignment]
     return deployment
+
+
+def _make_dispatcher(manager: _FakeRedisManager) -> Any:
+    # Unwrap the @ray.remote decorator and skip __init__ (it would open Redis);
+    # only the terminal-failure branches are under test.
+    dispatcher_cls = getattr(
+        RayTaskDispatcher, "__ray_actor_class__", RayTaskDispatcher
+    )
+    dispatcher = dispatcher_cls.__new__(dispatcher_cls)
+    dispatcher.redis_manager = manager
+    dispatcher.config = RayOrchestratorConfig(redis_url="redis://localhost:6379/")
+    dispatcher._wake_event = asyncio.Event()
+    return dispatcher
 
 
 def _only_update_processed(calls: list[dict[str, Any]]) -> Any:
@@ -257,16 +278,8 @@ async def test_dispatcher_emits_terminal_callback_when_it_terminalizes(
     recorded_callbacks: list[dict[str, Any]],
 ) -> None:
     """Covers failures the replica could not report itself (timeout, replica death)."""
-    # Unwrap the @ray.remote decorator and skip __init__ (it would open Redis);
-    # only the failure branch of _process_task_async is under test.
-    dispatcher_cls = getattr(
-        RayTaskDispatcher, "__ray_actor_class__", RayTaskDispatcher
-    )
-    dispatcher = dispatcher_cls.__new__(dispatcher_cls)
     manager = _FakeRedisManager()
-    dispatcher.redis_manager = manager  # type: ignore[attr-defined]
-    dispatcher.config = RayOrchestratorConfig(redis_url="redis://localhost:6379/")
-    dispatcher._wake_event = asyncio.Event()
+    dispatcher = _make_dispatcher(manager)
 
     class DeadReplicaCall:
         def remote(self, task: Task) -> Any:
@@ -281,3 +294,149 @@ async def test_dispatcher_emits_terminal_callback_when_it_terminalizes(
     progress = _only_update_processed(recorded_callbacks)
     assert progress.num_failed == 1
     assert manager.published and manager.published[0].task_status == TaskStatus.FAILURE
+
+
+def _started_metadata(task_size: int = 3) -> RedisTaskMetadata:
+    now = datetime.datetime.now(datetime.timezone.utc)
+    return RedisTaskMetadata(
+        task_id="t-callback",
+        tenant_id="tenant-a",
+        status=TaskStatus.STARTED,
+        task_type=TaskType.CONVERT,
+        task_size=task_size,
+        created_at=now,
+        last_update_at=now,
+        started_at=now,
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconciled_orphan_notifies_with_persisted_callbacks(
+    recorded_callbacks: list[dict[str, Any]],
+) -> None:
+    """A task whose replica died is only ever reported by reconciliation."""
+    manager = _FakeRedisManager()
+    dispatcher = _make_dispatcher(manager)
+
+    await dispatcher._fail_reconciled_task(
+        tenant_id="tenant-a",
+        task_id="t-callback",
+        metadata=_started_metadata(task_size=3),
+        callbacks=[CallbackSpec(url="https://example.invalid/hook")],
+        error_message="Task orphaned: replica execution lease stale during reconciliation",
+    )
+
+    progress = _only_update_processed(recorded_callbacks)
+    # Counts come from durable metadata, matching the failed-document accounting.
+    assert progress.num_processed == 3
+    assert progress.num_failed == 3
+    # Sources are not recoverable from metadata, so per-document detail degrades
+    # to a single carrier for the error message.
+    assert [doc.source for doc in progress.docs] == ["unknown"]
+    assert progress.docs[0].status == ConversionStatus.FAILURE
+
+
+@pytest.mark.asyncio
+async def test_reconciled_orphan_without_persisted_callbacks_is_silent(
+    recorded_callbacks: list[dict[str, Any]],
+) -> None:
+    """No dispatch hash means no callback specs survived — terminalize only."""
+    manager = _FakeRedisManager()
+    dispatcher = _make_dispatcher(manager)
+
+    await dispatcher._fail_reconciled_task(
+        tenant_id="tenant-a",
+        task_id="t-callback",
+        metadata=_started_metadata(),
+        callbacks=[],
+        error_message="Task orphaned: processing state missing during reconciliation",
+    )
+
+    assert recorded_callbacks == []
+    assert manager.published and manager.published[0].task_status == TaskStatus.FAILURE
+
+
+class _CapturingPipeline:
+    """Fake transactional pipeline recording the dispatch-hash write."""
+
+    def __init__(self, captured: dict[str, Any]) -> None:
+        self.captured = captured
+
+    async def __aenter__(self) -> "_CapturingPipeline":
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    async def watch(self, *keys: str) -> None:
+        return None
+
+    async def unwatch(self) -> None:
+        return None
+
+    def multi(self) -> None:
+        return None
+
+    def lpop(self, key: str) -> None:
+        return None
+
+    def sadd(self, key: str, value: str) -> None:
+        return None
+
+    def hincrby(self, key: str, field: str, amount: int) -> None:
+        return None
+
+    def hset(self, key: str, mapping: dict[str, str]) -> None:
+        self.captured[key] = mapping
+
+    def expire(self, key: str, ttl: int) -> None:
+        self.captured.setdefault("ttls", {})[key] = ttl
+
+    async def execute(self) -> list[Any]:
+        return []
+
+
+class _CapturingRedis:
+    def __init__(self, queued_task_json: str, captured: dict[str, Any]) -> None:
+        self.queued_task_json = queued_task_json
+        self.captured = captured
+
+    async def lindex(self, key: str, index: int) -> str:
+        return self.queued_task_json
+
+    def pipeline(self, transaction: bool = True) -> _CapturingPipeline:
+        assert transaction is True
+        return _CapturingPipeline(self.captured)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_persists_callbacks_for_reconciliation() -> None:
+    """The queue entry is consumed at dispatch; the dispatch hash must carry the specs."""
+    task = _task_with_callback()
+    task.callbacks = [
+        CallbackSpec(
+            url="https://example.invalid/hook",
+            headers={"Authorization": "Bearer token"},
+        )
+    ]
+    captured: dict[str, Any] = {}
+    manager = RedisStateManager(redis_url="redis://localhost:6379/")
+    manager.redis = _CapturingRedis(  # type: ignore[assignment]
+        json.dumps(dump_model_with_secrets(task)), captured
+    )
+
+    dispatched = await manager.dispatch_task_atomic("tenant-a", "t-callback", 1)
+
+    assert dispatched is True
+    dispatch_state = captured["task:t-callback:dispatch"]
+    decoded = RedisStateManager.decode_dispatch_callbacks(dispatch_state)
+    assert [str(spec.url) for spec in decoded] == ["https://example.invalid/hook"]
+    assert decoded[0].headers == {"Authorization": "Bearer token"}
+    # Credentials live only under the TTL-bounded key that terminalization deletes.
+    assert captured["ttls"]["task:t-callback:dispatch"] == manager.processing_ttl
+
+
+def test_decode_dispatch_callbacks_tolerates_legacy_and_corrupt_state() -> None:
+    assert RedisStateManager.decode_dispatch_callbacks({}) == []
+    assert RedisStateManager.decode_dispatch_callbacks({"callbacks": "not-json"}) == []
+    assert RedisStateManager.decode_dispatch_callbacks({"callbacks": "[{}]"}) == []

@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 import ray
 
+from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.responses import FailurePhase
 
 from docling_jobkit.datamodel.task import Task
@@ -518,10 +519,14 @@ class RayTaskDispatcher:
                     # No processing state + non-STARTED metadata: already terminal or
                     # was never properly dispatched. No action needed.
                     continue
+                # The dispatch hash is gone, so the persisted callback specs went
+                # with it: this task can only be terminalized durably, not
+                # announced to its client.
                 await self._fail_reconciled_task(
                     tenant_id=tenant_id,
                     task_id=task_id,
                     metadata=metadata,
+                    callbacks=[],
                     error_message="Task orphaned: processing state missing during reconciliation",
                 )
                 continue
@@ -563,6 +568,9 @@ class RayTaskDispatcher:
                     tenant_id=tenant_id,
                     task_id=task_id,
                     metadata=metadata,
+                    callbacks=self.redis_manager.decode_dispatch_callbacks(
+                        dispatch_hash
+                    ),
                     error_message=(
                         "Task orphaned: replica execution lease stale during reconciliation"
                     ),
@@ -575,9 +583,14 @@ class RayTaskDispatcher:
         tenant_id: str,
         task_id: str,
         metadata: RedisTaskMetadata,
+        callbacks: list[CallbackSpec],
         error_message: str,
     ) -> None:
-        """Fail a reconciled task and release any capacity it still consumes."""
+        """Fail a reconciled task and release any capacity it still consumes.
+
+        ``callbacks`` are the specs persisted at dispatch time; they are empty
+        when the task had none or when the dispatch hash is already gone.
+        """
         task_size = metadata.task_size if metadata.task_size > 0 else 1
         if task_size == 1 and metadata.task_size <= 0:
             _log.warning(
@@ -604,6 +617,11 @@ class RayTaskDispatcher:
             terminalization.status_changed
             and terminalization.final_status == TaskStatus.FAILURE
         ):
+            # A reconciled task never reported anything itself — this is the only
+            # notification its client will get.
+            reconciled_task = metadata.to_task()
+            reconciled_task.callbacks = callbacks
+            emit_task_failure_callbacks(reconciled_task, failure, task_size=task_size)
             await self.redis_manager.publish_update(
                 TaskUpdate(
                     task_id=task_id,
