@@ -13,6 +13,7 @@ from docling.datamodel.service.responses import FailurePhase
 
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
+from docling_jobkit.orchestrators.failure_callbacks import emit_task_failure_callbacks
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.ray.failure_classification import (
     classify_ray_public_task_failure,
@@ -462,6 +463,10 @@ class RayTaskDispatcher:
                 terminalization.status_changed
                 and terminalization.final_status == TaskStatus.FAILURE
             ):
+                # Covers failures the replica could not terminalize itself (task
+                # timeout, replica/actor death). Gated on status_changed so a
+                # coordinator-side failure notifies the client only once.
+                emit_task_failure_callbacks(task, failure, task_size=task_size)
                 await self.redis_manager.publish_update(
                     TaskUpdate(
                         task_id=task_id,

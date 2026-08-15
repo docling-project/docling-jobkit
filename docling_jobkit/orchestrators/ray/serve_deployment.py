@@ -81,6 +81,7 @@ from docling_jobkit.datamodel.result import (
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
+from docling_jobkit.orchestrators.failure_callbacks import emit_task_failure_callbacks
 from docling_jobkit.orchestrators.ray.config import (
     RayOrchestratorConfig,
     parse_memory_bytes,
@@ -686,7 +687,10 @@ class DoclingProcessorConverterDeployment:
             conv_results = await self._run_with_retry(
                 request.filename,
                 lambda: self._convert_materialized_request(request),
+                task=request.task,
             )
+            if isinstance(conv_results, ConverterFailureResult):
+                return conv_results
             exportable = _to_exportable_documents(request.task, conv_results)
             result = await asyncio.to_thread(
                 lambda: self._build_task_result(
@@ -1188,6 +1192,11 @@ class DoclingProcessorCoordinatorDeployment:
                 terminalization.status_changed
                 and terminalization.final_status == TaskStatus.FAILURE
             ):
+                # Emitted before the Redis follow-up so that a publish/stats error
+                # cannot swallow the client's only terminal notification. Gated on
+                # status_changed, so the dispatcher's own failure handler stays
+                # silent for this task and the callback fires exactly once.
+                emit_task_failure_callbacks(task, failure, task_size=task_size)
                 try:
                     await self.redis_manager.publish_update(
                         TaskUpdate(
@@ -1244,6 +1253,7 @@ class DoclingProcessorCoordinatorDeployment:
             terminalization.status_changed
             and terminalization.final_status == TaskStatus.FAILURE
         ):
+            emit_task_failure_callbacks(task, failure, task_size=task_size)
             try:
                 await self.redis_manager.publish_update(
                     TaskUpdate(
