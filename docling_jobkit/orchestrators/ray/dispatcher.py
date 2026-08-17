@@ -467,7 +467,7 @@ class RayTaskDispatcher:
                 # Covers failures the replica could not terminalize itself (task
                 # timeout, replica/actor death). Gated on status_changed so a
                 # coordinator-side failure notifies the client only once.
-                emit_task_failure_callbacks(task, failure, task_size=task_size)
+                emit_task_failure_callbacks(task, failure)
                 await self.redis_manager.publish_update(
                     TaskUpdate(
                         task_id=task_id,
@@ -618,10 +618,12 @@ class RayTaskDispatcher:
             and terminalization.final_status == TaskStatus.FAILURE
         ):
             # A reconciled task never reported anything itself — this is the only
-            # notification its client will get.
+            # notification its client will get. Its sources are not recoverable
+            # from durable metadata, so the event carries no per-document detail;
+            # the client reads the task status endpoint for the reason.
             reconciled_task = metadata.to_task()
             reconciled_task.callbacks = callbacks
-            emit_task_failure_callbacks(reconciled_task, failure, task_size=task_size)
+            emit_task_failure_callbacks(reconciled_task, failure)
             await self.redis_manager.publish_update(
                 TaskUpdate(
                     task_id=task_id,

@@ -1195,8 +1195,10 @@ class DoclingProcessorCoordinatorDeployment:
                 # Emitted before the Redis follow-up so that a publish/stats error
                 # cannot swallow the client's only terminal notification. Gated on
                 # status_changed, so the dispatcher's own failure handler stays
-                # silent for this task and the callback fires exactly once.
-                emit_task_failure_callbacks(task, failure, task_size=task_size)
+                # silent for this task and the callback is scheduled at most once.
+                # Scheduling only: if this replica dies before the daemon thread
+                # POSTs, nothing retries — see emit_task_failure_callbacks.
+                emit_task_failure_callbacks(task, failure)
                 try:
                     await self.redis_manager.publish_update(
                         TaskUpdate(
@@ -1253,7 +1255,7 @@ class DoclingProcessorCoordinatorDeployment:
             terminalization.status_changed
             and terminalization.final_status == TaskStatus.FAILURE
         ):
-            emit_task_failure_callbacks(task, failure, task_size=task_size)
+            emit_task_failure_callbacks(task, failure)
             try:
                 await self.redis_manager.publish_update(
                     TaskUpdate(

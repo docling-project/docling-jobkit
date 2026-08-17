@@ -2,8 +2,8 @@
 
 A task that dies before or inside conversion never reaches the result-processing
 path, which is the only place the Ray orchestrator emits progress callbacks. These
-tests pin the contract that such a task still notifies its callbacks exactly once,
-from whichever component actually terminalized it durably.
+tests pin the contract that such a task still schedules a terminal notification,
+at most once, from whichever component actually terminalized it durably.
 """
 
 import asyncio
@@ -25,7 +25,10 @@ from docling.datamodel.service.callbacks import (
     CallbackSpec,
     ProgressKind,
 )
-from docling.datamodel.service.requests import FileSourceRequest as FileSource
+from docling.datamodel.service.requests import (
+    FileSourceRequest as FileSource,
+    S3SourceRequest as S3Coordinates,
+)
 from docling.datamodel.service.responses import (
     FailureCategory,
     FailurePhase,
@@ -36,6 +39,7 @@ from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
+from docling_jobkit.orchestrators.failure_callbacks import emit_task_failure_callbacks
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.ray.dispatcher import RayTaskDispatcher
 from docling_jobkit.orchestrators.ray.models import (
@@ -327,13 +331,12 @@ async def test_reconciled_orphan_notifies_with_persisted_callbacks(
     )
 
     progress = _only_update_processed(recorded_callbacks)
-    # Counts come from durable metadata, matching the failed-document accounting.
-    assert progress.num_processed == 3
-    assert progress.num_failed == 3
-    # Sources are not recoverable from metadata, so per-document detail degrades
-    # to a single carrier for the error message.
-    assert [doc.source for doc in progress.docs] == ["unknown"]
-    assert progress.docs[0].status == ConversionStatus.FAILURE
+    # Sources are not recoverable from durable metadata, so the event is a bare
+    # terminal marker: no invented document entries, and counts that match them.
+    assert progress.docs == []
+    assert progress.num_processed == 0
+    assert progress.num_failed == 0
+    assert progress.num_succeeded == 0
 
 
 @pytest.mark.asyncio
@@ -354,6 +357,46 @@ async def test_reconciled_orphan_without_persisted_callbacks_is_silent(
 
     assert recorded_callbacks == []
     assert manager.published and manager.published[0].task_status == TaskStatus.FAILURE
+
+
+def test_expandable_sources_do_not_become_document_results(
+    recorded_callbacks: list[dict[str, Any]],
+) -> None:
+    """An S3 prefix is not a document, so it must not be reported as a failed one."""
+    task = Task(
+        task_id="t-callback",
+        sources=[
+            S3Coordinates(
+                endpoint="127.0.0.1:9000",
+                verify_ssl=False,
+                access_key="minioadmin",
+                secret_key="minioadmin",
+                bucket="source-bucket",
+                key_prefix="incoming/",
+            )
+        ],
+        target=InBodyTarget(),
+        callbacks=[CallbackSpec(url="https://example.invalid/hook")],
+        metadata={"tenant_id": "tenant-a"},
+    )
+
+    emit_task_failure_callbacks(
+        task,
+        PublicFailureInfo(
+            category=FailureCategory.TIMEOUT,
+            message="Task timed out",
+            retryable=True,
+            phase=FailurePhase.ORCHESTRATION,
+        ),
+    )
+
+    progress = _only_update_processed(recorded_callbacks)
+    # The prefix expands to an unknown number of documents: report the task as
+    # terminal without claiming a document tally that would contradict the
+    # per-document progress a fan-out task may already have delivered.
+    assert progress.docs == []
+    assert progress.num_processed == 0
+    assert progress.num_failed == 0
 
 
 class _CapturingPipeline:
