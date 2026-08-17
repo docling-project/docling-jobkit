@@ -1,6 +1,6 @@
 # Test locally against dev/docker-compose.kafka.yaml:
-#   docker compose -f dev/docker-compose.kafka.yaml up -d
-#   docling-jobkit-local dev/configs/run_kafka_chunks_example.yaml
+# docker compose -f dev/docker-compose.kafka.yaml up -d
+# Kafka UI view at https://localhost:8080
 
 options:
   do_ocr: false

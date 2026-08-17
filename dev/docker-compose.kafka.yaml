@@ -40,6 +40,19 @@ services:
         echo "Topics created:"
         kafka-topics --bootstrap-server broker:9092 --list
 
+  # UI view for Kafka messages https://localhost:8080
+  kafka-ui:
+    image: ghcr.io/kafbat/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      broker:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: broker:9092
+
 networks:
   default:
     name: docling-kafka
