@@ -40,7 +40,7 @@ services:
         echo "Topics created:"
         kafka-topics --bootstrap-server broker:9092 --list
 
-  # UI view for Kafka messages https://localhost:8080
+  # UI view for Kafka messages http://localhost:8080
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:latest
     container_name: kafka-ui
