@@ -18,6 +18,6 @@ target:
   key_mode: doc_id  # all chunks of a document land in one partition, ordered
   # auth:
   #   kind: sasl
-  #   mechanism: SCRAM-SHA-512
+  #   mechanism: PLAIN
   #   username: your-username
   #   password: "your-password"

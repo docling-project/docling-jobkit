@@ -14,11 +14,6 @@ class KafkaSaslAuth(BaseModel):
 
 
 class KafkaChunkTarget(FieldMappings, ChunkFieldSlots):
-    """Kafka target for chunk-level streaming.
-
-    Each chunk is published as a separate message with JSON value.
-    """
-
     kind: Literal["kafka_chunks"] = "kafka_chunks"
 
     bootstrap_servers: list[str] = Field(

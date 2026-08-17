@@ -19,10 +19,6 @@ if TYPE_CHECKING:
 
 
 class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
-    """Kafka target processor for chunk-level streaming.
-    Each chunk is published as a separate Kafka message.
-    """
-
     def __init__(self, target: KafkaChunkTarget) -> None:
         super().__init__(target)
         self._producer: "Optional[Producer]" = None
