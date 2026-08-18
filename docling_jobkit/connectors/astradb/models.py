@@ -57,14 +57,14 @@ class AstraDBChunkTarget(FieldMappings, ChunkFieldSlots):
     vectorize_provider: Annotated[
         str,
         Field(
-            default="openai",
+            default="nvidia",
             description=(
                 "AstraDB vectorize provider for server-side embeddings. "
                 "Supported: 'openai', 'huggingface', 'nvidia', 'voyageai', etc."
             ),
             examples=["openai", "huggingface", "nvidia"],
         ),
-    ] = "openai"
+    ] = "nvidia"
 
     vectorize_model: Annotated[
         str,
@@ -81,7 +81,7 @@ class AstraDBChunkTarget(FieldMappings, ChunkFieldSlots):
                 "sentence-transformers/all-MiniLM-L6-v2",
             ],
         ),
-    ] = "text-embedding-3-small"
+    ] = "nvidia/nv-embedqa-e5-v5"
 
     vectorize_authentication: Annotated[
         Optional[dict[str, str]],
