@@ -1,3 +1,4 @@
+import base64
 import logging
 from typing import Any
 
@@ -43,11 +44,14 @@ def build_producer_config(target: KafkaChunkTarget) -> dict[str, Any]:
 
     if target.auth is not None:
         auth = target.auth
-        config["sasl.mechanism"] = auth.mechanism  # PLAIN for Confluent Cloud API auth
+        config["sasl.mechanism"] = auth.mechanism
         config["sasl.username"] = auth.username
         config["sasl.password"] = auth.password.get_secret_value()
-        if auth.ca_cert_path:
-            config["ssl.ca.location"] = auth.ca_cert_path  # Optional: custom CA only
+
+        # Pass CA cert inline as PEM string (librdkafka ssl.ca.pem parameter)
+        if auth.ca_cert is not None:
+            ca_pem = base64.b64decode(auth.ca_cert.get_secret_value()).decode("utf-8")
+            config["ssl.ca.pem"] = ca_pem
 
     return config
 

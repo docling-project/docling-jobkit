@@ -25,6 +25,10 @@ target:
   #   mechanism: PLAIN
   #   username: your-username
   #   password: "your-password"
+  #   # Optional: base64-encoded CA certificate for self-signed/internal CAs
+  #   # To encode locally: cat your_ca.crt | base64 | tr -d '\n'
+  #   # ca_cert: aAAAaaa...
+
   # Defaults to SASL_SSL when 'auth' is set, PLAINTEXT otherwise. Set it
   # explicitly for SCRAM over a trusted network (SASL_PLAINTEXT) or mTLS (SSL).
   # security_protocol: SASL_SSL

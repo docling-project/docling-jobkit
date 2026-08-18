@@ -41,15 +41,16 @@ class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
 
         try:
             config = build_producer_config(self._target)
+            self._producer = Producer(config)
             _log.info(
-                "Initializing Kafka producer: brokers=%s topic=%s",
-                self._target.bootstrap_servers,
+                "kafka: connected to %s, topic=%s",
+                self._target.bootstrap_servers[0]
+                if len(self._target.bootstrap_servers) == 1
+                else f"{len(self._target.bootstrap_servers)} brokers",
                 self._target.topic,
             )
-            self._producer = Producer(config)
-            _log.info("Kafka producer initialized successfully")
         except Exception as exc:
-            _log.error("Failed to initialize Kafka producer", exc_info=True)
+            _log.error("kafka: connection failed", exc_info=True)
             raise TargetWriteError(
                 f"Could not connect to Kafka brokers {self._target.bootstrap_servers}."
             ) from exc

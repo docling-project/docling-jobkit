@@ -43,7 +43,13 @@ class KafkaSaslAuth(BaseModel):
     mechanism: Literal["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"] = "PLAIN"
     username: str
     password: SecretStr
-    ca_cert_path: Optional[str] = None  # Optional path to CA cert for TLS
+    ca_cert: Optional[SecretStr] = Field(
+        default=None,
+        description=(
+            "Base64-encoded CA certificate for TLS verification. Use this for "
+            "self-signed or internal CAs. Omit for publicly-trusted CAs."
+        ),
+    )
 
 
 class KafkaChunkTarget(FieldMappings, ChunkFieldSlots):
