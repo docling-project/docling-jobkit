@@ -134,8 +134,10 @@ class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
         # else key_mode == "none", key stays None
 
         # Headers duplicate payload fields so consumers can route without
-        # deserialising the value.
-        headers: list[tuple[str, str]] = [
+        # deserialising the value.  The values are always str, but produce()
+        # takes an invariant list, so the element type has to stay as wide as
+        # its signature.
+        headers: list[tuple[str, str | bytes | None]] = [
             ("doc_id", chunk.filename),
             ("chunk_index", str(chunk.chunk_index)),
             ("chunk_id", chunk_id),
