@@ -23,6 +23,21 @@ from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
 
 
+def project_document(
+    document: Optional[DoclingDocument], target_version: Optional[str]
+) -> Optional[DoclingDocument]:
+    """Down-project a produced doc to the newest version the client can read.
+
+    ``project_to`` is a no-op when ``target_version >= document.version`` and
+    raises ``ValueError`` below the projector floor (hard-fail -> task failure).
+    """
+    if document is None or not target_version:
+        return document
+    from docling_core.compat import project_to
+
+    return project_to(document, target_version)
+
+
 def source_to_public_uri(source: object) -> str | None:
     if isinstance(source, HttpSource):
         return str(source.url)
@@ -95,6 +110,7 @@ class ExportableDocument(BaseModel):
         source_uri: Optional[str] = None,
         page_range: Optional[tuple[int, int]] = None,
         slice_index: Optional[int] = None,
+        target_version: Optional[str] = None,
     ) -> "ExportableDocument":
         document: Optional[DoclingDocument] = conversion_result.document
         confidence: Optional[ConfidenceScores] = None
@@ -105,6 +121,8 @@ class ExportableDocument(BaseModel):
             confidence = ConfidenceScores.from_scores(conversion_result.confidence)
         else:
             document = None
+
+        document = project_document(document, target_version)
 
         return cls(
             file=conversion_result.input.file,

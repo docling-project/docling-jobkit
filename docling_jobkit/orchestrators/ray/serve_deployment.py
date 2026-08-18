@@ -67,6 +67,7 @@ from docling_jobkit.convert.results import (
 from docling_jobkit.convert.source_expansion import expand_task_sources
 from docling_jobkit.datamodel.exportable_document import (
     ExportableDocument,
+    project_document,
     source_to_public_uri,
 )
 from docling_jobkit.datamodel.result import (
@@ -143,6 +144,7 @@ def _to_exportable_documents(
     task: Task,
     conv_results: list[ConversionResult],
 ) -> list[ExportableDocument]:
+    target_version = (task.metadata or {}).get("target_document_version")
     return [
         ExportableDocument.from_conversion_result(
             conv_res,
@@ -152,6 +154,7 @@ def _to_exportable_documents(
                 if idx < len(task.sources)
                 else str(conv_res.input.file)
             ),
+            target_version=target_version,
         )
         for idx, conv_res in enumerate(conv_results)
     ]
@@ -548,6 +551,7 @@ def _slice_sort_key(result: ExportableDocument) -> int:
 
 def _assemble_slice_results(
     slice_results: list[ExportableDocument],
+    target_version: Optional[str] = None,
 ) -> ExportableDocument:
     ordered_results = sorted(slice_results, key=_slice_sort_key)
     successful_results = [
@@ -569,6 +573,8 @@ def _assemble_slice_results(
             ]
         )
     )
+    # Slices are converted at native version; project the assembled doc once.
+    assembled_doc = project_document(assembled_doc, target_version)
     final_status = (
         ConversionStatus.SUCCESS
         if all(result.status == ConversionStatus.SUCCESS for result in ordered_results)
@@ -606,9 +612,10 @@ def _finalize_slice_results(
     # heap, and it runs inside the slice_finalization_semaphore guard.
     slice_results: list[ExportableDocument] = ray.get(slice_refs)
 
+    target_version = (task.metadata or {}).get("target_document_version")
     return process_exportable_results(
         task=task,
-        exportable_documents=[_assemble_slice_results(slice_results)],
+        exportable_documents=[_assemble_slice_results(slice_results, target_version)],
         work_dir=work_dir,
         s3_presigned_config=s3_presigned_config,
         callback_invoker=callback_invoker,
