@@ -1354,9 +1354,9 @@ requires-dist = [
     { name = "boto3", specifier = "~=1.35" },
     { name = "codeflare-sdk", marker = "python_full_version >= '3.11' and python_full_version < '3.14' and extra == 'ray'", specifier = ">=0.20.0" },
     { name = "docling-core", git = "https://github.com/docling-project/docling-core/?rev=main" },
-    { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", git = "https://github.com/docling-project/docling/?branch=cau%2Fdocument-downprojection-support" },
-    { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", git = "https://github.com/docling-project/docling/?branch=cau%2Fdocument-downprojection-support" },
-    { name = "docling-slim", extras = ["standard"], git = "https://github.com/docling-project/docling/?branch=cau%2Fdocument-downprojection-support" },
+    { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", specifier = ">=2.94.0,<3.0.0" },
+    { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", specifier = ">=2.95.0,<3.0.0" },
+    { name = "docling-slim", extras = ["standard"], specifier = ">=2.118.0,<3.0.0" },
     { name = "google-api-python-client", marker = "extra == 'gdrive'", specifier = ">=2.183.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'gdrive'", specifier = ">=1.2.2" },
     { name = "google-cloud-storage", marker = "extra == 'gcloudstorage'", specifier = ">=2.10.0" },
@@ -1441,7 +1441,7 @@ wheels = [
 [[package]]
 name = "docling-slim"
 version = "2.120.3"
-source = { git = "https://github.com/docling-project/docling/?branch=cau%2Fdocument-downprojection-support#5145309ddbbe9e26a179607c47ebe38937369948" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
     { name = "docling-core" },
@@ -1451,6 +1451,10 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "requests" },
     { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/63/f5/56cfa7305d5a393e757b8c1af553a90c3e17a5b50eedbe887b48248feedd/docling_slim-2.120.3.tar.gz", hash = "sha256:d09a7cb93c47f3fc92061265a21382b31ae293c8fd012fe1b6a2970dc52e2e8d", size = 591639, upload-time = "2026-08-18T07:52:07.84Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/01/5b/551172bf46c5534c270805c4fd318cca76a7e87fb77b5a5b136ed568ad17/docling_slim-2.120.3-py3-none-any.whl", hash = "sha256:a36c920b6d59a577cbda066089aee8c250da92d69551c7683ad2e043fae83728", size = 732889, upload-time = "2026-08-18T07:52:05.618Z" },
 ]
 
 [package.optional-dependencies]
