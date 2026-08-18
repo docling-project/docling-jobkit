@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -54,9 +55,34 @@ class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
             ) from exc
 
     def _finalize(self) -> None:
-        if self._producer is not None:
-            self._producer.flush(10.0)
-            self._producer = None
+        """Tear the producer down.
+
+        ``end_chunks()`` already flushed and raised for the documents it saw;
+        anything left here is a leftover from a path that skipped it. Report it
+        loudly rather than dropping it silently — this runs from ``__exit__``,
+        where raising would mask the exception that caused the teardown.
+        """
+        if self._producer is None:
+            return
+
+        producer, self._producer = self._producer, None
+        remaining = producer.flush(10.0)
+        if remaining:
+            _log.error(
+                "kafka: %d message(s) still queued for topic %s at teardown; "
+                "they were dropped undelivered",
+                remaining,
+                self._target.topic,
+            )
+        if self._delivery_errors:
+            _log.error(
+                "kafka: %d unreported delivery error(s) for topic %s at "
+                "teardown; first: %s",
+                len(self._delivery_errors),
+                self._target.topic,
+                self._delivery_errors[0],
+            )
+        self._delivery_errors.clear()
 
     # Streaming chunk protocol
 
@@ -77,14 +103,12 @@ class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
 
     def consume_chunk(self, chunk: "ChunkedDocumentResultItem") -> None:
         """Produce one chunk message to Kafka."""
+        from confluent_kafka import KafkaException
+
         from docling_jobkit.convert.chunking import _chunk_row_payload
 
         if self._producer is None:
             raise RuntimeError("KafkaTargetProcessor is not initialized")
-
-        # Build the message value from the chunk
-        row = _chunk_row_payload(chunk, self._target)
-        value = json.dumps(row, ensure_ascii=False).encode("utf-8")
 
         # Derive stable chunk ID
         chunk_id = self._stable_chunk_id(
@@ -92,6 +116,14 @@ class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
             chunk.filename,
             chunk.chunk_index,
         )
+
+        # Build the message value from the chunk.  Kafka is append-only, so a
+        # re-run after a mid-document failure appends a duplicate set of chunks
+        # instead of overwriting (as OpenSearch does): the ID has to travel in
+        # the payload so a consumer reading it alone can dedupe.
+        row = _chunk_row_payload(chunk, self._target)
+        row[self._target.chunk_id_field] = chunk_id
+        value = json.dumps(row, ensure_ascii=False).encode("utf-8")
 
         # Determine message key based on key_mode
         key: Optional[str] = None
@@ -101,8 +133,9 @@ class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
             key = chunk_id
         # else key_mode == "none", key stays None
 
-        # Build headers (list of tuples for confluent_kafka)
-        headers: list[tuple[str, str | bytes | None]] = [
+        # Headers duplicate payload fields so consumers can route without
+        # deserialising the value.
+        headers: list[tuple[str, str]] = [
             ("doc_id", chunk.filename),
             ("chunk_index", str(chunk.chunk_index)),
             ("chunk_id", chunk_id),
@@ -116,8 +149,10 @@ class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
             len(value),
         )
 
-        # Produce the message with retry on BufferError
-        for attempt in range(2):
+        # Produce, retrying until the queue drains or the deadline passes.
+        deadline = time.monotonic() + self._target.queue_full_timeout_seconds
+        warned = False
+        while True:
             try:
                 self._producer.produce(
                     topic=self._target.topic,
@@ -128,15 +163,40 @@ class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
                 )
                 # Process delivery callbacks without blocking
                 self._producer.poll(0)
-                break
-            except BufferError:
-                if attempt == 0:
-                    _log.warning("kafka: producer queue full, waiting...")
-                    self._producer.poll(1.0)
-                else:
+                return
+            except BufferError as exc:
+                # Local queue full: bounded by queue_max_kbytes /
+                # queue_max_messages, so this is backpressure, not a failure.
+                time_left = deadline - time.monotonic()
+                if time_left <= 0:
                     raise TargetWriteError(
-                        f"Kafka producer queue full after retry for topic {self._target.topic}"
+                        f"Kafka producer queue still full after "
+                        f"{self._target.queue_full_timeout_seconds:g}s "
+                        f"for topic {self._target.topic}"
+                    ) from exc
+                if not warned:
+                    _log.warning(
+                        "kafka: producer queue full, waiting up to %.1fs...",
+                        time_left,
                     )
+                    warned = True
+                # poll() serves delivery callbacks, which is what frees queue
+                # slots.  The 50 ms floor keeps a near-expired deadline from
+                # spinning.
+                self._producer.poll(max(0.05, min(0.5, time_left)))
+            except KafkaException as exc:
+                # librdkafka rejects an oversized message synchronously from
+                # produce() (MSG_SIZE_TOO_LARGE), and raw KafkaExceptions are
+                # not recognised by classify_public_task_failure(); wrapping
+                # them in TargetWriteError gives the same TARGET_UNAVAILABLE
+                # classification the other targets produce.
+                raise TargetWriteError(
+                    f"Kafka rejected a {len(value)}-byte message for chunk "
+                    f"{chunk.chunk_index} of {chunk.filename} on topic "
+                    f"{self._target.topic}. If the chunk exceeds the message "
+                    f"size limit, raise 'message.max.bytes' on the broker and "
+                    f"'max.message.bytes' on the topic, or chunk smaller."
+                ) from exc
 
     def end_chunks(self) -> None:
         """Flush producer and check for delivery errors."""
@@ -144,16 +204,15 @@ class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
             return
 
         _log.debug("kafka: flushing producer...")
+        # flush() polls internally and returns only once every outstanding
+        # message has been delivered *and* its callback served, so there is
+        # nothing left to poll for afterwards.
         remaining = self._producer.flush(10.0)
         if remaining > 0:
             _log.error("kafka: flush timeout, %d messages remain in queue", remaining)
             raise TargetWriteError(
                 f"Kafka producer flush timeout: {remaining} messages still in queue"
             )
-
-        # Poll to process any pending delivery callbacks (flush() only blocks
-        # on transmission, not on broker ack — callbacks may still be pending)
-        self._producer.poll(1.0)
 
         # Check for delivery errors
         if self._delivery_errors:

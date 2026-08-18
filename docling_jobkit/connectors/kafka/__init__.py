@@ -1,1 +1,1 @@
-"""Kafka target conector - streams chunks as messages/events"""
+"""Kafka target connector - streams chunks as messages/events"""
