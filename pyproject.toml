@@ -43,6 +43,10 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "docling-slim[standard]>=2.118.0,<3.0.0",
+    # Directly imported (docling_core.compat.project_to). Declared explicitly so
+    # the temporary git source pin below applies (uv sources only bind to direct
+    # deps). Was previously satisfied transitively via docling-slim.
+    "docling-core>=2.91.0,<3.0.0",
     "pydantic~=2.10",
     "pydantic-settings~=2.4",
     "boto3~=1.35",
@@ -118,8 +122,13 @@ dev = [
 ]
 
 [tool.uv.sources]
-# docling-slim = { git = "https://github.com/docling-project/docling/", branch = "main" }
 # docling-slim = { path = "../docling", editable = true }
+# TEMPORARY: consume the unreleased down-projection work from git.
+# docling-slim carries the client Accept-Docling-Document-Version header;
+# docling-core main carries the compat/project_to system (unreleased on PyPI).
+# Revert both (and the docling-core direct dep above) once docling-core ships.
+docling-slim = { git = "https://github.com/docling-project/docling/", branch = "cau/document-downprojection-support" }
+docling-core = { git = "https://github.com/docling-project/docling-core/", rev = "main" }
 
 
 [tool.uv]
