@@ -87,6 +87,9 @@ def target_connectors():
     from docling_jobkit.connectors.http.target_processor import (
         HttpPutTargetProcessor,
     )
+    from docling_jobkit.connectors.kafka.target_processor import (
+        KafkaTargetProcessor,
+    )
     from docling_jobkit.connectors.local_path.target_processor import (
         LocalPathTargetProcessor,
     )
@@ -114,6 +117,7 @@ def target_connectors():
         OpenSearchTargetProcessor,
         AstraDBTargetProcessor,
         SharePointTargetProcessor,
+        KafkaTargetProcessor,
     ):
         _register_if_available(connectors, cls)
 
