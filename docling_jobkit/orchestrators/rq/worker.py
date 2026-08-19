@@ -155,6 +155,7 @@ def _run_docling_task(
                 headers=headers,
             )
 
+        target_version = (task.metadata or {}).get("target_document_version")
         exportable_documents = (
             ExportableDocument.from_conversion_result(
                 conv_res,
@@ -164,6 +165,7 @@ def _run_docling_task(
                     if idx < len(task.sources)
                     else str(conv_res.input.file)
                 ),
+                target_version=target_version,
             )
             for idx, conv_res in enumerate(conv_results)
         )

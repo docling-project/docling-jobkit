@@ -23,6 +23,31 @@ from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
 
 
+def project_document(
+    document: Optional[DoclingDocument], target_version: Optional[str]
+) -> Optional[DoclingDocument]:
+    """Down-project a produced doc to the newest version the client can read.
+
+    Targets at or above ``document.version`` return the original document.
+    Lower targets use ``project_to``, including its hard-fail below the floor.
+    """
+    if document is None or not target_version:
+        return document
+
+    target_parts = target_version.split(".")
+    document_parts = document.version.split(".")
+    if (
+        len(target_parts) == len(document_parts) == 3
+        and all(part.isdigit() for part in target_parts + document_parts)
+        and tuple(map(int, target_parts)) >= tuple(map(int, document_parts))
+    ):
+        return document
+
+    from docling_core.compat import project_to
+
+    return project_to(document, target_version)
+
+
 def source_to_public_uri(source: object) -> str | None:
     if isinstance(source, HttpSource):
         return str(source.url)
@@ -95,6 +120,7 @@ class ExportableDocument(BaseModel):
         source_uri: Optional[str] = None,
         page_range: Optional[tuple[int, int]] = None,
         slice_index: Optional[int] = None,
+        target_version: Optional[str] = None,
     ) -> "ExportableDocument":
         document: Optional[DoclingDocument] = conversion_result.document
         confidence: Optional[ConfidenceScores] = None
@@ -105,6 +131,8 @@ class ExportableDocument(BaseModel):
             confidence = ConfidenceScores.from_scores(conversion_result.confidence)
         else:
             document = None
+
+        document = project_document(document, target_version)
 
         return cls(
             file=conversion_result.input.file,

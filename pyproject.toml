@@ -43,6 +43,7 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "docling-slim[standard]>=2.118.0,<3.0.0",
+    "docling-core>=2.92.0,<3.0.0",
     "pydantic~=2.10",
     "pydantic-settings~=2.4",
     "boto3~=1.35",
@@ -116,11 +117,6 @@ dev = [
     "numpy<2.5.0",  # temporary pinning to avoid typing incompatibility for python < 3.12
     "types-psutil>=7.2.2.20260130",
 ]
-
-[tool.uv.sources]
-# docling-slim = { git = "https://github.com/docling-project/docling/", branch = "main" }
-# docling-slim = { path = "../docling", editable = true }
-
 
 [tool.uv]
 package = true
