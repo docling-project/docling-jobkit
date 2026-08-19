@@ -43,10 +43,7 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "docling-slim[standard]>=2.118.0,<3.0.0",
-    # Directly imported (docling_core.compat.project_to). Declared explicitly so
-    # the temporary git source pin below applies (uv sources only bind to direct
-    # deps). Was previously satisfied transitively via docling-slim.
-    "docling-core>=2.91.0,<3.0.0",
+    "docling-core>=2.92.0,<3.0.0",
     "pydantic~=2.10",
     "pydantic-settings~=2.4",
     "boto3~=1.35",
@@ -120,13 +117,6 @@ dev = [
     "numpy<2.5.0",  # temporary pinning to avoid typing incompatibility for python < 3.12
     "types-psutil>=7.2.2.20260130",
 ]
-
-[tool.uv.sources]
-# docling-slim = { path = "../docling", editable = true }
-# TEMPORARY: docling-core main carries compat/project_to (unreleased on PyPI).
-# Remove this source override once docling-core ships.
-docling-core = { git = "https://github.com/docling-project/docling-core/", rev = "main" }
-
 
 [tool.uv]
 package = true
