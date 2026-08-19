@@ -25,6 +25,9 @@ class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
         self._producer: "Optional[Producer]" = None
         self._current_document_hash: Optional[str] = None
         self._delivery_errors: list[Any] = []
+        # Broker/client errors from the error_cb (e.g. _UNKNOWN_TOPIC).
+        # These carry the real reason behind a _MSG_TIMED_OUT delivery failure.
+        self._broker_errors: list[Any] = []
 
     @classmethod
     def check_dependencies(cls) -> None:
@@ -41,19 +44,65 @@ class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
 
         try:
             config = build_producer_config(self._target)
+            config["error_cb"] = self._on_error
             self._producer = Producer(config)
-            _log.info(
-                "kafka: connected to %s, topic=%s",
-                self._target.bootstrap_servers[0]
-                if len(self._target.bootstrap_servers) == 1
-                else f"{len(self._target.bootstrap_servers)} brokers",
-                self._target.topic,
-            )
         except Exception as exc:
             _log.error("kafka: connection failed", exc_info=True)
             raise TargetWriteError(
                 f"Could not connect to Kafka brokers {self._target.bootstrap_servers}."
             ) from exc
+
+        # Verify the topic exists before producing any messages.  librdkafka
+        # surfaces a missing topic only as _MSG_TIMED_OUT on each message
+        # (the real error goes to the internal log, not the delivery callback),
+        # making the root cause invisible.  An explicit metadata fetch here
+        # gives a clear error immediately at connect time.
+        self._verify_topic()
+        _log.info(
+            "kafka: connected to %s, topic=%s",
+            self._target.bootstrap_servers[0]
+            if len(self._target.bootstrap_servers) == 1
+            else f"{len(self._target.bootstrap_servers)} brokers",
+            self._target.topic,
+        )
+
+    def _verify_topic(self) -> None:
+        """Raise TargetWriteError if the configured topic does not exist."""
+        from confluent_kafka.admin import AdminClient
+
+        from docling_jobkit.connectors.kafka.helper import build_producer_config
+
+        config = build_producer_config(self._target)
+        # AdminClient shares the same config shape as Producer.
+        admin = AdminClient(config)
+        try:
+            # list_topics() fetches cluster metadata; timeout is generous
+            # but bounded so a network issue doesn't hang indefinitely.
+            meta = admin.list_topics(
+                topic=self._target.topic,
+                timeout=10.0,
+            )
+        except Exception as exc:
+            raise TargetWriteError(
+                f"Could not fetch Kafka metadata for topic "
+                f"'{self._target.topic}': {exc}"
+            ) from exc
+
+        topic_meta = meta.topics.get(self._target.topic)
+        if topic_meta is None or topic_meta.error is not None:
+            from confluent_kafka import KafkaError
+
+            err = topic_meta.error if topic_meta is not None else None
+            if err is not None and err.code() == KafkaError.UNKNOWN_TOPIC_OR_PART:
+                raise TargetWriteError(
+                    f"Topic '{self._target.topic}' does not exist on the broker. "
+                    f"Create the topic or set 'allow.auto.create.topics=true' on "
+                    f"the broker."
+                )
+            raise TargetWriteError(
+                f"Kafka topic '{self._target.topic}' is not available: {err}"
+            )
+        _log.debug("kafka: topic '%s' exists and is accessible", self._target.topic)
 
     def _finalize(self) -> None:
         """Tear the producer down.
@@ -84,6 +133,7 @@ class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
                 self._delivery_errors[0],
             )
         self._delivery_errors.clear()
+        self._broker_errors.clear()
 
     # Streaming chunk protocol
 
@@ -101,6 +151,7 @@ class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
         _log.info("kafka: begin_chunks for %s (hash=%s)", filename, document_hash)
         self._current_document_hash = document_hash
         self._delivery_errors.clear()
+        self._broker_errors.clear()
 
     def consume_chunk(self, chunk: "ChunkedDocumentResultItem") -> None:
         """Produce one chunk message to Kafka."""
@@ -207,38 +258,66 @@ class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
             return
 
         _log.debug("kafka: flushing producer...")
-        # flush() polls internally and returns only once every outstanding
-        # message has been delivered *and* its callback served, so there is
-        # nothing left to poll for afterwards.
         remaining = self._producer.flush(10.0)
+
+        if remaining > 0:
+            # flush() timed out.  Do one extra poll to drain any callbacks
+            # that fired just as flush() gave up, then check for delivery errors.
+            self._producer.poll(0.5)
+
+        if self._delivery_errors:
+            from confluent_kafka import KafkaException
+
+            first_error = self._delivery_errors[0]
+            # If the error_cb captured broker-level detail (e.g. _SSL,
+            # _ALL_BROKERS_DOWN), surface that; otherwise fall back to the
+            # generic _MSG_TIMED_OUT from the delivery callback.
+            if self._broker_errors:
+                broker_err_str = " | ".join(str(e) for e in self._broker_errors)
+                hint = (
+                    f"Kafka delivery failed for topic '{self._target.topic}': "
+                    f"{broker_err_str}"
+                )
+            else:
+                hint = (
+                    f"Kafka message delivery failed for topic "
+                    f"'{self._target.topic}': {first_error}"
+                )
+            _log.error("kafka: %s", hint)
+            # KafkaError is a C type with no __traceback__; wrap it in a
+            # KafkaException before chaining so 'raise ... from' doesn't
+            # crash the traceback formatter.
+            raise TargetWriteError(hint) from KafkaException(first_error)
+
         if remaining > 0:
             _log.error("kafka: flush timeout, %d messages remain in queue", remaining)
             raise TargetWriteError(
-                f"Kafka producer flush timeout: {remaining} messages still in queue"
+                f"Kafka producer flush timeout: {remaining} messages still in queue "
+                f"for topic '{self._target.topic}'"
             )
-
-        # Check for delivery errors
-        if self._delivery_errors:
-            first_error = self._delivery_errors[0]
-            _log.error(
-                "kafka: delivery failed for topic %s: %s",
-                self._target.topic,
-                first_error,
-            )
-            raise TargetWriteError(
-                f"Kafka message delivery failed for topic {self._target.topic}"
-            ) from first_error
 
         _log.info("kafka: flush completed successfully")
 
         # Reset state
         self._current_document_hash = None
         self._delivery_errors.clear()
+        self._broker_errors.clear()
 
     def abort_chunks(self) -> None:
         """Discard in-flight state. Already-sent messages stay sent."""
         self._current_document_hash = None
         self._delivery_errors.clear()
+        self._broker_errors.clear()
+
+    def _on_error(self, err) -> None:
+        """Error callback for broker/client-level errors (error_cb).
+
+        These fire with the real reason code (e.g. _UNKNOWN_TOPIC) that
+        librdkafka wraps into the generic _MSG_TIMED_OUT delivery error.
+        Captured here so end_chunks() can surface actionable diagnostics.
+        """
+        _log.warning("kafka: broker/client error: %s", err)
+        self._broker_errors.append(err)
 
     def _on_delivery(self, err, msg) -> None:
         """Delivery callback for producer.produce().

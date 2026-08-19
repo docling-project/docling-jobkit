@@ -22,6 +22,12 @@ def build_producer_config(target: KafkaChunkTarget) -> dict[str, Any]:
         "compression.type": target.compression_type,
         "client.id": "docling-jobkit",
         "security.protocol": protocol,
+        # Cap the per-message retry window so delivery callbacks fire before
+        # end_chunks()'s flush() deadline.  librdkafka's default is 300 000 ms;
+        # without this cap, any runtime delivery failure (auth expiry, broker
+        # eviction) would silently outlast the flush and surface only as a
+        # generic timeout instead of the real error.
+        "message.timeout.ms": int(target.delivery_timeout_seconds * 1000),
     }
 
     # The idempotent producer is what actually makes key_mode='doc_id' ordered:

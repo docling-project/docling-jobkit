@@ -157,6 +157,18 @@ class KafkaChunkTarget(FieldMappings, ChunkFieldSlots):
         ),
     )
 
+    delivery_timeout_seconds: float = Field(
+        default=8.0,
+        gt=0.0,
+        description=(
+            "Per-message delivery timeout in seconds (librdkafka "
+            "'message.timeout.ms'). librdkafka will retry delivery until this "
+            "deadline expires, then fire the delivery callback with an error. "
+            "Must be shorter than the flush timeout (10 s) so that delivery "
+            "errors surface before the flush call gives up."
+        ),
+    )
+
     chunk_id_field: str = Field(
         default="chunk_id",
         description=(
