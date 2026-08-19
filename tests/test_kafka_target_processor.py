@@ -56,7 +56,24 @@ def mock_producer(monkeypatch):
     fake_confluent_kafka = types.ModuleType("confluent_kafka")
     fake_confluent_kafka.Producer = mock_producer_cls  # type: ignore[attr-defined]
     fake_confluent_kafka.KafkaException = FakeKafkaException  # type: ignore[attr-defined]
+
+    # _verify_topic() does `from confluent_kafka.admin import AdminClient`; the
+    # fake AdminClient returns a cluster-metadata mock with a non-empty topics dict
+    # so the topic-exists check passes without a real broker.
+    fake_topic_meta = Mock()
+    fake_topic_meta.error = None
+    fake_cluster_meta = Mock()
+    fake_cluster_meta.topics = {"test.chunks": fake_topic_meta}
+    fake_admin_instance = Mock()
+    fake_admin_instance.list_topics = Mock(return_value=fake_cluster_meta)
+    fake_admin_cls = Mock(return_value=fake_admin_instance)
+
+    fake_admin_mod = types.ModuleType("confluent_kafka.admin")
+    fake_admin_mod.AdminClient = fake_admin_cls  # type: ignore[attr-defined]
+    fake_confluent_kafka.admin = fake_admin_mod  # type: ignore[attr-defined]
+
     monkeypatch.setitem(sys.modules, "confluent_kafka", fake_confluent_kafka)
+    monkeypatch.setitem(sys.modules, "confluent_kafka.admin", fake_admin_mod)
 
     yield {
         "producer_cls": mock_producer_cls,
