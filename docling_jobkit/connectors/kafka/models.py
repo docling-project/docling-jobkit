@@ -43,7 +43,7 @@ class KafkaSaslAuth(BaseModel):
     mechanism: Literal["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"] = "PLAIN"
     username: str
     password: SecretStr
-    ca_cert: Optional[SecretStr] = Field(
+    ca_cert: Optional[str] = Field(
         default=None,
         description=(
             "Base64-encoded CA certificate for TLS verification. Use this for "
