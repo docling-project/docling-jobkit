@@ -11,7 +11,10 @@ from typing import Any, Callable, Literal, Optional, Type, TypedDict, Union
 
 from pydantic import BaseModel, Field
 
-from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
+from docling.backend.docling_parse_backend import (
+    DoclingParseDocumentBackend,
+    ThreadedDoclingParseDocumentBackend,
+)
 from docling.backend.pdf_backend import PdfDocumentBackend
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
@@ -1711,6 +1714,8 @@ class DoclingConverterManager:
         pdf_backend = normalize_pdf_backend(request.pdf_backend)
         if pdf_backend == PdfBackend.DOCLING_PARSE:
             backend: type[PdfDocumentBackend] = DoclingParseDocumentBackend
+        elif pdf_backend == PdfBackend.THREADED_DOCLING_PARSE:
+            backend = ThreadedDoclingParseDocumentBackend
         elif pdf_backend == PdfBackend.PYPDFIUM2:
             backend = PyPdfiumDocumentBackend
         else:
@@ -1866,8 +1871,11 @@ class DoclingConverterManager:
 
         elif request.pipeline == ProcessingPipeline.VLM:
             pipeline_options = self._parse_vlm_pdf_opts(request, artifacts_path)
+            backend = self._parse_backend(request)
             pdf_format_option = PdfFormatOption(
-                pipeline_cls=VlmPipeline, pipeline_options=pipeline_options
+                pipeline_cls=VlmPipeline,
+                pipeline_options=pipeline_options,
+                backend=backend,
             )
         else:
             raise NotImplementedError(
