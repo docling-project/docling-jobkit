@@ -135,11 +135,13 @@ def test_dump_model_preserves_api_engine_options_subclass_fields():
     assert engine_opts_dict["params"] == {"model": "granite-vision-4-1-4b"}
     assert engine_opts_dict["engine_type"] == "api"
 
-    # Without serialize_as_any the subclass fields are silently dropped
+    # VlmEngineOptionsMixin.engine_options is typed as SerializeAsAny[BaseVlmEngineOptions]
+    # in docling, so subclass fields are preserved even without serialize_as_any=True on
+    # the outer dump call.
     payload_no_any = dump_model_with_secrets(task, serialize_as_any=False)
     engine_opts_base = payload_no_any["convert_options"][
         "picture_description_custom_config"
     ]["engine_options"]
-    assert "url" not in engine_opts_base, (
-        "Without serialize_as_any=True, url should be missing (demonstrating the bug)"
+    assert engine_opts_base["url"] == "http://127.0.0.1:8881/v1/chat/completions", (
+        "SerializeAsAny on the field ensures url is preserved regardless of outer serialize_as_any"
     )
