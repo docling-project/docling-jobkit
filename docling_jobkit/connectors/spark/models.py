@@ -1,6 +1,6 @@
 from typing import Annotated, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from docling_jobkit.datamodel.target_field_slots import ChunkFieldSlots, FieldMappings
 
@@ -106,16 +106,43 @@ class SparkConnection(BaseModel):
 
 class SparkSourceCoordinates(SparkConnection):
     table: Annotated[
-        str,
+        Optional[str],
         Field(
             description="Fully-qualified source table to pull files from",
             examples=["catalog.schema.table"],
         ),
-    ]
+    ] = None
+
+    query: Annotated[
+        Optional[str],
+        Field(
+            description=(
+                "Full SELECT query wrapped as a subquery. Mutually exclusive with `table`. "
+                "The query must project the columns named by content_column/url_column/"
+                "filename_column/id_column. Enables anti-joins against the target for "
+                "incremental reads."
+            )
+        ),
+    ] = None
 
     content_column: Annotated[
-        str, Field(description="name of the column holding the raw document bytes")
-    ]
+        Optional[str],
+        Field(description="Name of the column holding the raw document bytes"),
+    ] = None
+
+    url_column: Annotated[
+        Optional[str],
+        Field(
+            description="Alternative to content_column. Https url for Databricks File API"
+        ),
+    ] = None
+
+    id_column: Annotated[
+        Optional[str],
+        Field(
+            description="Required when using url_column. No content to hash, needs explicit ID"
+        ),
+    ] = None
 
     filename_column: Annotated[
         Optional[str],
@@ -138,6 +165,40 @@ class SparkSourceCoordinates(SparkConnection):
             )
         ),
     ] = None
+
+    @model_validator(mode="after")
+    def validate_columns(self) -> "SparkSourceCoordinates":
+        has_content = self.content_column is not None
+        has_url = self.url_column is not None
+
+        if has_content and has_url:
+            raise ValueError("content_column and url_column are mutually exclusive")
+        if not has_content and not has_url:
+            raise ValueError("Either content_column or url_column must be set")
+
+        if has_url and self.id_column is None:
+            raise ValueError("url_column requires id_column to be set")
+
+        if has_url and self.partition_column is not None:
+            raise ValueError("url_column cannot be used with partition_column")
+
+        has_table = self.table is not None
+        has_query = self.query is not None
+
+        if has_table and has_query:
+            raise ValueError("table and query are mutually exclusive")
+        if not has_table and not has_query:
+            raise ValueError("Either table or query must be set")
+
+        if has_query and self.max_num_elements is not None:
+            assert self.query is not None  # for type checker
+            if "ORDER BY" not in self.query.upper():
+                raise ValueError(
+                    "When max_num_elements is set, query must include ORDER BY for "
+                    "deterministic results"
+                )
+
+        return self
 
 
 class SparkDocTarget(SparkConnection, FieldMappings):

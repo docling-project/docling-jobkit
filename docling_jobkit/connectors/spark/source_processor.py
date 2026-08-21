@@ -83,13 +83,15 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
     @_map_spark_source_errors
     def _initialize(self) -> None:
         self._backend = get_backend(self._coords)
-        if not self._backend.table_exists(self._coords.table):
+
+        # Validator ensures exactly one of table/query and content_column/url_column is set
+        if self._coords.table and not self._backend.table_exists(self._coords.table):
             raise SourceConnectorConfigError(
                 f"Spark source table {self._coords.table!r} not found, verify the "
                 f"catalog.schema.table name and that it exists on the cluster."
             )
 
-        _log.info("Spark source resolved table %s", self._coords.table)
+        _log.info("Spark source resolved %s", self._coords.table or "query")
         self._cached_partition = None
         self._partition_cache = {}
 
@@ -102,9 +104,10 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
 
     @_map_spark_source_errors
     def _count_documents(self) -> int:
+        # Validator ensures exactly one of table/query and content_column/url_column is set
         count = self._backend.count_documents(
-            self._coords.table,
-            self._coords.content_column,
+            self._coords.table or self._coords.query,  # type: ignore[arg-type]
+            self._coords.content_column or self._coords.url_column,  # type: ignore[arg-type]
             self._coords.max_num_elements,
         )
         _log.debug("Spark source counted %d document(s)", count)
@@ -120,9 +123,10 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
         grouped by partition so iterate_document_chunks can emit one chunk per
         partition without re-sorting.
         """
+        # Validator ensures exactly one of table/query and content_column/url_column is set
         for partition_value, row_key, filename in self._backend.enumerate_row_keys(
-            self._coords.table,
-            self._coords.content_column,
+            self._coords.table or self._coords.query,  # type: ignore[arg-type]
+            self._coords.content_column or self._coords.url_column,  # type: ignore[arg-type]
             self._partition_col,
             self._coords.filename_column,
             self._coords.max_num_elements,
@@ -190,11 +194,12 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
         # the cache, one backend read per partition instead of per document.
         partition_value, row_key, _ = identifier
         if self._cached_partition != partition_value:
+            # Validator ensures exactly one of table/query and content_column is set
             self._partition_cache = {
                 rk: (data, name or f"{rk}.bin")
                 for rk, data, name in self._backend.read_partition(
-                    self._coords.table,
-                    self._coords.content_column,
+                    self._coords.table or self._coords.query,  # type: ignore[arg-type]
+                    self._coords.content_column,  # type: ignore[arg-type]
                     self._partition_col,
                     partition_value,
                     self._coords.filename_column,
@@ -224,9 +229,11 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
 
         yielded = 0
         skipped_null = 0
+
+        # Validator ensures exactly one of table/query and content_column/url_column is set
         documents = self._backend.stream_documents(
-            self._coords.table,
-            self._coords.content_column,
+            self._coords.table or self._coords.query,  # type: ignore[arg-type]
+            self._coords.content_column or self._coords.url_column,  # type: ignore[arg-type]
             self._coords.filename_column,
             self._coords.max_num_elements,
         )
