@@ -50,6 +50,9 @@ def source_connectors():
         LocalPathSourceProcessor,
     )
     from docling_jobkit.connectors.s3.source_processor import S3SourceProcessor
+    from docling_jobkit.connectors.sharepoint.source_processor import (
+        SharePointSourceProcessor,
+    )
 
     connectors = [
         HttpSourceProcessor,
@@ -61,6 +64,7 @@ def source_connectors():
         AzureBlobSourceProcessor,
         GoogleDriveSourceProcessor,
         GoogleCloudStorageSourceProcessor,
+        SharePointSourceProcessor,
     ):
         _register_if_available(connectors, cls)
 
@@ -68,6 +72,9 @@ def source_connectors():
 
 
 def target_connectors():
+    from docling_jobkit.connectors.astradb.target_processor import (
+        AstraDBTargetProcessor,
+    )
     from docling_jobkit.connectors.azure_blob.target_processor import (
         AzureBlobTargetProcessor,
     )
@@ -80,6 +87,9 @@ def target_connectors():
     from docling_jobkit.connectors.http.target_processor import (
         HttpPutTargetProcessor,
     )
+    from docling_jobkit.connectors.kafka.target_processor import (
+        KafkaTargetProcessor,
+    )
     from docling_jobkit.connectors.local_path.target_processor import (
         LocalPathTargetProcessor,
     )
@@ -90,6 +100,9 @@ def target_connectors():
         PresignedTargetProcessor,
     )
     from docling_jobkit.connectors.s3.target_processor import S3TargetProcessor
+    from docling_jobkit.connectors.sharepoint.target_processor import (
+        SharePointTargetProcessor,
+    )
 
     connectors = [
         LocalPathTargetProcessor,
@@ -102,6 +115,9 @@ def target_connectors():
         GoogleDriveTargetProcessor,
         GoogleCloudStorageTargetProcessor,
         OpenSearchTargetProcessor,
+        AstraDBTargetProcessor,
+        SharePointTargetProcessor,
+        KafkaTargetProcessor,
     ):
         _register_if_available(connectors, cls)
 

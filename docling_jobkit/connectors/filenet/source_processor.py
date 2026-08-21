@@ -132,7 +132,8 @@ class FileNetSourceProcessor(
         max_elements = self._coords.max_num_elements
 
         if self._coords.document_ids:
-            return 1
+            count = len(self._coords.document_ids)
+            return min(count, max_elements) if max_elements is not None else count
 
         if self._coords.folder_id:
             docs = list_folder_documents(

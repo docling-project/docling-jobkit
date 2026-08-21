@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "docling-jobkit"
-version = "3.2.0"  # DO NOT EDIT, updated automatically
+version = "3.4.0"  # DO NOT EDIT, updated automatically
 description = "Running a distributed job processing documents with Docling."
 readme = "README.md"
 license = "MIT"
@@ -42,7 +42,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "docling-slim[standard]>=2.117.0,<3.0.0",
+    "docling-slim[standard]>=2.118.0,<3.0.0",
     "pydantic~=2.10",
     "pydantic-settings~=2.4",
     "boto3~=1.35",
@@ -84,6 +84,18 @@ azure = [
 ]
 opensearch = [
     "opensearch-py>=2.8.0,<3",
+]
+astradb = [
+    "astrapy>=1.0.0,<2",
+]
+kafka = [
+    "confluent-kafka>=2.5.0,<3",
+]
+sharepoint = [
+    # v3.0.0 imports `Self` from `typing` (stdlib), which only exists on Python >=3.11.
+    # Pin <3.0.0 until upstream fixes the backport to use typing_extensions.
+    "office365-rest-python-client>=2.6.2,<3.0.0; python_version < '3.11'",
+    "office365-rest-python-client>=2.6.2; python_version >= '3.11'",
 ]
 
 [dependency-groups]
@@ -225,9 +237,11 @@ module = [
     "googleapiclient.*",
     "google_auth_oauthlib.*",
     "google.*",
+    "office365.*",
     "ray.*",
     "codeflare_sdk.*",
     "opensearchpy.*",
+    "confluent_kafka.*",
 ]
 ignore_missing_imports = true
 

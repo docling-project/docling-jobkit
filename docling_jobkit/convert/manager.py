@@ -11,7 +11,10 @@ from typing import Any, Callable, Literal, Optional, Type, TypedDict, Union
 
 from pydantic import BaseModel, Field
 
-from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
+from docling.backend.docling_parse_backend import (
+    DoclingParseDocumentBackend,
+    ThreadedDoclingParseDocumentBackend,
+)
 from docling.backend.pdf_backend import PdfDocumentBackend
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
@@ -49,9 +52,16 @@ from docling.datamodel.vlm_engine_options import (
 )
 from docling.document_converter import (
     DocumentConverter,
+    ExcelFormatOption,
     FormatOption,
+    HTMLFormatOption,
     ImageFormatOption,
+    OdpFormatOption,
+    OdsFormatOption,
+    OdtFormatOption,
     PdfFormatOption,
+    PowerpointFormatOption,
+    WordFormatOption,
 )
 from docling.models.factories import (
     get_layout_factory,
@@ -523,6 +533,34 @@ class DoclingConverterManager:
                 InputFormat.PDF: pdf_format_option,
                 InputFormat.IMAGE: image_format_option,
             }
+
+            # Propagate picture description/classification/chart-extraction
+            # options to SimplePipeline-based office formats too. Without this,
+            # do_picture_description and friends are silently ignored for
+            # DOCX/PPTX/XLSX/HTML/ODT/ODS/ODP, even though SimplePipeline runs
+            # the same enrichment stage as the PDF pipeline.
+            office_pipeline_options = pdf_format_option.pipeline_options
+            format_options[InputFormat.DOCX] = WordFormatOption(
+                pipeline_options=office_pipeline_options
+            )
+            format_options[InputFormat.PPTX] = PowerpointFormatOption(
+                pipeline_options=office_pipeline_options
+            )
+            format_options[InputFormat.XLSX] = ExcelFormatOption(
+                pipeline_options=office_pipeline_options
+            )
+            format_options[InputFormat.HTML] = HTMLFormatOption(
+                pipeline_options=office_pipeline_options
+            )
+            format_options[InputFormat.ODT] = OdtFormatOption(
+                pipeline_options=office_pipeline_options
+            )
+            format_options[InputFormat.ODS] = OdsFormatOption(
+                pipeline_options=office_pipeline_options
+            )
+            format_options[InputFormat.ODP] = OdpFormatOption(
+                pipeline_options=office_pipeline_options
+            )
 
             return DocumentConverter(format_options=format_options)
 
@@ -1640,6 +1678,23 @@ class DoclingConverterManager:
         if new_code_formula_options is not None:
             pipeline_options.code_formula_options = new_code_formula_options
 
+        # `do_pdf_heading_hierarchy` is the request-level switch, while the nested
+        # options carry only the fine-tuning, so the pipeline's own `enabled` flag
+        # is derived from the switch here.
+        pipeline_options.heading_hierarchy_options = (
+            request.pdf_heading_hierarchy_options.model_copy(
+                update={"enabled": request.do_pdf_heading_hierarchy}, deep=True
+            )
+        )
+        # Style-based inference reads the parsed PDF cells, which the pipeline drops
+        # after assembly unless they are explicitly retained. Without them docling
+        # silently skips the style signal, so opt in on the caller's behalf.
+        if (
+            request.do_pdf_heading_hierarchy
+            and request.pdf_heading_hierarchy_options.use_style
+        ):
+            pipeline_options.generate_parsed_pages = True
+
         # Forward the definition of the following attributes, if they are not none
         for attr in (
             "queue_max_size",
@@ -1659,6 +1714,8 @@ class DoclingConverterManager:
         pdf_backend = normalize_pdf_backend(request.pdf_backend)
         if pdf_backend == PdfBackend.DOCLING_PARSE:
             backend: type[PdfDocumentBackend] = DoclingParseDocumentBackend
+        elif pdf_backend == PdfBackend.THREADED_DOCLING_PARSE:
+            backend = ThreadedDoclingParseDocumentBackend
         elif pdf_backend == PdfBackend.PYPDFIUM2:
             backend = PyPdfiumDocumentBackend
         else:
@@ -1814,8 +1871,11 @@ class DoclingConverterManager:
 
         elif request.pipeline == ProcessingPipeline.VLM:
             pipeline_options = self._parse_vlm_pdf_opts(request, artifacts_path)
+            backend = self._parse_backend(request)
             pdf_format_option = PdfFormatOption(
-                pipeline_cls=VlmPipeline, pipeline_options=pipeline_options
+                pipeline_cls=VlmPipeline,
+                pipeline_options=pipeline_options,
+                backend=backend,
             )
         else:
             raise NotImplementedError(

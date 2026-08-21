@@ -46,6 +46,7 @@ class RQOrchestratorConfig(BaseModel):
     queue_name: str = "convert"
     results_ttl: int = 3_600 * 4
     failure_ttl: int = 3_600 * 4
+    job_timeout: int = 3_600 * 4  # RQ death penalty per job; -1 disables it
     results_prefix: str = "docling:results"
     heartbeat_key_prefix: str = "docling:job:alive"
     sub_channel: str = "docling:updates"
@@ -109,7 +110,7 @@ class RQOrchestrator(BaseOrchestrator):
         rq_queue = Queue(
             config.queue_name,
             connection=conn,
-            default_timeout=14400,
+            default_timeout=config.job_timeout,
             result_ttl=config.results_ttl,
             failure_ttl=config.failure_ttl,
         )
@@ -211,7 +212,7 @@ class RQOrchestrator(BaseOrchestrator):
                 self._rq_job_function,
                 kwargs={"task_data": task_data},
                 job_id=task_id,
-                timeout=14400,
+                timeout=self.config.job_timeout,
                 failure_ttl=self.config.failure_ttl,
             )
             await self.init_task_tracking(task)

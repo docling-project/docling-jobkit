@@ -48,6 +48,7 @@ def test_builtin_source_connectors_registered():
         "google_cloud_storage",
         "http",
         "s3",
+        "sharepoint",
         "local_path",
         "google_drive",
     }
@@ -62,10 +63,56 @@ def test_builtin_target_connectors_registered():
         "local_path",
         "put",
         "google_drive",
+        "kafka_chunks",
         "presigned_url",
         "opensearch_doc",
         "opensearch_chunks",
+        "astradb_chunks",
+        "sharepoint",
     }
+
+
+@pytest.mark.parametrize(
+    "module, skipped",
+    [
+        ("office365", {"SharePointSourceProcessor", "SharePointTargetProcessor"}),
+        (
+            "boto3",
+            {"S3SourceProcessor", "S3TargetProcessor", "S3PresignedTargetProcessor"},
+        ),
+        (
+            "azure.storage.blob",
+            {"AzureBlobSourceProcessor", "AzureBlobTargetProcessor"},
+        ),
+    ],
+    ids=["sharepoint", "s3", "azure_blob"],
+)
+def test_connectors_are_skipped_when_their_sdk_is_missing(monkeypatch, module, skipped):
+    """Every connector behind an optional extra must declare check_dependencies().
+
+    The registration tests above run under ``--all-extras``, so they can never catch a
+    connector that forgot the probe — it registers happily and then dies mid-run with a
+    raw ModuleNotFoundError instead of being skipped with an actionable message.
+    """
+    import builtins
+
+    from docling_jobkit.connectors.plugins import defaults
+
+    real_import = builtins.__import__
+
+    def _blocked(name, *args, **kwargs):
+        if name == module or name.startswith(f"{module}."):
+            raise ImportError(f"No module named {name!r} (blocked by test)")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _blocked)
+
+    registered = {
+        cls.__name__
+        for cls in defaults.source_connectors()["source_connectors"]
+        + defaults.target_connectors()["target_connectors"]
+    }
+    assert registered.isdisjoint(skipped)
 
 
 def test_create_instance_exact_and_subtype_match():

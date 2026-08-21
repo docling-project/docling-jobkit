@@ -1,8 +1,12 @@
 import sys
+from pathlib import Path
 
 import pytest
 
-from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
+from docling.backend.docling_parse_backend import (
+    DoclingParseDocumentBackend,
+    ThreadedDoclingParseDocumentBackend,
+)
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import InputFormat
@@ -11,6 +15,15 @@ from docling.datamodel.pipeline_options import (
     PdfPipelineOptions,
     ProcessingPipeline,
     VlmPipelineOptions,
+)
+from docling.document_converter import (
+    ExcelFormatOption,
+    HTMLFormatOption,
+    OdpFormatOption,
+    OdsFormatOption,
+    OdtFormatOption,
+    PowerpointFormatOption,
+    WordFormatOption,
 )
 from docling.pipeline.vlm_pipeline import VlmPipeline
 from docling_core.types.doc import ImageRefMode, PictureClassificationLabel
@@ -112,6 +125,44 @@ def test_options_validator():
             pipeline_opts.pipeline_options.vlm_options
             == vlm_model_specs.GRANITEDOCLING_TRANSFORMERS
         )
+
+
+def test_backend_mapping_standard_and_vlm():
+    """Request pdf_backend must map to the right class and be set explicitly
+    for both Standard and VLM pipelines (no reliance on PdfFormatOption's default)."""
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+
+    cases = [
+        (None, DoclingParseDocumentBackend),  # omitted -> service-model default
+        (PdfBackend.DOCLING_PARSE, DoclingParseDocumentBackend),
+        (PdfBackend.THREADED_DOCLING_PARSE, ThreadedDoclingParseDocumentBackend),
+        (PdfBackend.PYPDFIUM2, PyPdfiumDocumentBackend),
+    ]
+
+    for pipeline in (ProcessingPipeline.STANDARD, ProcessingPipeline.VLM):
+        for requested, expected in cases:
+            kwargs = {"pipeline": pipeline}
+            if requested is not None:
+                kwargs["pdf_backend"] = requested
+            opts = ConvertDocumentsOptions(**kwargs)
+            pipeline_opts = m.get_pdf_pipeline_opts(opts)
+            assert pipeline_opts.backend == expected, (pipeline, requested)
+
+
+def test_threaded_request_reaches_conversion():
+    """A threaded-backend request must run a real conversion end to end,
+    not fail in option mapping (regression guard for the J1 compatibility work)."""
+    from docling.datamodel.base_models import ConversionStatus
+
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+    doc = Path(__file__).parent / "2206.01062v1-pg4.pdf"
+    opts = ConvertDocumentsOptions(pdf_backend=PdfBackend.THREADED_DOCLING_PARSE)
+
+    results = list(m.convert_documents([doc], opts))
+
+    assert len(results) == 1
+    assert results[0].status == ConversionStatus.SUCCESS
+    assert results[0].document is not None
 
 
 def test_options_cache_key():
@@ -347,3 +398,42 @@ def test_image_pipeline_uses_vlm_pipeline_when_requested():
     img_opt = converter.format_to_options[InputFormat.IMAGE]
     assert img_opt.pipeline_cls == VlmPipeline
     assert isinstance(img_opt.pipeline_options, VlmPipelineOptions)
+
+
+def test_picture_description_options_propagate_to_office_formats():
+    """do_picture_description (and the rest of the
+    picture description / classification / chart extraction options) must
+    reach the SimplePipeline-based office formats too, not just PDF/IMAGE.
+    """
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+    opts = ConvertDocumentsOptions(
+        do_picture_description=True,
+        picture_description_api={
+            "url": "http://localhost:8000/v1/chat/completions",
+            "params": {"model": "test-model"},
+        },
+    )
+
+    with pytest.warns(DeprecationWarning):
+        pipeline_opts = m.get_pdf_pipeline_opts(opts)
+
+    converter = m.get_converter(pipeline_opts)
+    pdf_picture_opts = pipeline_opts.pipeline_options.picture_description_options
+
+    office_format_to_option_cls = {
+        InputFormat.DOCX: WordFormatOption,
+        InputFormat.PPTX: PowerpointFormatOption,
+        InputFormat.XLSX: ExcelFormatOption,
+        InputFormat.HTML: HTMLFormatOption,
+        InputFormat.ODT: OdtFormatOption,
+        InputFormat.ODS: OdsFormatOption,
+        InputFormat.ODP: OdpFormatOption,
+    }
+    for input_format, option_cls in office_format_to_option_cls.items():
+        format_option = converter.format_to_options[input_format]
+        assert isinstance(format_option, option_cls)
+        assert format_option.pipeline_options.do_picture_description is True
+        assert (
+            format_option.pipeline_options.picture_description_options
+            == pdf_picture_opts
+        )

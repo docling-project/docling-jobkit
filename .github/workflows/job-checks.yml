@@ -14,6 +14,9 @@ on:
 jobs:
   run-checks:
     runs-on: ubuntu-latest
+    env:
+      # Skip the torch.compile warm-up, it costs ~150s on the CPU runners.
+      DOCLING_INFERENCE_COMPILE_TORCH_MODELS: "0"
     services:
       redis:
         image: redis:7

@@ -1,3 +1,35 @@
+## [v3.4.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.4.0) - 2026-08-20
+
+### Feature
+
+* **rq:** Make the RQ job timeout configurable ([#227](https://github.com/docling-project/docling-jobkit/issues/227)) ([`0cda962`](https://github.com/docling-project/docling-jobkit/commit/0cda962c2b09ee549f6d6f7d0a9894c75dc2f8ee))
+* Kafka chunk target ([#222](https://github.com/docling-project/docling-jobkit/issues/222)) ([`958a8c7`](https://github.com/docling-project/docling-jobkit/commit/958a8c76e439de210c6a12d559d6d93c48648539))
+
+### Fix
+
+* Map threaded docling-parse backend for Standard and VLM pipelines ([#228](https://github.com/docling-project/docling-jobkit/issues/228)) ([`2584d44`](https://github.com/docling-project/docling-jobkit/commit/2584d44504299b001d1848c2821538c369533672))
+* Make nvidia default provider in models.py. ([#223](https://github.com/docling-project/docling-jobkit/issues/223)) ([`5b9a8b5`](https://github.com/docling-project/docling-jobkit/commit/5b9a8b5581913ce4eb922f874ffc8dd3dc13d0dd))
+* Serialization of custom options ([#220](https://github.com/docling-project/docling-jobkit/issues/220)) ([`36e4dca`](https://github.com/docling-project/docling-jobkit/commit/36e4dcae2efb6c548af5b826d2c820ba9ffb47a8))
+* Reported expected doc count in callbacks ([#218](https://github.com/docling-project/docling-jobkit/issues/218)) ([`aa21f2f`](https://github.com/docling-project/docling-jobkit/commit/aa21f2f73f26e99f6635e44699addd860f316cd2))
+
+## [v3.3.1](https://github.com/docling-project/docling-jobkit/releases/tag/v3.3.1) - 2026-08-06
+
+### Fix
+
+* Count of total docs in multiple connectors ([#216](https://github.com/docling-project/docling-jobkit/issues/216)) ([`c3c2079`](https://github.com/docling-project/docling-jobkit/commit/c3c2079ba349a120e2b6a46219b11af5fc0dd3ae))
+
+## [v3.3.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.3.0) - 2026-08-06
+
+### Feature
+
+* Sharepoint connector ([#213](https://github.com/docling-project/docling-jobkit/issues/213)) ([`f80f461`](https://github.com/docling-project/docling-jobkit/commit/f80f4619e6bc231f3cfd640bd678d84c6b70c16c))
+* **API:** Expose PDF heading-level inference in the service API ([#212](https://github.com/docling-project/docling-jobkit/issues/212)) ([`f384205`](https://github.com/docling-project/docling-jobkit/commit/f384205e3e8a9202b9af008512fde7cfdc749d9e))
+* AstraDB connector ([#215](https://github.com/docling-project/docling-jobkit/issues/215)) ([`8a03ccc`](https://github.com/docling-project/docling-jobkit/commit/8a03ccccb5e05dfeabd24e2db7604087c510b851))
+
+### Fix
+
+* Propagate picture description/classification options to office formats ([#214](https://github.com/docling-project/docling-jobkit/issues/214)) ([`cd8e961`](https://github.com/docling-project/docling-jobkit/commit/cd8e96177e696ee6cec417a50fe2be06d165c4fa))
+
 ## [v3.2.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.2.0) - 2026-07-30
 
 ### Feature
