@@ -11,7 +11,7 @@ from docling_jobkit.connectors.spark import (
     merge_sql,
     quote_identifier,
 )
-from docling_jobkit.datamodel.spark_coords import SparkConnection
+from docling_jobkit.connectors.spark.models import SparkConnection
 
 
 def _conn(**overrides) -> SparkConnection:

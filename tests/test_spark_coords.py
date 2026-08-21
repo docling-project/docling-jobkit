@@ -1,7 +1,7 @@
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from docling_jobkit.datamodel.spark_coords import (
+from docling_jobkit.connectors.spark.models import (
     DatabricksClassicAuth,
     DatabricksServerlessAuth,
     SparkChunkTarget,

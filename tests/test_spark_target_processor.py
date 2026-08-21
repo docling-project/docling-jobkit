@@ -4,9 +4,9 @@ import pytest
 
 pytest.importorskip("pyspark")
 
+from docling_jobkit.connectors.spark.models import SparkChunkTarget, SparkDocTarget
 from docling_jobkit.connectors.spark.target_processor import SparkTargetProcessor
 from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
-from docling_jobkit.datamodel.spark_coords import SparkChunkTarget, SparkDocTarget
 
 
 def _doc_target(**overrides) -> SparkDocTarget:

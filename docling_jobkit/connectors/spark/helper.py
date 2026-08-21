@@ -5,7 +5,10 @@ import re
 import time
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Sequence
 
-from docling_jobkit.datamodel.spark_coords import DatabricksClassicAuth, SparkConnection
+from docling_jobkit.connectors.spark.models import (
+    DatabricksClassicAuth,
+    SparkConnection,
+)
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession

@@ -8,7 +8,7 @@ pytest.importorskip("databricks.sql")
 from docling_jobkit.connectors.spark.backend_connect import SparkConnectBackend
 from docling_jobkit.connectors.spark.backend_factory import get_backend
 from docling_jobkit.connectors.spark.backend_sql import DatabricksSqlBackend
-from docling_jobkit.datamodel.spark_coords import TaskSparkSource
+from docling_jobkit.connectors.spark.models import TaskSparkSource
 
 
 def _src(auth):

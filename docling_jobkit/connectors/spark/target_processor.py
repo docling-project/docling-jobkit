@@ -11,8 +11,8 @@ from docling_jobkit.connectors.database_target_processor import (
 from docling_jobkit.connectors.errors import map_connector_authentication_errors
 from docling_jobkit.connectors.spark import is_spark_authentication_error, normalize_row
 from docling_jobkit.connectors.spark.backend_factory import SparkBackend, get_backend
+from docling_jobkit.connectors.spark.models import SparkChunkTarget, SparkDocTarget
 from docling_jobkit.datamodel.result import ChunkedDocumentResultItem
-from docling_jobkit.datamodel.spark_coords import SparkChunkTarget, SparkDocTarget
 from docling_jobkit.datamodel.target_field_slots import FieldMappings
 
 _log = logging.getLogger(__name__)

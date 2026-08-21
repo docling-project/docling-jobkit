@@ -14,7 +14,7 @@ from docling_jobkit.connectors.spark.helper import (
     retry_on_merge_conflict,
     staging_name,
 )
-from docling_jobkit.datamodel.spark_coords import SparkConnection
+from docling_jobkit.connectors.spark.models import SparkConnection
 
 _FETCH = 500
 

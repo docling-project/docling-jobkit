@@ -23,11 +23,11 @@ from docling_jobkit.connectors.spark import (
     is_spark_unavailable_error,
 )
 from docling_jobkit.connectors.spark.backend_factory import get_backend
+from docling_jobkit.connectors.spark.models import TaskSparkSource
 from docling_jobkit.convert.materialization import (
     SourceLimitExceededError,
     normalize_max_file_size,
 )
-from docling_jobkit.datamodel.spark_coords import TaskSparkSource
 
 if TYPE_CHECKING:
     pass

@@ -4,7 +4,7 @@ from typing import Union
 
 from docling_jobkit.connectors.spark.backend_connect import SparkConnectBackend
 from docling_jobkit.connectors.spark.backend_sql import DatabricksSqlBackend
-from docling_jobkit.datamodel.spark_coords import (
+from docling_jobkit.connectors.spark.models import (
     DatabricksServerlessAuth,
     SparkConnection,
 )

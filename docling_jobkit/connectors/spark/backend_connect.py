@@ -9,7 +9,7 @@ from docling_jobkit.connectors.spark.helper import (
     get_spark_session,
     merge_with_retry,
 )
-from docling_jobkit.datamodel.spark_coords import SparkConnection
+from docling_jobkit.connectors.spark.models import SparkConnection
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession

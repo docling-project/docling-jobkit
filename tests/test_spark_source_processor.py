@@ -10,8 +10,8 @@ from docling.datamodel.base_models import DocumentStream
 from docling_jobkit.connectors.errors import SourceConnectorAuthenticationError
 from docling_jobkit.connectors.source_processor import DocumentChunk, SourceDocumentRef
 from docling_jobkit.connectors.spark import SparkRowID, SparkSourceProcessor
+from docling_jobkit.connectors.spark.models import TaskSparkSource
 from docling_jobkit.convert.materialization import SourceLimitExceededError
-from docling_jobkit.datamodel.spark_coords import TaskSparkSource
 
 
 def _coords(**overrides) -> TaskSparkSource:
