@@ -258,7 +258,7 @@ class DoclingConverterManagerConfig(BaseModel):
 
     # Code/Formula Control
     default_code_formula_preset: str = Field(
-        default="default",
+        default="codeformulav2",
         description='Default code/formula preset to use when user specifies "default".',
     )
     allowed_code_formula_presets: Optional[list[str]] = Field(
