@@ -112,6 +112,29 @@ class DatabricksSqlBackend:
         for row in self._query(sql_text):
             yield (row[0], row[1], (row[2] if filename_column else None))
 
+    def enumerate_urls(
+        self,
+        table: str,
+        url_column: str,
+        id_column: str,
+        filename_column: str | None,
+        max_num_elements: int | None,
+    ) -> Iterator[tuple[str, str, str | None]]:
+        """Yield (id_value, url, filename) for url-column mode."""
+        table_ref = quote_identifier(table)
+        id_ref = quote_identifier(id_column)
+        url_ref = quote_identifier(url_column)
+        select_expr = f"{id_ref} AS id, {url_ref} AS url"
+        if filename_column:
+            select_expr += f", {quote_identifier(filename_column)} AS fname"
+
+        sql_text = f"SELECT {select_expr} FROM {table_ref} WHERE {url_ref} IS NOT NULL"
+        if max_num_elements is not None:
+            sql_text += f" LIMIT {int(max_num_elements)}"
+
+        for row in self._query(sql_text):
+            yield (str(row[0]), str(row[1]), (str(row[2]) if filename_column else None))
+
     def read_partition(
         self,
         table: str,

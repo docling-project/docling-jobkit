@@ -15,6 +15,7 @@ from docling_jobkit.connectors.errors import (
 )
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
+    ConverterSource,
     DocumentChunk,
     SourceDocumentRef,
 )
@@ -23,6 +24,7 @@ from docling_jobkit.connectors.spark import (
     is_spark_unavailable_error,
 )
 from docling_jobkit.connectors.spark.backend_factory import get_backend
+from docling_jobkit.connectors.spark.helper import download_document_from_url
 from docling_jobkit.connectors.spark.models import TaskSparkSource
 from docling_jobkit.convert.materialization import (
     SourceLimitExceededError,
@@ -122,16 +124,31 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
         (partition_value, sha2 row_key, filename) triple, and rows arrive
         grouped by partition so iterate_document_chunks can emit one chunk per
         partition without re-sorting.
+
+        In url_column mode, row_key holds the URL instead of sha2 hash.
         """
         # Validator ensures exactly one of table/query and content_column/url_column is set
-        for partition_value, row_key, filename in self._backend.enumerate_row_keys(
-            self._coords.table or self._coords.query,  # type: ignore[arg-type]
-            self._coords.content_column or self._coords.url_column,  # type: ignore[arg-type]
-            self._partition_col,
-            self._coords.filename_column,
-            self._coords.max_num_elements,
-        ):
-            yield SparkRowID(partition_value, row_key, filename)
+        if self._coords.url_column:
+            # URL mode: enumerate (id, url, filename)
+            for id_val, url, filename in self._backend.enumerate_urls(
+                self._coords.table or self._coords.query,  # type: ignore[arg-type]
+                self._coords.url_column,  # type: ignore[arg-type]
+                self._coords.id_column,  # type: ignore[arg-type]
+                self._coords.filename_column,
+                self._coords.max_num_elements,
+            ):
+                # In url mode: partition_value=None, row_key=URL
+                yield SparkRowID(None, url, filename)
+        else:
+            # Content mode: enumerate (partition, sha2, filename)
+            for partition_value, row_key, filename in self._backend.enumerate_row_keys(
+                self._coords.table or self._coords.query,  # type: ignore[arg-type]
+                self._coords.content_column,  # type: ignore[arg-type]
+                self._partition_col,
+                self._coords.filename_column,
+                self._coords.max_num_elements,
+            ):
+                yield SparkRowID(partition_value, row_key, filename)
 
     @override
     def _make_document_ref(
@@ -139,12 +156,24 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
     ) -> SourceDocumentRef:
         partition_value, row_key, filename = identifier
 
-        return SourceDocumentRef(
-            id=identifier,
-            source_index=source_index,
-            source_uri=f"{self._coords.table}#{partition_value}",
-            filename=(filename or f"{row_key}.bin"),
-        )
+        if self._coords.url_column:
+            # URL mode: row_key is the URL, use it as source_uri
+            from pathlib import Path
+
+            return SourceDocumentRef(
+                id=identifier,
+                source_index=source_index,
+                source_uri=row_key,  # URL itself
+                filename=(filename or Path(row_key).name),
+            )
+        else:
+            # Content mode: existing logic
+            return SourceDocumentRef(
+                id=identifier,
+                source_index=source_index,
+                source_uri=f"{self._coords.table}#{partition_value}",
+                filename=(filename or f"{row_key}.bin"),
+            )
 
     def iterate_document_chunks(
         self, chunk_size: int
@@ -185,14 +214,76 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
         if current_ids:
             yield _emit(current_ids, chunk_index, source_index)
 
+    @override
+    def iterate_converter_sources(
+        self, *, max_file_size: int | None = None
+    ) -> Iterator[ConverterSource]:
+        """In URL mode, yield URL strings. In content mode, yield DocumentStreams."""
+        if self._coords.url_column:
+            # URL mode: yield URLs directly from _list_document_ids
+            for row_id in self._list_document_ids():
+                yield row_id.row_key  # row_key holds the URL
+        else:
+            # Content mode: use base implementation (yields DocumentStreams)
+            yield from self.iterate_documents(max_file_size=max_file_size)
+
+    @override
+    def fetch_converter_source_by_ref(
+        self, ref: SourceDocumentRef[SparkRowID], *, max_file_size: int | None = None
+    ) -> ConverterSource:
+        """Return URL string in url_column mode, DocumentStream in content_column mode."""
+        if self._coords.url_column:
+            # Reference mode: return the URL string
+            url = ref.id.row_key  # In url mode, row_key holds the URL
+            return url
+        else:
+            # Content mode: existing logic
+            return self._fetch_document_by_id(ref.id, max_file_size=max_file_size)
+
+    @override
+    def converter_headers(self) -> dict[str, object] | None:
+        """Provide Bearer token for Databricks Files API in url_column mode."""
+        if not self._coords.url_column:
+            return None
+
+        # Databricks Files API auth
+        if self._coords.auth and hasattr(self._coords.auth, "token"):
+            return {
+                "Authorization": f"Bearer {self._coords.auth.token.get_secret_value()}"
+            }
+        return None
+
+    @override
+    def headers_for_ref(
+        self, ref: SourceDocumentRef[SparkRowID]
+    ) -> dict[str, object] | None:
+        """Provide Bearer token for Databricks Files API in url_column mode."""
+        return self.converter_headers()
+
     @_map_spark_source_errors
     def _fetch_document_by_id(
         self, identifier: SparkRowID, *, max_file_size: int | None = None
     ) -> DocumentStream:
-        # Rows arrive grouped by partition: on the first access to a partition,
-        # cache the whole partition keyed by row_key, then serve siblings from
-        # the cache, one backend read per partition instead of per document.
-        partition_value, row_key, _ = identifier
+        """Fetch a single document by its identifier.
+
+        In url_column mode: Downloads from URL using Databricks Files API.
+        In content_column mode: Reads from cached partition.
+        """
+        partition_value, row_key, filename = identifier
+
+        # URL mode: download from Databricks Files API
+        if self._coords.url_column:
+            url = row_key  # row_key holds the URL in url_column mode
+            auth_token = self._coords.auth.token.get_secret_value()  # type: ignore[union-attr]
+
+            _log.info("Downloading document from URL: %s", url)
+            buffer = download_document_from_url(url, auth_token)
+
+            # Use filename from identifier or extract from URL
+            name = filename or url.split("/")[-1]
+            return DocumentStream(name=name, stream=buffer)
+
+        # Content mode: cache whole partition on first access
         if self._cached_partition != partition_value:
             # Validator ensures exactly one of table/query and content_column is set
             self._partition_cache = {
@@ -220,6 +311,13 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
     def _fetch_documents(
         self, *, max_file_size: int | None = None
     ) -> Iterator[DocumentStream]:
+        # URL mode: fetch documents by downloading from URLs
+        if self._coords.url_column:
+            for row_id in self._list_document_ids():
+                yield self._fetch_document_by_id(row_id, max_file_size=max_file_size)
+            return
+
+        # Content mode: stream bytes from backend
         if self._coords.partition_column is None:
             _log.info(
                 "Spark source reading single-node on the driver (no partition_column). "
@@ -230,10 +328,9 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
         yielded = 0
         skipped_null = 0
 
-        # Validator ensures exactly one of table/query and content_column/url_column is set
         documents = self._backend.stream_documents(
             self._coords.table or self._coords.query,  # type: ignore[arg-type]
-            self._coords.content_column or self._coords.url_column,  # type: ignore[arg-type]
+            self._coords.content_column,  # type: ignore[arg-type]
             self._coords.filename_column,
             self._coords.max_num_elements,
         )

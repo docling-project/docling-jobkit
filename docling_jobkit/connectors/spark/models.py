@@ -85,7 +85,7 @@ class SparkConnection(BaseModel):
 
     port: Annotated[
         int, Field(description="Spark Connect port.", examples=[443, 15002])
-    ]
+    ] = 443  # default for when using Databricks Serverless
 
     user_id: Annotated[
         Optional[str],

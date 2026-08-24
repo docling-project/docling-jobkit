@@ -1,14 +1,96 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
+from io import BytesIO
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Sequence
 
+import requests
+
+from docling_jobkit.connectors.errors import (
+    SourceConnectorPolicyError,
+    SourceConnectorUnavailableError,
+)
 from docling_jobkit.connectors.spark.models import (
     DatabricksClassicAuth,
     SparkConnection,
 )
+
+_log = logging.getLogger(__name__)
+
+_MAX_RETRIES = 3
+_BACKOFF_BASE_S = 0.5
+_RETRYABLE_4XX_STATUS = {429}
+
+
+def _with_exponential_retry(fn: Callable[[], Any], operation: str) -> Any:
+    """Helper for exponential retries on transient errors."""
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            result = fn()
+            if isinstance(result, requests.Response):
+                result.raise_for_status()
+            return result
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            if attempt == _MAX_RETRIES:
+                raise SourceConnectorUnavailableError(
+                    "Source document could not be reached.",
+                    source_kind="spark",
+                ) from exc
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if (
+                status is not None
+                and status < 500
+                and status not in _RETRYABLE_4XX_STATUS
+            ):
+                error_type = (
+                    SourceConnectorPolicyError
+                    if status in {401, 403, 404, 413, 415, 422}
+                    else SourceConnectorUnavailableError
+                )
+                raise error_type(
+                    str(exc),
+                    source_kind="spark",
+                    **(
+                        {"retryable": False}
+                        if error_type is SourceConnectorUnavailableError
+                        else {}
+                    ),
+                ) from exc
+            if attempt == _MAX_RETRIES:
+                raise SourceConnectorUnavailableError(
+                    str(exc),
+                    source_kind="spark",
+                ) from exc
+
+        wait = _BACKOFF_BASE_S * (2**attempt)
+        _log.warning(
+            "Spark: %s transient error, retry %d/%d in %.1fs",
+            operation,
+            attempt + 1,
+            _MAX_RETRIES,
+            wait,
+        )
+        time.sleep(wait)
+
+    raise AssertionError("unreachable")
+
+
+def download_document_from_url(url: str, auth_token: str) -> BytesIO:
+    """Download document from Databricks Files API URL with Bearer token auth."""
+    response = _with_exponential_retry(
+        lambda: requests.get(
+            url,
+            headers={"Authorization": f"Bearer {auth_token}"},
+            timeout=30,
+        ),
+        "download document",
+    )
+    return BytesIO(response.content)
+
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession

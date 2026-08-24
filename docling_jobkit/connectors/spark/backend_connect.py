@@ -82,6 +82,34 @@ class SparkConnectBackend:
                 (row["fname"] if filename_column else None),
             )
 
+    def enumerate_urls(
+        self,
+        table: str,
+        url_column: str,
+        id_column: str,
+        filename_column: str | None,
+        max_num_elements: int | None,
+    ) -> Iterator[tuple[str, str, str | None]]:
+        """Yield (id_value, url, filename) for url-column mode."""
+        from pyspark.sql.functions import col
+
+        df_ = self._spark.table(table).filter(col(url_column).isNotNull())
+
+        selects = [col(id_column).alias("id"), col(url_column).alias("url")]
+        if filename_column:
+            selects.append(col(filename_column).alias("fname"))
+
+        if max_num_elements is not None:
+            df_ = df_.limit(max_num_elements)
+
+        projected_df = df_.select(*selects)
+        for row in projected_df.toLocalIterator():
+            yield (
+                str(row["id"]),
+                str(row["url"]),
+                (str(row["fname"]) if filename_column else None),
+            )
+
     def read_partition(
         self,
         table: str,
