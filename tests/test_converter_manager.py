@@ -38,6 +38,46 @@ class TestPresetRegistryBuilding:
         # Other presets should not be in registry
         # (We can't test for specific presets without knowing all Docling presets)
 
+    def test_default_vlm_preset_is_reachable_by_its_own_id(self):
+        """The configured default must also be selectable by name.
+
+        Every other registry excludes the alias "default" from its loop, so that the
+        alias entry survives. The VLM loop excluded default_vlm_preset instead, which
+        dropped a real Docling preset id -- and with the stock config that id is
+        "granite_docling", so the shipped default was the one preset a request could
+        not name.
+        """
+        config = DoclingConverterManagerConfig(
+            default_vlm_preset="granite_docling",
+        )
+        manager = DoclingConverterManager(config)
+
+        assert "granite_docling" in manager.vlm_preset_registry
+        # ...and the alias still resolves to it rather than being overwritten.
+        assert manager.vlm_preset_registry["default"]["preset_id"] == "granite_docling"
+
+        by_id = manager._parse_vlm_options(
+            ConvertDocumentsOptions(vlm_pipeline_preset="granite_docling")
+        )
+        by_alias = manager._parse_vlm_options(
+            ConvertDocumentsOptions(vlm_pipeline_preset="default")
+        )
+        assert by_id == by_alias
+
+    def test_an_explicit_vlm_allowlist_still_restricts(self):
+        """Registering the default by name must not widen an explicit allowlist."""
+        config = DoclingConverterManagerConfig(
+            default_vlm_preset="granite_docling",
+            allowed_vlm_presets=["smoldocling"],
+        )
+        manager = DoclingConverterManager(config)
+
+        assert sorted(manager.vlm_preset_registry) == ["default", "smoldocling"]
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._parse_vlm_options(
+                ConvertDocumentsOptions(vlm_pipeline_preset="qwen")
+            )
+
     def test_custom_presets_added(self):
         """Test that custom presets are added to the registry."""
         custom_preset = {

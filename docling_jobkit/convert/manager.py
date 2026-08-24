@@ -584,7 +584,7 @@ class DoclingConverterManager:
         if self.config.allowed_vlm_presets is None:
             # Allow all Docling presets
             for preset_id in VlmConvertOptions.list_preset_ids():
-                if preset_id != self.config.default_vlm_preset:
+                if preset_id != "default":
                     self.vlm_preset_registry[preset_id] = {
                         "source": "docling",
                         "preset_id": preset_id,
@@ -592,7 +592,7 @@ class DoclingConverterManager:
         else:
             # Only allow specified presets
             for preset_id in self.config.allowed_vlm_presets:
-                if preset_id != self.config.default_vlm_preset:
+                if preset_id != "default":
                     self.vlm_preset_registry[preset_id] = {
                         "source": "docling",
                         "preset_id": preset_id,
