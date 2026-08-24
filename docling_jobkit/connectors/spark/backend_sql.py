@@ -69,34 +69,46 @@ class DatabricksSqlBackend:
             return cursor.fetchone() is not None
 
     def count_documents(
-        self, table: str, content_column: str, max_num_elements: int | None
+        self, table_or_query: str, content_column: str, max_num_elements: int | None
     ) -> int:
         """Count rows with non-null content, capped at max_num_elements when set."""
-        table_ref = quote_identifier(table)
+        # Determine if table_or_query is a query or table name
+        is_query = "SELECT" in table_or_query.upper()
+
+        if is_query:
+            source = f"({table_or_query}) AS source"
+        else:
+            source = quote_identifier(table_or_query)
+
         content_ref = quote_identifier(content_column)
         if max_num_elements is not None:
             inner = (
-                f"SELECT 1 FROM {table_ref} WHERE {content_ref} IS NOT NULL "
+                f"SELECT 1 FROM {source} WHERE {content_ref} IS NOT NULL "
                 f"LIMIT {int(max_num_elements)}"
             )
             sql_text = f"SELECT COUNT(*) FROM ({inner})"
         else:
-            sql_text = (
-                f"SELECT COUNT(*) FROM {table_ref} WHERE {content_ref} IS NOT NULL"
-            )
+            sql_text = f"SELECT COUNT(*) FROM {source} WHERE {content_ref} IS NOT NULL"
 
         return int(next(self._query(sql_text))[0])
 
     def enumerate_row_keys(
         self,
-        table: str,
+        table_or_query: str,
         content_column: str,
         partition_column: str,
         filename_column: str | None,
         max_num_elements: int | None,
     ) -> Iterator[tuple[object, str, str | None]]:
         """Yield (partition_value, sha2 row_key, filename) ordered by partition."""
-        table_ref = quote_identifier(table)
+        # Determine if table_or_query is a query or table name
+        is_query = "SELECT" in table_or_query.upper()
+
+        if is_query:
+            source = f"({table_or_query}) AS source"
+        else:
+            source = quote_identifier(table_or_query)
+
         content_ref = quote_identifier(content_column)
         partition_ref = quote_identifier(partition_column)
         select_expr = f"{partition_ref}, sha2({content_ref}, 256) AS row_key"
@@ -104,7 +116,7 @@ class DatabricksSqlBackend:
             select_expr += f", {quote_identifier(filename_column)} AS fname"
 
         sql_text = (
-            f"SELECT {select_expr} FROM {table_ref} "
+            f"SELECT {select_expr} FROM {source} "
             f"WHERE {content_ref} IS NOT NULL ORDER BY {partition_ref}"
         )
         if max_num_elements is not None:
@@ -114,21 +126,30 @@ class DatabricksSqlBackend:
 
     def enumerate_urls(
         self,
-        table: str,
+        table_or_query: str,
         url_column: str,
         id_column: str,
         filename_column: str | None,
         max_num_elements: int | None,
     ) -> Iterator[tuple[str, str, str | None]]:
         """Yield (id_value, url, filename) for url-column mode."""
-        table_ref = quote_identifier(table)
+        # Determine if table_or_query is a query (contains SELECT) or a table name
+        is_query = "SELECT" in table_or_query.upper()
+
+        if is_query:
+            # Wrap query as subquery
+            source = f"({table_or_query}) AS source"
+        else:
+            # Regular table reference
+            source = quote_identifier(table_or_query)
+
         id_ref = quote_identifier(id_column)
         url_ref = quote_identifier(url_column)
         select_expr = f"{id_ref} AS id, {url_ref} AS url"
         if filename_column:
             select_expr += f", {quote_identifier(filename_column)} AS fname"
 
-        sql_text = f"SELECT {select_expr} FROM {table_ref} WHERE {url_ref} IS NOT NULL"
+        sql_text = f"SELECT {select_expr} FROM {source} WHERE {url_ref} IS NOT NULL"
         if max_num_elements is not None:
             sql_text += f" LIMIT {int(max_num_elements)}"
 

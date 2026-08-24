@@ -1,0 +1,38 @@
+options:
+  do_ocr: false
+  to_formats:
+    - json
+
+sources:
+  - kind: spark
+    # Databricks workspace hostname
+    host: your-workspace.cloud.databricks.com
+    
+    # Databricks Serverless SQL Warehouse authentication
+    auth:
+      kind: databricks_serverless
+      # Personal Access Token (PAT) with SQL + Files scope
+      token: your_PAT
+      # SQL Warehouse HTTP path
+      http_path: /sql/1.0/warehouses/abc123def456
+    
+    # Query mode: Use SQL query instead of table
+    # Enables filtering, joins, anti-joins for incremental processing
+    query: |
+      SELECT doc_id, file_path, filename
+      FROM catalog.schema.documents_url
+      WHERE status = 'ready'
+        AND processed_at IS NULL
+      ORDER BY doc_id
+    
+    # URL mode: reads URLs from query results, downloads on-demand
+    url_column: file_path
+    id_column: doc_id
+    filename_column: filename
+    
+    # Optional: limit number of documents processed
+    # max_num_elements: 100
+
+targets:
+  - kind: local_path
+    path: ./output_documents
