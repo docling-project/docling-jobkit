@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from rq.exceptions import NoSuchJobError
+from rq.job import JobStatus
 
 from docling.datamodel.service.targets import InBodyTarget
 
@@ -385,6 +386,106 @@ class TestRQRedisGate:
             async with orch._redis_gate.acquire(1.0):
                 with pytest.raises(asyncio.CancelledError):
                     await orch._watchdog_task()
+
+    @pytest.mark.asyncio
+    async def test_watchdog_orphan_uses_remove_executions(self):
+        from docling_jobkit.orchestrators.rq.orchestrator import (
+            _WATCHDOG_GRACE_PERIOD,
+        )
+
+        orch = _make_orchestrator()
+        orch._async_redis_conn.exists = AsyncMock(return_value=0)
+        orch._async_redis_conn.publish = AsyncMock()
+
+        job = MagicMock()
+        job.set_status = MagicMock()
+
+        base_time = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+        future_time = base_time + datetime.timedelta(
+            seconds=_WATCHDOG_GRACE_PERIOD + 60
+        )
+
+        registry = MagicMock()
+        registry.get_job_ids.return_value = ["orphan-1"]
+
+        fake_dt = MagicMock()
+        fake_dt.now = MagicMock(side_effect=[base_time, future_time])
+        fake_dt.timezone = datetime.timezone
+
+        sleep_mock = AsyncMock(side_effect=[None, None, asyncio.CancelledError()])
+        with (
+            patch(
+                "docling_jobkit.orchestrators.rq.orchestrator.StartedJobRegistry",
+                return_value=registry,
+            ),
+            patch(
+                "docling_jobkit.orchestrators.rq.orchestrator.Job.fetch",
+                return_value=job,
+            ) as fetch_mock,
+            patch(
+                "docling_jobkit.orchestrators.rq.orchestrator.asyncio.sleep",
+                sleep_mock,
+            ),
+            patch(
+                "docling_jobkit.orchestrators.rq.orchestrator.datetime.datetime",
+                new=fake_dt,
+            ),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await orch._watchdog_task()
+
+        fetch_mock.assert_called()
+        job.set_status.assert_called_once_with(JobStatus.FAILED)
+        registry.remove_executions.assert_called_once_with(job)
+        registry.remove.assert_not_called()
+        orch._async_redis_conn.publish.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_watchdog_missing_job_is_nonfatal(self):
+        from docling_jobkit.orchestrators.rq.orchestrator import (
+            _WATCHDOG_GRACE_PERIOD,
+        )
+
+        orch = _make_orchestrator()
+        orch._async_redis_conn.exists = AsyncMock(return_value=0)
+        orch._async_redis_conn.publish = AsyncMock()
+
+        base_time = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+        future_time = base_time + datetime.timedelta(
+            seconds=_WATCHDOG_GRACE_PERIOD + 60
+        )
+
+        registry = MagicMock()
+        registry.get_job_ids.return_value = ["gone-1"]
+
+        fake_dt = MagicMock()
+        fake_dt.now = MagicMock(side_effect=[base_time, future_time])
+        fake_dt.timezone = datetime.timezone
+
+        sleep_mock = AsyncMock(side_effect=[None, None, asyncio.CancelledError()])
+        with (
+            patch(
+                "docling_jobkit.orchestrators.rq.orchestrator.StartedJobRegistry",
+                return_value=registry,
+            ),
+            patch(
+                "docling_jobkit.orchestrators.rq.orchestrator.Job.fetch",
+                side_effect=NoSuchJobError("already expired"),
+            ),
+            patch(
+                "docling_jobkit.orchestrators.rq.orchestrator.asyncio.sleep",
+                sleep_mock,
+            ),
+            patch(
+                "docling_jobkit.orchestrators.rq.orchestrator.datetime.datetime",
+                new=fake_dt,
+            ),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await orch._watchdog_task()
+
+        registry.remove.assert_not_called()
+        registry.remove_executions.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_reaper_is_not_gated(self):

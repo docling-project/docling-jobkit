@@ -710,13 +710,17 @@ class RQOrchestrator(BaseOrchestrator):
                                         connection=self._redis_conn,
                                     )
                                     job.set_status(JobStatus.FAILED)
+                                    registry.remove_executions(job)
+                                except NoSuchJobError:
+                                    _log.debug(
+                                        f"RQ job {tid} no longer exists, "
+                                        f"skipping started-registry cleanup"
+                                    )
                                 except Exception:
                                     _log.debug(
-                                        f"Could not set RQ job {tid} "
-                                        f"status to FAILED (may already "
-                                        f"be gone)"
+                                        f"Could not clean up RQ state for "
+                                        f"task {tid} (may already be gone)"
                                     )
-                                registry.remove(tid)
 
                             await asyncio.to_thread(_mark_rq_failed, task_id)
                             _log.info(
