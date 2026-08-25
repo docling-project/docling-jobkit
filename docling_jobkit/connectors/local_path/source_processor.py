@@ -12,6 +12,10 @@ from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     SourceDocumentRef,
 )
+from docling_jobkit.convert.materialization import (
+    SourceLimitExceededError,
+    normalize_max_file_size,
+)
 
 
 def _should_ignore_file(file_path: Path) -> bool:
@@ -126,7 +130,12 @@ class LocalPathSourceProcessor(
         max_file_size: int | None = None,
     ) -> DocumentStream:
         """Fetch a document by opening the file from the local filesystem."""
-        del max_file_size
+        limit = normalize_max_file_size(max_file_size)
+        if limit is not None and identifier.size > limit:
+            raise SourceLimitExceededError(
+                f"Source '{identifier.path}' exceeds max_file_size={limit} bytes"
+            )
+
         file_path = identifier.path
 
         # Open file in binary mode and return as DocumentStream
