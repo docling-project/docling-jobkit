@@ -96,8 +96,8 @@ def target_connectors():
     from docling_jobkit.connectors.opensearch.target_processor import (
         OpenSearchTargetProcessor,
     )
-    from docling_jobkit.connectors.s3.presigned_target_processor import (
-        S3PresignedTargetProcessor,
+    from docling_jobkit.connectors.presigned_target_processor import (
+        PresignedTargetProcessor,
     )
     from docling_jobkit.connectors.s3.target_processor import S3TargetProcessor
     from docling_jobkit.connectors.sharepoint.target_processor import (
@@ -110,7 +110,7 @@ def target_connectors():
     ]
     for cls in (
         S3TargetProcessor,
-        S3PresignedTargetProcessor,
+        PresignedTargetProcessor,
         AzureBlobTargetProcessor,
         GoogleDriveTargetProcessor,
         GoogleCloudStorageTargetProcessor,

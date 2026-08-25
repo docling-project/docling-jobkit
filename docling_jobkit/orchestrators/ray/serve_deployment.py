@@ -383,7 +383,7 @@ def _build_materialization_failure_result(
     source rejected inside the converter produces on the passthrough path, so metering
     stays in parity. The result is built inline rather than routed through
     process_exportable_results: a preflight rejection must not initialize target storage
-    (no S3/presigned client setup, no s3_presigned_config requirement) nor depend on
+    (no presigned client setup, no presigned_config requirement) nor depend on
     task.convert_options, both of which would turn a source failure into a target/config
     failure and skip these callbacks.
     """
@@ -593,7 +593,7 @@ def _finalize_slice_results(
     task: Task,
     slice_refs: list[ObjectRef],
     work_dir: Path,
-    s3_presigned_config: Any,
+    presigned_config: Any,
     callback_invoker: Optional[CallbackInvoker],
     start_time: float,
     debug_error_details: bool,
@@ -610,7 +610,7 @@ def _finalize_slice_results(
         task=task,
         exportable_documents=[_assemble_slice_results(slice_results)],
         work_dir=work_dir,
-        s3_presigned_config=s3_presigned_config,
+        presigned_config=presigned_config,
         callback_invoker=callback_invoker,
         start_time=start_time,
         debug_error_details=debug_error_details,
@@ -831,7 +831,7 @@ class DoclingProcessorConverterDeployment:
                     task=task,
                     exportable_documents=exportable_documents,
                     work_dir=workdir,
-                    s3_presigned_config=self.config.s3_presigned_config,
+                    presigned_config=self.config.presigned_config,
                     callback_invoker=callback_invoker,
                     debug_error_details=self.config.debug_error_details,
                     expected_doc_count=expected_doc_count,
@@ -1387,7 +1387,7 @@ class DoclingProcessorCoordinatorDeployment:
                                 task=task,
                                 slice_refs=slice_refs,
                                 work_dir=workdir,
-                                s3_presigned_config=self.config.s3_presigned_config,
+                                presigned_config=self.config.presigned_config,
                                 callback_invoker=callback_invoker,
                                 start_time=materialized_start_time,
                                 debug_error_details=self.config.debug_error_details,
