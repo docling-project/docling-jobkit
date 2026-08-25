@@ -2,6 +2,14 @@
 
 import pytest
 
+from docling.datamodel.picture_classification_options import (
+    DocumentPictureClassifierOptions,
+)
+from docling.datamodel.pipeline_options import (
+    CodeFormulaVlmOptions,
+    PictureDescriptionVlmEngineOptions,
+)
+
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
@@ -610,3 +618,79 @@ class TestGetVlmOptionsFromPreset:
         )
         assert options is not None
         assert options == custom_options
+
+
+class TestBuiltInPresetsAllowedByDefault:
+    """`allowed_*_presets=None` is documented as "None means all are allowed".
+
+    The VLM, OCR, chunking and table-structure registries honour that: with no
+    allow-list they enumerate every built-in preset. Picture-description,
+    code/formula and picture-classification instead only ever registered the
+    ``default`` alias, so every real Docling preset id was rejected with
+    "Allowed presets: default" -- the opposite of the documented contract.
+    """
+
+    @pytest.mark.parametrize(
+        "registry_name, expected_ids",
+        [
+            (
+                "picture_description_preset_registry",
+                PictureDescriptionVlmEngineOptions.list_preset_ids(),
+            ),
+            (
+                "code_formula_preset_registry",
+                CodeFormulaVlmOptions.list_preset_ids(),
+            ),
+            (
+                "picture_classification_preset_registry",
+                DocumentPictureClassifierOptions.list_preset_ids(),
+            ),
+        ],
+    )
+    def test_all_built_in_presets_registered_without_allow_list(
+        self, registry_name, expected_ids
+    ):
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        registry = getattr(manager, registry_name)
+
+        assert set(registry) == {"default", *expected_ids}
+
+    @pytest.mark.parametrize(
+        "config_field, registry_name, allowed",
+        [
+            (
+                "allowed_picture_description_presets",
+                "picture_description_preset_registry",
+                ["smolvlm"],
+            ),
+            (
+                "allowed_code_formula_presets",
+                "code_formula_preset_registry",
+                ["granite_docling"],
+            ),
+            (
+                "allowed_picture_classification_presets",
+                "picture_classification_preset_registry",
+                ["document_figure_classifier_v2"],
+            ),
+        ],
+    )
+    def test_allow_list_still_restricts(self, config_field, registry_name, allowed):
+        """An explicit allow-list must keep excluding everything else."""
+        config = DoclingConverterManagerConfig(**{config_field: allowed})
+        manager = DoclingConverterManager(config)
+
+        assert set(getattr(manager, registry_name)) == {"default", *allowed}
+
+    def test_layout_registry_is_kind_based_and_unchanged(self):
+        """Layout presets are factory *kinds*, not stage preset ids.
+
+        `_parse_layout_options` resolves a docling-source layout preset with
+        `layout_factory.create_options(kind=preset_id)`, so enumerating
+        `LayoutObjectDetectionOptions.list_preset_ids()` here would register ids
+        the factory cannot build. Layout is deliberately left alone.
+        """
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        assert set(manager.layout_preset_registry) == {"default"}

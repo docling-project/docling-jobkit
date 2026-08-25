@@ -20,6 +20,9 @@ from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.document import ConversionResult
+from docling.datamodel.picture_classification_options import (
+    DocumentPictureClassifierOptions,
+)
 from docling.datamodel.pipeline_options import (
     CodeFormulaVlmOptions,
     OcrOptions,
@@ -615,14 +618,19 @@ class DoclingConverterManager:
             "preset_id": self.config.default_picture_description_preset,
         }
 
-        # Add allowed presets if specified
-        if self.config.allowed_picture_description_presets is not None:
-            for preset_id in self.config.allowed_picture_description_presets:
-                if preset_id != "default":
-                    self.picture_description_preset_registry[preset_id] = {
-                        "source": "docling",
-                        "preset_id": preset_id,
-                    }
+        # Add Docling built-in presets (if allowed)
+        if self.config.allowed_picture_description_presets is None:
+            # Allow all Docling presets
+            preset_ids = PictureDescriptionVlmEngineOptions.list_preset_ids()
+        else:
+            # Only allow specified presets
+            preset_ids = self.config.allowed_picture_description_presets
+        for preset_id in preset_ids:
+            if preset_id != "default":
+                self.picture_description_preset_registry[preset_id] = {
+                    "source": "docling",
+                    "preset_id": preset_id,
+                }
 
         # Add custom presets
         for (
@@ -642,14 +650,19 @@ class DoclingConverterManager:
             "preset_id": self.config.default_code_formula_preset,
         }
 
-        # Add allowed presets if specified
-        if self.config.allowed_code_formula_presets is not None:
-            for preset_id in self.config.allowed_code_formula_presets:
-                if preset_id != "default":
-                    self.code_formula_preset_registry[preset_id] = {
-                        "source": "docling",
-                        "preset_id": preset_id,
-                    }
+        # Add Docling built-in presets (if allowed)
+        if self.config.allowed_code_formula_presets is None:
+            # Allow all Docling presets
+            preset_ids = CodeFormulaVlmOptions.list_preset_ids()
+        else:
+            # Only allow specified presets
+            preset_ids = self.config.allowed_code_formula_presets
+        for preset_id in preset_ids:
+            if preset_id != "default":
+                self.code_formula_preset_registry[preset_id] = {
+                    "source": "docling",
+                    "preset_id": preset_id,
+                }
 
         # Add custom presets
         for (
@@ -695,14 +708,19 @@ class DoclingConverterManager:
             "preset_id": self.config.default_picture_classification_preset,
         }
 
-        # Add allowed presets if specified
-        if self.config.allowed_picture_classification_presets is not None:
-            for preset_id in self.config.allowed_picture_classification_presets:
-                if preset_id != "default":
-                    self.picture_classification_preset_registry[preset_id] = {
-                        "source": "docling",
-                        "preset_id": preset_id,
-                    }
+        # Add Docling built-in presets (if allowed)
+        if self.config.allowed_picture_classification_presets is None:
+            # Allow all Docling presets
+            preset_ids = DocumentPictureClassifierOptions.list_preset_ids()
+        else:
+            # Only allow specified presets
+            preset_ids = self.config.allowed_picture_classification_presets
+        for preset_id in preset_ids:
+            if preset_id != "default":
+                self.picture_classification_preset_registry[preset_id] = {
+                    "source": "docling",
+                    "preset_id": preset_id,
+                }
 
         # Add custom presets
         for (
