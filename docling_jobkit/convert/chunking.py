@@ -495,6 +495,7 @@ def process_chunkable_results(
                     export_doclang=False,
                     image_mode=conversion_options.image_export_mode,
                     md_page_break_placeholder=conversion_options.md_page_break_placeholder,
+                    md_compact_tables=conversion_options.md_compact_tables,
                 )
             elif output_dir is not None:
                 doc_content = _export_document_for_chunking(
