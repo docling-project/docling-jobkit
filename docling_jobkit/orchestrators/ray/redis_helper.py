@@ -1186,9 +1186,6 @@ class RedisStateManager:
 
     async def resync_tenant_limits(self, tenant_id: str) -> TenantLimits:
         """Resynchronize tenant counters from canonical Redis structures."""
-        if not self.redis:
-            await self.connect()
-
         limits_key = f"tenant:{tenant_id}:limits"
         active_key = f"tenant:{tenant_id}:active_tasks"
         queue_key = f"tenant:{tenant_id}:tasks"
