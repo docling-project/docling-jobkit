@@ -96,11 +96,11 @@ class DatabricksSqlBackend:
         self,
         table_or_query: str,
         content_column: str,
-        partition_column: str,
+        partition_column: str | None,
         filename_column: str | None,
         max_num_elements: int | None,
     ) -> Iterator[tuple[object, str, str | None]]:
-        """Yield (partition_value, sha2 row_key, filename) ordered by partition."""
+        """Yield (partition_value, sha2 row_key, filename) optionally ordered by partition."""
         # Determine if table_or_query is a query or table name
         is_query = "SELECT" in table_or_query.upper()
 
@@ -110,19 +110,34 @@ class DatabricksSqlBackend:
             source = quote_identifier(table_or_query)
 
         content_ref = quote_identifier(content_column)
-        partition_ref = quote_identifier(partition_column)
-        select_expr = f"{partition_ref}, sha2({content_ref}, 256) AS row_key"
-        if filename_column:
-            select_expr += f", {quote_identifier(filename_column)} AS fname"
 
-        sql_text = (
-            f"SELECT {select_expr} FROM {source} "
-            f"WHERE {content_ref} IS NOT NULL ORDER BY {partition_ref}"
-        )
-        if max_num_elements is not None:
-            sql_text += f" LIMIT {int(max_num_elements)}"
-        for row in self._query(sql_text):
-            yield (row[0], row[1], (row[2] if filename_column else None))
+        if partition_column:
+            partition_ref = quote_identifier(partition_column)
+            select_expr = f"{partition_ref}, sha2({content_ref}, 256) AS row_key"
+            if filename_column:
+                select_expr += f", {quote_identifier(filename_column)} AS fname"
+
+            sql_text = (
+                f"SELECT {select_expr} FROM {source} "
+                f"WHERE {content_ref} IS NOT NULL ORDER BY {partition_ref}"
+            )
+            if max_num_elements is not None:
+                sql_text += f" LIMIT {int(max_num_elements)}"
+            for row in self._query(sql_text):
+                yield (row[0], row[1], (row[2] if filename_column else None))
+        else:
+            # No partition column: partition_value is always None
+            select_expr = f"sha2({content_ref}, 256) AS row_key"
+            if filename_column:
+                select_expr += f", {quote_identifier(filename_column)} AS fname"
+
+            sql_text = (
+                f"SELECT {select_expr} FROM {source} WHERE {content_ref} IS NOT NULL"
+            )
+            if max_num_elements is not None:
+                sql_text += f" LIMIT {int(max_num_elements)}"
+            for row in self._query(sql_text):
+                yield (None, row[0], (row[1] if filename_column else None))
 
     def enumerate_urls(
         self,
@@ -156,28 +171,64 @@ class DatabricksSqlBackend:
         for row in self._query(sql_text):
             yield (str(row[0]), str(row[1]), (str(row[2]) if filename_column else None))
 
-    def read_partition(
+    def fetch_by_id(
         self,
-        table: str,
+        table_or_query: str,
+        id_column: str,
+        id_value: str,
         content_column: str,
-        partition_column: str,
-        partition_value: object,
         filename_column: str | None,
-    ) -> Iterator[tuple[str, bytes, str | None]]:
-        """Yield (sha2 row_key, content bytes, filename) for one partition's non-null rows."""
-        table_ref = quote_identifier(table)
+    ) -> Iterator[tuple[bytes, str]]:
+        """Fetch one row by id_column value. Yields (content_bytes, filename)."""
+        # Determine if table_or_query is a query or table name
+        is_query = "SELECT" in table_or_query.upper()
+
+        if is_query:
+            source = f"({table_or_query}) AS source"
+        else:
+            source = quote_identifier(table_or_query)
+
+        id_ref = quote_identifier(id_column)
         content_ref = quote_identifier(content_column)
-        partition_ref = quote_identifier(partition_column)
-        select_expr = f"sha2({content_ref}, 256) AS row_key, {content_ref} AS c"
+        select_expr = content_ref
+        if filename_column:
+            select_expr += f", {quote_identifier(filename_column)} AS fname"
+
+        sql_text = f"SELECT {select_expr} FROM {source} WHERE {id_ref} = ? LIMIT 1"
+
+        for row in self._query(sql_text, [id_value]):
+            fname = row[1] if filename_column else f"{id_value}.bin"
+            yield (bytes(row[0]), fname)
+
+    def fetch_by_content_hash(
+        self,
+        table_or_query: str,
+        content_column: str,
+        sha2_hash: str,
+        filename_column: str | None,
+    ) -> Iterator[tuple[bytes, str]]:
+        """Fetch one row by sha2(content,256). Yields (content_bytes, filename)."""
+        # Determine if table_or_query is a query or table name
+        is_query = "SELECT" in table_or_query.upper()
+
+        if is_query:
+            source = f"({table_or_query}) AS source"
+        else:
+            source = quote_identifier(table_or_query)
+
+        content_ref = quote_identifier(content_column)
+        select_expr = content_ref
         if filename_column:
             select_expr += f", {quote_identifier(filename_column)} AS fname"
 
         sql_text = (
-            f"SELECT {select_expr} FROM {table_ref} "
-            f"WHERE {partition_ref} = ? AND {content_ref} IS NOT NULL"
+            f"SELECT {select_expr} FROM {source} "
+            f"WHERE sha2({content_ref}, 256) = ? LIMIT 1"
         )
-        for row in self._query(sql_text, [partition_value]):
-            yield (row[0], bytes(row[1]), (row[2] if filename_column else None))
+
+        for row in self._query(sql_text, [sha2_hash]):
+            fname = row[1] if filename_column else f"{sha2_hash}.bin"
+            yield (bytes(row[0]), fname)
 
     def stream_documents(
         self,

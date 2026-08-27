@@ -30,13 +30,16 @@ from docling.datamodel.service.callbacks import (
 )
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.responses import FailurePhase, PublicFailureInfo
-from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
+from docling.datamodel.service.sources import FileSource, HttpSource
 from docling.datamodel.service.targets import PresignedUrlTarget
 from docling.datamodel.service.tasks import TaskType
 from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
 
-from docling_jobkit.connectors.connector_factory import get_target_connector_factory
+from docling_jobkit.connectors.connector_factory import (
+    get_source_connector_factory,
+    get_target_connector_factory,
+)
 from docling_jobkit.connectors.source_processor import (
     DocumentChunk,
     SourceDocumentRef,
@@ -212,7 +215,10 @@ def _count_documents_for_task(
     return total
 
 
-def _is_s3_fanout_task(task: Task, *, allow_external_plugins: bool = False) -> bool:
+def _is_expandable_source_task(
+    task: Task, *, allow_external_plugins: bool = False
+) -> bool:
+    """True when the task has an expandable source and a storage-like target."""
     first_target = task.targets[0] if task.targets else None
     target_factory = get_target_connector_factory(allow_external_plugins)
     target_mode = (
@@ -220,19 +226,37 @@ def _is_s3_fanout_task(task: Task, *, allow_external_plugins: bool = False) -> b
         if target_factory.supports(first_target)  # type: ignore[arg-type]
         else None
     )
+
+    # Expandable sources: S3, GDrive, Spark (with id_column or url_column), etc.
+    # Storage-like targets: result_mode in {artifacts, database, presigned}
+    source_factory = get_source_connector_factory(allow_external_plugins)
+    has_expandable = any(
+        not isinstance(source, DocumentStream) and source_factory.is_expandable(source)
+        for source in task.sources
+    )
+
     return (
         task.task_type == TaskType.CONVERT
-        and target_mode in {"artifacts", "presigned"}
-        and len(task.sources) > 0
-        and any(isinstance(source, S3Coordinates) for source in task.sources)
+        and target_mode in {"artifacts", "database", "presigned"}
+        and has_expandable
     )
 
 
-def _validate_no_s3_source_in_passthrough(task: Task) -> None:
-    if any(isinstance(source, S3Coordinates) for source in task.sources):
+def _validate_no_expandable_source_in_passthrough(
+    task: Task, *, allow_external_plugins: bool = False
+) -> None:
+    """Expandable sources must not reach passthrough; routing should have directed them to fan-out."""
+    source_factory = get_source_connector_factory(allow_external_plugins)
+    expandable = [
+        source
+        for source in task.sources
+        if not isinstance(source, DocumentStream)
+        and source_factory.is_expandable(source)
+    ]
+    if expandable:
         raise RuntimeError(
-            "S3Coordinates sources must not reach the passthrough path; "
-            "routing should have directed this task to the S3 fan-out handler."
+            "Expandable sources must not reach the passthrough path; "
+            "routing should have directed this task to the source-chunk fan-out handler."
         )
 
 
@@ -866,7 +890,10 @@ class DoclingProcessorConverterDeployment:
         )
 
     def _convert_passthrough_task(self, task: Task) -> list[ConversionResult]:
-        _validate_no_s3_source_in_passthrough(task)
+        _validate_no_expandable_source_in_passthrough(
+            task,
+            allow_external_plugins=self.converter_manager_config.allow_external_plugins,
+        )
         convert_sources, headers = expand_task_sources(
             task,
             max_file_size=self.converter_manager_config.max_file_size,
@@ -1307,7 +1334,7 @@ class DoclingProcessorCoordinatorDeployment:
         convert_options = task.convert_options or ConvertDocumentsOptions()
         materialized_start_time = time.monotonic()
 
-        if _is_s3_fanout_task(
+        if _is_expandable_source_task(
             task,
             allow_external_plugins=(
                 self.converter_manager_config.allow_external_plugins
@@ -1493,9 +1520,7 @@ class DoclingProcessorCoordinatorDeployment:
         finally:
             await self.redis_manager.release_converter_units(tenant_id, task.task_id, 1)
 
-    def _iter_source_chunks_for_s3_fanout(
-        self, task: Task
-    ) -> Iterator[DocumentChunk[Any, Any]]:
+    def _iter_source_chunks(self, task: Task) -> Iterator[DocumentChunk[Any, Any]]:
         source_index_offset = 0
         chunk_index = 0
         for source in task.sources:
@@ -1549,9 +1574,7 @@ class DoclingProcessorCoordinatorDeployment:
         timeout = self.config.s3_source_listing_timeout_s
         try:
             all_chunks: list[DocumentChunk[Any, Any]] = await asyncio.wait_for(
-                asyncio.to_thread(
-                    lambda: list(self._iter_source_chunks_for_s3_fanout(task))
-                ),
+                asyncio.to_thread(lambda: list(self._iter_source_chunks(task))),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:

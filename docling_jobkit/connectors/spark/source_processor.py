@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from io import BytesIO
-from typing import TYPE_CHECKING, Iterator, NamedTuple, Optional
+from typing import TYPE_CHECKING, Iterator, NamedTuple
 
 from pydantic import BaseModel
 from typing_extensions import override
@@ -16,7 +16,6 @@ from docling_jobkit.connectors.errors import (
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
     ConverterSource,
-    DocumentChunk,
     SourceDocumentRef,
 )
 from docling_jobkit.connectors.spark import (
@@ -57,18 +56,11 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
     def __init__(self, coords: TaskSparkSource) -> None:
         super().__init__(coords)
         self._coords = coords
-        # Distributed per-worker partition cache: one partition in memory at a time.
-        self._cached_partition: Optional[object] = None
-        self._partition_cache: dict[str, tuple[bytes, str]] = {}
 
     @property
-    def _partition_col(self) -> str:
-        """The partition column, required in distributed mode."""
-        partition_col = self._coords.partition_column
-        if partition_col is None:
-            raise RuntimeError("partition_column is required for distributed reads")
-
-        return partition_col
+    def _partition_col(self) -> str | None:
+        """The partition column for ORDER BY, or None."""
+        return self._coords.partition_column
 
     @classmethod
     def check_dependencies(cls) -> None:
@@ -80,7 +72,16 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
 
     @classmethod
     def is_expandable(cls, config: BaseModel) -> bool:
-        return bool(getattr(config, "partition_column", None))
+        """Expandable when id_column enables cheap chunking, or when url_column
+        avoids the memory problem. Not expandable for unbounded content_column
+        reads without an id column (every chunk would be a full table scan)."""
+        if getattr(config, "id_column", None):
+            return True
+        if getattr(config, "url_column", None):
+            return True
+        # Content mode without id_column: only expandable if bounded
+        max_num = getattr(config, "max_num_elements", None)
+        return max_num is not None
 
     @_map_spark_source_errors
     def _initialize(self) -> None:
@@ -94,15 +95,10 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
             )
 
         _log.info("Spark source resolved %s", self._coords.table or "query")
-        self._cached_partition = None
-        self._partition_cache = {}
 
     def _finalize(self) -> None:
         if self._backend is not None:
             self._backend.close()
-
-        self._cached_partition = None
-        self._partition_cache = {}
 
     @_map_spark_source_errors
     def _count_documents(self) -> int:
@@ -175,45 +171,6 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
                 filename=(filename or f"{row_key}.bin"),
             )
 
-    def iterate_document_chunks(
-        self, chunk_size: int
-    ) -> Iterator[DocumentChunk[TaskSparkSource, SparkRowID]]:
-        if not self._coords.partition_column:
-            raise RuntimeError(
-                "Spark distributed processing requires 'partition_column' "
-                "set it, or run the local orchestrator for a single-driver read"
-            )
-
-        ids_gen = self._list_document_ids()
-
-        chunk_index = 0
-        source_index = 0
-        current_partition: object = object()
-        current_ids: list[SparkRowID] = []
-
-        def _emit(ids: list, idx: int, start: int) -> DocumentChunk:
-            refs = [
-                self._make_document_ref(identifier, start + offset)
-                for offset, identifier in enumerate(ids)
-            ]
-
-            return DocumentChunk(source=self.source, refs=refs, chunk_index=idx)
-
-        for identifier in ids_gen:
-            partition_value = identifier[0]
-            if current_ids and partition_value != current_partition:
-                yield _emit(current_ids, chunk_index, source_index)
-
-                chunk_index += 1
-                source_index += len(current_ids)
-                current_ids = []
-
-            current_partition = partition_value
-            current_ids.append(identifier)
-
-        if current_ids:
-            yield _emit(current_ids, chunk_index, source_index)
-
     @override
     def iterate_converter_sources(
         self, *, max_file_size: int | None = None
@@ -267,9 +224,9 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
         """Fetch a single document by its identifier.
 
         In url_column mode: Downloads from URL using Databricks Files API.
-        In content_column mode: Reads from cached partition.
+        In content_column mode: Fetches single row by id_column or sha2 hash.
         """
-        partition_value, row_key, filename = identifier
+        _partition_value, row_key, filename = identifier
 
         # URL mode: download from Databricks Files API
         if self._coords.url_column:
@@ -283,22 +240,36 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
             name = filename or url.split("/")[-1]
             return DocumentStream(name=name, stream=buffer)
 
-        # Content mode: cache whole partition on first access
-        if self._cached_partition != partition_value:
-            # Validator ensures exactly one of table/query and content_column is set
-            self._partition_cache = {
-                rk: (data, name or f"{rk}.bin")
-                for rk, data, name in self._backend.read_partition(
-                    self._coords.table or self._coords.query,  # type: ignore[arg-type]
+        # Content mode: fetch single row (no partition cache)
+        table_or_query = self._coords.table or self._coords.query
+        assert table_or_query is not None, "Either table or query must be set"
+
+        if self._coords.id_column:
+            # Fetch by id_column value (row_key is the id)
+            results = list(
+                self._backend.fetch_by_id(
+                    table_or_query,
+                    self._coords.id_column,  # type: ignore[arg-type]
+                    row_key,
                     self._coords.content_column,  # type: ignore[arg-type]
-                    self._partition_col,
-                    partition_value,
                     self._coords.filename_column,
                 )
-            }
-            self._cached_partition = partition_value
+            )
+        else:
+            # Fetch by sha2 hash (row_key is sha2(content, 256))
+            results = list(
+                self._backend.fetch_by_content_hash(
+                    table_or_query,
+                    self._coords.content_column,  # type: ignore[arg-type]
+                    row_key,
+                    self._coords.filename_column,
+                )
+            )
 
-        data, name = self._partition_cache[row_key]
+        if not results:
+            raise RuntimeError(f"Document not found: {row_key}")
+
+        data, name = results[0]
         limit = normalize_max_file_size(max_file_size)
         if limit is not None and len(data) > limit:
             raise SourceLimitExceededError(

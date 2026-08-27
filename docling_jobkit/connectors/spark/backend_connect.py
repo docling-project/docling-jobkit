@@ -67,30 +67,47 @@ class SparkConnectBackend:
         self,
         table_or_query: str,
         content_column: str,
-        partition_column: str,
+        partition_column: str | None,
         filename_column: str | None,
         max_num_elements: int | None,
     ) -> Iterator[tuple[object, str, str | None]]:
-        """Yield (partition_value, sha2 row_key, filename) ordered by partition."""
+        """Yield (partition_value, sha2 row_key, filename) optionally ordered by partition."""
         from pyspark.sql.functions import col, sha2
 
         non_null_content_df = self._non_null_limted(
             table_or_query, content_column, max_num_elements
         )
-        selects = [
-            col(partition_column),
-            sha2(col(content_column), 256).alias("row_key"),
-        ]
-        if filename_column:
-            selects.append(col(filename_column).alias("fname"))
 
-        ordered_df = non_null_content_df.select(*selects).orderBy(col(partition_column))
-        for row in ordered_df.toLocalIterator():
-            yield (
-                row[partition_column],
-                row["row_key"],
-                (row["fname"] if filename_column else None),
+        if partition_column:
+            selects = [
+                col(partition_column),
+                sha2(col(content_column), 256).alias("row_key"),
+            ]
+            if filename_column:
+                selects.append(col(filename_column).alias("fname"))
+
+            ordered_df = non_null_content_df.select(*selects).orderBy(
+                col(partition_column)
             )
+            for row in ordered_df.toLocalIterator():
+                yield (
+                    row[partition_column],
+                    row["row_key"],
+                    (row["fname"] if filename_column else None),
+                )
+        else:
+            # No partition column: partition_value is always None
+            selects = [sha2(col(content_column), 256).alias("row_key")]
+            if filename_column:
+                selects.append(col(filename_column).alias("fname"))
+
+            df_ = non_null_content_df.select(*selects)
+            for row in df_.toLocalIterator():
+                yield (
+                    None,
+                    row["row_key"],
+                    (row["fname"] if filename_column else None),
+                )
 
     def enumerate_urls(
         self,
@@ -130,36 +147,66 @@ class SparkConnectBackend:
                 (str(row["fname"]) if filename_column else None),
             )
 
-    def read_partition(
+    def fetch_by_id(
         self,
-        table: str,
+        table_or_query: str,
+        id_column: str,
+        id_value: str,
         content_column: str,
-        partition_column: str,
-        partition_value: object,
         filename_column: str | None,
-    ) -> Iterator[tuple[str, bytes, str | None]]:
-        """Yield (sha2 row_key, content bytes, filename) for one partition's rows."""
+    ) -> Iterator[tuple[bytes, str]]:
+        """Fetch one row by id_column value. Yields (content_bytes, filename)."""
+        from pyspark.sql.functions import col
+
+        # Determine if table_or_query is a query or table name
+        is_query = "SELECT" in table_or_query.upper()
+
+        if is_query:
+            df_ = self._spark.sql(table_or_query)
+        else:
+            df_ = self._spark.table(table_or_query)
+
+        cols = [content_column]
+        if filename_column:
+            cols.append(filename_column)
+
+        df_ = df_.where(col(id_column) == id_value).select(*cols).limit(1)
+
+        for row in df_.toLocalIterator():
+            fname = row[1] if filename_column else f"{id_value}.bin"
+            yield (bytes(row[0]), fname)
+
+    def fetch_by_content_hash(
+        self,
+        table_or_query: str,
+        content_column: str,
+        sha2_hash: str,
+        filename_column: str | None,
+    ) -> Iterator[tuple[bytes, str]]:
+        """Fetch one row by sha2(content,256). Yields (content_bytes, filename)."""
         from pyspark.sql.functions import col, sha2
 
-        selects = [
-            sha2(col(content_column), 256).alias("row_key"),
-            col(content_column).alias("c"),
-        ]
-        if filename_column:
-            selects.append(col(filename_column).alias("fname"))
+        # Determine if table_or_query is a query or table name
+        is_query = "SELECT" in table_or_query.upper()
 
-        partition_df = (
-            self._spark.table(table)
-            .filter(col(partition_column) == partition_value)  # type: ignore[arg-type]
-            .filter(col(content_column).isNotNull())
-            .select(*selects)
+        if is_query:
+            df_ = self._spark.sql(table_or_query)
+        else:
+            df_ = self._spark.table(table_or_query)
+
+        cols = [content_column]
+        if filename_column:
+            cols.append(filename_column)
+
+        df_ = (
+            df_.where(sha2(col(content_column), 256) == sha2_hash)
+            .select(*cols)
+            .limit(1)
         )
-        for row in partition_df.toLocalIterator():
-            yield (
-                row["row_key"],
-                row["c"],
-                (row["fname"] if filename_column else None),
-            )
+
+        for row in df_.toLocalIterator():
+            fname = row[1] if filename_column else f"{sha2_hash}.bin"
+            yield (bytes(row[0]), fname)
 
     def stream_documents(
         self,

@@ -52,17 +52,6 @@ def test_enumerate_row_keys_yields_partition_hash_filename():
     assert out == [("2024-01-01", "h1", "a.pdf"), ("2024-01-02", "h2", None)]
 
 
-def test_read_partition_yields_rowkey_bytes_name():
-    from pyspark.sql import Row
-
-    test_df = _chainable_df([Row(row_key="h1", c=b"PDF", fname="a.pdf")])
-    out = list(
-        _backend(test_df).read_partition("t", "content", "dt", "2024-01-01", "doc_name")
-    )
-
-    assert out == [("h1", b"PDF", "a.pdf")]
-
-
 def test_stream_documents_yields_bytes_and_name():
     from pyspark.sql import Row
 
