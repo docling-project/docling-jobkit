@@ -640,6 +640,8 @@ class RedisStateManager:
         limits_key = f"tenant:{tenant_id}:limits"
         redis = self._ensure_redis()
 
+        # Change only the requested fields atomically. The old read/modify/write
+        # of the whole hash could restore counters changed by another worker.
         async with redis.pipeline(transaction=True) as pipe:
             pipe.hsetnx(
                 limits_key, "max_concurrent_tasks", str(self.max_concurrent_tasks)
@@ -1192,6 +1194,9 @@ class RedisStateManager:
         queue_key = f"tenant:{tenant_id}:tasks"
         redis = self._ensure_redis()
 
+        # Unlike the atomic increments above, resync derives one snapshot from
+        # several keys. WATCH rejects a stale snapshot; three attempts absorb a
+        # transient conflict without letting a hot tenant stall reconciliation.
         for _ in range(3):
             async with redis.pipeline(transaction=True) as pipe:
                 try:
