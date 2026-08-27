@@ -11,6 +11,7 @@ from docling_jobkit.connectors.spark import (
     merge_sql,
     quote_identifier,
 )
+from docling_jobkit.connectors.spark.helper import get_spark_session
 from docling_jobkit.connectors.spark.models import SparkConnection
 
 
@@ -57,6 +58,47 @@ def test_remote_url_local_no_auth_with_user_id():
     # A no-auth connection carrying only user_id still emits the param.
     url = build_remote_url(_conn(user_id="alice"))
     assert url == "sc://myhost:15002/;user_id=alice"
+
+
+class _FakeSession:
+    def __init__(self, url):
+        self.url = url
+        self.stopped = False
+
+    def stop(self):
+        self.stopped = True
+
+
+class _FakeBuilder:
+    def remote(self, url):
+        self._url = url
+        return self
+
+    def create(self):
+        return _FakeSession(self._url)
+
+
+def test_get_spark_session_creates_dedicated_session_per_call(monkeypatch):
+    """Each call gets its own session bound to its own conn — never shared,
+    even across two calls with identical connections. `.create()` (not
+    `.getOrCreate()`) guarantees this: `.getOrCreate()` would return whatever
+    session is already active/default in the process regardless of the URL
+    just built, silently ignoring a second connector's own host/token."""
+    import pyspark.sql as pyspark_sql
+
+    monkeypatch.setattr(pyspark_sql.SparkSession, "builder", _FakeBuilder())
+
+    conn_a = _conn(auth={"kind": "token", "token": "A"})
+    conn_b = _conn(auth={"kind": "token", "token": "B"})
+
+    session_a1 = get_spark_session(conn_a)
+    session_a2 = get_spark_session(conn_a)  # same conn, still a distinct session
+    session_b = get_spark_session(conn_b)
+
+    assert session_a1 is not session_a2
+    assert session_a1 is not session_b
+    assert session_a1.url == session_a2.url
+    assert session_a1.url != session_b.url
 
 
 @pytest.mark.parametrize(

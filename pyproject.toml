@@ -97,9 +97,17 @@ sharepoint = [
     "office365-rest-python-client>=2.6.2,<3.0.0; python_version < '3.11'",
     "office365-rest-python-client>=2.6.2; python_version >= '3.11'",
 ]
-spark=[
+spark_connect = [
     "pyspark[connect]>=4.2,<5",
-    "databricks-sql-connector>=4.4.0,<5"
+]
+spark_serverless = [
+    "databricks-sql-connector>=4.4.0,<5",
+]
+# Bundled convenience extra; prefer spark_connect/spark_serverless individually
+# when you only need one backend.
+spark = [
+    "docling-jobkit[spark_connect]",
+    "docling-jobkit[spark_serverless]",
 ]
 
 [dependency-groups]

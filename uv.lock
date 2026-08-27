@@ -7,8 +7,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'darwin'",
     "python_full_version == '3.14.*' and sys_platform != 'darwin'",
     "python_full_version == '3.13.*' and sys_platform == 'darwin'",
-    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
     "python_full_version == '3.13.*' and sys_platform != 'darwin'",
+    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
     "python_full_version == '3.12.*' and sys_platform != 'darwin'",
     "python_full_version == '3.11.*' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and sys_platform != 'darwin'",
@@ -338,8 +338,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'darwin'",
     "python_full_version == '3.14.*' and sys_platform != 'darwin'",
     "python_full_version == '3.13.*' and sys_platform == 'darwin'",
-    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
     "python_full_version == '3.13.*' and sys_platform != 'darwin'",
+    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
     "python_full_version == '3.12.*' and sys_platform != 'darwin'",
     "python_full_version == '3.11.*' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and sys_platform != 'darwin'",
@@ -1481,6 +1481,12 @@ spark = [
     { name = "databricks-sql-connector" },
     { name = "pyspark", extra = ["connect"] },
 ]
+spark-connect = [
+    { name = "pyspark", extra = ["connect"] },
+]
+spark-serverless = [
+    { name = "databricks-sql-connector" },
+]
 vlm = [
     { name = "docling-slim", extra = ["models-vlm-inline"] },
 ]
@@ -1515,7 +1521,9 @@ requires-dist = [
     { name = "boto3", specifier = "~=1.35" },
     { name = "codeflare-sdk", marker = "python_full_version >= '3.11' and python_full_version < '3.14' and extra == 'ray'", specifier = ">=0.20.0" },
     { name = "confluent-kafka", marker = "extra == 'kafka'", specifier = ">=2.5.0,<3" },
-    { name = "databricks-sql-connector", marker = "extra == 'spark'", specifier = ">=4.4.0,<5" },
+    { name = "databricks-sql-connector", marker = "extra == 'spark-serverless'", specifier = ">=4.4.0,<5" },
+    { name = "docling-jobkit", extras = ["spark-connect"], marker = "extra == 'spark'" },
+    { name = "docling-jobkit", extras = ["spark-serverless"], marker = "extra == 'spark'" },
     { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", specifier = ">=2.94.0,<3.0.0" },
     { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", specifier = ">=2.95.0,<3.0.0" },
     { name = "docling-slim", extras = ["standard"], specifier = ">=2.118.0,<3.0.0" },
@@ -1532,13 +1540,13 @@ requires-dist = [
     { name = "psutil", marker = "extra == 'ray'", specifier = ">=6.0.0" },
     { name = "pydantic", specifier = "~=2.10" },
     { name = "pydantic-settings", specifier = "~=2.4" },
-    { name = "pyspark", extras = ["connect"], marker = "extra == 'spark'", specifier = ">=4.2,<5" },
+    { name = "pyspark", extras = ["connect"], marker = "extra == 'spark-connect'", specifier = ">=4.2,<5" },
     { name = "ray", extras = ["serve"], marker = "python_full_version < '3.14' and extra == 'ray'", specifier = "~=2.52" },
     { name = "redis", extras = ["hiredis"], marker = "extra == 'ray'", specifier = ">=4.2,<8.0.0" },
     { name = "rq", marker = "extra == 'rq'", specifier = "~=2.4" },
     { name = "typer", specifier = ">=0.12.5,<1" },
 ]
-provides-extras = ["vlm", "onnxruntime", "rq", "ray", "gdrive", "gcloudstorage", "azure", "opensearch", "astradb", "kafka", "sharepoint", "spark"]
+provides-extras = ["vlm", "onnxruntime", "rq", "ray", "gdrive", "gcloudstorage", "azure", "opensearch", "astradb", "kafka", "sharepoint", "spark-connect", "spark-serverless", "spark"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3768,8 +3776,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'darwin'",
     "python_full_version == '3.14.*' and sys_platform != 'darwin'",
     "python_full_version == '3.13.*' and sys_platform == 'darwin'",
-    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
     "python_full_version == '3.13.*' and sys_platform != 'darwin'",
+    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
     "python_full_version == '3.12.*' and sys_platform != 'darwin'",
     "python_full_version == '3.11.*' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and sys_platform != 'darwin'",
@@ -3898,8 +3906,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'darwin'",
     "python_full_version == '3.14.*' and sys_platform != 'darwin'",
     "python_full_version == '3.13.*' and sys_platform == 'darwin'",
-    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
     "python_full_version == '3.13.*' and sys_platform != 'darwin'",
+    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
     "python_full_version == '3.12.*' and sys_platform != 'darwin'",
     "python_full_version == '3.11.*' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and sys_platform != 'darwin'",
@@ -4169,8 +4177,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'darwin'",
     "python_full_version == '3.14.*' and sys_platform != 'darwin'",
     "python_full_version == '3.13.*' and sys_platform == 'darwin'",
-    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
     "python_full_version == '3.13.*' and sys_platform != 'darwin'",
+    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
     "python_full_version == '3.12.*' and sys_platform != 'darwin'",
     "python_full_version == '3.11.*' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and sys_platform != 'darwin'",
@@ -6196,8 +6204,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'darwin'",
     "python_full_version == '3.14.*' and sys_platform != 'darwin'",
     "python_full_version == '3.13.*' and sys_platform == 'darwin'",
-    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
     "python_full_version == '3.13.*' and sys_platform != 'darwin'",
+    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
     "python_full_version == '3.12.*' and sys_platform != 'darwin'",
     "python_full_version == '3.11.*' and sys_platform == 'darwin'",
     "python_full_version == '3.11.*' and sys_platform != 'darwin'",
@@ -6564,8 +6572,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'darwin'",
     "python_full_version == '3.14.*' and sys_platform != 'darwin'",
     "python_full_version == '3.13.*' and sys_platform == 'darwin'",
-    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
     "python_full_version == '3.13.*' and sys_platform != 'darwin'",
+    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
     "python_full_version == '3.12.*' and sys_platform != 'darwin'",
 ]
 dependencies = [

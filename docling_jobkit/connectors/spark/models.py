@@ -259,6 +259,16 @@ class SparkChunkTarget(SparkConnection, FieldMappings, ChunkFieldSlots):
         int, Field(description="Rows buffered before a batch write.", gt=0)
     ] = 100
 
+    @model_validator(mode="after")
+    def validate_no_mappings(self) -> "SparkChunkTarget":
+        if self.mappings:
+            raise ValueError(
+                "spark_chunks uses the fixed chunk field slots (text_field, "
+                "metadata_field, etc.); mappings (output-format-to-column) is "
+                "not applicable and must be left unset."
+            )
+        return self
+
 
 class TaskSparkSource(SparkSourceCoordinates):
     kind: Literal["spark"] = "spark"

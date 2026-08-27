@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from io import BytesIO
-from typing import TYPE_CHECKING, Iterator, NamedTuple
+from typing import Iterator, NamedTuple
 
 from pydantic import BaseModel
 from typing_extensions import override
@@ -11,6 +11,7 @@ from docling.datamodel.base_models import DocumentStream
 
 from docling_jobkit.connectors.errors import (
     SourceConnectorConfigError,
+    SourceConnectorPolicyError,
     map_connector_authentication_errors,
 )
 from docling_jobkit.connectors.source_processor import (
@@ -18,20 +19,17 @@ from docling_jobkit.connectors.source_processor import (
     ConverterSource,
     SourceDocumentRef,
 )
-from docling_jobkit.connectors.spark import (
+from docling_jobkit.connectors.spark.backend_factory import get_backend
+from docling_jobkit.connectors.spark.helper import (
+    download_document_from_url,
     is_spark_authentication_error,
     is_spark_unavailable_error,
 )
-from docling_jobkit.connectors.spark.backend_factory import get_backend
-from docling_jobkit.connectors.spark.helper import download_document_from_url
 from docling_jobkit.connectors.spark.models import TaskSparkSource
 from docling_jobkit.convert.materialization import (
     SourceLimitExceededError,
     normalize_max_file_size,
 )
-
-if TYPE_CHECKING:
-    pass
 
 _log = logging.getLogger(__name__)
 
@@ -117,11 +115,13 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
         """Enumerate row identifiers ordered by partition.
 
         Unlike a typical source (one opaque id per document), each id is a
-        (partition_value, sha2 row_key, filename) triple, and rows arrive
+        (partition_value, row_key, filename) triple, and rows arrive
         grouped by partition so iterate_document_chunks can emit one chunk per
         partition without re-sorting.
 
-        In url_column mode, row_key holds the URL instead of sha2 hash.
+        In content_column mode, row_key is the id_column value when id_column
+        is set, otherwise sha2(content, 256). In url_column mode, row_key
+        holds the URL instead.
         """
         # Validator ensures exactly one of table/query and content_column/url_column is set
         if self._coords.url_column:
@@ -143,6 +143,7 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
                 self._partition_col,
                 self._coords.filename_column,
                 self._coords.max_num_elements,
+                self._coords.id_column,
             ):
                 yield SparkRowID(partition_value, row_key, filename)
 
@@ -267,7 +268,9 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
             )
 
         if not results:
-            raise RuntimeError(f"Document not found: {row_key}")
+            raise SourceConnectorPolicyError(
+                f"Document not found: {row_key}", source_kind="spark"
+            )
 
         data, name = results[0]
         limit = normalize_max_file_size(max_file_size)

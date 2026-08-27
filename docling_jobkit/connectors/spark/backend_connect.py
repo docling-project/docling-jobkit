@@ -18,20 +18,20 @@ if TYPE_CHECKING:
 class SparkConnectBackend:
     """Spark Connect transport (local OSS, token, Databricks classic).
 
-    Holds a remote SparkSession and performs all reads/writes via the DataFrame
-    API.
+    Holds a dedicated remote SparkSession (never shared with another backend
+    instance, even one with an identical connection) and performs all
+    reads/writes via the DataFrame API.
     """
 
     def __init__(self, conn: SparkConnection) -> None:
         self._spark: SparkSession = get_spark_session(conn)
 
     def close(self) -> None:
-        """No-op: SparkSession lifecycle is managed externally."""
+        """Stop this backend's own session."""
+        self._spark.stop()
 
-    def _non_null_limted(
-        self, table_or_query: str, content_column: str, max_num_elements: int | None
-    ) -> DataFrame:
-        """Table/query rows with non-null content, optionally capped at max_num_elements."""
+    def _non_null_df(self, table_or_query: str, content_column: str) -> DataFrame:
+        """Table/query rows with non-null content (no limit applied)."""
         from pyspark.sql.functions import col
 
         # Determine if table_or_query is a query or table name
@@ -42,9 +42,18 @@ class SparkConnectBackend:
         else:
             non_null_content_df = self._spark.table(table_or_query)
 
-        non_null_content_df = non_null_content_df.filter(
-            col(content_column).isNotNull()
-        )
+        return non_null_content_df.filter(col(content_column).isNotNull())
+
+    def _non_null_limited(
+        self, table_or_query: str, content_column: str, max_num_elements: int | None
+    ) -> DataFrame:
+        """Table/query rows with non-null content, optionally capped at max_num_elements.
+
+        Only safe for callers that don't order the result afterward — LIMIT
+        must be applied after ORDER BY for deterministic results, see
+        `enumerate_row_keys`.
+        """
+        non_null_content_df = self._non_null_df(table_or_query, content_column)
         if max_num_elements is not None:
             non_null_content_df = non_null_content_df.limit(max_num_elements)
 
@@ -58,7 +67,7 @@ class SparkConnectBackend:
     ) -> int:
         """Count rows with non-null content (respecting max_num_elements)."""
         return int(
-            self._non_null_limted(
+            self._non_null_limited(
                 table_or_query, content_column, max_num_elements
             ).count()
         )
@@ -70,18 +79,29 @@ class SparkConnectBackend:
         partition_column: str | None,
         filename_column: str | None,
         max_num_elements: int | None,
+        id_column: str | None = None,
     ) -> Iterator[tuple[object, str, str | None]]:
-        """Yield (partition_value, sha2 row_key, filename) optionally ordered by partition."""
+        """Yield (partition_value, row_key, filename) optionally ordered by partition.
+
+        row_key is the id_column value when id_column is set (fetch_by_id then
+        looks the row up the same way, with no hashing involved), otherwise
+        sha2(content, 256), which fetch_by_content_hash recomputes to match.
+        Deriving row_key from id_column avoids hashing content_column here only
+        to read and hash it again on fetch.
+        """
         from pyspark.sql.functions import col, sha2
 
-        non_null_content_df = self._non_null_limted(
-            table_or_query, content_column, max_num_elements
-        )
+        row_key_expr = (
+            col(id_column).cast("string")
+            if id_column
+            else sha2(col(content_column), 256)
+        ).alias("row_key")
 
         if partition_column:
+            non_null_content_df = self._non_null_df(table_or_query, content_column)
             selects = [
                 col(partition_column),
-                sha2(col(content_column), 256).alias("row_key"),
+                row_key_expr,
             ]
             if filename_column:
                 selects.append(col(filename_column).alias("fname"))
@@ -89,6 +109,8 @@ class SparkConnectBackend:
             ordered_df = non_null_content_df.select(*selects).orderBy(
                 col(partition_column)
             )
+            if max_num_elements is not None:
+                ordered_df = ordered_df.limit(max_num_elements)
             for row in ordered_df.toLocalIterator():
                 yield (
                     row[partition_column],
@@ -96,8 +118,12 @@ class SparkConnectBackend:
                     (row["fname"] if filename_column else None),
                 )
         else:
-            # No partition column: partition_value is always None
-            selects = [sha2(col(content_column), 256).alias("row_key")]
+            # No partition column: partition_value is always None, so ordering
+            # doesn't matter and the limit can be applied up front.
+            non_null_content_df = self._non_null_limited(
+                table_or_query, content_column, max_num_elements
+            )
+            selects = [row_key_expr]
             if filename_column:
                 selects.append(col(filename_column).alias("fname"))
 
@@ -218,7 +244,7 @@ class SparkConnectBackend:
         """Yield (content bytes, filename) for every non-null row."""
         from pyspark.sql.functions import col
 
-        non_null_content_df = self._non_null_limted(
+        non_null_content_df = self._non_null_limited(
             table_or_query, content_column, max_num_elements
         )
         selects = [col(content_column).alias("c")]

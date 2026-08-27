@@ -99,8 +99,16 @@ class DatabricksSqlBackend:
         partition_column: str | None,
         filename_column: str | None,
         max_num_elements: int | None,
+        id_column: str | None = None,
     ) -> Iterator[tuple[object, str, str | None]]:
-        """Yield (partition_value, sha2 row_key, filename) optionally ordered by partition."""
+        """Yield (partition_value, row_key, filename) optionally ordered by partition.
+
+        row_key is the id_column value when id_column is set (fetch_by_id then
+        looks the row up the same way, with no hashing involved), otherwise
+        sha2(content, 256), which fetch_by_content_hash recomputes to match.
+        Deriving row_key from id_column avoids hashing content_column here only
+        to read and hash it again on fetch.
+        """
         # Determine if table_or_query is a query or table name
         is_query = "SELECT" in table_or_query.upper()
 
@@ -110,10 +118,15 @@ class DatabricksSqlBackend:
             source = quote_identifier(table_or_query)
 
         content_ref = quote_identifier(content_column)
+        row_key_expr = (
+            f"CAST({quote_identifier(id_column)} AS STRING) AS row_key"
+            if id_column
+            else f"sha2({content_ref}, 256) AS row_key"
+        )
 
         if partition_column:
             partition_ref = quote_identifier(partition_column)
-            select_expr = f"{partition_ref}, sha2({content_ref}, 256) AS row_key"
+            select_expr = f"{partition_ref}, {row_key_expr}"
             if filename_column:
                 select_expr += f", {quote_identifier(filename_column)} AS fname"
 
@@ -127,7 +140,7 @@ class DatabricksSqlBackend:
                 yield (row[0], row[1], (row[2] if filename_column else None))
         else:
             # No partition column: partition_value is always None
-            select_expr = f"sha2({content_ref}, 256) AS row_key"
+            select_expr = row_key_expr
             if filename_column:
                 select_expr += f", {quote_identifier(filename_column)} AS fname"
 

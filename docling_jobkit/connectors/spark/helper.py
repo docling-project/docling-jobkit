@@ -123,7 +123,9 @@ def is_merge_conflict(exc: BaseException) -> bool:
 
 
 def build_remote_url(conn: SparkConnection) -> str:
-    """Assemble Spark Connect `sc://` connection string from config"""
+    """Assemble Spark Connect `sc://` connection string from config.
+
+    The token/PAT is embedded in this URL. Don't log it."""
     base = f"sc://{conn.host}:{conn.port}"
     params: list[str] = []
 
@@ -141,12 +143,10 @@ def build_remote_url(conn: SparkConnection) -> str:
 
 
 def get_spark_session(conn: SparkConnection) -> "SparkSession":
-    """Create a remote Spark Connect session from conn config"""
+    """Create a dedicated Spark Connect session for `conn`."""
     from pyspark.sql import SparkSession
 
-    spark = SparkSession.builder.remote(build_remote_url(conn)).getOrCreate()
-
-    return spark
+    return SparkSession.builder.remote(build_remote_url(conn)).create()
 
 
 def normalize_row(row: dict[str, Any], columns: Sequence[str]) -> dict[str, Any]:

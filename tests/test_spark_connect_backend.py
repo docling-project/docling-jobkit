@@ -52,6 +52,57 @@ def test_enumerate_row_keys_yields_partition_hash_filename():
     assert out == [("2024-01-01", "h1", "a.pdf"), ("2024-01-02", "h2", None)]
 
 
+def test_enumerate_row_keys_limit_after_order():
+    """max_num_elements must cap AFTER ordering by partition, not before —
+    limiting first would make the "first N rows" arbitrary/non-deterministic."""
+    from pyspark.sql import Row
+
+    test_df = _chainable_df([Row(dt="2024-01-01", row_key="h1", fname=None)])
+    list(_backend(test_df).enumerate_row_keys("t", "content", "dt", None, 5))
+
+    names = [c[0] for c in test_df.mock_calls]
+    assert "orderBy" in names and "limit" in names
+    assert names.index("orderBy") < names.index("limit")
+
+
+def test_enumerate_row_keys_uses_id_column_when_set(monkeypatch):
+    """When id_column is set, row_key comes from it directly — content_column
+    is only read for the not-null filter, never hashed. This is what lets
+    fetch_by_id look the row up by the same id_column value afterward,
+    instead of recomputing sha2(content) to match a hash produced here."""
+    import pyspark.sql.functions as F
+    from pyspark.sql import Row
+
+    col_mock = MagicMock(side_effect=lambda *a, **k: MagicMock())
+    sha2_mock = MagicMock()
+    monkeypatch.setattr(F, "col", col_mock)
+    monkeypatch.setattr(F, "sha2", sha2_mock)
+
+    test_df = _chainable_df([Row(dt="2024-01-01", row_key="id1", fname=None)])
+    list(
+        _backend(test_df).enumerate_row_keys(
+            "t", "content", "dt", None, None, id_column="doc_id"
+        )
+    )
+
+    sha2_mock.assert_not_called()
+    assert any(call.args == ("doc_id",) for call in col_mock.call_args_list)
+
+
+def test_enumerate_row_keys_hashes_content_when_no_id_column(monkeypatch):
+    import pyspark.sql.functions as F
+    from pyspark.sql import Row
+
+    sha2_mock = MagicMock(side_effect=lambda *a, **k: MagicMock())
+    monkeypatch.setattr(F, "col", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(F, "sha2", sha2_mock)
+
+    test_df = _chainable_df([Row(dt="2024-01-01", row_key="h1", fname=None)])
+    list(_backend(test_df).enumerate_row_keys("t", "content", "dt", None, None))
+
+    sha2_mock.assert_called_once()
+
+
 def test_stream_documents_yields_bytes_and_name():
     from pyspark.sql import Row
 

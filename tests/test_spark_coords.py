@@ -116,3 +116,13 @@ def test_chunk_target_defaults():
     assert t.chunk_id_field == "chunk_id"
     assert t.text_field == "text"  # inherited ChunkFieldSlots default
     assert t.chunk_index_field == "chunk_index"
+
+
+def test_chunk_target_rejects_mappings():
+    with pytest.raises(ValidationError):
+        SparkChunkTarget(
+            host="h",
+            table="cat.db.chunks",
+            port=15002,
+            mappings={"MARKDOWN": "text"},
+        )
