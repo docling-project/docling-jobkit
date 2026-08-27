@@ -11,6 +11,8 @@ that faithfully models the Redis commands the instrumented code paths use
 This mirrors the hermetic style of ``test_ray_converter_units.py``.
 """
 
+import asyncio
+
 import pytest
 
 pytest.importorskip("msgpack")
@@ -116,6 +118,9 @@ class _FakeRedis:
 
     async def hgetall(self, key):
         return self._apply("hgetall", (key,), {})
+
+    async def hset(self, key, *args, **kwargs):
+        return self._apply("hset", (key, *args), kwargs)
 
     async def scard(self, key):
         return self._apply("scard", (key,), {})
@@ -370,3 +375,86 @@ async def test_finalize_is_exactly_once_first_terminal_wins() -> None:
     counters = await manager.get_tenant_task_counters("tenant-a")
     assert counters.tasks_succeeded_total == 1
     assert counters.tasks_failed_total == 0
+
+
+# --- bookkeeping race between enqueue and terminalization ----------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Confirmed bug: update_tenant_limits does a non-atomic whole-hash "
+    "read-modify-write (HGETALL->mutate->HSET) that clobbers a concurrent "
+    "finalize's HINCRBY. Remove this marker when update_tenant_limits switches "
+    "to per-field HINCRBY. See "
+    "docs/plans/redis-tenant-limits-bookkeeping-race-handoff.md.",
+)
+@pytest.mark.asyncio
+async def test_enqueue_limits_update_does_not_restore_stale_active_usage() -> None:
+    """A concurrent finalize must not be clobbered by enqueue's limits write.
+
+    ``update_tenant_limits`` does a non-atomic read-modify-write of the whole
+    limits hash (HGETALL -> mutate -> HSET mapping), while terminalization does
+    per-field HINCRBY under WATCH. If a finalize lands inside the enqueue read
+    window, enqueue's blind HSET restores the stale ``active_tasks`` and wedges
+    the tenant: the active set is empty but the derived limits say it is full.
+    See docs/plans/redis-tenant-limits-bookkeeping-race-handoff.md.
+    """
+    manager, fake = _manager()
+    manager.max_concurrent_tasks = 1
+
+    # Seed: one task handed out and running, limits say active=1/queued=0.
+    fake.hashes["task:task-running"] = {"status": "started"}
+    fake.sets["tenant:tenant-A:active_tasks"] = {"task-running"}
+    fake.hashes["tenant:tenant-A:limits"] = {
+        "max_concurrent_tasks": "1",
+        "active_tasks": "1",
+        "queued_tasks": "0",
+        "active_documents": "0",
+    }
+
+    # Pause enqueue right after it captures its limits snapshot, before HSET.
+    real_get_limits = manager.get_tenant_limits
+    snapshot_captured = asyncio.Event()
+    release_enqueue = asyncio.Event()
+
+    async def _gated_get_limits(tenant_id):
+        limits = await real_get_limits(tenant_id)
+        snapshot_captured.set()
+        await release_enqueue.wait()
+        return limits
+
+    manager.get_tenant_limits = _gated_get_limits  # type: ignore[method-assign]
+
+    enqueue = asyncio.create_task(
+        manager.enqueue_task("tenant-A", _task("task-queued"))
+    )
+    await snapshot_captured.wait()  # stale snapshot (active_tasks=1) is held
+
+    # While enqueue is paused, the running task finishes and frees capacity.
+    manager.get_tenant_limits = real_get_limits  # finalize path uses the real read
+    await manager._finalize_task_terminal_state_atomic(
+        tenant_id="tenant-A",
+        task_id="task-running",
+        task_size=1,
+        terminal_status=TaskStatus.SUCCESS,
+    )
+
+    # Intermediate state is consistent: nothing active.
+    assert await manager.get_tenant_active_task_count("tenant-A") == 0
+    assert (await manager.get_tenant_limits("tenant-A")).active_tasks == 0
+
+    # Let enqueue resume; its whole-hash HSET must not resurrect active_tasks.
+    release_enqueue.set()
+    await enqueue
+
+    active_set = await manager.get_tenant_active_task_count("tenant-A")
+    limits = await manager.get_tenant_limits("tenant-A")
+    assert active_set == 0
+    assert limits.active_tasks == 0, (
+        f"enqueue restored stale active_tasks={limits.active_tasks} over the "
+        "finalize's decrement -> false full gate"
+    )
+    assert limits.queued_tasks == 1  # the newly enqueued task is preserved
+
+    can_process, reason = await manager.check_tenant_can_process("tenant-A", 1)
+    assert can_process, reason
