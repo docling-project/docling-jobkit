@@ -638,22 +638,21 @@ class RedisStateManager:
             await self.connect()
 
         limits_key = f"tenant:{tenant_id}:limits"
-
-        # Get current limits or initialize
-        limits = await self.get_tenant_limits(tenant_id)
-
-        # Update counters
-        limits.active_tasks = max(0, limits.active_tasks + delta_active_tasks)
-        limits.queued_tasks = max(0, limits.queued_tasks + delta_queued_tasks)
-        limits.active_documents = max(0, limits.active_documents + delta_docs)
-
-        # Store updated limits
-        limits_dict = limits.model_dump()
-        # Convert None to string for Redis
-        limits_dict = {k: str(v) for k, v in limits_dict.items()}
-
         redis = self._ensure_redis()
-        await redis.hset(limits_key, mapping=limits_dict)  # type: ignore[misc]
+
+        async with redis.pipeline(transaction=True) as pipe:
+            pipe.hsetnx(
+                limits_key, "max_concurrent_tasks", str(self.max_concurrent_tasks)
+            )
+            pipe.hsetnx(limits_key, "max_queued_tasks", str(self.max_queued_tasks))
+            pipe.hsetnx(limits_key, "max_documents", str(self.max_documents))
+            if delta_active_tasks:
+                pipe.hincrby(limits_key, "active_tasks", delta_active_tasks)
+            if delta_queued_tasks:
+                pipe.hincrby(limits_key, "queued_tasks", delta_queued_tasks)
+            if delta_docs:
+                pipe.hincrby(limits_key, "active_documents", delta_docs)
+            await pipe.execute()
 
     async def check_tenant_can_enqueue(
         self, tenant_id: str, task_size: int
@@ -1185,26 +1184,64 @@ class RedisStateManager:
 
     async def resync_tenant_limits(self, tenant_id: str) -> TenantLimits:
         """Resynchronize tenant counters from canonical Redis structures."""
-        active_task_ids = await self.get_tenant_active_task_ids(tenant_id)
-        active_documents = 0
-        converter_units = 0
-        for task_id in active_task_ids:
-            active_documents += await self._get_task_size_for_resync(task_id)
-            lease = await self.get_task_execution_lease(task_id)
-            if lease is not None:
-                converter_units += int(lease.get("converter_units") or 0)
-
-        limits = await self.get_tenant_limits(tenant_id)
-        limits.active_tasks = len(active_task_ids)
-        limits.queued_tasks = await self.get_tenant_queue_size(tenant_id)
-        limits.active_documents = active_documents
-        limits.converter_units = converter_units
+        if not self.redis:
+            await self.connect()
 
         limits_key = f"tenant:{tenant_id}:limits"
-        limits_dict = {key: str(value) for key, value in limits.model_dump().items()}
+        active_key = f"tenant:{tenant_id}:active_tasks"
+        queue_key = f"tenant:{tenant_id}:tasks"
         redis = self._ensure_redis()
-        await redis.hset(limits_key, mapping=limits_dict)  # type: ignore[misc]
-        return limits
+
+        for _ in range(3):
+            async with redis.pipeline(transaction=True) as pipe:
+                try:
+                    await pipe.watch(active_key, queue_key, limits_key)
+
+                    active_task_ids = await self.get_tenant_active_task_ids(tenant_id)
+                    active_documents = 0
+                    converter_units = 0
+                    for task_id in active_task_ids:
+                        active_documents += await self._get_task_size_for_resync(
+                            task_id
+                        )
+                        lease = await self.get_task_execution_lease(task_id)
+                        if lease is not None:
+                            converter_units += int(lease.get("converter_units") or 0)
+
+                    limits = await self.get_tenant_limits(tenant_id)
+                    limits.active_tasks = len(active_task_ids)
+                    limits.queued_tasks = await self.get_tenant_queue_size(tenant_id)
+                    limits.active_documents = active_documents
+                    limits.converter_units = converter_units
+
+                    pipe.multi()
+                    pipe.hsetnx(
+                        limits_key,
+                        "max_concurrent_tasks",
+                        str(self.max_concurrent_tasks),
+                    )
+                    pipe.hsetnx(
+                        limits_key, "max_queued_tasks", str(self.max_queued_tasks)
+                    )
+                    pipe.hsetnx(limits_key, "max_documents", str(self.max_documents))
+                    pipe.hset(
+                        limits_key,
+                        mapping={
+                            "active_tasks": str(limits.active_tasks),
+                            "queued_tasks": str(limits.queued_tasks),
+                            "active_documents": str(limits.active_documents),
+                            "converter_units": str(limits.converter_units),
+                        },
+                    )
+                    await pipe.execute()
+                except WatchError:
+                    continue
+                return limits
+
+        _log.warning(
+            "Tenant limits resync deferred after repeated contention: %s", tenant_id
+        )
+        return await self.get_tenant_limits(tenant_id)
 
     async def get_task_dispatch_hash(self, task_id: str) -> dict:
         """Get the dispatcher-owned dispatch state hash for a task.
