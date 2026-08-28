@@ -715,7 +715,7 @@ def test_ray_s3_fanout_accepts_plugin_artifact_target(monkeypatch):
         task_id="task-plugin-fanout",
         task_type=TaskType.CONVERT,
         sources=[
-            S3Coordinates(
+            S3SourceRequest(
                 endpoint="127.0.0.1:9000",
                 access_key="minioadmin",
                 secret_key="minioadmin",
@@ -726,7 +726,9 @@ def test_ray_s3_fanout_accepts_plugin_artifact_target(monkeypatch):
         targets=[_OneDriveTarget(drive_id="target")],
     )
 
-    assert serve_deployment._is_s3_fanout_task(task, allow_external_plugins=True)
+    assert serve_deployment._is_expandable_source_task(
+        task, allow_external_plugins=True
+    )
 
 
 def test_source_expansion_dispatches_fake_registered_processor(monkeypatch):
