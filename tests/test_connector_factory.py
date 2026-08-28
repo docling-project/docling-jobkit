@@ -51,6 +51,7 @@ def test_builtin_source_connectors_registered():
         "sharepoint",
         "local_path",
         "google_drive",
+        "snowflake",
     }
 
 
@@ -69,6 +70,8 @@ def test_builtin_target_connectors_registered():
         "opensearch_chunks",
         "astradb_chunks",
         "sharepoint",
+        "snowflake_doc",
+        "snowflake_chunks",
     }
 
 
