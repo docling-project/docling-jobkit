@@ -19,6 +19,7 @@ from docling_jobkit.connectors.snowflake.models import (
     SnowflakeCoordinates,
     SnowflakeDocTarget,
 )
+from docling_jobkit.convert.materialization import SourceLimitExceededError
 
 
 @pytest.fixture
@@ -243,6 +244,33 @@ def test_download_stage_file_passes_through_uncompressed(coords):
     assert data == b"raw pdf bytes"
     assert name == "file.pdf"
     mock_stream.close.assert_called_once()
+
+
+def test_download_stage_file_allows_decompressed_output_within_max_file_size(coords):
+    session = MagicMock()
+    mock_stream = MagicMock()
+    mock_stream.read.return_value = gzip.compress(b"hello world")
+    session.file.get_stream.return_value = mock_stream
+
+    data, name = download_stage_file(
+        session, coords, "sub/file.pdf.gz", max_file_size=len(b"hello world")
+    )
+
+    assert data == b"hello world"
+    assert name == "file.pdf"
+
+
+def test_download_stage_file_rejects_gzip_bomb_exceeding_max_file_size(coords):
+    """A small compressed payload that expands past max_file_size must be
+    caught during decompression, not after the whole thing is materialized."""
+    session = MagicMock()
+    mock_stream = MagicMock()
+    huge = b"a" * (10 * 1024 * 1024)
+    mock_stream.read.return_value = gzip.compress(huge)
+    session.file.get_stream.return_value = mock_stream
+
+    with pytest.raises(SourceLimitExceededError, match="Decompressed size exceeds"):
+        download_stage_file(session, coords, "sub/file.pdf.gz", max_file_size=1024)
 
 
 # MERGE builder

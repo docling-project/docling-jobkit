@@ -134,7 +134,10 @@ class SnowflakeSourceProcessor(
         # Download with retry on transient failures
         def _download():
             return download_stage_file(
-                self._session, self._coords, identifier.relative_path
+                self._session,
+                self._coords,
+                identifier.relative_path,
+                max_file_size=limit,
             )
 
         data, display_name = with_retry(

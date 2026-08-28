@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import time
+import zlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator, TypeVar
 
@@ -12,6 +13,7 @@ from docling_jobkit.connectors.snowflake.models import (
     SnowflakeCoordinates,
     SnowflakeDocTarget,
 )
+from docling_jobkit.convert.materialization import SourceLimitExceededError
 
 _log = logging.getLogger(__name__)
 
@@ -20,6 +22,8 @@ _T = TypeVar("_T")
 
 _MAX_RETRIES = 3
 _BACKOFF_BASE = 1.0
+
+_DECOMPRESS_CHUNK_SIZE = 1024 * 1024
 
 if TYPE_CHECKING:
     from snowflake.snowpark import Session
@@ -203,10 +207,37 @@ def relative_path_from_list_name(name: str) -> str:
     return name.split("/", 1)[1] if "/" in name else name
 
 
+def _decompress_gzip_bounded(data: bytes, max_size: int | None) -> bytes:
+    """Decompress gzip data, aborting once the decompressed output would exceed max_size."""
+    if max_size is None:
+        return gzip.decompress(data)
+
+    decompressor = zlib.decompressobj(
+        wbits=zlib.MAX_WBITS | 16
+    )  # tells decompressor to expect gzip format (headers etc.)
+    chunks: list[bytes] = []
+    total = 0
+    remaining = data
+    while True:
+        chunk = decompressor.decompress(remaining, _DECOMPRESS_CHUNK_SIZE)
+        remaining = decompressor.unconsumed_tail
+        total += len(chunk)
+        if total > max_size:
+            raise SourceLimitExceededError(
+                f"Decompressed size exceeds max_file_size={max_size} bytes"
+            )
+        chunks.append(chunk)
+        if not remaining and decompressor.eof:
+            break
+    return b"".join(chunks)
+
+
 def download_stage_file(
     session: "Session",
     coords: SnowflakeCoordinates,
     relative_path: str,
+    *,
+    max_file_size: int | None = None,
 ) -> tuple[bytes, str]:
     """Download one file from stage via Snowpark's in-memory streaming.
     Snowpark provides an in-memory file streaming API (session.file.get_stream)
@@ -229,7 +260,7 @@ def download_stage_file(
     # Manually decompress if filename indicates gzip compression
     display_name = Path(relative_path).name
     if display_name.endswith(".gz"):
-        data = gzip.decompress(data)
+        data = _decompress_gzip_bounded(data, max_file_size)
         display_name = display_name[:-3]  # ".gz"
 
     return data, display_name
