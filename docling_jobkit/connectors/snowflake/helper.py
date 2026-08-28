@@ -1,6 +1,7 @@
 import gzip
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator, TypeVar
@@ -146,7 +147,14 @@ def get_snowflake_connection(
     return Session.builder.configs(config).create()
 
 
+# Valid unquoted Snowflake identifier
+_UNQUOTED_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+
+
 def stage_ref(coords: SnowflakeCoordinates) -> str:
+    for name in (coords.database, coords.db_schema, coords.stage):
+        if not _UNQUOTED_IDENTIFIER.match(name):
+            raise ValueError(f"Unsafe Snowflake identifier: {name!r}")
     return f"{coords.database}.{coords.db_schema}.{coords.stage}"
 
 
@@ -156,7 +164,12 @@ def list_stage_files(
 ) -> Iterator[dict[str, object]]:
     path = f"@{stage_ref(coords)}"
     if coords.prefix:
-        path = f"{path}/{coords.prefix.lstrip('/')}"
+        prefix = coords.prefix.lstrip("/")
+        if "'" in prefix or "\\" in prefix:
+            raise ValueError(
+                f"Snowflake prefix cannot contain single quotes or backslashes: {prefix!r}"
+            )
+        path = f"{path}/{prefix}"
 
     sql = f"LIST '{path}'"
     if coords.pattern:
@@ -210,32 +223,10 @@ def download_stage_file(
 
 
 def table_ref(target: _TableTarget) -> str:
+    for name in (target.database, target.db_schema, target.table):
+        if not _UNQUOTED_IDENTIFIER.match(name):
+            raise ValueError(f"Invalid Snowflake identifier: {name!r}")
     return f"{target.database}.{target.db_schema}.{target.table}"
-
-
-def _to_sql_literal(value: Any) -> str:
-    """Convert a Python value to a SQL literal string."""
-    if isinstance(value, (dict, list)):
-        # JSON types: serialize and wrap in single quotes, escaping internal quotes
-        json_str = json.dumps(value)
-        escaped = json_str.replace("'", "''")
-        return f"'{escaped}'"
-    elif isinstance(value, str):
-        # String: escape single quotes and wrap
-        escaped = value.replace("'", "''")
-        return f"'{escaped}'"
-    elif value is None:
-        return "NULL"
-    elif isinstance(value, bool):
-        # Boolean: TRUE/FALSE (before int check since bool is subclass of int)
-        return "TRUE" if value else "FALSE"
-    elif isinstance(value, (int, float)):
-        # Numeric: use as-is
-        return str(value)
-    else:
-        # Default: convert to string and escape
-        escaped = str(value).replace("'", "''")
-        return f"'{escaped}'"
 
 
 def upsert_table_rows(
@@ -258,11 +249,26 @@ def upsert_table_rows(
     if id_field not in columns:
         raise ValueError(f"Row is missing id field {id_field!r}; cannot upsert.")
 
-    # Build VALUES clause with SQL-formatted literals
+    # id_field/columns come from user config (id_field, chunk_id_field,
+    # FieldMappings-derived names) and are spliced unquoted into the SQL
+    # below, so validate them as identifiers the same way table_ref() does.
+    for name in columns:
+        if not _UNQUOTED_IDENTIFIER.match(name):
+            raise ValueError(f"Unsafe Snowflake column name: {name!r}")
+
+    # Row values are untrusted document content, so bind them as query
+    # parameters (qmark placeholders) instead of formatting SQL literals.
     values_rows = []
+    params: list[Any] = []
     for row in rows:
-        formatted_values = [_to_sql_literal(row[c]) for c in columns]
-        values_rows.append(f"({', '.join(formatted_values)})")
+        placeholders = []
+        for c in columns:
+            value = row[c]
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value)
+            params.append(value)
+            placeholders.append("?")
+        values_rows.append(f"({', '.join(placeholders)})")
     values_clause = ", ".join(values_rows)
 
     update_list = ", ".join(f"t.{c} = s.{c}" for c in columns if c != id_field)
@@ -281,8 +287,7 @@ def upsert_table_rows(
         f"WHEN NOT MATCHED THEN INSERT ({insert_columns}) VALUES ({insert_values})"
     )
 
-    # Execute without bind parameters since values are already formatted into SQL
-    session.sql(sql).collect()
+    session.sql(sql, params=params).collect()
 
     _log.debug("Upserted %d rows to table %s", len(rows), table_ref(target))
 

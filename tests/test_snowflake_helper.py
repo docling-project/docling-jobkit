@@ -155,6 +155,26 @@ def test_list_stage_files_builds_sql_with_prefix_and_pattern(coords):
     assert rows == [{"name": "STG/in/a.pdf"}]
 
 
+def test_list_stage_files_rejects_prefix_breaking_out_of_sql_literal(coords):
+    coords = coords.model_copy(update={"prefix": "in/'; DROP TABLE t; --"})
+    session = MagicMock()
+
+    with pytest.raises(ValueError, match="prefix"):
+        list(list_stage_files(session, coords))
+
+    session.sql.assert_not_called()
+
+
+def test_list_stage_files_rejects_pattern_breaking_out_of_sql_literal(coords):
+    coords = coords.model_copy(update={"pattern": "a' OR '1'='1"})
+    session = MagicMock()
+
+    with pytest.raises(ValueError, match="PATTERN"):
+        list(list_stage_files(session, coords))
+
+    session.sql.assert_not_called()
+
+
 # Download + gzip
 
 
@@ -187,13 +207,14 @@ def test_download_stage_file_passes_through_uncompressed(coords):
 # MERGE builder
 
 
-def test_upsert_table_row_builds_unquoted_merge_and_formats_values(target):
+def test_upsert_table_row_builds_unquoted_merge_and_binds_values(target):
     session = MagicMock()
 
     row = {"doc_id": "abc", "content_json": {"a": 1}, "content_text": "hi"}
     upsert_table_row(session, target, "doc_id", row)
 
-    sql = session.sql.call_args[0][0]
+    args, kwargs = session.sql.call_args
+    sql = args[0]
     assert "MERGE INTO DB.SCH.DOCS" in sql
     # Unquoted identifiers. Snowflake's own case-folding must resolve them,
     # matching how unquoted DDL upper-cases column names by default.
@@ -202,8 +223,19 @@ def test_upsert_table_row_builds_unquoted_merge_and_formats_values(target):
         "WHEN MATCHED THEN UPDATE SET t.content_json = s.content_json, "
         "t.content_text = s.content_text" in sql
     )
-    # Values are formatted as SQL literals
-    assert "VALUES ('abc', '{\"a\": 1}', 'hi')" in sql
+    # Values are bound as query parameters, not formatted into the SQL text.
+    assert "VALUES (?, ?, ?)" in sql
+    assert kwargs["params"] == ["abc", '{"a": 1}', "hi"]
+
+
+def test_upsert_table_rows_rejects_invalid_column_name(target):
+    session = MagicMock()
+    rows = [{"doc_id": "c1", "text; DROP TABLE t": "a"}]
+
+    with pytest.raises(ValueError, match="Invalid Snowflake column name"):
+        upsert_table_rows(session, target, "doc_id", rows)
+
+    session.sql.assert_not_called()
 
 
 def test_upsert_table_row_omits_when_matched_with_no_extra_columns(target):
@@ -248,12 +280,11 @@ def test_upsert_table_rows_builds_one_multi_row_merge(target):
     upsert_table_rows(session, target, "doc_id", rows)
 
     assert session.sql.call_count == 1
-    sql = session.sql.call_args[0][0]
-    # Values are formatted as SQL literals
-    assert (
-        "USING (VALUES ('c1', 'a'), ('c2', 'b'), ('c3', 'c')) AS s (doc_id, text)"
-        in sql
-    )
+    args, kwargs = session.sql.call_args
+    sql = args[0]
+    # Values are bound as query parameters, not formatted into the SQL text.
+    assert "USING (VALUES (?, ?), (?, ?), (?, ?)) AS s (doc_id, text)" in sql
+    assert kwargs["params"] == ["c1", "a", "c2", "b", "c3", "c"]
 
 
 def test_upsert_table_rows_empty_list_is_a_noop(target):
