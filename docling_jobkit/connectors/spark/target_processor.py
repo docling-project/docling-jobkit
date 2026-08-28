@@ -133,6 +133,11 @@ class SparkTargetProcessor(BaseDatabaseTargetProcessor[_SparkTarget]):
                 f"got {type(self._target)!r}"
             )
         row = _chunk_row_payload(chunk, self._target)
+        if self._document_hash:
+            # overriding id field set by chunk_row_payload
+            # where doc_id is set to filename unconditionally
+            # TODO: Fix chunk_row_payload to accept a hash, fall back to filename
+            row[self._target.doc_id_field] = self._document_hash
         row[self._target.chunk_id_field] = self._stable_chunk_id(
             self._document_hash, chunk.filename, chunk.chunk_index
         )

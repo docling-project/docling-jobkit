@@ -105,7 +105,7 @@ def test_chunk_consume_normalizes_row(make_proc, chunk_item) -> None:
     # (metadata is a JSON string); the assertions below are on unaffected fields.
     row = proc._buffer[-1]
     assert row["text"] == "chunk text"
-    assert row["doc_id"] == "test.pdf"
+    assert row["doc_id"] == "h123"  # document_hash, not filename
     assert row["chunk_index"] == 0
     assert len(row["chunk_id"]) == 64  # sha-256 hex
 
@@ -128,6 +128,19 @@ def test_chunk_id_is_deterministic_across_instances(make_proc, chunk_item) -> No
         return proc._buffer[-1]["chunk_id"]
 
     assert _chunk_id() == _chunk_id()  # identical inputs -> identical id
+
+
+def test_doc_id_differs_across_files_with_same_name(make_proc, chunk_item) -> None:
+    """Two different documents sharing a filename must not be grouped under
+    the same doc_id — doc_id must come from document_hash, not filename."""
+
+    def _doc_id(document_hash: str) -> str:
+        proc = make_proc(_chunk_target(flush_batch_size=1000))
+        proc.begin_chunks("test.pdf", MagicMock(), document_hash=document_hash)
+        proc.consume_chunk(chunk_item)
+        return proc._buffer[-1]["doc_id"]
+
+    assert _doc_id("hash-a") != _doc_id("hash-b")
 
 
 def test_finalize_flushes_buffer(make_proc) -> None:
