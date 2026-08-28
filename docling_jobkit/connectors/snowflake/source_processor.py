@@ -79,14 +79,7 @@ class SnowflakeSourceProcessor(
 
     @_map_snowflake_source_errors
     def _list_document_ids(self) -> Iterator[SnowflakeFileIdentifier]:
-        yielded = 0
-        max_num_elements = self._coords.max_num_elements
-
         for row in list_stage_files(self._session, self._coords):
-            if max_num_elements is not None and yielded >= max_num_elements:
-                return
-
-            yielded += 1
             size = row.get("size")
             last_modified = row.get("last_modified")
             yield SnowflakeFileIdentifier(
@@ -98,13 +91,8 @@ class SnowflakeSourceProcessor(
     @_map_snowflake_source_errors
     def _count_documents(self) -> int:
         total = 0
-        max_num_elements = self._coords.max_num_elements
-
         for _ in list_stage_files(self._session, self._coords):
-            if max_num_elements is not None and total >= max_num_elements:
-                return max_num_elements
             total += 1
-
         return total
 
     @override

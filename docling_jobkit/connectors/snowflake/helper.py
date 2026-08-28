@@ -179,9 +179,22 @@ def list_stage_files(
             )
         sql += f" PATTERN = '{coords.pattern}'"
 
-    # Snowpark returns DataFrame; convert rows to dicts
-    df_ = session.sql(sql)
-    for row in df_.collect():
+    max_num_elements = coords.max_num_elements
+    yielded = 0
+
+    # to_local_iterator() streams rows via a server-side cursor instead of collect() buffering the whole thing
+    iterator = session.sql(sql).to_local_iterator()
+    while max_num_elements is None or yielded < max_num_elements:
+        try:
+            row = next(iterator)
+        except StopIteration:
+            return
+
+        # LIST includes zero-byte directory-marker objects, skip those
+        if str(row["name"]).endswith("/"):
+            continue
+
+        yielded += 1
         yield row.as_dict()
 
 
@@ -225,7 +238,7 @@ def download_stage_file(
 def table_ref(target: _TableTarget) -> str:
     for name in (target.database, target.db_schema, target.table):
         if not _UNQUOTED_IDENTIFIER.match(name):
-            raise ValueError(f"Invalid Snowflake identifier: {name!r}")
+            raise ValueError(f"Unsafe Snowflake identifier: {name!r}")
     return f"{target.database}.{target.db_schema}.{target.table}"
 
 

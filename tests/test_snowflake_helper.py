@@ -140,12 +140,19 @@ def test_get_snowflake_connection_uses_private_key():
 # Listing
 
 
+def _mock_row(data: dict) -> MagicMock:
+    """A Snowpark Row supports both row["name"] and row.as_dict()."""
+    row = MagicMock()
+    row.__getitem__.side_effect = data.__getitem__
+    row.as_dict.return_value = data
+    return row
+
+
 def test_list_stage_files_builds_sql_with_prefix_and_pattern(coords):
     coords = coords.model_copy(update={"prefix": "in/", "pattern": ".*[.]pdf"})
     session = MagicMock()
-    mock_row = MagicMock()
-    mock_row.as_dict.return_value = {"name": "STG/in/a.pdf"}
-    session.sql.return_value.collect.return_value = [mock_row]
+    mock_row = _mock_row({"name": "STG/in/a.pdf"})
+    session.sql.return_value.to_local_iterator.return_value = iter([mock_row])
 
     rows = list(list_stage_files(session, coords))
 
@@ -153,6 +160,40 @@ def test_list_stage_files_builds_sql_with_prefix_and_pattern(coords):
     assert "@DB.SCH.STG/in/" in sql
     assert "PATTERN = '.*[.]pdf'" in sql
     assert rows == [{"name": "STG/in/a.pdf"}]
+
+
+def test_list_stage_files_applies_max_num_elements_without_exhausting_iterator(coords):
+    coords = coords.model_copy(update={"max_num_elements": 2})
+    session = MagicMock()
+    mock_rows = [_mock_row({"name": f"STG/{i}.pdf"}) for i in range(5)]
+
+    consumed = []
+
+    def _tracking_iter():
+        for row in mock_rows:
+            consumed.append(row)
+            yield row
+
+    session.sql.return_value.to_local_iterator.return_value = _tracking_iter()
+
+    rows = list(list_stage_files(session, coords))
+
+    assert rows == [{"name": "STG/0.pdf"}, {"name": "STG/1.pdf"}]
+    # Only pulled as many rows off the (lazy) iterator as it needed.
+    assert len(consumed) == 2
+
+
+def test_list_stage_files_skips_directory_markers(coords):
+    session = MagicMock()
+    mock_rows = [
+        _mock_row({"name": "STG/subdir/"}),
+        _mock_row({"name": "STG/subdir/a.pdf"}),
+    ]
+    session.sql.return_value.to_local_iterator.return_value = iter(mock_rows)
+
+    rows = list(list_stage_files(session, coords))
+
+    assert rows == [{"name": "STG/subdir/a.pdf"}]
 
 
 def test_list_stage_files_rejects_prefix_breaking_out_of_sql_literal(coords):
@@ -232,7 +273,7 @@ def test_upsert_table_rows_rejects_invalid_column_name(target):
     session = MagicMock()
     rows = [{"doc_id": "c1", "text; DROP TABLE t": "a"}]
 
-    with pytest.raises(ValueError, match="Invalid Snowflake column name"):
+    with pytest.raises(ValueError, match="Unsafe Snowflake column name"):
         upsert_table_rows(session, target, "doc_id", rows)
 
     session.sql.assert_not_called()

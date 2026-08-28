@@ -37,15 +37,16 @@ def test_get_config_types():
     assert SnowflakeSourceProcessor.get_config_types() == (TaskSnowflakeSource,)
 
 
-def test_list_document_ids_respects_max_num_elements(coords):
-    capped = coords.model_copy(update={"max_num_elements": 2})
-    processor = SnowflakeSourceProcessor(capped)
+def test_list_document_ids_maps_rows_from_list_stage_files(coords):
+    # max_num_elements is enforced inside list_stage_files() itself (so it
+    # can apply before fully materializing the LIST result), not here --
+    # see test_snowflake_helper.py for that behavior.
+    processor = SnowflakeSourceProcessor(coords)
     processor._session = MagicMock()
 
     rows = [
         {"name": "STG/a.pdf", "size": 10, "last_modified": "t1"},
         {"name": "STG/b.pdf", "size": 20, "last_modified": "t2"},
-        {"name": "STG/c.pdf", "size": 30, "last_modified": "t3"},
     ]
     with patch(
         "docling_jobkit.connectors.snowflake.source_processor.list_stage_files",
@@ -58,9 +59,8 @@ def test_list_document_ids_respects_max_num_elements(coords):
     assert ids[0].last_modified == "t1"
 
 
-def test_count_documents_clips_to_max_num_elements(coords):
-    capped = coords.model_copy(update={"max_num_elements": 2})
-    processor = SnowflakeSourceProcessor(capped)
+def test_count_documents_counts_rows_from_list_stage_files(coords):
+    processor = SnowflakeSourceProcessor(coords)
     processor._session = MagicMock()
 
     rows = [{"name": f"STG/{i}.pdf"} for i in range(5)]
@@ -68,7 +68,7 @@ def test_count_documents_clips_to_max_num_elements(coords):
         "docling_jobkit.connectors.snowflake.source_processor.list_stage_files",
         return_value=iter(rows),
     ):
-        assert processor._count_documents() == 2
+        assert processor._count_documents() == 5
 
 
 def test_make_document_ref_uses_basename_and_snowflake_uri(coords):
