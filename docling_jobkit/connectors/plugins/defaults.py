@@ -87,14 +87,17 @@ def target_connectors():
     from docling_jobkit.connectors.http.target_processor import (
         HttpPutTargetProcessor,
     )
+    from docling_jobkit.connectors.kafka.target_processor import (
+        KafkaTargetProcessor,
+    )
     from docling_jobkit.connectors.local_path.target_processor import (
         LocalPathTargetProcessor,
     )
     from docling_jobkit.connectors.opensearch.target_processor import (
         OpenSearchTargetProcessor,
     )
-    from docling_jobkit.connectors.s3.presigned_target_processor import (
-        S3PresignedTargetProcessor,
+    from docling_jobkit.connectors.presigned_target_processor import (
+        PresignedTargetProcessor,
     )
     from docling_jobkit.connectors.s3.target_processor import S3TargetProcessor
     from docling_jobkit.connectors.sharepoint.target_processor import (
@@ -107,13 +110,14 @@ def target_connectors():
     ]
     for cls in (
         S3TargetProcessor,
-        S3PresignedTargetProcessor,
+        PresignedTargetProcessor,
         AzureBlobTargetProcessor,
         GoogleDriveTargetProcessor,
         GoogleCloudStorageTargetProcessor,
         OpenSearchTargetProcessor,
         AstraDBTargetProcessor,
         SharePointTargetProcessor,
+        KafkaTargetProcessor,
     ):
         _register_if_available(connectors, cls)
 

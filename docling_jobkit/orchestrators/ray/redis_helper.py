@@ -255,7 +255,7 @@ class RedisStateManager:
 
         queue_key = f"tenant:{tenant_id}:tasks"
         task_counters_key = f"tenant:{tenant_id}:task_counters"
-        task_json = json.dumps(dump_model_with_secrets(task))
+        task_json = json.dumps(dump_model_with_secrets(task, serialize_as_any=True))
 
         # Push the task and bump the monotonic enqueued counter atomically so the
         # counter can never drift from the queue contents.

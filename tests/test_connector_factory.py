@@ -63,6 +63,7 @@ def test_builtin_target_connectors_registered():
         "local_path",
         "put",
         "google_drive",
+        "kafka_chunks",
         "presigned_url",
         "opensearch_doc",
         "opensearch_chunks",

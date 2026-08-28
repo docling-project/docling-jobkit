@@ -1,3 +1,17 @@
+## [v3.4.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.4.0) - 2026-08-20
+
+### Feature
+
+* **rq:** Make the RQ job timeout configurable ([#227](https://github.com/docling-project/docling-jobkit/issues/227)) ([`0cda962`](https://github.com/docling-project/docling-jobkit/commit/0cda962c2b09ee549f6d6f7d0a9894c75dc2f8ee))
+* Kafka chunk target ([#222](https://github.com/docling-project/docling-jobkit/issues/222)) ([`958a8c7`](https://github.com/docling-project/docling-jobkit/commit/958a8c76e439de210c6a12d559d6d93c48648539))
+
+### Fix
+
+* Map threaded docling-parse backend for Standard and VLM pipelines ([#228](https://github.com/docling-project/docling-jobkit/issues/228)) ([`2584d44`](https://github.com/docling-project/docling-jobkit/commit/2584d44504299b001d1848c2821538c369533672))
+* Make nvidia default provider in models.py. ([#223](https://github.com/docling-project/docling-jobkit/issues/223)) ([`5b9a8b5`](https://github.com/docling-project/docling-jobkit/commit/5b9a8b5581913ce4eb922f874ffc8dd3dc13d0dd))
+* Serialization of custom options ([#220](https://github.com/docling-project/docling-jobkit/issues/220)) ([`36e4dca`](https://github.com/docling-project/docling-jobkit/commit/36e4dcae2efb6c548af5b826d2c820ba9ffb47a8))
+* Reported expected doc count in callbacks ([#218](https://github.com/docling-project/docling-jobkit/issues/218)) ([`aa21f2f`](https://github.com/docling-project/docling-jobkit/commit/aa21f2f73f26e99f6635e44699addd860f316cd2))
+
 ## [v3.3.1](https://github.com/docling-project/docling-jobkit/releases/tag/v3.3.1) - 2026-08-06
 
 ### Fix
