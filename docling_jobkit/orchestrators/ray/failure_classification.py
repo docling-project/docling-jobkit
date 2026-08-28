@@ -28,6 +28,14 @@ def _unwrap_ray_failure_exception(exc: BaseException) -> BaseException:
         return current
 
 
+def is_missing_model_artifact_failure(exc: BaseException) -> bool:
+    """Return whether conversion cannot start because its configured model is absent."""
+    root_exc = _unwrap_ray_failure_exception(exc)
+    return isinstance(root_exc, FileNotFoundError) and (
+        "not found in artifacts_path" in str(root_exc)
+    )
+
+
 def classify_ray_public_task_failure(
     exc: BaseException,
     *,

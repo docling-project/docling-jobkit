@@ -90,6 +90,7 @@ from docling_jobkit.orchestrators.ray.config import (
 )
 from docling_jobkit.orchestrators.ray.failure_classification import (
     classify_ray_public_task_failure,
+    is_missing_model_artifact_failure,
 )
 from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
@@ -290,6 +291,27 @@ def _aggregate_s3_fanout_results(
         ),
         num_converted=sum(
             child_result.task_result.num_converted for child_result in child_results
+        ),
+    )
+
+
+def _emit_s3_update_processed(
+    task: Task,
+    callback_invoker: Optional[CallbackInvoker],
+    child_results: list[ConverterTaskResult],
+    summary: DoclingTaskResult,
+) -> None:
+    if not callback_invoker or not task.callbacks:
+        return
+    callback_invoker.invoke_callbacks_async(
+        callbacks=task.callbacks,
+        task_id=task.task_id,
+        progress=ProgressUpdateProcessed(
+            num_processed=sum(len(result.processed_docs) for result in child_results),
+            num_succeeded=summary.num_succeeded,
+            num_partially_succeeded=summary.num_partially_succeeded,
+            num_failed=summary.num_failed,
+            docs=[doc for result in child_results for doc in result.processed_docs],
         ),
     )
 
@@ -689,10 +711,7 @@ class DoclingProcessorConverterDeployment:
             conv_results = await self._run_with_retry(
                 request.filename,
                 lambda: self._convert_materialized_request(request),
-                task=request.task,
             )
-            if isinstance(conv_results, ConverterFailureResult):
-                return conv_results
             exportable = _to_exportable_documents(request.task, conv_results)
             result = await asyncio.to_thread(
                 lambda: self._build_task_result(
@@ -1633,18 +1652,18 @@ class DoclingProcessorCoordinatorDeployment:
                     try:
                         converter_result = await completed
                     except Exception as exc:
-                        failure = classify_ray_public_task_failure(
-                            exc,
-                            task_id=task.task_id,
-                            phase=FailurePhase.EXECUTION,
-                            details={
-                                "task_size": str(total_docs),
-                                "target_kind": getattr(
-                                    task.target, "kind", type(task.target).__name__
+                        if is_missing_model_artifact_failure(exc):
+                            completed_results = [result for _, result in child_results]
+                            _emit_s3_update_processed(
+                                task,
+                                callback_invoker,
+                                completed_results,
+                                _aggregate_s3_fanout_results(
+                                    task,
+                                    completed_results,
+                                    time.monotonic() - task_start,
                                 ),
-                            },
-                        )
-                        if not is_client_actionable_failure(failure):
+                            )
                             raise
                         _log.warning(
                             "Coordinator replica %s: source chunk %s for task %s failed: %s",
@@ -1655,7 +1674,7 @@ class DoclingProcessorCoordinatorDeployment:
                         )
                         converter_result = self._handle_failed_source_chunk(
                             chunk=chunk,
-                            error=build_public_error_item_from_failure(failure),
+                            error=build_public_error_item(exc),
                             task=task,
                             total_docs=total_docs,
                             callback_invoker=callback_invoker,
@@ -1706,25 +1725,7 @@ class DoclingProcessorCoordinatorDeployment:
             child_results=ordered_results,
             processing_time=time.monotonic() - task_start,
         )
-        if callback_invoker and task.callbacks:
-            callback_invoker.invoke_callbacks_async(
-                callbacks=task.callbacks,
-                task_id=task.task_id,
-                progress=ProgressUpdateProcessed(
-                    num_processed=sum(
-                        len(converter_result.processed_docs)
-                        for converter_result in ordered_results
-                    ),
-                    num_succeeded=aggregated.num_succeeded,
-                    num_partially_succeeded=aggregated.num_partially_succeeded,
-                    num_failed=aggregated.num_failed,
-                    docs=[
-                        processed_doc
-                        for converter_result in ordered_results
-                        for processed_doc in converter_result.processed_docs
-                    ],
-                ),
-            )
+        _emit_s3_update_processed(task, callback_invoker, ordered_results, aggregated)
 
         return aggregated
 
