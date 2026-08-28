@@ -1,7 +1,10 @@
+from unittest.mock import MagicMock
+
 import pytest
 
 pytest.importorskip("pyspark")
 
+from docling_jobkit.connectors.errors import SourceConnectorPolicyError
 from docling_jobkit.connectors.spark import (
     build_remote_url,
     create_table_sql,
@@ -11,8 +14,12 @@ from docling_jobkit.connectors.spark import (
     merge_sql,
     quote_identifier,
 )
-from docling_jobkit.connectors.spark.helper import get_spark_session
+from docling_jobkit.connectors.spark.helper import (
+    download_document_from_url,
+    get_spark_session,
+)
 from docling_jobkit.connectors.spark.models import SparkConnection
+from docling_jobkit.convert.materialization import SourceLimitExceededError
 
 
 def _conn(**overrides) -> SparkConnection:
@@ -165,3 +172,141 @@ def test_create_table_types_and_format(fmt, using):
     assert "`doc_id` STRING" in sql
     assert "`n` BIGINT" in sql
     assert using in sql
+
+
+def _fake_streamed_response(
+    chunks: list[bytes], *, status_code: int = 200
+) -> MagicMock:
+    response = MagicMock()
+    response.status_code = status_code
+    response.iter_content.return_value = iter(chunks)
+    return response
+
+
+def test_download_document_streams_chunks_into_buffer(monkeypatch):
+    response = _fake_streamed_response([b"PDF-", b"bytes"])
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.spark.helper.requests.get",
+        lambda *a, **k: response,
+    )
+
+    buffer = download_document_from_url(
+        "https://files.databricks.com/doc.pdf",
+        "tok",
+        expected_host="files.databricks.com",
+    )
+
+    assert buffer.read() == b"PDF-bytes"
+
+
+def test_download_document_requests_streaming_response_no_redirects(monkeypatch):
+    """stream=True is required so the response body isn't fully materialized
+    by requests itself before our bounded loop ever sees it; allow_redirects
+    must be False so a same-host response can't silently redirect off-host
+    and carry the Authorization header with it."""
+    response = _fake_streamed_response([b"PDF"])
+    captured_kwargs = {}
+
+    def _get(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return response
+
+    monkeypatch.setattr("docling_jobkit.connectors.spark.helper.requests.get", _get)
+
+    download_document_from_url(
+        "https://files.databricks.com/doc.pdf",
+        "tok",
+        expected_host="files.databricks.com",
+    )
+
+    assert captured_kwargs["stream"] is True
+    assert captured_kwargs["allow_redirects"] is False
+
+
+def test_download_document_enforces_max_file_size(monkeypatch):
+    response = _fake_streamed_response([b"0" * 5, b"0" * 5, b"0" * 5])
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.spark.helper.requests.get",
+        lambda *a, **k: response,
+    )
+
+    with pytest.raises(SourceLimitExceededError):
+        download_document_from_url(
+            "https://files.databricks.com/doc.pdf",
+            "tok",
+            expected_host="files.databricks.com",
+            max_file_size=8,
+        )
+
+
+def test_download_document_no_limit_allows_large_body(monkeypatch):
+    response = _fake_streamed_response([b"0" * 1000])
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.spark.helper.requests.get",
+        lambda *a, **k: response,
+    )
+
+    buffer = download_document_from_url(
+        "https://files.databricks.com/doc.pdf",
+        "tok",
+        expected_host="files.databricks.com",
+    )
+    assert len(buffer.read()) == 1000
+
+
+def test_download_document_rejects_non_https(monkeypatch):
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.spark.helper.requests.get",
+        lambda *a, **k: pytest.fail("must not be called"),
+    )
+
+    with pytest.raises(SourceConnectorPolicyError, match="https"):
+        download_document_from_url(
+            "http://files.databricks.com/doc.pdf",
+            "tok",
+            expected_host="files.databricks.com",
+        )
+
+
+def test_download_document_rejects_mismatched_host(monkeypatch):
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.spark.helper.requests.get",
+        lambda *a, **k: pytest.fail("must not be called"),
+    )
+
+    with pytest.raises(SourceConnectorPolicyError, match="workspace token"):
+        download_document_from_url(
+            "https://bad.example.com/doc.pdf",
+            "tok",
+            expected_host="files.databricks.com",
+        )
+
+
+def test_download_document_accepts_host_with_scheme_prefix(monkeypatch):
+    response = _fake_streamed_response([b"PDF"])
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.spark.helper.requests.get",
+        lambda *a, **k: response,
+    )
+
+    buffer = download_document_from_url(
+        "https://adb-1.azuredatabricks.net/doc.pdf",
+        "tok",
+        expected_host="https://adb-1.azuredatabricks.net",
+    )
+    assert buffer.read() == b"PDF"
+
+
+def test_download_document_rejects_redirect(monkeypatch):
+    response = _fake_streamed_response([], status_code=302)
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.spark.helper.requests.get",
+        lambda *a, **k: response,
+    )
+
+    with pytest.raises(SourceConnectorPolicyError, match="redirect"):
+        download_document_from_url(
+            "https://files.databricks.com/doc.pdf",
+            "tok",
+            expected_host="files.databricks.com",
+        )

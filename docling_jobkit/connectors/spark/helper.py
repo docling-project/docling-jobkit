@@ -6,6 +6,7 @@ import re
 import time
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Sequence
+from urllib.parse import urlparse
 
 import requests
 
@@ -16,6 +17,10 @@ from docling_jobkit.connectors.errors import (
 from docling_jobkit.connectors.spark.models import (
     DatabricksClassicAuth,
     SparkConnection,
+)
+from docling_jobkit.convert.materialization import (
+    SourceLimitExceededError,
+    normalize_max_file_size,
 )
 
 _log = logging.getLogger(__name__)
@@ -79,17 +84,82 @@ def _with_exponential_retry(fn: Callable[[], Any], operation: str) -> Any:
     raise AssertionError("unreachable")
 
 
-def download_document_from_url(url: str, auth_token: str) -> BytesIO:
-    """Download document from Databricks Files API URL with Bearer token auth."""
+def _hostname_of(value: str) -> str:
+    """Extract a bare hostname from a config value that may or may not
+    include a scheme (e.g. ``"myhost"`` or ``"https://myhost:443"``)."""
+    parsed = urlparse(value if "://" in value else f"//{value}")
+    return (parsed.hostname or value).lower()
+
+
+def _validate_databricks_url(url: str, expected_host: str) -> None:
+    """Only allow https URLs on the configured Databricks workspace host (for now)."""
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise SourceConnectorPolicyError(
+            f"Refusing to fetch document URL with scheme {parsed.scheme!r}; "
+            "only https Databricks workspace URLs are allowed.",
+            source_kind="spark",
+        )
+
+    url_host = (parsed.hostname or "").lower()
+    expected = _hostname_of(expected_host)
+    if url_host != expected:
+        raise SourceConnectorPolicyError(
+            f"Refusing to send the workspace token to {url_host!r}; expected "
+            f"the configured Databricks workspace host {expected!r}.",
+            source_kind="spark",
+        )
+
+
+def download_document_from_url(
+    url: str,
+    auth_token: str,
+    *,
+    expected_host: str,
+    max_file_size: int | None = None,
+) -> BytesIO:
+    """Download document from Databricks Files API URL with Bearer token auth.
+
+    Expected_host is the configured Databricks workspace host
+    Requires https and disallows redirects
+
+    Streams the response into a bounded buffer respecting max_file_size
+    """
+    _validate_databricks_url(url, expected_host)
+    limit = normalize_max_file_size(max_file_size)
     response = _with_exponential_retry(
         lambda: requests.get(
             url,
             headers={"Authorization": f"Bearer {auth_token}"},
             timeout=30,
+            stream=True,
+            allow_redirects=False,
         ),
         "download document",
     )
-    return BytesIO(response.content)
+
+    if 300 <= response.status_code < 400:
+        raise SourceConnectorPolicyError(
+            f"Document URL {url!r} returned a redirect ({response.status_code}); "
+            "redirects are not followed to avoid leaking the workspace token "
+            "to an unverified host.",
+            source_kind="spark",
+        )
+
+    buffer = BytesIO()
+    bytes_seen = 0
+    for chunk in response.iter_content(chunk_size=1 << 16):
+        if not chunk:
+            continue
+        bytes_seen += len(chunk)
+        if limit is not None and bytes_seen > limit:
+            raise SourceLimitExceededError(
+                f"Source {url!r} exceeds max_file_size={limit} bytes"
+            )
+        buffer.write(chunk)
+
+    buffer.seek(0)
+    return buffer
 
 
 if TYPE_CHECKING:

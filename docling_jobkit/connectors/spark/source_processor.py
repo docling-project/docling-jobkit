@@ -249,7 +249,12 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
             auth_token = self._coords.auth.token.get_secret_value()  # type: ignore[union-attr]
 
             _log.info("Downloading document from URL: %s", url)
-            buffer = download_document_from_url(url, auth_token)
+            buffer = download_document_from_url(
+                url,
+                auth_token,
+                expected_host=self._coords.host,
+                max_file_size=max_file_size,
+            )
 
             # Use filename from identifier or extract from URL
             name = filename or url.split("/")[-1]
