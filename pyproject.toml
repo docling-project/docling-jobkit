@@ -121,7 +121,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-# docling-slim = { git = "https://github.com/docling-project/docling/", branch = "main" }
+docling-slim = { git = "https://github.com/docling-project/docling/", branch = "codex/task-completed-callback" }
 # docling-slim = { path = "../docling", editable = true }
 
 

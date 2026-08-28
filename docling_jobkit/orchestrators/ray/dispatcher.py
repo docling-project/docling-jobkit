@@ -14,7 +14,9 @@ from docling.datamodel.service.responses import FailurePhase
 
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
-from docling_jobkit.orchestrators.failure_callbacks import emit_task_failure_callbacks
+from docling_jobkit.orchestrators.completion_callbacks import (
+    emit_task_completed_callback,
+)
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.ray.failure_classification import (
     classify_ray_public_task_failure,
@@ -465,9 +467,9 @@ class RayTaskDispatcher:
                 and terminalization.final_status == TaskStatus.FAILURE
             ):
                 # Covers failures the replica could not terminalize itself (task
-                # timeout, replica/actor death). Gated on status_changed so a
-                # coordinator-side failure notifies the client only once.
-                emit_task_failure_callbacks(task, failure, task_size=task_size)
+                # timeout, replica/actor death). The durable gate provides
+                # at-most-once scheduling across competing lifecycle owners.
+                emit_task_completed_callback(task, "failure", failure)
                 await self.redis_manager.publish_update(
                     TaskUpdate(
                         task_id=task_id,
@@ -617,11 +619,9 @@ class RayTaskDispatcher:
             terminalization.status_changed
             and terminalization.final_status == TaskStatus.FAILURE
         ):
-            # A reconciled task never reported anything itself — this is the only
-            # notification its client will get.
             reconciled_task = metadata.to_task()
             reconciled_task.callbacks = callbacks
-            emit_task_failure_callbacks(reconciled_task, failure, task_size=task_size)
+            emit_task_completed_callback(reconciled_task, "failure", failure)
             await self.redis_manager.publish_update(
                 TaskUpdate(
                     task_id=task_id,

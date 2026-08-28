@@ -1,9 +1,7 @@
-"""Terminal-failure progress callbacks in the Ray orchestrator.
+"""Terminal task progress callbacks in the Ray orchestrator.
 
-A task that dies before or inside conversion never reaches the result-processing
-path, which is the only place the Ray orchestrator emits progress callbacks. These
-tests pin the contract that such a task still notifies its callbacks exactly once,
-from whichever component actually terminalized it durably.
+Tests pin at-most-once scheduling by the durable terminalization winner and keep
+task outcomes independent from document outcomes.
 """
 
 import asyncio
@@ -23,15 +21,22 @@ pytest.importorskip("ray")
 from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.service.callbacks import (
     CallbackSpec,
+    ProcessedDocsItem,
     ProgressKind,
+    ProgressUpdateProcessed,
 )
-from docling.datamodel.service.requests import FileSourceRequest as FileSource
+from docling.datamodel.service.requests import (
+    FileSourceRequest as FileSource,
+    HttpSourceRequest as HttpSource,
+)
 from docling.datamodel.service.responses import (
+    DoclingTaskResult,
     FailureCategory,
     FailurePhase,
     PublicFailureInfo,
+    RemoteTargetResult,
 )
-from docling.datamodel.service.targets import InBodyTarget
+from docling.datamodel.service.targets import InBodyTarget, PresignedUrlTarget
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.datamodel.task import Task
@@ -39,6 +44,7 @@ from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.ray.dispatcher import RayTaskDispatcher
 from docling_jobkit.orchestrators.ray.models import (
+    ConverterTaskResult,
     RedisTaskMetadata,
     TaskTerminalizationResult,
 )
@@ -62,7 +68,7 @@ class _RecordingInvoker:
 def recorded_callbacks(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     _RecordingInvoker.calls = []
     monkeypatch.setattr(
-        "docling_jobkit.orchestrators.failure_callbacks.CallbackInvoker",
+        "docling_jobkit.orchestrators.completion_callbacks.CallbackInvoker",
         _RecordingInvoker,
     )
     return _RecordingInvoker.calls
@@ -106,6 +112,16 @@ class _FakeRedisManager:
             capacity_released=True,
         )
 
+    async def finalize_task_success_atomic(
+        self, **kwargs: Any
+    ) -> TaskTerminalizationResult:
+        return TaskTerminalizationResult(
+            final_status=TaskStatus.SUCCESS,
+            status_changed=self._status_changed,
+            capacity_released=True,
+            result_key="task:t-callback:result",
+        )
+
     async def publish_update(self, update: Any) -> None:
         self.published.append(update)
 
@@ -113,11 +129,13 @@ class _FakeRedisManager:
         return None
 
 
-def _task_with_callback() -> Task:
+def _task_with_callback(
+    *, sources: list[Any] | None = None, target: Any | None = None
+) -> Task:
     return Task(
         task_id="t-callback",
-        sources=[FileSource(base64_string="ZHVtbXk=", filename="doc.md")],
-        target=InBodyTarget(),
+        sources=sources or [FileSource(base64_string="ZHVtbXk=", filename="doc.md")],
+        target=target or InBodyTarget(),
         callbacks=[CallbackSpec(url="https://example.invalid/hook")],
         metadata={"tenant_id": "tenant-a"},
     )
@@ -137,7 +155,7 @@ def _make_coordinator(
     # short-circuit that so the test never touches connector I/O.
     monkeypatch.setattr(
         "docling_jobkit.orchestrators.ray.serve_deployment._count_documents_for_task",
-        lambda task, allow_external_plugins=False: 1,
+        lambda task, allow_external_plugins=False: len(task.sources),
     )
     deployment_cls = getattr(
         DoclingProcessorCoordinatorDeployment, "func_or_class", None
@@ -168,10 +186,10 @@ def _make_dispatcher(manager: _FakeRedisManager) -> Any:
     return dispatcher
 
 
-def _only_update_processed(calls: list[dict[str, Any]]) -> Any:
+def _only_task_completed(calls: list[dict[str, Any]]) -> Any:
     assert len(calls) == 1, f"expected exactly one callback, got {len(calls)}"
     progress = calls[0]["progress"]
-    assert progress.kind == ProgressKind.UPDATE_PROCESSED
+    assert progress.kind == ProgressKind.TASK_COMPLETED
     return progress
 
 
@@ -201,17 +219,116 @@ async def test_converter_exception_emits_terminal_failure_callback(
     )
 
     with pytest.raises(FileNotFoundError):
-        await deployment.process_task(_task_with_callback())
+        await deployment.process_task(
+            _task_with_callback(
+                sources=[HttpSource(url="https://example.invalid/doc.pdf")],
+                target=PresignedUrlTarget(),
+            )
+        )
 
-    progress = _only_update_processed(recorded_callbacks)
+    progress = _only_task_completed(recorded_callbacks)
     assert recorded_callbacks[0]["task_id"] == "t-callback"
-    assert progress.num_processed == 1
-    assert progress.num_failed == 1
-    assert progress.num_succeeded == 0
-    assert [doc.status for doc in progress.docs] == [ConversionStatus.FAILURE]
-    assert progress.docs[0].source == "doc.md"
+    assert progress.task_status == "failure"
+    assert progress.failure.category == FailureCategory.INTERNAL
+    assert progress.failure.message == "Internal processing error."
+    assert not hasattr(progress, "docs")
     # The durable update still went out — the callback does not replace it.
     assert manager.published and manager.published[0].task_status == TaskStatus.FAILURE
+
+
+@pytest.mark.parametrize(
+    ("num_succeeded", "num_failed"),
+    [(2, 0), (1, 1), (0, 2)],
+)
+@pytest.mark.asyncio
+async def test_complete_document_results_emit_task_success(
+    num_succeeded: int,
+    num_failed: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recorded_callbacks: list[dict[str, Any]],
+) -> None:
+    class CompletedConverter:
+        async def remote(self, request: object) -> ConverterTaskResult:
+            return ConverterTaskResult(
+                task_result=DoclingTaskResult(
+                    result=RemoteTargetResult(),
+                    processing_time=0.1,
+                    num_converted=2,
+                    num_succeeded=num_succeeded,
+                    num_partially_succeeded=0,
+                    num_failed=num_failed,
+                )
+            )
+
+    manager = _FakeRedisManager()
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/", scratch_dir=tmp_path
+    )
+    deployment = _make_coordinator(
+        config,
+        SimpleNamespace(process_converter_request=CompletedConverter()),
+        manager,
+        monkeypatch,
+    )
+    task = _task_with_callback(
+        sources=[
+            FileSource(base64_string="Zmlyc3Q=", filename="first.md"),
+            FileSource(base64_string="c2Vjb25k", filename="second.md"),
+        ]
+    )
+
+    result = await deployment.process_task(task)
+
+    assert (result.num_succeeded, result.num_failed) == (num_succeeded, num_failed)
+    progress = _only_task_completed(recorded_callbacks)
+    assert progress.task_status == "success"
+    assert progress.failure is None
+
+
+@pytest.mark.asyncio
+async def test_partial_document_progress_then_abort_keeps_only_known_outcomes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recorded_callbacks: list[dict[str, Any]],
+) -> None:
+    document_progress = ProgressUpdateProcessed(
+        num_processed=1,
+        num_succeeded=1,
+        num_partially_succeeded=0,
+        num_failed=0,
+        docs=[
+            ProcessedDocsItem(
+                source="known.md",
+                status=ConversionStatus.SUCCESS,
+            )
+        ],
+    )
+    recorded_callbacks.append({"task_id": "t-callback", "progress": document_progress})
+
+    class ExplodingConverter:
+        async def remote(self, request: object) -> Any:
+            raise RuntimeError("converter crashed after partial progress")
+
+    manager = _FakeRedisManager()
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/", scratch_dir=tmp_path
+    )
+    deployment = _make_coordinator(
+        config,
+        SimpleNamespace(process_converter_request=ExplodingConverter()),
+        manager,
+        monkeypatch,
+    )
+
+    with pytest.raises(RuntimeError):
+        await deployment.process_task(_task_with_callback())
+
+    assert recorded_callbacks[0]["progress"] is document_progress
+    terminal = recorded_callbacks[1]["progress"]
+    assert terminal.kind == ProgressKind.TASK_COMPLETED
+    assert terminal.task_status == "failure"
+    assert not hasattr(terminal, "docs")
 
 
 @pytest.mark.asyncio
@@ -267,9 +384,9 @@ async def test_client_actionable_failure_emits_terminal_callback(
         ),
     )
 
-    progress = _only_update_processed(recorded_callbacks)
-    assert progress.num_failed == 1
-    assert progress.docs[0].error == "Source document could not be reached."
+    progress = _only_task_completed(recorded_callbacks)
+    assert progress.task_status == "failure"
+    assert progress.failure.message == "Source document could not be reached."
 
 
 @pytest.mark.asyncio
@@ -291,8 +408,9 @@ async def test_dispatcher_emits_terminal_callback_when_it_terminalizes(
 
     await dispatcher._process_task_async(_task_with_callback(), "tenant-a")
 
-    progress = _only_update_processed(recorded_callbacks)
-    assert progress.num_failed == 1
+    progress = _only_task_completed(recorded_callbacks)
+    assert progress.task_status == "failure"
+    assert progress.failure.category == FailureCategory.TIMEOUT
     assert manager.published and manager.published[0].task_status == TaskStatus.FAILURE
 
 
@@ -326,14 +444,9 @@ async def test_reconciled_orphan_notifies_with_persisted_callbacks(
         error_message="Task orphaned: replica execution lease stale during reconciliation",
     )
 
-    progress = _only_update_processed(recorded_callbacks)
-    # Counts come from durable metadata, matching the failed-document accounting.
-    assert progress.num_processed == 3
-    assert progress.num_failed == 3
-    # Sources are not recoverable from metadata, so per-document detail degrades
-    # to a single carrier for the error message.
-    assert [doc.source for doc in progress.docs] == ["unknown"]
-    assert progress.docs[0].status == ConversionStatus.FAILURE
+    progress = _only_task_completed(recorded_callbacks)
+    assert progress.task_status == "failure"
+    assert progress.failure.phase == FailurePhase.ORCHESTRATION
 
 
 @pytest.mark.asyncio

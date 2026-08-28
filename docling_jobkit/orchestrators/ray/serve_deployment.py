@@ -81,7 +81,9 @@ from docling_jobkit.datamodel.result import (
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
-from docling_jobkit.orchestrators.failure_callbacks import emit_task_failure_callbacks
+from docling_jobkit.orchestrators.completion_callbacks import (
+    emit_task_completed_callback,
+)
 from docling_jobkit.orchestrators.ray.config import (
     RayOrchestratorConfig,
     parse_memory_bytes,
@@ -1117,6 +1119,7 @@ class DoclingProcessorCoordinatorDeployment:
                 and terminalization.final_status == TaskStatus.SUCCESS
                 and terminalization.result_key is not None
             ):
+                emit_task_completed_callback(task, "success")
                 try:
                     await self.redis_manager.publish_update(
                         TaskUpdate(
@@ -1192,11 +1195,9 @@ class DoclingProcessorCoordinatorDeployment:
                 terminalization.status_changed
                 and terminalization.final_status == TaskStatus.FAILURE
             ):
-                # Emitted before the Redis follow-up so that a publish/stats error
-                # cannot swallow the client's only terminal notification. Gated on
-                # status_changed, so the dispatcher's own failure handler stays
-                # silent for this task and the callback fires exactly once.
-                emit_task_failure_callbacks(task, failure, task_size=task_size)
+                # Schedule before fallible Redis follow-up. The durable gate gives
+                # at-most-once scheduling, not guaranteed callback delivery.
+                emit_task_completed_callback(task, "failure", failure)
                 try:
                     await self.redis_manager.publish_update(
                         TaskUpdate(
@@ -1253,7 +1254,7 @@ class DoclingProcessorCoordinatorDeployment:
             terminalization.status_changed
             and terminalization.final_status == TaskStatus.FAILURE
         ):
-            emit_task_failure_callbacks(task, failure, task_size=task_size)
+            emit_task_completed_callback(task, "failure", failure)
             try:
                 await self.redis_manager.publish_update(
                     TaskUpdate(
@@ -1632,9 +1633,19 @@ class DoclingProcessorCoordinatorDeployment:
                     try:
                         converter_result = await completed
                     except Exception as exc:
-                        # An unexpected/raised chunk failure: degrade to a
-                        # document-level FAILURE for this chunk so sibling chunks
-                        # still complete instead of aborting the whole task.
+                        failure = classify_ray_public_task_failure(
+                            exc,
+                            task_id=task.task_id,
+                            phase=FailurePhase.EXECUTION,
+                            details={
+                                "task_size": str(total_docs),
+                                "target_kind": getattr(
+                                    task.target, "kind", type(task.target).__name__
+                                ),
+                            },
+                        )
+                        if not is_client_actionable_failure(failure):
+                            raise
                         _log.warning(
                             "Coordinator replica %s: source chunk %s for task %s failed: %s",
                             self.replica_id,
@@ -1644,7 +1655,7 @@ class DoclingProcessorCoordinatorDeployment:
                         )
                         converter_result = self._handle_failed_source_chunk(
                             chunk=chunk,
-                            error=build_public_error_item(exc),
+                            error=build_public_error_item_from_failure(failure),
                             task=task,
                             total_docs=total_docs,
                             callback_invoker=callback_invoker,

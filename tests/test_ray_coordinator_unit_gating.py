@@ -26,13 +26,21 @@ from docling.datamodel.service.requests import (
     FileSourceRequest as FileSource,
     S3SourceRequest as S3Coordinates,
 )
+from docling.datamodel.service.responses import (
+    FailureCategory,
+    FailurePhase,
+    PublicFailureInfo,
+)
 from docling.datamodel.service.targets import InBodyTarget, S3Target
 
 from docling_jobkit.connectors.source_processor import DocumentChunk, SourceDocumentRef
 from docling_jobkit.datamodel.result import DoclingTaskResult, RemoteTargetResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
-from docling_jobkit.orchestrators.ray.models import ConverterTaskResult
+from docling_jobkit.orchestrators.ray.models import (
+    ConverterFailureResult,
+    ConverterTaskResult,
+)
 from docling_jobkit.orchestrators.ray.serve_deployment import (
     DoclingProcessorCoordinatorDeployment,
     _build_slice_plan,
@@ -240,7 +248,7 @@ async def test_s3_fanout_never_exceeds_ceiling_and_processes_all(
 
 
 @pytest.mark.asyncio
-async def test_s3_fanout_releases_unit_on_child_failure(
+async def test_s3_fanout_propagates_internal_child_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     refs = _s3_refs(4)
@@ -263,13 +271,52 @@ async def test_s3_fanout_releases_unit_on_child_failure(
         monkeypatch,
     )
 
+    with pytest.raises(RuntimeError, match="boom"):
+        await deployment._process_s3_fanout_task(_s3_task("t-fail"), time.monotonic())
+
+    assert manager.in_flight == 0
+    assert manager.total_acquired == manager.total_released == 3
+
+
+@pytest.mark.asyncio
+async def test_s3_fanout_keeps_source_failure_document_scoped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    refs = _s3_refs(4)
+    _patch_source_processor(monkeypatch, refs)
+
+    class MissingSourceConverter:
+        async def remote(
+            self, request: object
+        ) -> ConverterTaskResult | ConverterFailureResult:
+            if request.chunk.chunk_index == 1:
+                return ConverterFailureResult(
+                    failure=PublicFailureInfo(
+                        category=FailureCategory.SOURCE_UNAVAILABLE,
+                        message="Source document could not be reached.",
+                        retryable=True,
+                        phase=FailurePhase.SOURCE_ENUMERATION,
+                    )
+                )
+            return _ok_result(request.chunk.refs[0].filename)
+
+    manager = _FakeUnitManager(ceiling=3)
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/", scratch_dir=tmp_path
+    )
+    deployment = _make_coordinator(
+        config,
+        SimpleNamespace(process_converter_request=MissingSourceConverter()),
+        manager,
+        monkeypatch,
+    )
+
     result = await deployment._process_s3_fanout_task(
-        _s3_task("t-fail"), time.monotonic()
+        _s3_task("t-source-fail"), time.monotonic()
     )
 
     assert result.num_failed == 1
     assert result.num_succeeded == 3
-    # The failed child's unit is released too — acquired == released, nothing leaked.
     assert manager.in_flight == 0
     assert manager.total_acquired == manager.total_released == 4
 
