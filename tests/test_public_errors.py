@@ -213,6 +213,32 @@ def test_classify_ray_failure_preserves_connector_authentication_error():
     assert failure.message == str(auth_error)
 
 
+def test_is_request_wide_capability_failure_classifies_by_type_not_text():
+    ray = pytest.importorskip("ray")
+    from docling_jobkit.orchestrators.ray.failure_classification import (
+        is_request_wide_capability_failure,
+    )
+    from docling_jobkit.public_errors import PipelineInitializationError
+
+    setup_error = PipelineInitializationError(
+        "Model 'example/model' not found in artifacts_path."
+    )
+    # Recognized raw and through Ray's exception envelope.
+    assert is_request_wide_capability_failure(setup_error) is True
+    wrapped = ray.exceptions.RayTaskError("worker.convert", "traceback", setup_error)
+    assert is_request_wide_capability_failure(wrapped) is True
+
+    # Regression: the same message on a bare exception must NOT be treated as
+    # request-wide. Classification is by phase/type, never by error text.
+    assert (
+        is_request_wide_capability_failure(
+            FileNotFoundError("Model 'example/model' not found in artifacts_path.")
+        )
+        is False
+    )
+    assert is_request_wide_capability_failure(RuntimeError("boom")) is False
+
+
 def test_render_public_error_list_avoids_python_repr():
     errors = [
         ErrorItem(

@@ -90,7 +90,7 @@ from docling_jobkit.orchestrators.ray.config import (
 )
 from docling_jobkit.orchestrators.ray.failure_classification import (
     classify_ray_public_task_failure,
-    is_missing_model_artifact_failure,
+    is_request_wide_capability_failure,
 )
 from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
@@ -1652,7 +1652,7 @@ class DoclingProcessorCoordinatorDeployment:
                     try:
                         converter_result = await completed
                     except Exception as exc:
-                        if is_missing_model_artifact_failure(exc):
+                        if is_request_wide_capability_failure(exc):
                             completed_results = [result for _, result in child_results]
                             _emit_s3_update_processed(
                                 task,

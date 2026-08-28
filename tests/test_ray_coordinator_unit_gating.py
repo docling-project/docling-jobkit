@@ -50,6 +50,7 @@ from docling_jobkit.orchestrators.ray.serve_deployment import (
     DoclingProcessorCoordinatorDeployment,
     _build_slice_plan,
 )
+from docling_jobkit.public_errors import PipelineInitializationError
 
 
 class _FakeUnitManager:
@@ -312,7 +313,9 @@ async def test_s3_fanout_propagates_missing_model_failure_after_update_processed
     class MissingModelConverter:
         async def remote(self, request: object) -> ConverterTaskResult:
             if request.chunk.chunk_index == failing_chunk:
-                raise FileNotFoundError(
+                # The worker's convert_documents() tags pipeline/model setup
+                # failures with this type; classification is by type, not text.
+                raise PipelineInitializationError(
                     "Model 'example/model' not found in artifacts_path."
                 )
             return _ok_result(request.chunk.refs[0].filename)
@@ -335,7 +338,7 @@ async def test_s3_fanout_propagates_missing_model_failure_after_update_processed
     task = _s3_task("t-missing-model")
     task.callbacks = [CallbackSpec(url="https://example.invalid/hook")]
 
-    with pytest.raises(FileNotFoundError, match="not found in artifacts_path"):
+    with pytest.raises(PipelineInitializationError):
         await deployment._process_s3_fanout_task(task, time.monotonic())
 
     summary = callback_invoker.invoke_callbacks_async.call_args_list[-1].kwargs[
