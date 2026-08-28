@@ -127,9 +127,9 @@ def test_list_document_ids_enumerates_partition_and_hash():
         ],
     )
     assert list(proc._list_document_ids()) == [
-        ("2024-01-01", "h1", "a.pdf"),
-        ("2024-01-01", "h2", "b.pdf"),
-        ("2024-01-02", "h3", None),
+        SparkRowID("2024-01-01", "h1", "a.pdf"),
+        SparkRowID("2024-01-01", "h2", "b.pdf"),
+        SparkRowID("2024-01-02", "h3", None),
     ]
 
 
@@ -146,8 +146,8 @@ def test_make_document_ref_keys_on_partition_and_row_key():
 @pytest.mark.parametrize(
     "row, expected_name",
     [
-        (("2024-01-01", "h1", "a.pdf"), "a.pdf"),
-        (("2024-01-02", "h3", None), "h3.bin"),
+        (SparkRowID("2024-01-01", "h1", "a.pdf"), "a.pdf"),
+        (SparkRowID("2024-01-02", "h3", None), "h3.bin"),
     ],
     ids=["explicit_filename", "synthesized_from_row_key"],
 )
@@ -155,3 +155,44 @@ def test_make_document_ref_filename(row, expected_name):
     proc = SparkSourceProcessor(_coords(partition_column="dt"))
 
     assert proc._make_document_ref(row, 0).filename == expected_name
+
+
+def _url_coords(**overrides) -> TaskSparkSource:
+    return _coords(
+        content_column=None,
+        url_column="file_path",
+        id_column="doc_id",
+        **overrides,
+    )
+
+
+def test_list_document_ids_url_mode_keeps_id_column_as_identity():
+    proc = _proc(_url_coords())
+    proc._backend.enumerate_urls.return_value = iter(
+        [("doc-1", "https://files/doc-1.pdf", "a.pdf")]
+    )
+
+    (row_id,) = list(proc._list_document_ids())
+
+    assert row_id.row_key == "doc-1"
+    assert row_id.url == "https://files/doc-1.pdf"
+    assert row_id.filename == "a.pdf"
+
+
+def test_make_document_ref_url_mode_id_is_identity_uri_is_fetch_location():
+    proc = SparkSourceProcessor(_url_coords())
+    row_id = SparkRowID(None, "doc-1", "a.pdf", "https://files/doc-1.pdf")
+
+    ref = proc._make_document_ref(row_id, 0)
+
+    assert ref.id.row_key == "doc-1"  # id_column value survives as identity
+    assert ref.source_uri == "https://files/doc-1.pdf"
+    assert ref.filename == "a.pdf"
+
+
+def test_fetch_converter_source_by_ref_url_mode_returns_url():
+    proc = SparkSourceProcessor(_url_coords())
+    row_id = SparkRowID(None, "doc-1", "a.pdf", "https://files/doc-1.pdf")
+    ref = proc._make_document_ref(row_id, 0)
+
+    assert proc.fetch_converter_source_by_ref(ref) == "https://files/doc-1.pdf"

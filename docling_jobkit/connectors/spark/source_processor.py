@@ -37,8 +37,11 @@ _log = logging.getLogger(__name__)
 # Distributed identifier
 class SparkRowID(NamedTuple):
     partition_value: object
+    # hash or id in content mode, strictly id for url mode
     row_key: str
     filename: str | None = None
+    # url_column mode only: the fetch location
+    url: str | None = None
 
 
 _map_spark_source_errors = map_connector_authentication_errors(
@@ -120,13 +123,14 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
         """Enumerate row identifiers ordered by partition.
 
         Unlike a typical source (one opaque id per document), each id is a
-        (partition_value, row_key, filename) triple, and rows arrive
+        SparkRowID (partition_value, row_key, filename, url), and rows arrive
         grouped by partition so iterate_document_chunks can emit one chunk per
         partition without re-sorting.
 
         In content_column mode, row_key is the id_column value when id_column
-        is set, otherwise sha2(content, 256). In url_column mode, row_key
-        holds the URL instead.
+        is set, otherwise sha2(content, 256). In url_column mode, row_key is
+        the id_column value (required there — no content to hash) and the
+        URL is kept separately so id_column still ends up as the identity.
         """
         # Validator ensures exactly one of table/query and content_column/url_column is set
         if self._coords.url_column:
@@ -139,8 +143,8 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
                 self._coords.filename_column,
                 self._coords.max_num_elements,
             ):
-                # In url mode: partition_value=None, row_key=URL
-                yield SparkRowID(None, url, filename)
+                # In url mode: partition_value=None, row_key=id_column value, url=fetch location
+                yield SparkRowID(None, id_val, filename, url)
         else:
             # Content mode: enumerate (partition, sha2, filename)
             for partition_value, row_key, filename in self._backend.enumerate_row_keys(
@@ -158,17 +162,19 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
     def _make_document_ref(
         self, identifier: SparkRowID, source_index: int
     ) -> SourceDocumentRef:
-        partition_value, row_key, filename = identifier
+        partition_value, row_key, filename, url = identifier
 
         if self._coords.url_column:
-            # URL mode: row_key is the URL, use it as source_uri
+            # URL mode: identifier.url is the fetch location; row_key (id_column
+            # value) is the identity and travels via identifier.id, not source_uri
             from pathlib import Path
 
+            assert url is not None, "url must be set in url_column mode"
             return SourceDocumentRef(
                 id=identifier,
                 source_index=source_index,
-                source_uri=row_key,  # URL itself
-                filename=(filename or Path(row_key).name),
+                source_uri=url,
+                filename=(filename or Path(url).name),
             )
         else:
             # Content mode: existing logic
@@ -187,7 +193,8 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
         if self._coords.url_column:
             # URL mode: yield URLs directly from _list_document_ids
             for row_id in self._list_document_ids():
-                yield row_id.row_key  # row_key holds the URL
+                assert row_id.url is not None, "url must be set in url_column mode"
+                yield row_id.url
         else:
             # Content mode: use base implementation (yields DocumentStreams)
             yield from self.iterate_documents(max_file_size=max_file_size)
@@ -199,8 +206,8 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
         """Return URL string in url_column mode, DocumentStream in content_column mode."""
         if self._coords.url_column:
             # Reference mode: return the URL string
-            url = ref.id.row_key  # In url mode, row_key holds the URL
-            return url
+            assert ref.id.url is not None, "url must be set in url_column mode"
+            return ref.id.url
         else:
             # Content mode: existing logic
             return self._fetch_document_by_id(ref.id, max_file_size=max_file_size)
@@ -234,11 +241,11 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
         In url_column mode: Downloads from URL using Databricks Files API.
         In content_column mode: Fetches single row by id_column or sha2 hash.
         """
-        _partition_value, row_key, filename = identifier
+        _partition_value, row_key, filename, url = identifier
 
         # URL mode: download from Databricks Files API
         if self._coords.url_column:
-            url = row_key  # row_key holds the URL in url_column mode
+            assert url is not None, "url must be set in url_column mode"
             auth_token = self._coords.auth.token.get_secret_value()  # type: ignore[union-attr]
 
             _log.info("Downloading document from URL: %s", url)
