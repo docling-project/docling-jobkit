@@ -60,6 +60,10 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
         """The partition column for ORDER BY, or None."""
         return self._coords.partition_column
 
+    @property
+    def _is_query(self) -> bool:
+        return self._coords.query is not None
+
     @classmethod
     def check_dependencies(cls) -> None:
         import pyspark  # noqa: F401
@@ -103,6 +107,7 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
         # Validator ensures exactly one of table/query and content_column/url_column is set
         count = self._backend.count_documents(
             self._coords.table or self._coords.query,  # type: ignore[arg-type]
+            self._is_query,
             self._coords.content_column or self._coords.url_column,  # type: ignore[arg-type]
             self._coords.max_num_elements,
         )
@@ -128,6 +133,7 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
             # URL mode: enumerate (id, url, filename)
             for id_val, url, filename in self._backend.enumerate_urls(
                 self._coords.table or self._coords.query,  # type: ignore[arg-type]
+                self._is_query,
                 self._coords.url_column,  # type: ignore[arg-type]
                 self._coords.id_column,  # type: ignore[arg-type]
                 self._coords.filename_column,
@@ -139,6 +145,7 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
             # Content mode: enumerate (partition, sha2, filename)
             for partition_value, row_key, filename in self._backend.enumerate_row_keys(
                 self._coords.table or self._coords.query,  # type: ignore[arg-type]
+                self._is_query,
                 self._coords.content_column,  # type: ignore[arg-type]
                 self._partition_col,
                 self._coords.filename_column,
@@ -250,6 +257,7 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
             results = list(
                 self._backend.fetch_by_id(
                     table_or_query,
+                    self._is_query,
                     self._coords.id_column,  # type: ignore[arg-type]
                     row_key,
                     self._coords.content_column,  # type: ignore[arg-type]
@@ -261,6 +269,7 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
             results = list(
                 self._backend.fetch_by_content_hash(
                     table_or_query,
+                    self._is_query,
                     self._coords.content_column,  # type: ignore[arg-type]
                     row_key,
                     self._coords.filename_column,
@@ -304,6 +313,7 @@ class SparkSourceProcessor(BaseSourceProcessor[TaskSparkSource, SparkRowID]):
 
         documents = self._backend.stream_documents(
             self._coords.table or self._coords.query,  # type: ignore[arg-type]
+            self._is_query,
             self._coords.content_column,  # type: ignore[arg-type]
             self._coords.filename_column,
             self._coords.max_num_elements,

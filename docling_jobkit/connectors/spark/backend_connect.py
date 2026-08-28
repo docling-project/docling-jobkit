@@ -30,12 +30,11 @@ class SparkConnectBackend:
         """Stop this backend's own session."""
         self._spark.stop()
 
-    def _non_null_df(self, table_or_query: str, content_column: str) -> DataFrame:
+    def _non_null_df(
+        self, table_or_query: str, is_query: bool, content_column: str
+    ) -> DataFrame:
         """Table/query rows with non-null content (no limit applied)."""
         from pyspark.sql.functions import col
-
-        # Determine if table_or_query is a query or table name
-        is_query = "SELECT" in table_or_query.upper()
 
         if is_query:
             non_null_content_df = self._spark.sql(table_or_query)
@@ -45,7 +44,11 @@ class SparkConnectBackend:
         return non_null_content_df.filter(col(content_column).isNotNull())
 
     def _non_null_limited(
-        self, table_or_query: str, content_column: str, max_num_elements: int | None
+        self,
+        table_or_query: str,
+        is_query: bool,
+        content_column: str,
+        max_num_elements: int | None,
     ) -> DataFrame:
         """Table/query rows with non-null content, optionally capped at max_num_elements.
 
@@ -53,7 +56,9 @@ class SparkConnectBackend:
         must be applied after ORDER BY for deterministic results, see
         `enumerate_row_keys`.
         """
-        non_null_content_df = self._non_null_df(table_or_query, content_column)
+        non_null_content_df = self._non_null_df(
+            table_or_query, is_query, content_column
+        )
         if max_num_elements is not None:
             non_null_content_df = non_null_content_df.limit(max_num_elements)
 
@@ -63,18 +68,23 @@ class SparkConnectBackend:
         return bool(self._spark.catalog.tableExists(table))
 
     def count_documents(
-        self, table_or_query: str, content_column: str, max_num_elements: int | None
+        self,
+        table_or_query: str,
+        is_query: bool,
+        content_column: str,
+        max_num_elements: int | None,
     ) -> int:
         """Count rows with non-null content (respecting max_num_elements)."""
         return int(
             self._non_null_limited(
-                table_or_query, content_column, max_num_elements
+                table_or_query, is_query, content_column, max_num_elements
             ).count()
         )
 
     def enumerate_row_keys(
         self,
         table_or_query: str,
+        is_query: bool,
         content_column: str,
         partition_column: str | None,
         filename_column: str | None,
@@ -98,7 +108,9 @@ class SparkConnectBackend:
         ).alias("row_key")
 
         if partition_column:
-            non_null_content_df = self._non_null_df(table_or_query, content_column)
+            non_null_content_df = self._non_null_df(
+                table_or_query, is_query, content_column
+            )
             selects = [
                 col(partition_column),
                 row_key_expr,
@@ -121,7 +133,7 @@ class SparkConnectBackend:
             # No partition column: partition_value is always None, so ordering
             # doesn't matter and the limit can be applied up front.
             non_null_content_df = self._non_null_limited(
-                table_or_query, content_column, max_num_elements
+                table_or_query, is_query, content_column, max_num_elements
             )
             selects = [row_key_expr]
             if filename_column:
@@ -138,6 +150,7 @@ class SparkConnectBackend:
     def enumerate_urls(
         self,
         table_or_query: str,
+        is_query: bool,
         url_column: str,
         id_column: str,
         filename_column: str | None,
@@ -145,9 +158,6 @@ class SparkConnectBackend:
     ) -> Iterator[tuple[str, str, str | None]]:
         """Yield (id_value, url, filename) for url-column mode."""
         from pyspark.sql.functions import col
-
-        # Determine if table_or_query is a query or table name
-        is_query = "SELECT" in table_or_query.upper()
 
         if is_query:
             # Use sql() for queries
@@ -176,6 +186,7 @@ class SparkConnectBackend:
     def fetch_by_id(
         self,
         table_or_query: str,
+        is_query: bool,
         id_column: str,
         id_value: str,
         content_column: str,
@@ -183,9 +194,6 @@ class SparkConnectBackend:
     ) -> Iterator[tuple[bytes, str]]:
         """Fetch one row by id_column value. Yields (content_bytes, filename)."""
         from pyspark.sql.functions import col
-
-        # Determine if table_or_query is a query or table name
-        is_query = "SELECT" in table_or_query.upper()
 
         if is_query:
             df_ = self._spark.sql(table_or_query)
@@ -205,15 +213,13 @@ class SparkConnectBackend:
     def fetch_by_content_hash(
         self,
         table_or_query: str,
+        is_query: bool,
         content_column: str,
         sha2_hash: str,
         filename_column: str | None,
     ) -> Iterator[tuple[bytes, str]]:
         """Fetch one row by sha2(content,256). Yields (content_bytes, filename)."""
         from pyspark.sql.functions import col, sha2
-
-        # Determine if table_or_query is a query or table name
-        is_query = "SELECT" in table_or_query.upper()
 
         if is_query:
             df_ = self._spark.sql(table_or_query)
@@ -237,6 +243,7 @@ class SparkConnectBackend:
     def stream_documents(
         self,
         table_or_query: str,
+        is_query: bool,
         content_column: str,
         filename_column: str | None,
         max_num_elements: int | None,
@@ -245,7 +252,7 @@ class SparkConnectBackend:
         from pyspark.sql.functions import col
 
         non_null_content_df = self._non_null_limited(
-            table_or_query, content_column, max_num_elements
+            table_or_query, is_query, content_column, max_num_elements
         )
         selects = [col(content_column).alias("c")]
         if filename_column:

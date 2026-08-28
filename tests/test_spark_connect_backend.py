@@ -46,7 +46,9 @@ def test_enumerate_row_keys_yields_partition_hash_filename():
         ]
     )
     out = list(
-        _backend(test_df).enumerate_row_keys("t", "content", "dt", "doc_name", None)
+        _backend(test_df).enumerate_row_keys(
+            "t", False, "content", "dt", "doc_name", None
+        )
     )
 
     assert out == [("2024-01-01", "h1", "a.pdf"), ("2024-01-02", "h2", None)]
@@ -58,7 +60,7 @@ def test_enumerate_row_keys_limit_after_order():
     from pyspark.sql import Row
 
     test_df = _chainable_df([Row(dt="2024-01-01", row_key="h1", fname=None)])
-    list(_backend(test_df).enumerate_row_keys("t", "content", "dt", None, 5))
+    list(_backend(test_df).enumerate_row_keys("t", False, "content", "dt", None, 5))
 
     names = [c[0] for c in test_df.mock_calls]
     assert "orderBy" in names and "limit" in names
@@ -81,7 +83,7 @@ def test_enumerate_row_keys_uses_id_column_when_set(monkeypatch):
     test_df = _chainable_df([Row(dt="2024-01-01", row_key="id1", fname=None)])
     list(
         _backend(test_df).enumerate_row_keys(
-            "t", "content", "dt", None, None, id_column="doc_id"
+            "t", False, "content", "dt", None, None, id_column="doc_id"
         )
     )
 
@@ -98,7 +100,7 @@ def test_enumerate_row_keys_hashes_content_when_no_id_column(monkeypatch):
     monkeypatch.setattr(F, "sha2", sha2_mock)
 
     test_df = _chainable_df([Row(dt="2024-01-01", row_key="h1", fname=None)])
-    list(_backend(test_df).enumerate_row_keys("t", "content", "dt", None, None))
+    list(_backend(test_df).enumerate_row_keys("t", False, "content", "dt", None, None))
 
     sha2_mock.assert_called_once()
 
@@ -107,9 +109,50 @@ def test_stream_documents_yields_bytes_and_name():
     from pyspark.sql import Row
 
     test_df = _chainable_df([Row(c=b"PDF", fname="a.pdf")])
-    out = list(_backend(test_df).stream_documents("t", "content", "doc_name", None))
+    out = list(
+        _backend(test_df).stream_documents("t", False, "content", "doc_name", None)
+    )
 
     assert out == [(b"PDF", "a.pdf")]
+
+
+def test_stream_documents_query_mode_uses_sql_not_table():
+    """A table:False source uses spark.table(); a query:True source must use
+    spark.sql() instead — is_query is now an explicit flag, not derived by
+    sniffing the string for "SELECT" (which would misfire on a table like
+    `my_selections`)."""
+    from pyspark.sql import Row
+
+    backend = _backend()
+    spark = cast(MagicMock, backend._spark)
+    spark.sql.return_value = _chainable_df([Row(c=b"PDF", fname=None)])
+
+    out = list(
+        backend.stream_documents(
+            "SELECT * FROM my_selections", True, "content", None, None
+        )
+    )
+
+    spark.sql.assert_called_once_with("SELECT * FROM my_selections")
+    spark.table.assert_not_called()
+    assert out == [(b"PDF", None)]
+
+
+def test_stream_documents_table_name_containing_select_substring_uses_table():
+    """Table literally named `my_selections` contains "SELECT"
+    as a substring but must still be read via spark.table(), not spark.sql()
+    is_query is passed explicitly"""
+    from pyspark.sql import Row
+
+    backend = _backend()
+    spark = cast(MagicMock, backend._spark)
+    spark.table.return_value = _chainable_df([Row(c=b"PDF", fname=None)])
+
+    out = list(backend.stream_documents("my_selections", False, "content", None, None))
+
+    spark.table.assert_called_once_with("my_selections")
+    spark.sql.assert_not_called()
+    assert out == [(b"PDF", None)]
 
 
 def test_write_rows_delta_existing_merges(monkeypatch):

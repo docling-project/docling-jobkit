@@ -69,12 +69,13 @@ class DatabricksSqlBackend:
             return cursor.fetchone() is not None
 
     def count_documents(
-        self, table_or_query: str, content_column: str, max_num_elements: int | None
+        self,
+        table_or_query: str,
+        is_query: bool,
+        content_column: str,
+        max_num_elements: int | None,
     ) -> int:
         """Count rows with non-null content, capped at max_num_elements when set."""
-        # Determine if table_or_query is a query or table name
-        is_query = "SELECT" in table_or_query.upper()
-
         if is_query:
             source = f"({table_or_query}) AS source"
         else:
@@ -95,6 +96,7 @@ class DatabricksSqlBackend:
     def enumerate_row_keys(
         self,
         table_or_query: str,
+        is_query: bool,
         content_column: str,
         partition_column: str | None,
         filename_column: str | None,
@@ -109,9 +111,6 @@ class DatabricksSqlBackend:
         Deriving row_key from id_column avoids hashing content_column here only
         to read and hash it again on fetch.
         """
-        # Determine if table_or_query is a query or table name
-        is_query = "SELECT" in table_or_query.upper()
-
         if is_query:
             source = f"({table_or_query}) AS source"
         else:
@@ -155,15 +154,13 @@ class DatabricksSqlBackend:
     def enumerate_urls(
         self,
         table_or_query: str,
+        is_query: bool,
         url_column: str,
         id_column: str,
         filename_column: str | None,
         max_num_elements: int | None,
     ) -> Iterator[tuple[str, str, str | None]]:
         """Yield (id_value, url, filename) for url-column mode."""
-        # Determine if table_or_query is a query (contains SELECT) or a table name
-        is_query = "SELECT" in table_or_query.upper()
-
         if is_query:
             # Wrap query as subquery
             source = f"({table_or_query}) AS source"
@@ -187,15 +184,13 @@ class DatabricksSqlBackend:
     def fetch_by_id(
         self,
         table_or_query: str,
+        is_query: bool,
         id_column: str,
         id_value: str,
         content_column: str,
         filename_column: str | None,
     ) -> Iterator[tuple[bytes, str]]:
         """Fetch one row by id_column value. Yields (content_bytes, filename)."""
-        # Determine if table_or_query is a query or table name
-        is_query = "SELECT" in table_or_query.upper()
-
         if is_query:
             source = f"({table_or_query}) AS source"
         else:
@@ -216,14 +211,12 @@ class DatabricksSqlBackend:
     def fetch_by_content_hash(
         self,
         table_or_query: str,
+        is_query: bool,
         content_column: str,
         sha2_hash: str,
         filename_column: str | None,
     ) -> Iterator[tuple[bytes, str]]:
         """Fetch one row by sha2(content,256). Yields (content_bytes, filename)."""
-        # Determine if table_or_query is a query or table name
-        is_query = "SELECT" in table_or_query.upper()
-
         if is_query:
             source = f"({table_or_query}) AS source"
         else:
@@ -245,21 +238,24 @@ class DatabricksSqlBackend:
 
     def stream_documents(
         self,
-        table: str,
+        table_or_query: str,
+        is_query: bool,
         content_column: str,
         filename_column: str | None,
         max_num_elements: int | None,
     ) -> Iterator[tuple[bytes, str | None]]:
         """Yield (content bytes, filename) for every non-null row (single-driver read)."""
-        table_ref = quote_identifier(table)
+        if is_query:
+            source = f"({table_or_query}) AS source"
+        else:
+            source = quote_identifier(table_or_query)
+
         content_ref = quote_identifier(content_column)
         select_expr = f"{content_ref} AS c"
         if filename_column:
             select_expr += f", {quote_identifier(filename_column)} AS fname"
 
-        sql_text = (
-            f"SELECT {select_expr} FROM {table_ref} WHERE {content_ref} IS NOT NULL"
-        )
+        sql_text = f"SELECT {select_expr} FROM {source} WHERE {content_ref} IS NOT NULL"
         if max_num_elements is not None:
             sql_text += f" LIMIT {int(max_num_elements)}"
         for row in self._query(sql_text):

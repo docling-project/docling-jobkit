@@ -44,7 +44,7 @@ def test_enumerate_row_keys_sql_uses_id_column_when_set():
 
     out = list(
         backend.enumerate_row_keys(
-            "cat.db.docs", "content", "dt", None, None, id_column="doc_id"
+            "cat.db.docs", False, "content", "dt", None, None, id_column="doc_id"
         )
     )
 
@@ -58,10 +58,36 @@ def test_enumerate_row_keys_sql_hashes_content_when_no_id_column():
     backend, cur = _backend_with_cursor()
     cur.fetchmany.side_effect = [[("2024-01-01", "h1", None)], []]
 
-    list(backend.enumerate_row_keys("cat.db.docs", "content", "dt", None, None))
+    list(backend.enumerate_row_keys("cat.db.docs", False, "content", "dt", None, None))
 
     executed = cur.execute.call_args_list[0].args[0]
     assert "sha2(`content`, 256) AS row_key" in executed
+
+
+def test_stream_documents_table_mode():
+    backend, cur = _backend_with_cursor()
+    cur.fetchmany.side_effect = [[(b"PDF", None)], []]
+
+    out = list(backend.stream_documents("cat.db.docs", False, "content", None, None))
+
+    executed = cur.execute.call_args_list[0].args[0]
+    assert "FROM `cat`.`db`.`docs`" in executed
+    assert out == [(b"PDF", None)]
+
+
+def test_stream_documents_query_mode_wraps_subquery():
+    backend, cur = _backend_with_cursor()
+    cur.fetchmany.side_effect = [[(b"PDF", None)], []]
+
+    out = list(
+        backend.stream_documents(
+            "SELECT * FROM my_selections", True, "content", None, None
+        )
+    )
+
+    executed = cur.execute.call_args_list[0].args[0]
+    assert "FROM (SELECT * FROM my_selections) AS source" in executed
+    assert out == [(b"PDF", None)]
 
 
 def test_non_delta_write_appends_without_merge():
