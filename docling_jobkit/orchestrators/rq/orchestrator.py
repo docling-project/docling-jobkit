@@ -25,7 +25,7 @@ from docling.datamodel.service.requests import FileSourceRequest
 from docling.datamodel.service.targets import InBodyTarget
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
-from docling_jobkit.config.target_config import S3PresignedConfig
+from docling_jobkit.config.target_config import PresignedConfig
 from docling_jobkit.connectors.connector_factory import get_source_connector_factory
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
@@ -46,6 +46,7 @@ class RQOrchestratorConfig(BaseModel):
     queue_name: str = "convert"
     results_ttl: int = 3_600 * 4
     failure_ttl: int = 3_600 * 4
+    job_timeout: int = 3_600 * 4  # RQ death penalty per job; -1 disables it
     results_prefix: str = "docling:results"
     heartbeat_key_prefix: str = "docling:job:alive"
     sub_channel: str = "docling:updates"
@@ -61,7 +62,7 @@ class RQOrchestratorConfig(BaseModel):
     zombie_reaper_max_age: float = 3600.0
     result_removal_delay: int = 300  # seconds until result key expires after fetch
     debug_error_details: bool = False
-    s3_presigned_config: S3PresignedConfig | None = None
+    presigned_config: PresignedConfig | None = None
     allowed_target_kinds: Optional[set[str]] = None
     allow_external_plugins: bool = False
 
@@ -109,7 +110,7 @@ class RQOrchestrator(BaseOrchestrator):
         rq_queue = Queue(
             config.queue_name,
             connection=conn,
-            default_timeout=14400,
+            default_timeout=config.job_timeout,
             result_ttl=config.results_ttl,
             failure_ttl=config.failure_ttl,
         )
@@ -211,7 +212,7 @@ class RQOrchestrator(BaseOrchestrator):
                 self._rq_job_function,
                 kwargs={"task_data": task_data},
                 job_id=task_id,
-                timeout=14400,
+                timeout=self.config.job_timeout,
                 failure_ttl=self.config.failure_ttl,
             )
             await self.init_task_tracking(task)

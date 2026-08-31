@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "docling-jobkit"
-version = "3.3.1"  # DO NOT EDIT, updated automatically
+version = "3.4.0"  # DO NOT EDIT, updated automatically
 description = "Running a distributed job processing documents with Docling."
 readme = "README.md"
 license = "MIT"
@@ -90,6 +90,9 @@ opensearch = [
 ]
 astradb = [
     "astrapy>=1.0.0,<2",
+]
+kafka = [
+    "confluent-kafka>=2.5.0,<3",
 ]
 sharepoint = [
     # v3.0.0 imports `Self` from `typing` (stdlib), which only exists on Python >=3.11.
@@ -259,6 +262,7 @@ module = [
     "ray.*",
     "codeflare_sdk.*",
     "opensearchpy.*",
+    "confluent_kafka.*",
 ]
 ignore_missing_imports = true
 

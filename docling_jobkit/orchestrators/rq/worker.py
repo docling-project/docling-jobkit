@@ -180,9 +180,10 @@ def _run_docling_task(
                         task=task,
                         exportable_documents=exportable_documents,
                         work_dir=workdir,
-                        s3_presigned_config=orchestrator_config.s3_presigned_config,
+                        presigned_config=orchestrator_config.presigned_config,
                         callback_invoker=callback_invoker,
                         debug_error_details=orchestrator_config.debug_error_details,
+                        expected_doc_count=len(convert_sources),
                         allow_external_plugins=(
                             orchestrator_config.allow_external_plugins
                         ),
@@ -197,6 +198,7 @@ def _run_docling_task(
                         work_dir=workdir,
                         callback_invoker=callback_invoker,
                         debug_error_details=orchestrator_config.debug_error_details,
+                        expected_doc_count=len(convert_sources),
                     )
             else:
                 raise RuntimeError(f"Unsupported task type: {task.task_type}")
