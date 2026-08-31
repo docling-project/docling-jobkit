@@ -20,17 +20,50 @@ _log = logging.getLogger(__name__)
 _TAG_KEYS = ("tenant_id", "replica_tag")
 
 _TIMINGS_HIST_BUCKETS = [
-    0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.025, 0.05, 0.075, 0.1,
-    0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 3.5, 4.0,
-    5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 12.5, 15.0, 17.5, 20.0, 25.0, 30.0,
+    0.000001,
+    0.00001,
+    0.0001,
+    0.001,
+    0.01,
+    0.025,
+    0.05,
+    0.075,
+    0.1,
+    0.25,
+    0.5,
+    0.75,
+    1.0,
+    1.25,
+    1.5,
+    1.75,
+    2.0,
+    2.5,
+    3.0,
+    3.5,
+    4.0,
+    5.0,
+    6.0,
+    7.0,
+    8.0,
+    9.0,
+    10.0,
+    12.5,
+    15.0,
+    17.5,
+    20.0,
+    25.0,
+    30.0,
     # Coarser tail buckets so a genuine aberration (stuck OCR/layout call,
     # etc.) gets resolution instead of collapsing into +Inf.
-    45.0, 60.0, 90.0, 120.0,
+    45.0,
+    60.0,
+    90.0,
+    120.0,
 ]
 
 
 def _random_digit_string(length: int) -> str:
-    return ''.join(random.choices(string.digits, k=length))
+    return "".join(random.choices(string.digits, k=length))
 
 
 class RayMetricsRecorder:
@@ -226,34 +259,42 @@ class RayMetricsRecorder:
                 hist.observe(value, tags=tags)
 
         for item in metrics:
-            if 'reference' in item:
+            if "reference" in item:
                 metrics_list = item["metrics"]
             else:
                 metrics_list = [item]
 
             for record in metrics_list:
                 pipeline_stats = record["timings_stats"]
-                if 'pipeline_total' in pipeline_stats:
-                    _observe_all(self.pipeline_total_hist, pipeline_stats["pipeline_total"])
-                if 'page_parse' in pipeline_stats:
+                if "pipeline_total" in pipeline_stats:
+                    _observe_all(
+                        self.pipeline_total_hist, pipeline_stats["pipeline_total"]
+                    )
+                if "page_parse" in pipeline_stats:
                     _observe_all(self.page_parse_hist, pipeline_stats["page_parse"])
-                if 'ocr' in pipeline_stats:
+                if "ocr" in pipeline_stats:
                     _observe_all(self.ocr_hist, pipeline_stats["ocr"])
-                if 'layout' in pipeline_stats:
+                if "layout" in pipeline_stats:
                     _observe_all(self.layout_hist, pipeline_stats["layout"])
-                if 'table_structure' in pipeline_stats:
-                    _observe_all(self.table_structure_hist, pipeline_stats["table_structure"])
-                if 'page_assemble' in pipeline_stats:
-                    _observe_all(self.page_assemble_hist, pipeline_stats["page_assemble"])
-                if 'doc_assemble' in pipeline_stats:
+                if "table_structure" in pipeline_stats:
+                    _observe_all(
+                        self.table_structure_hist, pipeline_stats["table_structure"]
+                    )
+                if "page_assemble" in pipeline_stats:
+                    _observe_all(
+                        self.page_assemble_hist, pipeline_stats["page_assemble"]
+                    )
+                if "doc_assemble" in pipeline_stats:
                     _observe_all(self.doc_assemble_hist, pipeline_stats["doc_assemble"])
-                if 'reading_order' in pipeline_stats:
-                    _observe_all(self.reading_order_hist, pipeline_stats["reading_order"])
-                if 'doc_enrich' in pipeline_stats:
+                if "reading_order" in pipeline_stats:
+                    _observe_all(
+                        self.reading_order_hist, pipeline_stats["reading_order"]
+                    )
+                if "doc_enrich" in pipeline_stats:
                     _observe_all(self.doc_enrich_hist, pipeline_stats["doc_enrich"])
 
                 document_stats = record["document_stats"]
-                if 'input_format' in document_stats:
+                if "input_format" in document_stats:
                     doc_type = document_stats["input_format"]
                     if doc_type == InputFormat.PDF:
                         self.doc_type_pdf_counter.inc(tags=tags)
@@ -269,7 +310,11 @@ class RayMetricsRecorder:
                         self.doc_type_md_counter.inc(tags=tags)
                     elif doc_type == InputFormat.XLSX:
                         self.doc_type_xlsx_counter.inc(tags=tags)
-                    elif doc_type in (InputFormat.XML_USPTO, InputFormat.XML_JATS, InputFormat.XML_XBRL):
+                    elif doc_type in (
+                        InputFormat.XML_USPTO,
+                        InputFormat.XML_JATS,
+                        InputFormat.XML_XBRL,
+                    ):
                         self.doc_type_xml_counter.inc(tags=tags)
                     elif doc_type == InputFormat.XML_DOCLANG:
                         self.doc_type_doclang_counter.inc(tags=tags)
@@ -277,19 +322,21 @@ class RayMetricsRecorder:
                         self.doc_type_docling_counter.inc(tags=tags)
                     else:
                         self.doc_type_other_counter.inc(tags=tags)
-                if 'num_pages' in document_stats:
+                if "num_pages" in document_stats:
                     self.num_pages_hist.inc(document_stats["num_pages"], tags=tags)
-                if 'pictures' in document_stats:
+                if "pictures" in document_stats:
                     self.pictures_hist.inc(document_stats["pictures"], tags=tags)
-                if 'tables' in document_stats:
+                if "tables" in document_stats:
                     self.tables_hist.inc(document_stats["tables"], tags=tags)
-                if 'key_value_items' in document_stats:
-                    self.key_value_items_hist.inc(document_stats["key_value_items"], tags=tags)
-                if 'form_items' in document_stats:
+                if "key_value_items" in document_stats:
+                    self.key_value_items_hist.inc(
+                        document_stats["key_value_items"], tags=tags
+                    )
+                if "form_items" in document_stats:
                     self.form_items_hist.inc(document_stats["form_items"], tags=tags)
-                if 'texts' in document_stats:
+                if "texts" in document_stats:
                     self.texts_hist.inc(document_stats["texts"], tags=tags)
-                if 'groups' in document_stats:
+                if "groups" in document_stats:
                     self.groups_hist.inc(document_stats["groups"], tags=tags)
 
                 conv_status = record["status"]

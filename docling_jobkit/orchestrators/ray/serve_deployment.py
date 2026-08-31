@@ -19,7 +19,9 @@ from pydantic import BaseModel
 from ray import ObjectRef, serve
 
 from docling_jobkit.orchestrators.ray.metrics_recorder import RayMetricsRecorder
-from docling_jobkit.orchestrators.ray.metrics_utils import get_metrics_from_exportable_doc
+from docling_jobkit.orchestrators.ray.metrics_utils import (
+    get_metrics_from_exportable_doc,
+)
 
 from docling.datamodel.base_models import (
     ConversionStatus,
@@ -692,9 +694,7 @@ class DoclingProcessorConverterDeployment:
                 return conv_results
             exportable = _to_exportable_documents(request.task, conv_results)
             if self.metrics is not None:
-                metrics = [
-                    get_metrics_from_exportable_doc(doc) for doc in exportable
-                ]
+                metrics = [get_metrics_from_exportable_doc(doc) for doc in exportable]
                 self.metrics.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             result = await asyncio.to_thread(
                 lambda: self._build_task_result(
@@ -718,9 +718,7 @@ class DoclingProcessorConverterDeployment:
                 return conv_results
             exportable = _to_exportable_documents(request.task, conv_results)
             if self.metrics is not None:
-                metrics = [
-                    get_metrics_from_exportable_doc(doc) for doc in exportable
-                ]
+                metrics = [get_metrics_from_exportable_doc(doc) for doc in exportable]
                 self.metrics.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             result = await asyncio.to_thread(
                 lambda: self._build_task_result(
@@ -746,9 +744,7 @@ class DoclingProcessorConverterDeployment:
                 request.chunk, conv_results
             )
             if self.metrics is not None:
-                metrics = [
-                    get_metrics_from_exportable_doc(doc) for doc in exportable
-                ]
+                metrics = [get_metrics_from_exportable_doc(doc) for doc in exportable]
                 self.metrics.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             result = await asyncio.to_thread(
                 lambda: self._build_task_result(
@@ -1071,7 +1067,6 @@ class DoclingProcessorCoordinatorDeployment:
         self.metrics = RayMetricsRecorder() if config.generate_metrics else None
 
         _log.setLevel(self.config.log_level.upper())
-
 
     async def process_task(self, task: Task) -> DoclingTaskResult:
         task_start = datetime.datetime.now(datetime.timezone.utc)
@@ -1539,7 +1534,9 @@ class DoclingProcessorCoordinatorDeployment:
                 f"Task {task.task_id} was terminalized before converter dispatch"
             )
         try:
-            return await self.converter_handle.process_converter_request.remote(request=request, tenant_id=tenant_id)
+            return await self.converter_handle.process_converter_request.remote(
+                request=request, tenant_id=tenant_id
+            )
         finally:
             await self.redis_manager.release_converter_units(tenant_id, task.task_id, 1)
 
@@ -1813,7 +1810,7 @@ class DoclingProcessorCoordinatorDeployment:
                 chunk=chunk,
                 expected_doc_count=expected_doc_count,
             ),
-            tenant_id=tenant_id
+            tenant_id=tenant_id,
         )
 
     def _should_materialize_pdf(self, task: Task) -> bool:
@@ -1871,7 +1868,11 @@ class DoclingProcessorCoordinatorDeployment:
                     if granted == 0:
                         break  # at tenant ceiling; drain an in-flight slice first
                     in_flight.add(
-                        asyncio.create_task(self._execute_slice_request(request=next_request, tenant_id=tenant_id))
+                        asyncio.create_task(
+                            self._execute_slice_request(
+                                request=next_request, tenant_id=tenant_id
+                            )
+                        )
                     )
                     next_request = next(pending_requests, None)
                 if not in_flight:
@@ -1896,12 +1897,16 @@ class DoclingProcessorCoordinatorDeployment:
 
         return collected_results
 
-    async def _execute_slice_request(self, request: SliceConvertRequest, tenant_id: str) -> ObjectRef:
+    async def _execute_slice_request(
+        self, request: SliceConvertRequest, tenant_id: str
+    ) -> ObjectRef:
         try:
             # On success the converter returns an ObjectRef pointing to the
             # ExportableDocument in the plasma store — the coordinator never
             # holds the document object itself while waiting for other slices.
-            return await self.converter_handle.process_converter_request.remote(request=request, tenant_id=tenant_id)
+            return await self.converter_handle.process_converter_request.remote(
+                request=request, tenant_id=tenant_id
+            )
         except Exception as exc:
             _log.warning(
                 "Coordinator replica %s: slice %s for %s failed: %s",

@@ -41,7 +41,7 @@ def collect_doc_stats(exp_doc: ExportableDocument):
 
     doc_stats["input_format"] = exp_doc.document_type
     doc = exp_doc.document
-    if 'pages' in doc:
+    if "pages" in doc:
         doc_stats["num_pages"] = len(doc.pages)
         doc_stats["pictures"] = len(doc.pictures)
         doc_stats["tables"] = len(doc.tables)
@@ -51,12 +51,13 @@ def collect_doc_stats(exp_doc: ExportableDocument):
         doc_stats["groups"] = len(doc.groups)
     return doc_stats
 
+
 # def get_metrics_from_conversion_result(conversion_result: ConversionResult):
 #     metrics = {}
 #     metrics["document_hash"] = conversion_result.input.document_hash
 #     metrics["timings_stats"] = reduce_timings(timings=conversion_result.timings)
 #     metrics["document_stats"] = collect_doc_stats(conv_res=conversion_result)
-    
+
 #     conv_status = conversion_result.status
 #     if conv_status == ConversionStatus.SUCCESS:
 #         status = "success"
@@ -68,12 +69,13 @@ def collect_doc_stats(exp_doc: ExportableDocument):
 
 #     return metrics
 
+
 def get_metrics_from_exportable_doc(exp_doc: ExportableDocument):
     metrics = {}
     metrics["document_hash"] = exp_doc.document_hash
     metrics["timings_stats"] = reduce_timings(timings=exp_doc.timings)
     metrics["document_stats"] = collect_doc_stats(exp_doc=exp_doc)
-    
+
     # conv_status = exp_doc.status
     # if conv_status == ConversionStatus.SUCCESS:
     #     status = "success"
