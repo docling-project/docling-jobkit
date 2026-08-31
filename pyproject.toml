@@ -61,9 +61,7 @@ onnxruntime = [
 # asr = [
 #     "docling[asr]~=2.53",
 # ]
-# kfp = [
-#     "kfp[kubernetes]>=2.10.0",
-# ]
+
 rq = [
     "rq~=2.4",
     "msgpack~=1.1",
@@ -140,12 +138,6 @@ override-dependencies = [
   "protobuf<7",
 ]
 
-# conflicts = [
-#     [
-#         { extra = "ray" },
-#         { extra = "kfp" },
-#     ],
-# ]
 
 [tool.hatch.build.targets.sdist]
 include = ["docling_jobkit"]
@@ -250,8 +242,6 @@ module = [
     "easyocr.*",
     "tesserocr.*",
     "rapidocr_onnxruntime.*",
-    # "kfp.*",
-    # "kfp_server_api.*",
     "pandas.*",
     "msgpack.*",
     "mlx_vlm.*",

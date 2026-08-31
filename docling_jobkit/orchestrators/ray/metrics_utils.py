@@ -51,37 +51,11 @@ def collect_doc_stats(exp_doc: ExportableDocument):
     return doc_stats
 
 
-# def get_metrics_from_conversion_result(conversion_result: ConversionResult):
-#     metrics = {}
-#     metrics["document_hash"] = conversion_result.input.document_hash
-#     metrics["timings_stats"] = reduce_timings(timings=conversion_result.timings)
-#     metrics["document_stats"] = collect_doc_stats(conv_res=conversion_result)
-
-#     conv_status = conversion_result.status
-#     if conv_status == ConversionStatus.SUCCESS:
-#         status = "success"
-#     elif conv_status == ConversionStatus.PARTIAL_SUCCESS:
-#         status = "partial"
-#     else:
-#         status = "failed"
-#     metrics["status"] = status
-
-#     return metrics
-
-
 def get_metrics_from_exportable_doc(exp_doc: ExportableDocument):
     metrics: dict[str, Any] = {}
     metrics["document_hash"] = exp_doc.document_hash
     metrics["timings_stats"] = reduce_timings(timings=exp_doc.timings)
     metrics["document_stats"] = collect_doc_stats(exp_doc=exp_doc)
-
-    # conv_status = exp_doc.status
-    # if conv_status == ConversionStatus.SUCCESS:
-    #     status = "success"
-    # elif conv_status == ConversionStatus.PARTIAL_SUCCESS:
-    #     status = "partial"
-    # else:
-    #     status = "failed"
     metrics["status"] = exp_doc.status
 
     return metrics
