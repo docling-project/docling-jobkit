@@ -314,9 +314,7 @@ class RayMetricsRecorder:
         if "tables" in document_stats:
             self.tables_hist.inc(document_stats["tables"], tags=tags)
         if "key_value_items" in document_stats:
-            self.key_value_items_hist.inc(
-                document_stats["key_value_items"], tags=tags
-            )
+            self.key_value_items_hist.inc(document_stats["key_value_items"], tags=tags)
         if "form_items" in document_stats:
             self.form_items_hist.inc(document_stats["form_items"], tags=tags)
         if "texts" in document_stats:
