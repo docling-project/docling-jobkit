@@ -1,8 +1,5 @@
 """Ray Serve metrics generation utilities."""
 
-from typing import TYPE_CHECKING, Optional
-from docling.datamodel.document import ConversionResult
-from docling.datamodel.base_models import ConversionStatus
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
 
 # Pipeline stages we know how to map onto a dcls_* histogram in emit_metrics().

@@ -239,6 +239,99 @@ class RayMetricsRecorder:
             tag_keys=_TAG_KEYS,
         )
 
+    def _observe_all(self, hist: Histogram, values: list, tags: dict) -> None:
+        # Observe each raw sample (not a pre-aggregated min/max/median) so
+        # Prometheus can compute accurate percentiles and surface a single
+        # slow page instead of it being smoothed into a document average.
+        for value in values:
+            hist.observe(value, tags=tags)
+
+    def _emit_timing_stats(self, pipeline_stats: dict, tags: dict) -> None:
+        if "pipeline_total" in pipeline_stats:
+            self._observe_all(
+                self.pipeline_total_hist, pipeline_stats["pipeline_total"], tags
+            )
+        if "page_parse" in pipeline_stats:
+            self._observe_all(self.page_parse_hist, pipeline_stats["page_parse"], tags)
+        if "ocr" in pipeline_stats:
+            self._observe_all(self.ocr_hist, pipeline_stats["ocr"], tags)
+        if "layout" in pipeline_stats:
+            self._observe_all(self.layout_hist, pipeline_stats["layout"], tags)
+        if "table_structure" in pipeline_stats:
+            self._observe_all(
+                self.table_structure_hist, pipeline_stats["table_structure"], tags
+            )
+        if "page_assemble" in pipeline_stats:
+            self._observe_all(
+                self.page_assemble_hist, pipeline_stats["page_assemble"], tags
+            )
+        if "doc_assemble" in pipeline_stats:
+            self._observe_all(
+                self.doc_assemble_hist, pipeline_stats["doc_assemble"], tags
+            )
+        if "reading_order" in pipeline_stats:
+            self._observe_all(
+                self.reading_order_hist, pipeline_stats["reading_order"], tags
+            )
+        if "doc_enrich" in pipeline_stats:
+            self._observe_all(self.doc_enrich_hist, pipeline_stats["doc_enrich"], tags)
+
+    def _emit_doc_type_counter(self, doc_type, tags: dict) -> None:
+        if doc_type == InputFormat.PDF:
+            self.doc_type_pdf_counter.inc(tags=tags)
+        elif doc_type == InputFormat.DOCX:
+            self.doc_type_docx_counter.inc(tags=tags)
+        elif doc_type == InputFormat.PPTX:
+            self.doc_type_pptx_counter.inc(tags=tags)
+        elif doc_type == InputFormat.HTML:
+            self.doc_type_html_counter.inc(tags=tags)
+        elif doc_type == InputFormat.IMAGE:
+            self.doc_type_image_counter.inc(tags=tags)
+        elif doc_type == InputFormat.MD:
+            self.doc_type_md_counter.inc(tags=tags)
+        elif doc_type == InputFormat.XLSX:
+            self.doc_type_xlsx_counter.inc(tags=tags)
+        elif doc_type in (
+            InputFormat.XML_USPTO,
+            InputFormat.XML_JATS,
+            InputFormat.XML_XBRL,
+        ):
+            self.doc_type_xml_counter.inc(tags=tags)
+        elif doc_type == InputFormat.XML_DOCLANG:
+            self.doc_type_doclang_counter.inc(tags=tags)
+        elif doc_type == InputFormat.JSON_DOCLING:
+            self.doc_type_docling_counter.inc(tags=tags)
+        else:
+            self.doc_type_other_counter.inc(tags=tags)
+
+    def _emit_document_stats(self, document_stats: dict, tags: dict) -> None:
+        if "input_format" in document_stats:
+            self._emit_doc_type_counter(document_stats["input_format"], tags)
+        if "num_pages" in document_stats:
+            self.num_pages_hist.inc(document_stats["num_pages"], tags=tags)
+        if "pictures" in document_stats:
+            self.pictures_hist.inc(document_stats["pictures"], tags=tags)
+        if "tables" in document_stats:
+            self.tables_hist.inc(document_stats["tables"], tags=tags)
+        if "key_value_items" in document_stats:
+            self.key_value_items_hist.inc(
+                document_stats["key_value_items"], tags=tags
+            )
+        if "form_items" in document_stats:
+            self.form_items_hist.inc(document_stats["form_items"], tags=tags)
+        if "texts" in document_stats:
+            self.texts_hist.inc(document_stats["texts"], tags=tags)
+        if "groups" in document_stats:
+            self.groups_hist.inc(document_stats["groups"], tags=tags)
+
+    def _emit_status_counter(self, conv_status: str, tags: dict) -> None:
+        if conv_status == "success":
+            self.success_counter.inc(tags=tags)
+        elif conv_status == "partial_success":
+            self.partial_counter.inc(tags=tags)
+        else:
+            self.failed_counter.inc(tags=tags)
+
     def emit_metrics(self, metrics: list, tenant_id: str) -> None:
         replica_tag = serve.get_replica_context().replica_tag
         if not replica_tag:
@@ -251,13 +344,6 @@ class RayMetricsRecorder:
         tags = {"tenant_id": tenant_id, "replica_tag": replica_tag}
         self.metric_emission_counter.inc(tags=tags)
 
-        def _observe_all(hist: Histogram, values: list) -> None:
-            # Observe each raw sample (not a pre-aggregated min/max/median) so
-            # Prometheus can compute accurate percentiles and surface a single
-            # slow page instead of it being smoothed into a document average.
-            for value in values:
-                hist.observe(value, tags=tags)
-
         for item in metrics:
             if "reference" in item:
                 metrics_list = item["metrics"]
@@ -265,87 +351,9 @@ class RayMetricsRecorder:
                 metrics_list = [item]
 
             for record in metrics_list:
-                pipeline_stats = record["timings_stats"]
-                if "pipeline_total" in pipeline_stats:
-                    _observe_all(
-                        self.pipeline_total_hist, pipeline_stats["pipeline_total"]
-                    )
-                if "page_parse" in pipeline_stats:
-                    _observe_all(self.page_parse_hist, pipeline_stats["page_parse"])
-                if "ocr" in pipeline_stats:
-                    _observe_all(self.ocr_hist, pipeline_stats["ocr"])
-                if "layout" in pipeline_stats:
-                    _observe_all(self.layout_hist, pipeline_stats["layout"])
-                if "table_structure" in pipeline_stats:
-                    _observe_all(
-                        self.table_structure_hist, pipeline_stats["table_structure"]
-                    )
-                if "page_assemble" in pipeline_stats:
-                    _observe_all(
-                        self.page_assemble_hist, pipeline_stats["page_assemble"]
-                    )
-                if "doc_assemble" in pipeline_stats:
-                    _observe_all(self.doc_assemble_hist, pipeline_stats["doc_assemble"])
-                if "reading_order" in pipeline_stats:
-                    _observe_all(
-                        self.reading_order_hist, pipeline_stats["reading_order"]
-                    )
-                if "doc_enrich" in pipeline_stats:
-                    _observe_all(self.doc_enrich_hist, pipeline_stats["doc_enrich"])
-
-                document_stats = record["document_stats"]
-                if "input_format" in document_stats:
-                    doc_type = document_stats["input_format"]
-                    if doc_type == InputFormat.PDF:
-                        self.doc_type_pdf_counter.inc(tags=tags)
-                    elif doc_type == InputFormat.DOCX:
-                        self.doc_type_docx_counter.inc(tags=tags)
-                    elif doc_type == InputFormat.PPTX:
-                        self.doc_type_pptx_counter.inc(tags=tags)
-                    elif doc_type == InputFormat.HTML:
-                        self.doc_type_html_counter.inc(tags=tags)
-                    elif doc_type == InputFormat.IMAGE:
-                        self.doc_type_image_counter.inc(tags=tags)
-                    elif doc_type == InputFormat.MD:
-                        self.doc_type_md_counter.inc(tags=tags)
-                    elif doc_type == InputFormat.XLSX:
-                        self.doc_type_xlsx_counter.inc(tags=tags)
-                    elif doc_type in (
-                        InputFormat.XML_USPTO,
-                        InputFormat.XML_JATS,
-                        InputFormat.XML_XBRL,
-                    ):
-                        self.doc_type_xml_counter.inc(tags=tags)
-                    elif doc_type == InputFormat.XML_DOCLANG:
-                        self.doc_type_doclang_counter.inc(tags=tags)
-                    elif doc_type == InputFormat.JSON_DOCLING:
-                        self.doc_type_docling_counter.inc(tags=tags)
-                    else:
-                        self.doc_type_other_counter.inc(tags=tags)
-                if "num_pages" in document_stats:
-                    self.num_pages_hist.inc(document_stats["num_pages"], tags=tags)
-                if "pictures" in document_stats:
-                    self.pictures_hist.inc(document_stats["pictures"], tags=tags)
-                if "tables" in document_stats:
-                    self.tables_hist.inc(document_stats["tables"], tags=tags)
-                if "key_value_items" in document_stats:
-                    self.key_value_items_hist.inc(
-                        document_stats["key_value_items"], tags=tags
-                    )
-                if "form_items" in document_stats:
-                    self.form_items_hist.inc(document_stats["form_items"], tags=tags)
-                if "texts" in document_stats:
-                    self.texts_hist.inc(document_stats["texts"], tags=tags)
-                if "groups" in document_stats:
-                    self.groups_hist.inc(document_stats["groups"], tags=tags)
-
-                conv_status = record["status"]
-                if conv_status == "success":
-                    self.success_counter.inc(tags=tags)
-                elif conv_status == "partial_success":
-                    self.partial_counter.inc(tags=tags)
-                else:
-                    self.failed_counter.inc(tags=tags)
+                self._emit_timing_stats(record["timings_stats"], tags)
+                self._emit_document_stats(record["document_stats"], tags)
+                self._emit_status_counter(record["status"], tags)
 
     def emit_failure_metrics(self, tenant_id: str) -> None:
         """Record a failed conversion attempt when no ExportableDocument was

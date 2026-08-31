@@ -18,16 +18,10 @@ import ray
 from pydantic import BaseModel
 from ray import ObjectRef, serve
 
-from docling_jobkit.orchestrators.ray.metrics_recorder import RayMetricsRecorder
-from docling_jobkit.orchestrators.ray.metrics_utils import (
-    get_metrics_from_exportable_doc,
-)
-
 from docling.datamodel.base_models import (
     ConversionStatus,
     DocumentStream,
     ErrorItem,
-    InputFormat,
 )
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.service.callbacks import (
@@ -96,6 +90,10 @@ from docling_jobkit.orchestrators.ray.failure_classification import (
 )
 from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
+)
+from docling_jobkit.orchestrators.ray.metrics_recorder import RayMetricsRecorder
+from docling_jobkit.orchestrators.ray.metrics_utils import (
+    get_metrics_from_exportable_doc,
 )
 from docling_jobkit.orchestrators.ray.models import (
     ConverterFailureResult,
@@ -169,7 +167,6 @@ def _to_exportable_documents_from_chunk(
     conv_results: list[ConversionResult],
 ) -> list[ExportableDocument]:
     exportable: list[ExportableDocument] = []
-    metrics = []
     for idx, conv_res in enumerate(conv_results):
         ref = chunk.refs[idx] if idx < len(chunk.refs) else None
         exportable.append(
