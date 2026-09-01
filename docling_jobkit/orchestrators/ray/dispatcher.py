@@ -20,6 +20,7 @@ from docling_jobkit.orchestrators.completion_callbacks import (
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.ray.failure_classification import (
     classify_ray_public_task_failure,
+    task_target_kind,
 )
 from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
@@ -442,9 +443,7 @@ class RayTaskDispatcher:
                 phase=FailurePhase.ORCHESTRATION,
                 details={
                     "task_size": str(task_size),
-                    "target_kind": getattr(
-                        task.target, "kind", type(task.target).__name__
-                    ),
+                    "target_kind": task_target_kind(task),
                 },
             )
             error_message = failure.message

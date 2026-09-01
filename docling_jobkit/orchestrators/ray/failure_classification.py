@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import ray.exceptions as ray_exceptions
 
 from docling.datamodel.service.responses import (
@@ -12,6 +14,21 @@ from docling_jobkit.public_errors import (
     PipelineInitializationError,
     classify_public_task_failure,
 )
+
+if TYPE_CHECKING:
+    from docling_jobkit.datamodel.task import Task
+
+
+def task_target_kind(task: "Task") -> str:
+    """Return the ``kind`` of the first target, or its type name as a fallback.
+
+    ``task.target`` is always ``None`` at runtime because the model validator
+    normalises it into ``task.targets`` immediately on construction.  Reading
+    ``task.targets[0]`` is therefore the correct way to reach the first target.
+    """
+    targets = task.targets
+    first = targets[0] if targets else None
+    return getattr(first, "kind", type(first).__name__)
 
 
 def _unwrap_ray_failure_exception(exc: BaseException) -> BaseException:

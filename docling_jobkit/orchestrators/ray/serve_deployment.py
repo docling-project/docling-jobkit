@@ -91,6 +91,7 @@ from docling_jobkit.orchestrators.ray.config import (
 from docling_jobkit.orchestrators.ray.failure_classification import (
     classify_ray_public_task_failure,
     is_request_wide_capability_failure,
+    task_target_kind,
 )
 from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
@@ -697,14 +698,27 @@ class DoclingProcessorConverterDeployment:
             if isinstance(conv_results, ConverterFailureResult):
                 return conv_results
             exportable = _to_exportable_documents(request.task, conv_results)
-            result = await asyncio.to_thread(
-                lambda: self._build_task_result(
-                    request.task,
-                    exportable,
-                    expected_doc_count=request.expected_doc_count,
-                    start_time=request_start,
+            try:
+                result = await asyncio.to_thread(
+                    lambda: self._build_task_result(
+                        request.task,
+                        exportable,
+                        expected_doc_count=request.expected_doc_count,
+                        start_time=request_start,
+                    )
                 )
-            )
+            except Exception as exc:
+                return ConverterFailureResult(
+                    failure=classify_ray_public_task_failure(
+                        exc,
+                        task_id=request.task.task_id,
+                        phase=FailurePhase.EXECUTION,
+                        details={
+                            "task_size": str(len(request.task.sources)),
+                            "target_kind": task_target_kind(request.task),
+                        },
+                    )
+                )
             self.documents_processed += result.task_result.num_converted
         elif isinstance(request, MaterializedConvertRequest):
             request_start = time.monotonic()
@@ -713,14 +727,27 @@ class DoclingProcessorConverterDeployment:
                 lambda: self._convert_materialized_request(request),
             )
             exportable = _to_exportable_documents(request.task, conv_results)
-            result = await asyncio.to_thread(
-                lambda: self._build_task_result(
-                    request.task,
-                    exportable,
-                    expected_doc_count=request.source_count,
-                    start_time=request_start,
+            try:
+                result = await asyncio.to_thread(
+                    lambda: self._build_task_result(
+                        request.task,
+                        exportable,
+                        expected_doc_count=request.source_count,
+                        start_time=request_start,
+                    )
                 )
-            )
+            except Exception as exc:
+                return ConverterFailureResult(
+                    failure=classify_ray_public_task_failure(
+                        exc,
+                        task_id=request.task.task_id,
+                        phase=FailurePhase.EXECUTION,
+                        details={
+                            "task_size": str(len(request.task.sources)),
+                            "target_kind": task_target_kind(request.task),
+                        },
+                    )
+                )
             self.documents_processed += result.task_result.num_converted
         elif isinstance(request, SourceChunkConvertRequest):
             request_start = time.monotonic()
@@ -734,15 +761,28 @@ class DoclingProcessorConverterDeployment:
             exportable = _to_exportable_documents_from_chunk(
                 request.chunk, conv_results
             )
-            result = await asyncio.to_thread(
-                lambda: self._build_task_result(
-                    request.task,
-                    exportable,
-                    expected_doc_count=request.expected_doc_count,
-                    start_time=request_start,
-                    callback_mode=_SOURCE_CHUNK_CALLBACK_MODE,
+            try:
+                result = await asyncio.to_thread(
+                    lambda: self._build_task_result(
+                        request.task,
+                        exportable,
+                        expected_doc_count=request.expected_doc_count,
+                        start_time=request_start,
+                        callback_mode=_SOURCE_CHUNK_CALLBACK_MODE,
+                    )
                 )
-            )
+            except Exception as exc:
+                return ConverterFailureResult(
+                    failure=classify_ray_public_task_failure(
+                        exc,
+                        task_id=request.task.task_id,
+                        phase=FailurePhase.EXECUTION,
+                        details={
+                            "task_size": str(len(request.task.sources)),
+                            "target_kind": task_target_kind(request.task),
+                        },
+                    )
+                )
             self.documents_processed += result.task_result.num_converted
         elif isinstance(request, SliceConvertRequest):
             slice_ref, slice_status = await self._run_with_retry(
@@ -779,9 +819,7 @@ class DoclingProcessorConverterDeployment:
                         phase=FailurePhase.EXECUTION,
                         details={
                             "task_size": str(len(task.sources)),
-                            "target_kind": getattr(
-                                task.target, "kind", type(task.target).__name__
-                            ),
+                            "target_kind": task_target_kind(task),
                         },
                     )
                     if is_client_actionable_failure(failure):
@@ -1184,9 +1222,7 @@ class DoclingProcessorCoordinatorDeployment:
                 phase=FailurePhase.EXECUTION,
                 details={
                     "task_size": str(task_size),
-                    "target_kind": getattr(
-                        task.target, "kind", type(task.target).__name__
-                    ),
+                    "target_kind": task_target_kind(task),
                 },
             )
             error_message = failure.message

@@ -413,3 +413,63 @@ def test_classify_target_write_error_preserves_phase():
     assert failure.category == FailureCategory.TARGET_UNAVAILABLE
     assert failure.phase == FailurePhase.ORCHESTRATION
     assert failure.message == "Result could not be written to the requested target."
+
+
+# ---------------------------------------------------------------------------
+# task_target_kind helper
+# ---------------------------------------------------------------------------
+
+
+def test_task_target_kind_with_targets_form():
+    """task.targets[0].kind is returned when the multi-target form is used."""
+    pytest.importorskip("ray")
+    from docling.datamodel.service.requests import FileSourceRequest as FileSource
+    from docling.datamodel.service.targets import InBodyTarget
+
+    from docling_jobkit.orchestrators.ray.failure_classification import task_target_kind
+
+    # The model validator normalises target → targets, so task.target is always None
+    # at runtime.  task_target_kind must read task.targets[0] instead.
+    task = Task(
+        task_id="t-kind",
+        sources=[FileSource(base64_string="ZHVtbXk=", filename="doc.pdf")],
+        target=InBodyTarget(),
+    )
+    assert task.target is None  # validator cleared the singular field
+    assert task_target_kind(task) == InBodyTarget().kind
+
+
+def test_task_target_kind_with_singular_target_form():
+    """Behaviour is the same whether the caller originally used target= or targets=."""
+    pytest.importorskip("ray")
+    from docling.datamodel.service.requests import FileSourceRequest as FileSource
+    from docling.datamodel.service.targets import PresignedUrlTarget
+
+    from docling_jobkit.orchestrators.ray.failure_classification import task_target_kind
+
+    task = Task(
+        task_id="t-kind2",
+        sources=[FileSource(base64_string="ZHVtbXk=", filename="doc.pdf")],
+        targets=[PresignedUrlTarget()],
+    )
+    assert task_target_kind(task) == PresignedUrlTarget().kind
+
+
+def test_task_target_kind_no_targets():
+    """Falls back gracefully when targets is unexpectedly empty."""
+    pytest.importorskip("ray")
+    from docling.datamodel.service.requests import FileSourceRequest as FileSource
+
+    from docling_jobkit.orchestrators.ray.failure_classification import task_target_kind
+
+    task = Task(
+        task_id="t-kind3",
+        sources=[FileSource(base64_string="ZHVtbXk=", filename="doc.pdf")],
+    )
+    # Default target (InBodyTarget) is injected by the validator; kind is present.
+    # The exact string is InBodyTarget().kind — assert it is not the "NoneType"
+    # fallback that the old getattr(task.target, ...) lookup produced.
+    from docling.datamodel.service.targets import InBodyTarget
+
+    assert task_target_kind(task) == InBodyTarget().kind
+    assert task_target_kind(task) != "NoneType"

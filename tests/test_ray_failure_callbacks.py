@@ -553,3 +553,118 @@ def test_decode_dispatch_callbacks_tolerates_legacy_and_corrupt_state() -> None:
     assert RedisStateManager.decode_dispatch_callbacks({}) == []
     assert RedisStateManager.decode_dispatch_callbacks({"callbacks": "not-json"}) == []
     assert RedisStateManager.decode_dispatch_callbacks({"callbacks": "[{}]"}) == []
+
+
+@pytest.mark.asyncio
+async def test_target_write_error_in_build_task_result_returns_converter_failure_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TargetWriteError raised inside _build_task_result must be caught by the
+    converter's process_converter_request and returned as a ConverterFailureResult,
+    not propagate as an unhandled exception that Ray logs as 'Request failed'."""
+    from unittest.mock import patch
+
+    from docling_jobkit.orchestrators.ray.models import (
+        ConverterFailureResult,
+        PassthroughTaskRequest,
+    )
+    from docling_jobkit.orchestrators.ray.serve_deployment import (
+        DoclingProcessorConverterDeployment,
+    )
+    from docling_jobkit.public_errors import TargetWriteError
+
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/", scratch_dir=tmp_path
+    )
+    monkeypatch.setattr(
+        "docling_jobkit.orchestrators.ray.serve_deployment.serve.get_replica_context",
+        lambda: type("ReplicaContext", (), {"replica_id": "converter-1"})(),
+    )
+    converter_manager_config = MagicMock()
+    converter_manager_config.allow_external_plugins = False
+    converter_cls = getattr(DoclingProcessorConverterDeployment, "func_or_class", None)
+    assert converter_cls is not None
+
+    with patch(
+        "docling_jobkit.orchestrators.ray.serve_deployment.DoclingConverterManager"
+    ):
+        converter = converter_cls(
+            converter_manager_config=converter_manager_config,
+            config=config,
+        )
+
+    task = _task_with_callback(
+        sources=[HttpSource(url="https://example.invalid/doc.pdf")],
+        target=PresignedUrlTarget(),
+    )
+    request = PassthroughTaskRequest(task=task)
+
+    kafka_error = TargetWriteError(
+        "Could not fetch Kafka metadata for topic 'docling.chunks': "
+        "Local: Broker transport failure"
+    )
+
+    # Patch _build_task_result on the instance to simulate target write failing
+    # after conversion succeeds — the path that was previously unhandled.
+    with (
+        patch.object(converter, "_run_with_retry", return_value=MagicMock()),
+        patch.object(converter, "_build_task_result", side_effect=kafka_error),
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment._to_exportable_documents",
+            return_value=[],
+        ),
+    ):
+        result = await converter.process_converter_request(request)
+
+    assert isinstance(result, ConverterFailureResult)
+    assert result.failure.category.value == "target_unavailable"
+    assert result.failure.retryable is False
+    assert (
+        result.failure.message == "Result could not be written to the requested target."
+    )
+    assert result.failure.details.get("target_kind") == PresignedUrlTarget().kind
+
+
+@pytest.mark.asyncio
+async def test_target_write_error_details_contain_correct_target_kind(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recorded_callbacks: list[dict[str, Any]],
+) -> None:
+    """failure.details['target_kind'] must reflect the actual target, not 'NoneType'.
+
+    task.target is always None at runtime (normalised into task.targets by the
+    model validator), so the old getattr(task.target, ...) lookup always produced
+    'NoneType'.  The fix reads task.targets[0] instead.
+
+    The coordinator re-raises after emitting the callback, so pytest.raises is used
+    and the published TaskUpdate is inspected for the correct target_kind detail.
+    """
+    from docling_jobkit.public_errors import TargetWriteError
+
+    class TargetWriteConverter:
+        async def remote(self, request: object) -> Any:
+            raise TargetWriteError("Broker transport failure")
+
+    manager = _FakeRedisManager()
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/", scratch_dir=tmp_path
+    )
+    task = _task_with_callback(
+        sources=[HttpSource(url="https://example.invalid/doc.pdf")],
+        target=PresignedUrlTarget(),
+    )
+    deployment = _make_coordinator(
+        config,
+        SimpleNamespace(process_converter_request=TargetWriteConverter()),
+        manager,
+        monkeypatch,
+    )
+
+    with pytest.raises(TargetWriteError):
+        await deployment.process_task(task)
+
+    progress = _only_task_completed(recorded_callbacks)
+    assert progress.failure.category == FailureCategory.TARGET_UNAVAILABLE
+    assert progress.failure.details.get("target_kind") == PresignedUrlTarget().kind
