@@ -339,6 +339,45 @@ class TestOptionsParsingPreset:
         options = manager._parse_picture_description_options(request)
         assert options is not None
 
+    def test_parse_code_formula_options_with_preset(self):
+        """Test parsing code/formula options from preset."""
+        config = DoclingConverterManagerConfig(
+            default_code_formula_preset="codeformulav2",
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(
+            code_formula_preset="default",
+        )
+
+        options = manager._parse_code_formula_options(request)
+        assert options is not None
+
+    @pytest.mark.parametrize(
+        "request_field, parser_name",
+        [
+            ("vlm_pipeline_preset", "_parse_vlm_options"),
+            ("picture_description_preset", "_parse_picture_description_options"),
+            ("code_formula_preset", "_parse_code_formula_options"),
+            ("table_structure_preset", "_parse_table_structure_options"),
+            ("layout_preset", "_parse_layout_options"),
+            ("ocr_preset", "_parse_ocr_options"),
+        ],
+    )
+    def test_default_alias_resolves_with_stock_config(self, request_field, parser_name):
+        """Every default_*_preset must name a real Docling preset.
+
+        The registries map the alias "default" onto the configured
+        default_<stage>_preset, so a stock config has to be able to resolve
+        "default" for every stage. Picture classification is left out because
+        its docling branch deliberately returns None until the factory exists.
+        """
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        request = ConvertDocumentsOptions(**{request_field: "default"})
+
+        assert getattr(manager, parser_name)(request) is not None
+
 
 def _raw_engine_options() -> dict:
     return {
