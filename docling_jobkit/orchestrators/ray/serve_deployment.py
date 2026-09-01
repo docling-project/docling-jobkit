@@ -96,6 +96,11 @@ from docling_jobkit.orchestrators.ray.failure_classification import (
 from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
 )
+from docling_jobkit.orchestrators.ray.metrics_recorder import RayMetricsRecorder
+from docling_jobkit.orchestrators.ray.metrics_utils import (
+    ConversionMetrics,
+    get_metrics_from_exportable_doc,
+)
 from docling_jobkit.orchestrators.ray.models import (
     ConverterFailureResult,
     ConverterRequest,
@@ -605,6 +610,7 @@ def _assemble_slice_results(
     return ExportableDocument(
         file=successful_results[0].file,
         document_hash=successful_results[0].document_hash,
+        document_type=successful_results[0].document_type,
         status=final_status,
         errors=errors,
         timings=_merge_timings(ordered_results),
@@ -626,15 +632,22 @@ def _finalize_slice_results(
     allow_external_plugins: bool,
     chunker_manager: Optional[DocumentChunkerManager] = None,
     chunking_options: Any = None,
-) -> DoclingTaskResult:
-    """Fetch child slice outputs, merge them, and build the parent task result."""
+) -> tuple[DoclingTaskResult, ConversionMetrics]:
+    """Fetch child slice outputs, merge them, and build the parent task result.
+
+    Returns the task result alongside the merged document's metrics record
+    (see get_metrics_from_exportable_doc); the caller emits it through the
+    coordinator's own RayMetricsRecorder, since the coordinator constructs
+    one whenever generate_metrics is enabled.
+    """
     # This is the only place where full slice documents enter the coordinator's
     # heap, and it runs inside the slice_finalization_semaphore guard.
     slice_results: list[ExportableDocument] = ray.get(slice_refs)
+    merged_document = _assemble_slice_results(slice_results)
 
-    return process_exportable_results(
+    task_result = process_exportable_results(
         task=task,
-        exportable_documents=[_assemble_slice_results(slice_results)],
+        exportable_documents=[merged_document],
         work_dir=work_dir,
         presigned_config=presigned_config,
         callback_invoker=callback_invoker,
@@ -644,6 +657,7 @@ def _finalize_slice_results(
         chunker_manager=chunker_manager,
         chunking_options=chunking_options,
     )
+    return task_result, get_metrics_from_exportable_doc(merged_document)
 
 
 @serve.deployment
@@ -682,8 +696,13 @@ class DoclingProcessorConverterDeployment:
         self.memory_warnings = 0
         self._chunker_manager: DocumentChunkerManager | None = None
 
+        # Pipeline timing histograms stay empty unless the operator also sets
+        # DOCLING_DEBUG_PROFILE_PIPELINE_TIMINGS=true, which docling reads on
+        # startup to enable ConversionResult.timings collection.
+        self.metrics = RayMetricsRecorder() if config.generate_metrics else None
+
     async def process_converter_request(
-        self, request: ConverterRequest
+        self, request: ConverterRequest, tenant_id: str
     ) -> ConverterTaskResult | ConverterFailureResult | ObjectRef:
         if self.config.enable_oom_protection and PSUTIL_AVAILABLE:
             await self._check_memory()
@@ -696,8 +715,13 @@ class DoclingProcessorConverterDeployment:
                 task=request.task,
             )
             if isinstance(conv_results, ConverterFailureResult):
+                if self.metrics is not None:
+                    self.metrics.emit_failure_metrics(tenant_id=tenant_id)
                 return conv_results
             exportable = _to_exportable_documents(request.task, conv_results)
+            if self.metrics is not None:
+                metrics = [get_metrics_from_exportable_doc(doc) for doc in exportable]
+                self.metrics.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             try:
                 result = await asyncio.to_thread(
                     lambda: self._build_task_result(
@@ -725,8 +749,16 @@ class DoclingProcessorConverterDeployment:
             conv_results = await self._run_with_retry(
                 request.filename,
                 lambda: self._convert_materialized_request(request),
+                task=request.task,
             )
+            if isinstance(conv_results, ConverterFailureResult):
+                if self.metrics is not None:
+                    self.metrics.emit_failure_metrics(tenant_id=tenant_id)
+                return conv_results
             exportable = _to_exportable_documents(request.task, conv_results)
+            if self.metrics is not None:
+                metrics = [get_metrics_from_exportable_doc(doc) for doc in exportable]
+                self.metrics.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             try:
                 result = await asyncio.to_thread(
                     lambda: self._build_task_result(
@@ -757,10 +789,15 @@ class DoclingProcessorConverterDeployment:
                 task=request.task,
             )
             if isinstance(conv_results, ConverterFailureResult):
+                if self.metrics is not None:
+                    self.metrics.emit_failure_metrics(tenant_id=tenant_id)
                 return conv_results
             exportable = _to_exportable_documents_from_chunk(
                 request.chunk, conv_results
             )
+            if self.metrics is not None:
+                metrics = [get_metrics_from_exportable_doc(doc) for doc in exportable]
+                self.metrics.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             try:
                 result = await asyncio.to_thread(
                     lambda: self._build_task_result(
@@ -1089,6 +1126,11 @@ class DoclingProcessorCoordinatorDeployment:
         # Lazily-initialized converter manager used only to resolve chunking
         # presets during slice finalization (the coordinator does not convert).
         self._converter_manager: Optional[DoclingConverterManager] = None
+
+        # Pipeline timing histograms stay empty unless the operator also sets
+        # DOCLING_DEBUG_PROFILE_PIPELINE_TIMINGS=true, which docling reads on
+        # startup to enable ConversionResult.timings collection.
+        self.metrics = RayMetricsRecorder() if config.generate_metrics else None
 
         _log.setLevel(self.config.log_level.upper())
 
@@ -1448,7 +1490,7 @@ class DoclingProcessorCoordinatorDeployment:
                     callback_invoker = CallbackInvoker() if task.callbacks else None
                     try:
                         async with self._slice_finalization_semaphore:
-                            return await asyncio.to_thread(
+                            task_result, slice_metrics = await asyncio.to_thread(
                                 _finalize_slice_results,
                                 task=task,
                                 slice_refs=slice_refs,
@@ -1470,6 +1512,12 @@ class DoclingProcessorCoordinatorDeployment:
                         # once finalization is done. Error shells (inline
                         # ExportableDocuments) are also released here.
                         del slice_refs
+                    if self.metrics is not None:
+                        tenant_id = task.metadata.get("tenant_id", "default")
+                        self.metrics.emit_metrics(
+                            metrics=[slice_metrics], tenant_id=tenant_id
+                        )
+                    return task_result
                 else:
                     converter_result = await self._run_single_converter_call(
                         task,
@@ -1555,7 +1603,9 @@ class DoclingProcessorCoordinatorDeployment:
                 f"Task {task.task_id} was terminalized before converter dispatch"
             )
         try:
-            return await self.converter_handle.process_converter_request.remote(request)
+            return await self.converter_handle.process_converter_request.remote(
+                request=request, tenant_id=tenant_id
+            )
         finally:
             await self.redis_manager.release_converter_units(tenant_id, task.task_id, 1)
 
@@ -1811,15 +1861,17 @@ class DoclingProcessorCoordinatorDeployment:
         expected_doc_count: int,
     ) -> ConverterTaskResult:
         child_task = task.model_copy(update={"sources": [chunk.source]})
+        tenant_id = task.metadata.get("tenant_id", "default")
         # The chunk carries only source + refs, so it is safe to cloudpickle as-is.
         # The converter reconstructs its own source processor from chunk.source and
         # fetches each ref via fetch_converter_source_by_ref().
         return await self.converter_handle.process_converter_request.remote(
-            SourceChunkConvertRequest(
+            request=SourceChunkConvertRequest(
                 task=child_task,
                 chunk=chunk,
                 expected_doc_count=expected_doc_count,
-            )
+            ),
+            tenant_id=tenant_id,
         )
 
     def _should_materialize_pdf(self, task: Task) -> bool:
@@ -1877,7 +1929,11 @@ class DoclingProcessorCoordinatorDeployment:
                     if granted == 0:
                         break  # at tenant ceiling; drain an in-flight slice first
                     in_flight.add(
-                        asyncio.create_task(self._execute_slice_request(next_request))
+                        asyncio.create_task(
+                            self._execute_slice_request(
+                                request=next_request, tenant_id=tenant_id
+                            )
+                        )
                     )
                     next_request = next(pending_requests, None)
                 if not in_flight:
@@ -1902,12 +1958,16 @@ class DoclingProcessorCoordinatorDeployment:
 
         return collected_results
 
-    async def _execute_slice_request(self, request: SliceConvertRequest) -> ObjectRef:
+    async def _execute_slice_request(
+        self, request: SliceConvertRequest, tenant_id: str
+    ) -> ObjectRef:
         try:
             # On success the converter returns an ObjectRef pointing to the
             # ExportableDocument in the plasma store — the coordinator never
             # holds the document object itself while waiting for other slices.
-            return await self.converter_handle.process_converter_request.remote(request)
+            return await self.converter_handle.process_converter_request.remote(
+                request=request, tenant_id=tenant_id
+            )
         except Exception as exc:
             _log.warning(
                 "Coordinator replica %s: slice %s for %s failed: %s",

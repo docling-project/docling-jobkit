@@ -221,7 +221,7 @@ async def test_s3_fanout_never_exceeds_ceiling_and_processes_all(
     gate = asyncio.Event()
 
     class GatedConverter:
-        async def remote(self, request: object) -> ConverterTaskResult:
+        async def remote(self, request: object, **_: object) -> ConverterTaskResult:
             await gate.wait()  # hold children so concurrency can build to the cap
             return _ok_result(request.chunk.refs[0].filename)
 
@@ -261,7 +261,7 @@ async def test_s3_fanout_keeps_unclassified_child_failure_document_scoped(
     _patch_source_processor(monkeypatch, refs)
 
     class FlakyConverter:
-        async def remote(self, request: object) -> ConverterTaskResult:
+        async def remote(self, request: object, **_: object) -> ConverterTaskResult:
             if request.chunk.chunk_index == 1:
                 raise RuntimeError("boom")
             return _ok_result(request.chunk.refs[0].filename)
@@ -311,7 +311,7 @@ async def test_s3_fanout_propagates_missing_model_failure_after_update_processed
     _patch_source_processor(monkeypatch, refs)
 
     class MissingModelConverter:
-        async def remote(self, request: object) -> ConverterTaskResult:
+        async def remote(self, request: object, **_: object) -> ConverterTaskResult:
             if request.chunk.chunk_index == failing_chunk:
                 # The worker's convert_documents() tags pipeline/model setup
                 # failures with this type; classification is by type, not text.
@@ -362,7 +362,7 @@ async def test_s3_fanout_keeps_source_failure_document_scoped(
 
     class MissingSourceConverter:
         async def remote(
-            self, request: object
+            self, request: object, **_: object
         ) -> ConverterTaskResult | ConverterFailureResult:
             if request.chunk.chunk_index == 1:
                 return ConverterFailureResult(
@@ -405,7 +405,7 @@ async def test_s3_fanout_terminalization_raises_and_releases_all(
     gate = asyncio.Event()
 
     class GatedConverter:
-        async def remote(self, request: object) -> ConverterTaskResult:
+        async def remote(self, request: object, **_: object) -> ConverterTaskResult:
             await gate.wait()
             return _ok_result(request.chunk.refs[0].filename)
 
@@ -443,7 +443,7 @@ async def test_slice_plan_never_exceeds_ceiling_and_collects_all(
     gate = asyncio.Event()
 
     class GatedConverter:
-        async def remote(self, request: object) -> str:
+        async def remote(self, request: object, **_: object) -> str:
             await gate.wait()
             return f"objref-{request.slice_index}"  # stand-in ObjectRef
 
