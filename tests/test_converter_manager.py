@@ -734,3 +734,46 @@ class TestBuiltInPresetsAllowedByDefault:
         manager = DoclingConverterManager(DoclingConverterManagerConfig())
 
         assert set(manager.layout_preset_registry) == {"default"}
+
+
+class TestConvertDocumentsSetupFailureTagging:
+    """convert_documents() tags data-independent setup failures by type.
+
+    Any failure in the eager setup span (option resolution through
+    initialize_pipeline) must surface as PipelineInitializationError so lifecycle
+    owners classify it as request-wide, never as a per-document failure. The
+    subsequent convert_all() is lazy, so nothing document-specific runs here.
+    """
+
+    def test_pre_init_setup_failure_is_tagged(self, monkeypatch):
+        from docling_jobkit.public_errors import PipelineInitializationError
+
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+        # A pre-init step (option resolution) blowing up -- e.g. an unavailable
+        # OCR engine -- must be tagged, not leak as a bare exception.
+        monkeypatch.setattr(
+            manager,
+            "get_pdf_pipeline_opts",
+            lambda options: (_ for _ in ()).throw(RuntimeError("OCR engine missing")),
+        )
+        with pytest.raises(PipelineInitializationError):
+            list(
+                manager.convert_documents(sources=[], options=ConvertDocumentsOptions())
+            )
+
+    def test_pipeline_init_failure_is_tagged(self, monkeypatch):
+        from docling_jobkit.public_errors import PipelineInitializationError
+
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        class _BadConverter:
+            def initialize_pipeline(self, *a, **k):
+                raise FileNotFoundError("Model 'x' not found in artifacts_path.")
+
+        monkeypatch.setattr(manager, "parse_chunking_options", lambda options: None)
+        monkeypatch.setattr(manager, "get_pdf_pipeline_opts", lambda options: object())
+        monkeypatch.setattr(manager, "get_converter", lambda opts: _BadConverter())
+        with pytest.raises(PipelineInitializationError):
+            list(
+                manager.convert_documents(sources=[], options=ConvertDocumentsOptions())
+            )

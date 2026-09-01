@@ -14,6 +14,7 @@ from redis.asyncio import Redis
 from redis.asyncio.connection import ConnectionPool
 from redis.exceptions import WatchError
 
+from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.responses import PublicFailureInfo
 from docling.datamodel.service.tasks import TaskType
 
@@ -638,22 +639,23 @@ class RedisStateManager:
             await self.connect()
 
         limits_key = f"tenant:{tenant_id}:limits"
-
-        # Get current limits or initialize
-        limits = await self.get_tenant_limits(tenant_id)
-
-        # Update counters
-        limits.active_tasks = max(0, limits.active_tasks + delta_active_tasks)
-        limits.queued_tasks = max(0, limits.queued_tasks + delta_queued_tasks)
-        limits.active_documents = max(0, limits.active_documents + delta_docs)
-
-        # Store updated limits
-        limits_dict = limits.model_dump()
-        # Convert None to string for Redis
-        limits_dict = {k: str(v) for k, v in limits_dict.items()}
-
         redis = self._ensure_redis()
-        await redis.hset(limits_key, mapping=limits_dict)  # type: ignore[misc]
+
+        # Change only the requested fields atomically. The old read/modify/write
+        # of the whole hash could restore counters changed by another worker.
+        async with redis.pipeline(transaction=True) as pipe:
+            pipe.hsetnx(
+                limits_key, "max_concurrent_tasks", str(self.max_concurrent_tasks)
+            )
+            pipe.hsetnx(limits_key, "max_queued_tasks", str(self.max_queued_tasks))
+            pipe.hsetnx(limits_key, "max_documents", str(self.max_documents))
+            if delta_active_tasks:
+                pipe.hincrby(limits_key, "active_tasks", delta_active_tasks)
+            if delta_queued_tasks:
+                pipe.hincrby(limits_key, "queued_tasks", delta_queued_tasks)
+            if delta_docs:
+                pipe.hincrby(limits_key, "active_documents", delta_docs)
+            await pipe.execute()
 
     async def check_tenant_can_enqueue(
         self, tenant_id: str, task_size: int
@@ -874,14 +876,25 @@ class RedisStateManager:
 
                 # 4. Create processing state
                 now_timestamp = datetime.datetime.now(datetime.timezone.utc).timestamp()
-                pipe.hset(
-                    dispatch_key,
-                    mapping={
-                        "tenant_id": tenant_id,
-                        "dispatched_at": str(now_timestamp),
-                        "task_size": str(task_size),
-                    },
-                )
+                dispatch_state = {
+                    "tenant_id": tenant_id,
+                    "dispatched_at": str(now_timestamp),
+                    "task_size": str(task_size),
+                }
+                if front_task.callbacks:
+                    # The task payload leaves the queue here, so this hash is the
+                    # last place the callback specs survive. Reconciliation needs
+                    # them to notify a client whose replica died without ever
+                    # reporting. Kept out of the long-lived task:{id} metadata
+                    # hash on purpose: callback headers can carry credentials, and
+                    # this key is TTL-bounded and deleted at terminalization.
+                    dispatch_state["callbacks"] = json.dumps(
+                        [
+                            dump_model_with_secrets(callback)
+                            for callback in front_task.callbacks
+                        ]
+                    )
+                pipe.hset(dispatch_key, mapping=dispatch_state)
                 pipe.expire(dispatch_key, self.processing_ttl)
 
                 # 5. Bump the monotonic dispatched counter (atomic with the
@@ -1185,26 +1198,64 @@ class RedisStateManager:
 
     async def resync_tenant_limits(self, tenant_id: str) -> TenantLimits:
         """Resynchronize tenant counters from canonical Redis structures."""
-        active_task_ids = await self.get_tenant_active_task_ids(tenant_id)
-        active_documents = 0
-        converter_units = 0
-        for task_id in active_task_ids:
-            active_documents += await self._get_task_size_for_resync(task_id)
-            lease = await self.get_task_execution_lease(task_id)
-            if lease is not None:
-                converter_units += int(lease.get("converter_units") or 0)
-
-        limits = await self.get_tenant_limits(tenant_id)
-        limits.active_tasks = len(active_task_ids)
-        limits.queued_tasks = await self.get_tenant_queue_size(tenant_id)
-        limits.active_documents = active_documents
-        limits.converter_units = converter_units
-
         limits_key = f"tenant:{tenant_id}:limits"
-        limits_dict = {key: str(value) for key, value in limits.model_dump().items()}
+        active_key = f"tenant:{tenant_id}:active_tasks"
+        queue_key = f"tenant:{tenant_id}:tasks"
         redis = self._ensure_redis()
-        await redis.hset(limits_key, mapping=limits_dict)  # type: ignore[misc]
-        return limits
+
+        # Unlike the atomic increments above, resync derives one snapshot from
+        # several keys. WATCH rejects a stale snapshot; three attempts absorb a
+        # transient conflict without letting a hot tenant stall reconciliation.
+        for _ in range(3):
+            async with redis.pipeline(transaction=True) as pipe:
+                try:
+                    await pipe.watch(active_key, queue_key, limits_key)
+
+                    active_task_ids = await self.get_tenant_active_task_ids(tenant_id)
+                    active_documents = 0
+                    converter_units = 0
+                    for task_id in active_task_ids:
+                        active_documents += await self._get_task_size_for_resync(
+                            task_id
+                        )
+                        lease = await self.get_task_execution_lease(task_id)
+                        if lease is not None:
+                            converter_units += int(lease.get("converter_units") or 0)
+
+                    limits = await self.get_tenant_limits(tenant_id)
+                    limits.active_tasks = len(active_task_ids)
+                    limits.queued_tasks = await self.get_tenant_queue_size(tenant_id)
+                    limits.active_documents = active_documents
+                    limits.converter_units = converter_units
+
+                    pipe.multi()
+                    pipe.hsetnx(
+                        limits_key,
+                        "max_concurrent_tasks",
+                        str(self.max_concurrent_tasks),
+                    )
+                    pipe.hsetnx(
+                        limits_key, "max_queued_tasks", str(self.max_queued_tasks)
+                    )
+                    pipe.hsetnx(limits_key, "max_documents", str(self.max_documents))
+                    pipe.hset(
+                        limits_key,
+                        mapping={
+                            "active_tasks": str(limits.active_tasks),
+                            "queued_tasks": str(limits.queued_tasks),
+                            "active_documents": str(limits.active_documents),
+                            "converter_units": str(limits.converter_units),
+                        },
+                    )
+                    await pipe.execute()
+                except WatchError:
+                    continue
+                return limits
+
+        _log.warning(
+            "Tenant limits resync deferred after repeated contention: %s", tenant_id
+        )
+        return await self.get_tenant_limits(tenant_id)
 
     async def get_task_dispatch_hash(self, task_id: str) -> dict:
         """Get the dispatcher-owned dispatch state hash for a task.
@@ -1221,6 +1272,23 @@ class RedisStateManager:
         if not state:
             return {}
         return {k.decode("utf-8"): v.decode("utf-8") for k, v in state.items()}
+
+    @staticmethod
+    def decode_dispatch_callbacks(dispatch_hash: dict) -> list[CallbackSpec]:
+        """Read the callback specs persisted by dispatch_task_atomic.
+
+        Returns an empty list for tasks without callbacks, for dispatch hashes
+        written before this field existed, and for unparseable payloads — a
+        client notification is best-effort and must never block reconciliation.
+        """
+        raw = dispatch_hash.get("callbacks")
+        if not raw:
+            return []
+        try:
+            return [CallbackSpec.model_validate(entry) for entry in json.loads(raw)]
+        except (ValueError, ValidationError) as exc:
+            _log.warning("Could not decode persisted callbacks: %s", exc)
+            return []
 
     async def write_task_execution_lease(
         self, task_id: str, tenant_id: str, replica_id: str

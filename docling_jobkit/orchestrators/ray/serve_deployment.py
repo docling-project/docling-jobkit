@@ -81,12 +81,17 @@ from docling_jobkit.datamodel.result import (
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
+from docling_jobkit.orchestrators.completion_callbacks import (
+    emit_task_completed_callback,
+)
 from docling_jobkit.orchestrators.ray.config import (
     RayOrchestratorConfig,
     parse_memory_bytes,
 )
 from docling_jobkit.orchestrators.ray.failure_classification import (
     classify_ray_public_task_failure,
+    is_request_wide_capability_failure,
+    task_target_kind,
 )
 from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
@@ -292,6 +297,27 @@ def _aggregate_s3_fanout_results(
         ),
         num_converted=sum(
             child_result.task_result.num_converted for child_result in child_results
+        ),
+    )
+
+
+def _emit_s3_update_processed(
+    task: Task,
+    callback_invoker: Optional[CallbackInvoker],
+    child_results: list[ConverterTaskResult],
+    summary: DoclingTaskResult,
+) -> None:
+    if not callback_invoker or not task.callbacks:
+        return
+    callback_invoker.invoke_callbacks_async(
+        callbacks=task.callbacks,
+        task_id=task.task_id,
+        progress=ProgressUpdateProcessed(
+            num_processed=sum(len(result.processed_docs) for result in child_results),
+            num_succeeded=summary.num_succeeded,
+            num_partially_succeeded=summary.num_partially_succeeded,
+            num_failed=summary.num_failed,
+            docs=[doc for result in child_results for doc in result.processed_docs],
         ),
     )
 
@@ -693,14 +719,27 @@ class DoclingProcessorConverterDeployment:
             if self.metrics is not None:
                 metrics = [get_metrics_from_exportable_doc(doc) for doc in exportable]
                 self.metrics.emit_metrics(metrics=metrics, tenant_id=tenant_id)
-            result = await asyncio.to_thread(
-                lambda: self._build_task_result(
-                    request.task,
-                    exportable,
-                    expected_doc_count=request.expected_doc_count,
-                    start_time=request_start,
+            try:
+                result = await asyncio.to_thread(
+                    lambda: self._build_task_result(
+                        request.task,
+                        exportable,
+                        expected_doc_count=request.expected_doc_count,
+                        start_time=request_start,
+                    )
                 )
-            )
+            except Exception as exc:
+                return ConverterFailureResult(
+                    failure=classify_ray_public_task_failure(
+                        exc,
+                        task_id=request.task.task_id,
+                        phase=FailurePhase.EXECUTION,
+                        details={
+                            "task_size": str(len(request.task.sources)),
+                            "target_kind": task_target_kind(request.task),
+                        },
+                    )
+                )
             self.documents_processed += result.task_result.num_converted
         elif isinstance(request, MaterializedConvertRequest):
             request_start = time.monotonic()
@@ -717,14 +756,27 @@ class DoclingProcessorConverterDeployment:
             if self.metrics is not None:
                 metrics = [get_metrics_from_exportable_doc(doc) for doc in exportable]
                 self.metrics.emit_metrics(metrics=metrics, tenant_id=tenant_id)
-            result = await asyncio.to_thread(
-                lambda: self._build_task_result(
-                    request.task,
-                    exportable,
-                    expected_doc_count=request.source_count,
-                    start_time=request_start,
+            try:
+                result = await asyncio.to_thread(
+                    lambda: self._build_task_result(
+                        request.task,
+                        exportable,
+                        expected_doc_count=request.source_count,
+                        start_time=request_start,
+                    )
                 )
-            )
+            except Exception as exc:
+                return ConverterFailureResult(
+                    failure=classify_ray_public_task_failure(
+                        exc,
+                        task_id=request.task.task_id,
+                        phase=FailurePhase.EXECUTION,
+                        details={
+                            "task_size": str(len(request.task.sources)),
+                            "target_kind": task_target_kind(request.task),
+                        },
+                    )
+                )
             self.documents_processed += result.task_result.num_converted
         elif isinstance(request, SourceChunkConvertRequest):
             request_start = time.monotonic()
@@ -743,15 +795,28 @@ class DoclingProcessorConverterDeployment:
             if self.metrics is not None:
                 metrics = [get_metrics_from_exportable_doc(doc) for doc in exportable]
                 self.metrics.emit_metrics(metrics=metrics, tenant_id=tenant_id)
-            result = await asyncio.to_thread(
-                lambda: self._build_task_result(
-                    request.task,
-                    exportable,
-                    expected_doc_count=request.expected_doc_count,
-                    start_time=request_start,
-                    callback_mode=_SOURCE_CHUNK_CALLBACK_MODE,
+            try:
+                result = await asyncio.to_thread(
+                    lambda: self._build_task_result(
+                        request.task,
+                        exportable,
+                        expected_doc_count=request.expected_doc_count,
+                        start_time=request_start,
+                        callback_mode=_SOURCE_CHUNK_CALLBACK_MODE,
+                    )
                 )
-            )
+            except Exception as exc:
+                return ConverterFailureResult(
+                    failure=classify_ray_public_task_failure(
+                        exc,
+                        task_id=request.task.task_id,
+                        phase=FailurePhase.EXECUTION,
+                        details={
+                            "task_size": str(len(request.task.sources)),
+                            "target_kind": task_target_kind(request.task),
+                        },
+                    )
+                )
             self.documents_processed += result.task_result.num_converted
         elif isinstance(request, SliceConvertRequest):
             slice_ref, slice_status = await self._run_with_retry(
@@ -788,9 +853,7 @@ class DoclingProcessorConverterDeployment:
                         phase=FailurePhase.EXECUTION,
                         details={
                             "task_size": str(len(task.sources)),
-                            "target_kind": getattr(
-                                task.target, "kind", type(task.target).__name__
-                            ),
+                            "target_kind": task_target_kind(task),
                         },
                     )
                     if is_client_actionable_failure(failure):
@@ -1149,6 +1212,7 @@ class DoclingProcessorCoordinatorDeployment:
                 and terminalization.final_status == TaskStatus.SUCCESS
                 and terminalization.result_key is not None
             ):
+                emit_task_completed_callback(task, "success")
                 try:
                     await self.redis_manager.publish_update(
                         TaskUpdate(
@@ -1194,9 +1258,7 @@ class DoclingProcessorCoordinatorDeployment:
                 phase=FailurePhase.EXECUTION,
                 details={
                     "task_size": str(task_size),
-                    "target_kind": getattr(
-                        task.target, "kind", type(task.target).__name__
-                    ),
+                    "target_kind": task_target_kind(task),
                 },
             )
             error_message = failure.message
@@ -1224,6 +1286,9 @@ class DoclingProcessorCoordinatorDeployment:
                 terminalization.status_changed
                 and terminalization.final_status == TaskStatus.FAILURE
             ):
+                # Schedule before fallible Redis follow-up. The durable gate gives
+                # at-most-once scheduling, not guaranteed callback delivery.
+                emit_task_completed_callback(task, "failure", failure)
                 try:
                     await self.redis_manager.publish_update(
                         TaskUpdate(
@@ -1280,6 +1345,7 @@ class DoclingProcessorCoordinatorDeployment:
             terminalization.status_changed
             and terminalization.final_status == TaskStatus.FAILURE
         ):
+            emit_task_completed_callback(task, "failure", failure)
             try:
                 await self.redis_manager.publish_update(
                     TaskUpdate(
@@ -1666,9 +1732,19 @@ class DoclingProcessorCoordinatorDeployment:
                     try:
                         converter_result = await completed
                     except Exception as exc:
-                        # An unexpected/raised chunk failure: degrade to a
-                        # document-level FAILURE for this chunk so sibling chunks
-                        # still complete instead of aborting the whole task.
+                        if is_request_wide_capability_failure(exc):
+                            completed_results = [result for _, result in child_results]
+                            _emit_s3_update_processed(
+                                task,
+                                callback_invoker,
+                                completed_results,
+                                _aggregate_s3_fanout_results(
+                                    task,
+                                    completed_results,
+                                    time.monotonic() - task_start,
+                                ),
+                            )
+                            raise
                         _log.warning(
                             "Coordinator replica %s: source chunk %s for task %s failed: %s",
                             self.replica_id,
@@ -1729,25 +1805,7 @@ class DoclingProcessorCoordinatorDeployment:
             child_results=ordered_results,
             processing_time=time.monotonic() - task_start,
         )
-        if callback_invoker and task.callbacks:
-            callback_invoker.invoke_callbacks_async(
-                callbacks=task.callbacks,
-                task_id=task.task_id,
-                progress=ProgressUpdateProcessed(
-                    num_processed=sum(
-                        len(converter_result.processed_docs)
-                        for converter_result in ordered_results
-                    ),
-                    num_succeeded=aggregated.num_succeeded,
-                    num_partially_succeeded=aggregated.num_partially_succeeded,
-                    num_failed=aggregated.num_failed,
-                    docs=[
-                        processed_doc
-                        for converter_result in ordered_results
-                        for processed_doc in converter_result.processed_docs
-                    ],
-                ),
-            )
+        _emit_s3_update_processed(task, callback_invoker, ordered_results, aggregated)
 
         return aggregated
 
