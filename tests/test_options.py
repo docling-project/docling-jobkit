@@ -71,7 +71,7 @@ def test_options_validator():
     pipeline_opts = m.get_pdf_pipeline_opts(opts)
     assert pipeline_opts.pipeline_options is not None
     assert isinstance(pipeline_opts.pipeline_options, PdfPipelineOptions)
-    assert pipeline_opts.backend == DoclingParseDocumentBackend
+    assert pipeline_opts.backend == ThreadedDoclingParseDocumentBackend
     assert pipeline_opts.pipeline_options.generate_picture_images is True
     assert pipeline_opts.pipeline_options.generate_page_images is False
 
@@ -133,7 +133,7 @@ def test_backend_mapping_standard_and_vlm():
     m = DoclingConverterManager(config=DoclingConverterManagerConfig())
 
     cases = [
-        (None, DoclingParseDocumentBackend),  # omitted -> service-model default
+        (None, ThreadedDoclingParseDocumentBackend),  # omitted -> service-model default
         (PdfBackend.DOCLING_PARSE, DoclingParseDocumentBackend),
         (PdfBackend.THREADED_DOCLING_PARSE, ThreadedDoclingParseDocumentBackend),
         (PdfBackend.PYPDFIUM2, PyPdfiumDocumentBackend),

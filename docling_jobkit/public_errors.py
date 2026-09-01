@@ -28,6 +28,20 @@ class TargetWriteError(RuntimeError):
     """Raised when writing results to a user-provided target (PutTarget) fails."""
 
 
+class PipelineInitializationError(Exception):
+    """Converter setup failed before any document was touched.
+
+    Raised from the eager setup span of ``convert_documents()`` -- chunking-option
+    parsing, pipeline-option resolution, converter construction, and
+    ``initialize_pipeline()``. That span is a pure function of the request's
+    convert options and ``artifacts_path``; no document data is involved (the
+    subsequent ``convert_all()`` is lazy). A failure here is therefore
+    request-wide (e.g. a configured model absent from ``artifacts_path``, an
+    unavailable OCR engine), not a per-document failure. Lifecycle owners classify
+    by this type instead of matching error text.
+    """
+
+
 INTERNAL_TASK_ERROR_MESSAGE = "Internal processing error."
 _ALLOWED_DETAIL_KEYS = {
     "source_kind",
