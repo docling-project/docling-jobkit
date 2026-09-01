@@ -202,7 +202,7 @@ async def test_converter_exception_emits_terminal_failure_callback(
     """The reported bug: conversion raises, so no callback ever fired."""
 
     class ExplodingConverter:
-        async def remote(self, request: object) -> Any:
+        async def remote(self, request: object, **_: object) -> Any:
             raise FileNotFoundError(
                 "Model 'HuggingFaceTB/SmolVLM-256M-Instruct' not found in artifacts_path."
             )
@@ -249,7 +249,7 @@ async def test_complete_document_results_emit_task_success(
     recorded_callbacks: list[dict[str, Any]],
 ) -> None:
     class CompletedConverter:
-        async def remote(self, request: object) -> ConverterTaskResult:
+        async def remote(self, request: object, **_: object) -> ConverterTaskResult:
             return ConverterTaskResult(
                 task_result=DoclingTaskResult(
                     result=RemoteTargetResult(),
@@ -307,7 +307,7 @@ async def test_partial_document_progress_then_abort_keeps_only_known_outcomes(
     recorded_callbacks.append({"task_id": "t-callback", "progress": document_progress})
 
     class ExplodingConverter:
-        async def remote(self, request: object) -> Any:
+        async def remote(self, request: object, **_: object) -> Any:
             raise RuntimeError("converter crashed after partial progress")
 
     manager = _FakeRedisManager()
@@ -340,7 +340,7 @@ async def test_no_callback_when_task_was_already_terminalized(
     """Emission is gated on winning the atomic terminalization, so it fires once."""
 
     class ExplodingConverter:
-        async def remote(self, request: object) -> Any:
+        async def remote(self, request: object, **_: object) -> Any:
             raise RuntimeError("converter crashed")
 
     manager = _FakeRedisManager(status_changed=False)
@@ -615,7 +615,7 @@ async def test_target_write_error_in_build_task_result_returns_converter_failure
             return_value=[],
         ),
     ):
-        result = await converter.process_converter_request(request)
+        result = await converter.process_converter_request(request, tenant_id="default")
 
     assert isinstance(result, ConverterFailureResult)
     assert result.failure.category.value == "target_unavailable"
@@ -644,7 +644,7 @@ async def test_target_write_error_details_contain_correct_target_kind(
     from docling_jobkit.public_errors import TargetWriteError
 
     class TargetWriteConverter:
-        async def remote(self, request: object) -> Any:
+        async def remote(self, request: object, **_: object) -> Any:
             raise TargetWriteError("Broker transport failure")
 
     manager = _FakeRedisManager()
