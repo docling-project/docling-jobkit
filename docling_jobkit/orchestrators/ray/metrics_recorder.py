@@ -7,17 +7,21 @@ without depending on a remote call to a converter replica.
 """
 
 import logging
-import random
-import string
 
 from ray import serve
 from ray.util.metrics import Counter, Histogram
 
 from docling.datamodel.base_models import InputFormat
 
+from docling_jobkit.orchestrators.ray.metrics_utils import (
+    ConversionMetrics,
+    DocumentStats,
+)
+
 _log = logging.getLogger(__name__)
 
 _TAG_KEYS = ("tenant_id", "replica_tag")
+_DOC_TYPE_TAG_KEYS = (*_TAG_KEYS, "format")
 
 _TIMINGS_HIST_BUCKETS = [
     0.000001,
@@ -62,8 +66,33 @@ _TIMINGS_HIST_BUCKETS = [
 ]
 
 
-def _random_digit_string(length: int) -> str:
-    return "".join(random.choices(string.digits, k=length))
+def _doc_type_label(doc_type: InputFormat | None) -> str:
+    if doc_type == InputFormat.PDF:
+        return "pdf"
+    elif doc_type == InputFormat.DOCX:
+        return "docx"
+    elif doc_type == InputFormat.PPTX:
+        return "pptx"
+    elif doc_type == InputFormat.HTML:
+        return "html"
+    elif doc_type == InputFormat.IMAGE:
+        return "image"
+    elif doc_type == InputFormat.MD:
+        return "md"
+    elif doc_type == InputFormat.XLSX:
+        return "xlsx"
+    elif doc_type in (
+        InputFormat.XML_USPTO,
+        InputFormat.XML_JATS,
+        InputFormat.XML_XBRL,
+    ):
+        return "xml"
+    elif doc_type == InputFormat.XML_DOCLANG:
+        return "doclang"
+    elif doc_type == InputFormat.JSON_DOCLING:
+        return "docling"
+    else:
+        return "other"
 
 
 class RayMetricsRecorder:
@@ -76,12 +105,12 @@ class RayMetricsRecorder:
     def __init__(self) -> None:
         self.metric_emission_counter = Counter(
             "dcls_metrics_emitted",
-            description="Number of attemps to emmit metrics",
+            description="Number of attempts to emit metrics",
             tag_keys=_TAG_KEYS,
         )
         self.success_counter = Counter(
             "dcls_conversion_success",
-            description="Number of successeful conversions",
+            description="Number of successful conversions",
             tag_keys=_TAG_KEYS,
         )
         self.partial_counter = Counter(
@@ -148,92 +177,42 @@ class RayMetricsRecorder:
             boundaries=_TIMINGS_HIST_BUCKETS,
             tag_keys=_TAG_KEYS,
         )
-        self.doc_type_pdf_counter = Counter(
-            "dcls_doc_type_pdf",
-            description="Number of pdf documents",
-            tag_keys=_TAG_KEYS,
+        self.doc_type_counter = Counter(
+            "dcls_doc_type",
+            description="Number of documents converted, by format",
+            tag_keys=_DOC_TYPE_TAG_KEYS,
         )
-        self.doc_type_docx_counter = Counter(
-            "dcls_doc_type_docx",
-            description="Number of docx documents",
-            tag_keys=_TAG_KEYS,
-        )
-        self.doc_type_pptx_counter = Counter(
-            "dcls_doc_type_pptx",
-            description="Number of pptx documents",
-            tag_keys=_TAG_KEYS,
-        )
-        self.doc_type_html_counter = Counter(
-            "dcls_doc_type_html",
-            description="Number of html documents",
-            tag_keys=_TAG_KEYS,
-        )
-        self.doc_type_image_counter = Counter(
-            "dcls_doc_type_image",
-            description="Number of image documents",
-            tag_keys=_TAG_KEYS,
-        )
-        self.doc_type_md_counter = Counter(
-            "dcls_doc_type_md",
-            description="Number of md documents",
-            tag_keys=_TAG_KEYS,
-        )
-        self.doc_type_xlsx_counter = Counter(
-            "dcls_doc_type_xlsx",
-            description="Number of xlsx documents",
-            tag_keys=_TAG_KEYS,
-        )
-        self.doc_type_xml_counter = Counter(
-            "dcls_doc_type_xml",
-            description="Number of xml documents",
-            tag_keys=_TAG_KEYS,
-        )
-        self.doc_type_doclang_counter = Counter(
-            "dcls_doc_type_doclang",
-            description="Number of doclang documents",
-            tag_keys=_TAG_KEYS,
-        )
-        self.doc_type_docling_counter = Counter(
-            "dcls_doc_type_docling",
-            description="Number of docling type documents",
-            tag_keys=_TAG_KEYS,
-        )
-        self.doc_type_other_counter = Counter(
-            "dcls_doc_type_other",
-            description="Number of other type documents",
-            tag_keys=_TAG_KEYS,
-        )
-        self.num_pages_hist = Counter(
+        self.num_pages_counter = Counter(
             "dcls_num_pages",
             description="Number of pages in converted document",
             tag_keys=_TAG_KEYS,
         )
-        self.pictures_hist = Counter(
+        self.pictures_counter = Counter(
             "dcls_pictures",
             description="Number of pictures in converted document",
             tag_keys=_TAG_KEYS,
         )
-        self.tables_hist = Counter(
+        self.tables_counter = Counter(
             "dcls_tables",
             description="Number of tables in converted document",
             tag_keys=_TAG_KEYS,
         )
-        self.key_value_items_hist = Counter(
+        self.key_value_items_counter = Counter(
             "dcls_key_value_items",
             description="Number of key value items in converted document",
             tag_keys=_TAG_KEYS,
         )
-        self.form_items_hist = Counter(
+        self.form_items_counter = Counter(
             "dcls_form_items",
             description="Number of form items in converted document",
             tag_keys=_TAG_KEYS,
         )
-        self.texts_hist = Counter(
+        self.texts_counter = Counter(
             "dcls_texts",
             description="Number of text items in converted document",
             tag_keys=_TAG_KEYS,
         )
-        self.groups_hist = Counter(
+        self.groups_counter = Counter(
             "dcls_groups",
             description="Number of group items in converted document",
             tag_keys=_TAG_KEYS,
@@ -246,81 +225,44 @@ class RayMetricsRecorder:
         for value in values:
             hist.observe(value, tags=tags)
 
-    def _emit_timing_stats(self, pipeline_stats: dict, tags: dict) -> None:
-        if "pipeline_total" in pipeline_stats:
-            self._observe_all(
-                self.pipeline_total_hist, pipeline_stats["pipeline_total"], tags
-            )
-        if "page_parse" in pipeline_stats:
-            self._observe_all(self.page_parse_hist, pipeline_stats["page_parse"], tags)
-        if "ocr" in pipeline_stats:
-            self._observe_all(self.ocr_hist, pipeline_stats["ocr"], tags)
-        if "layout" in pipeline_stats:
-            self._observe_all(self.layout_hist, pipeline_stats["layout"], tags)
-        if "table_structure" in pipeline_stats:
-            self._observe_all(
-                self.table_structure_hist, pipeline_stats["table_structure"], tags
-            )
-        if "page_assemble" in pipeline_stats:
-            self._observe_all(
-                self.page_assemble_hist, pipeline_stats["page_assemble"], tags
-            )
-        if "doc_assemble" in pipeline_stats:
-            self._observe_all(
-                self.doc_assemble_hist, pipeline_stats["doc_assemble"], tags
-            )
-        if "reading_order" in pipeline_stats:
-            self._observe_all(
-                self.reading_order_hist, pipeline_stats["reading_order"], tags
-            )
-        if "doc_enrich" in pipeline_stats:
-            self._observe_all(self.doc_enrich_hist, pipeline_stats["doc_enrich"], tags)
-
-    def _emit_doc_type_counter(self, doc_type, tags: dict) -> None:
-        if doc_type == InputFormat.PDF:
-            self.doc_type_pdf_counter.inc(tags=tags)
-        elif doc_type == InputFormat.DOCX:
-            self.doc_type_docx_counter.inc(tags=tags)
-        elif doc_type == InputFormat.PPTX:
-            self.doc_type_pptx_counter.inc(tags=tags)
-        elif doc_type == InputFormat.HTML:
-            self.doc_type_html_counter.inc(tags=tags)
-        elif doc_type == InputFormat.IMAGE:
-            self.doc_type_image_counter.inc(tags=tags)
-        elif doc_type == InputFormat.MD:
-            self.doc_type_md_counter.inc(tags=tags)
-        elif doc_type == InputFormat.XLSX:
-            self.doc_type_xlsx_counter.inc(tags=tags)
-        elif doc_type in (
-            InputFormat.XML_USPTO,
-            InputFormat.XML_JATS,
-            InputFormat.XML_XBRL,
+    def _emit_timing_stats(self, timings_stats: dict[str, list], tags: dict) -> None:
+        for key, hist in (
+            ("pipeline_total", self.pipeline_total_hist),
+            ("page_parse", self.page_parse_hist),
+            ("ocr", self.ocr_hist),
+            ("layout", self.layout_hist),
+            ("table_structure", self.table_structure_hist),
+            ("page_assemble", self.page_assemble_hist),
+            ("doc_assemble", self.doc_assemble_hist),
+            ("reading_order", self.reading_order_hist),
+            ("doc_enrich", self.doc_enrich_hist),
         ):
-            self.doc_type_xml_counter.inc(tags=tags)
-        elif doc_type == InputFormat.XML_DOCLANG:
-            self.doc_type_doclang_counter.inc(tags=tags)
-        elif doc_type == InputFormat.JSON_DOCLING:
-            self.doc_type_docling_counter.inc(tags=tags)
-        else:
-            self.doc_type_other_counter.inc(tags=tags)
+            values = timings_stats.get(key)
+            if values:
+                self._observe_all(hist, values, tags)
 
-    def _emit_document_stats(self, document_stats: dict, tags: dict) -> None:
-        if "input_format" in document_stats:
-            self._emit_doc_type_counter(document_stats["input_format"], tags)
-        if "num_pages" in document_stats:
-            self.num_pages_hist.inc(document_stats["num_pages"], tags=tags)
-        if "pictures" in document_stats:
-            self.pictures_hist.inc(document_stats["pictures"], tags=tags)
-        if "tables" in document_stats:
-            self.tables_hist.inc(document_stats["tables"], tags=tags)
-        if "key_value_items" in document_stats:
-            self.key_value_items_hist.inc(document_stats["key_value_items"], tags=tags)
-        if "form_items" in document_stats:
-            self.form_items_hist.inc(document_stats["form_items"], tags=tags)
-        if "texts" in document_stats:
-            self.texts_hist.inc(document_stats["texts"], tags=tags)
-        if "groups" in document_stats:
-            self.groups_hist.inc(document_stats["groups"], tags=tags)
+    def _emit_document_stats(self, document_stats: DocumentStats, tags: dict) -> None:
+        if document_stats.input_format is not None:
+            self.doc_type_counter.inc(
+                tags={**tags, "format": _doc_type_label(document_stats.input_format)}
+            )
+        # Ray's Counter.inc() rejects 0 (requires value > 0), and a document
+        # can legitimately have 0 tables/pictures/etc., so these are truthy
+        # checks rather than `is not None` checks.
+        if document_stats.num_pages:
+            self.num_pages_counter.inc(document_stats.num_pages, tags=tags)
+        if document_stats.pictures:
+            self.pictures_counter.inc(document_stats.pictures, tags=tags)
+        if document_stats.tables:
+            self.tables_counter.inc(document_stats.tables, tags=tags)
+        if document_stats.key_value_items:
+            self.key_value_items_counter.inc(document_stats.key_value_items, tags=tags)
+        if document_stats.form_items:
+            self.form_items_counter.inc(document_stats.form_items, tags=tags)
+        if document_stats.texts:
+            self.texts_counter.inc(document_stats.texts, tags=tags)
+        if document_stats.groups:
+            self.groups_counter.inc(document_stats.groups, tags=tags)
 
     def _emit_status_counter(self, conv_status: str, tags: dict) -> None:
         if conv_status == "success":
@@ -330,36 +272,28 @@ class RayMetricsRecorder:
         else:
             self.failed_counter.inc(tags=tags)
 
-    def emit_metrics(self, metrics: list, tenant_id: str) -> None:
-        replica_tag = serve.get_replica_context().replica_tag
-        if not replica_tag:
-            replica_tag = _random_digit_string(12)
+    def _tags(self, tenant_id: str) -> dict:
+        replica_tag = serve.get_replica_context().replica_tag or "unknown"
+        return {"tenant_id": tenant_id, "replica_tag": replica_tag}
+
+    def emit_metrics(self, metrics: list[ConversionMetrics], tenant_id: str) -> None:
+        tags = self._tags(tenant_id)
         _log.info(
             "Emitting metrics, total number of records %s, replica tag: %s",
             len(metrics),
-            replica_tag,
+            tags["replica_tag"],
         )
-        tags = {"tenant_id": tenant_id, "replica_tag": replica_tag}
         self.metric_emission_counter.inc(tags=tags)
 
-        for item in metrics:
-            if "reference" in item:
-                metrics_list = item["metrics"]
-            else:
-                metrics_list = [item]
-
-            for record in metrics_list:
-                self._emit_timing_stats(record["timings_stats"], tags)
-                self._emit_document_stats(record["document_stats"], tags)
-                self._emit_status_counter(record["status"], tags)
+        for record in metrics:
+            self._emit_timing_stats(record.timings_stats, tags)
+            self._emit_document_stats(record.document_stats, tags)
+            self._emit_status_counter(record.status, tags)
 
     def emit_failure_metrics(self, tenant_id: str) -> None:
         """Record a failed conversion attempt when no ExportableDocument was
         produced (e.g. ConverterFailureResult), so failures aren't silently
         dropped from dcls_metrics_emitted / dcls_conversion_failed."""
-        replica_tag = serve.get_replica_context().replica_tag
-        if not replica_tag:
-            replica_tag = _random_digit_string(12)
-        tags = {"tenant_id": tenant_id, "replica_tag": replica_tag}
+        tags = self._tags(tenant_id)
         self.metric_emission_counter.inc(tags=tags)
         self.failed_counter.inc(tags=tags)

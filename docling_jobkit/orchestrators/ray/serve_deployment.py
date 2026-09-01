@@ -98,6 +98,7 @@ from docling_jobkit.orchestrators.ray.logging_utils import (
 )
 from docling_jobkit.orchestrators.ray.metrics_recorder import RayMetricsRecorder
 from docling_jobkit.orchestrators.ray.metrics_utils import (
+    ConversionMetrics,
     get_metrics_from_exportable_doc,
 )
 from docling_jobkit.orchestrators.ray.models import (
@@ -152,7 +153,7 @@ def _to_exportable_documents(
     task: Task,
     conv_results: list[ConversionResult],
 ) -> list[ExportableDocument]:
-    exportable_docs = [
+    return [
         ExportableDocument.from_conversion_result(
             conv_res,
             source_index=idx,
@@ -164,7 +165,6 @@ def _to_exportable_documents(
         )
         for idx, conv_res in enumerate(conv_results)
     ]
-    return exportable_docs
 
 
 def _to_exportable_documents_from_chunk(
@@ -632,13 +632,13 @@ def _finalize_slice_results(
     allow_external_plugins: bool,
     chunker_manager: Optional[DocumentChunkerManager] = None,
     chunking_options: Any = None,
-) -> tuple[DoclingTaskResult, dict]:
+) -> tuple[DoclingTaskResult, ConversionMetrics]:
     """Fetch child slice outputs, merge them, and build the parent task result.
 
-    Returns the task result alongside the merged document's metrics dict
-    (see get_metrics_from_exportable_doc), since this runs on the coordinator
-    actor, which has no metrics/histogram objects of its own to observe with -
-    the caller is expected to forward the metrics dict to a converter replica.
+    Returns the task result alongside the merged document's metrics record
+    (see get_metrics_from_exportable_doc); the caller emits it through the
+    coordinator's own RayMetricsRecorder, since the coordinator constructs
+    one whenever generate_metrics is enabled.
     """
     # This is the only place where full slice documents enter the coordinator's
     # heap, and it runs inside the slice_finalization_semaphore guard.
@@ -696,6 +696,9 @@ class DoclingProcessorConverterDeployment:
         self.memory_warnings = 0
         self._chunker_manager: DocumentChunkerManager | None = None
 
+        # Pipeline timing histograms stay empty unless the operator also sets
+        # DOCLING_DEBUG_PROFILE_PIPELINE_TIMINGS=true, which docling reads on
+        # startup to enable ConversionResult.timings collection.
         self.metrics = RayMetricsRecorder() if config.generate_metrics else None
 
     async def process_converter_request(
@@ -1124,6 +1127,9 @@ class DoclingProcessorCoordinatorDeployment:
         # presets during slice finalization (the coordinator does not convert).
         self._converter_manager: Optional[DoclingConverterManager] = None
 
+        # Pipeline timing histograms stay empty unless the operator also sets
+        # DOCLING_DEBUG_PROFILE_PIPELINE_TIMINGS=true, which docling reads on
+        # startup to enable ConversionResult.timings collection.
         self.metrics = RayMetricsRecorder() if config.generate_metrics else None
 
         _log.setLevel(self.config.log_level.upper())
