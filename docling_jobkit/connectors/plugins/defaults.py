@@ -36,6 +36,9 @@ def source_connectors():
     from docling_jobkit.connectors.azure_blob.source_processor import (
         AzureBlobSourceProcessor,
     )
+    from docling_jobkit.connectors.box.source_processor import (
+        BoxSourceProcessor,
+    )
     from docling_jobkit.connectors.filenet.source_processor import (
         FileNetSourceProcessor,
     )
@@ -65,6 +68,7 @@ def source_connectors():
         GoogleDriveSourceProcessor,
         GoogleCloudStorageSourceProcessor,
         SharePointSourceProcessor,
+        BoxSourceProcessor,
     ):
         _register_if_available(connectors, cls)
 

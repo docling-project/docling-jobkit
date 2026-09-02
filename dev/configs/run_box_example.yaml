@@ -1,0 +1,28 @@
+options:
+  do_ocr: false
+  to_formats:
+    - json
+
+sources:
+  - kind: box
+    client_id: "" # Box custom app client ID
+    client_secret: "" # Box custom app client secret
+
+    # auth: provide enterprise_id (service account) or user_id (impersonation)
+    enterprise_id: "" # Box enterprise ID
+    # user_id: "" # Box user ID
+
+    # JWT auth (optional): set all three of these to switch from CCG to JWT.
+    # Leave unset to authenticate via Client Credentials Grant (CCG) instead.
+    #jwt_key_id: "" # public key ID of the JWT keypair
+    #private_key: "" # PEM-encoded private key of the JWT keypair
+    #private_key_passphrase: "" # passphrase protecting private_key
+
+    # optional params
+    #folder_id: "0" # folder to read from, recurses subfolders. "0" = root
+    #file_ids: [] # explicit file ids, if set overrides folder traversal
+    #max_num_elements: # set this to cap it to a specific num, default is all
+
+target:
+  kind: local_path
+  path: ./output_documents/
