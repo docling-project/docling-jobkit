@@ -14,6 +14,9 @@ _log = logging.getLogger(__name__)
 # get_folder_items returns "mini" item entries (id/name/type/etag only) unless these
 # are requested explicitly — without this, size/modified_at are silently missing.
 _ITEM_FIELDS = ["id", "name", "type", "size", "modified_at"]
+
+# 1000 is the documented maximum for get_folder_items' `limit`
+# Box's own default is 100.
 _PAGE_SIZE = 1000
 
 
@@ -70,7 +73,7 @@ def _to_file_meta(item: Any) -> dict[str, Any]:
     return {
         "id": item.id,
         "name": item.name,
-        "size": item.size or 0,
+        "size": item.size,
         "modified_at": item.modified_at,
     }
 

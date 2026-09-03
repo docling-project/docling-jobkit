@@ -6,13 +6,10 @@ from pydantic import BaseModel, Field, SecretStr, model_validator
 class BoxSource(BaseModel):
     """Box source connector configuration.
 
-    Supports two mutually distinguishable auth strategies against the same set of
-    connection fields: Client Credentials Grant (CCG) — ``client_id``/``client_secret``
-    plus one of ``enterprise_id``/``user_id`` — or JWT service-account auth, which adds
-    ``jwt_key_id``/``private_key``/``private_key_passphrase`` on top of the CCG fields.
-    Which mode applies is inferred from whether the JWT-only fields are set (see
-    ``auth_mode``), mirroring how the SharePoint connector infers its target from
-    ``site_url`` vs ``onedrive_user`` rather than a separate discriminator field.
+    Supports both CCG (client credentials grant) and more strict JWT
+    JWT takes precedence when its fields are included on top of CCGs (layered)
+
+    auth_mode inferred by presence of JWT fields
     """
 
     kind: Literal["box"] = "box"
