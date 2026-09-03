@@ -548,6 +548,19 @@ wheels = [
 ]
 
 [[package]]
+name = "boxsdk"
+version = "10.14.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+    { name = "requests-toolbelt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/23/bf/ea5265c0f37692fea93b764475e7706bdacbf5b7f9765bef7529f0489ba2/boxsdk-10.14.0.tar.gz", hash = "sha256:08819c9d223caaf91d98ffb673841618f77ef2803ed35abba2bf54deef5b9689", size = 293614, upload-time = "2026-08-05T10:59:08.51Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/25/22/5a24b1e48ff64433f6ebe7d01bc3fe56c14306f1d852487f3ed02636ac28/boxsdk-10.14.0-py3-none-any.whl", hash = "sha256:99eaa85a2ffe1a38a1710f440bdf7608297fc795c4c91096e358769e3837dea9", size = 621539, upload-time = "2026-08-05T10:59:07.036Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.7.22"
 source = { registry = "https://pypi.org/simple" }
@@ -1412,6 +1425,9 @@ astradb = [
 azure = [
     { name = "azure-storage-blob" },
 ]
+box = [
+    { name = "boxsdk" },
+]
 gcloudstorage = [
     { name = "google-cloud-storage" },
 ]
@@ -1475,6 +1491,7 @@ requires-dist = [
     { name = "astrapy", marker = "extra == 'astradb'", specifier = ">=1.0.0,<2" },
     { name = "azure-storage-blob", marker = "extra == 'azure'", specifier = ">=12.19.0" },
     { name = "boto3", specifier = "~=1.35" },
+    { name = "boxsdk", marker = "extra == 'box'", specifier = ">=10" },
     { name = "codeflare-sdk", marker = "python_full_version >= '3.11' and python_full_version < '3.14' and extra == 'ray'", specifier = ">=0.20.0" },
     { name = "confluent-kafka", marker = "extra == 'kafka'", specifier = ">=2.5.0,<3" },
     { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", specifier = ">=2.94.0,<3.0.0" },
@@ -1498,7 +1515,7 @@ requires-dist = [
     { name = "rq", marker = "extra == 'rq'", specifier = "~=2.4" },
     { name = "typer", specifier = ">=0.12.5,<1" },
 ]
-provides-extras = ["vlm", "onnxruntime", "rq", "ray", "gdrive", "gcloudstorage", "azure", "opensearch", "astradb", "kafka", "sharepoint"]
+provides-extras = ["vlm", "onnxruntime", "rq", "ray", "gdrive", "gcloudstorage", "azure", "opensearch", "astradb", "kafka", "sharepoint", "box"]
 
 [package.metadata.requires-dev]
 dev = [
