@@ -1634,6 +1634,7 @@ class DoclingConverterManager:
             do_table_structure=request.do_table_structure,
             do_code_enrichment=request.do_code_enrichment,
             do_formula_enrichment=request.do_formula_enrichment,
+            do_table_cell_formula_enrichment=request.do_table_cell_formula_enrichment,
             do_picture_classification=request.do_picture_classification,
             do_chart_extraction=request.do_chart_extraction,
             do_picture_description=request.do_picture_description,
