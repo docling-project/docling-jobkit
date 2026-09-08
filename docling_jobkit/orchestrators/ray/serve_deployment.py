@@ -124,6 +124,41 @@ _log = logging.getLogger(__name__)
 
 _SOURCE_CHUNK_CALLBACK_MODE = CallbackMode.CHILD_ONLY
 
+# Number of emit_* calls between recreations of an actor's RayMetricsRecorder.
+# Constructing RayMetricsRecorder() eagerly at actor __init__ time registers
+# its OpenTelemetry instruments during actor startup -- the exact window
+# where a transient GCS connection hiccup has been observed to silently
+# wedge that registration: emit_metrics() keeps succeeding with no error,
+# but the metric never reaches /metrics. Deferring creation to first use
+# (see _refresh_metrics_recorder) avoids the highest-risk window, since
+# Serve only routes traffic to a replica once it is already confirmed
+# healthy. Periodically recreating the instruments thereafter bounds how
+# long a wedge -- at startup or later -- can persist without a full actor
+# restart; Ray's metrics backend already aggregates same-named metrics
+# across actors by design, so re-registering under the same name mid-life
+# is safe and picked up seamlessly by Prometheus as a continuation of the
+# same series.
+_METRICS_RECORDER_REFRESH_INTERVAL = 2000
+
+
+def _refresh_metrics_recorder(
+    current: RayMetricsRecorder | None,
+    call_count: int,
+    generate_metrics: bool,
+) -> tuple[RayMetricsRecorder | None, int]:
+    """Return a (possibly newly constructed) metrics recorder and call count.
+
+    Lazily creates the recorder on first use, then periodically recreates it
+    every _METRICS_RECORDER_REFRESH_INTERVAL calls to self-heal a wedged
+    registration. See the module-level comment above for why this exists.
+    """
+    if not generate_metrics:
+        return None, 0
+    if current is None or call_count >= _METRICS_RECORDER_REFRESH_INTERVAL:
+        return RayMetricsRecorder(), 0
+    return current, call_count
+
+
 # Back-off between retries when a coordinator is fully starved of converter units
 # (the tenant's whole budget is held by its own sibling tasks and nothing is in
 # flight on this coordinator to wait on). Only this rare case polls; coordinators
@@ -699,7 +734,18 @@ class DoclingProcessorConverterDeployment:
         # Pipeline timing histograms stay empty unless the operator also sets
         # DOCLING_DEBUG_PROFILE_PIPELINE_TIMINGS=true, which docling reads on
         # startup to enable ConversionResult.timings collection.
-        self.metrics = RayMetricsRecorder() if config.generate_metrics else None
+        # Lazily-initialized (and periodically refreshed) by _get_metrics();
+        # see _refresh_metrics_recorder for why this isn't built here.
+        self.metrics: RayMetricsRecorder | None = None
+        self._metrics_call_count = 0
+
+    def _get_metrics(self) -> RayMetricsRecorder | None:
+        self.metrics, self._metrics_call_count = _refresh_metrics_recorder(
+            self.metrics, self._metrics_call_count, self.config.generate_metrics
+        )
+        if self.metrics is not None:
+            self._metrics_call_count += 1
+        return self.metrics
 
     async def process_converter_request(
         self, request: ConverterRequest, tenant_id: str
@@ -715,13 +761,15 @@ class DoclingProcessorConverterDeployment:
                 task=request.task,
             )
             if isinstance(conv_results, ConverterFailureResult):
-                if self.metrics is not None:
-                    self.metrics.emit_failure_metrics(tenant_id=tenant_id)
+                metrics_recorder = self._get_metrics()
+                if metrics_recorder is not None:
+                    metrics_recorder.emit_failure_metrics(tenant_id=tenant_id)
                 return conv_results
             exportable = _to_exportable_documents(request.task, conv_results)
-            if self.metrics is not None:
+            metrics_recorder = self._get_metrics()
+            if metrics_recorder is not None:
                 metrics = [get_metrics_from_exportable_doc(doc) for doc in exportable]
-                self.metrics.emit_metrics(metrics=metrics, tenant_id=tenant_id)
+                metrics_recorder.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             try:
                 result = await asyncio.to_thread(
                     lambda: self._build_task_result(
@@ -752,13 +800,15 @@ class DoclingProcessorConverterDeployment:
                 task=request.task,
             )
             if isinstance(conv_results, ConverterFailureResult):
-                if self.metrics is not None:
-                    self.metrics.emit_failure_metrics(tenant_id=tenant_id)
+                metrics_recorder = self._get_metrics()
+                if metrics_recorder is not None:
+                    metrics_recorder.emit_failure_metrics(tenant_id=tenant_id)
                 return conv_results
             exportable = _to_exportable_documents(request.task, conv_results)
-            if self.metrics is not None:
+            metrics_recorder = self._get_metrics()
+            if metrics_recorder is not None:
                 metrics = [get_metrics_from_exportable_doc(doc) for doc in exportable]
-                self.metrics.emit_metrics(metrics=metrics, tenant_id=tenant_id)
+                metrics_recorder.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             try:
                 result = await asyncio.to_thread(
                     lambda: self._build_task_result(
@@ -789,15 +839,17 @@ class DoclingProcessorConverterDeployment:
                 task=request.task,
             )
             if isinstance(conv_results, ConverterFailureResult):
-                if self.metrics is not None:
-                    self.metrics.emit_failure_metrics(tenant_id=tenant_id)
+                metrics_recorder = self._get_metrics()
+                if metrics_recorder is not None:
+                    metrics_recorder.emit_failure_metrics(tenant_id=tenant_id)
                 return conv_results
             exportable = _to_exportable_documents_from_chunk(
                 request.chunk, conv_results
             )
-            if self.metrics is not None:
+            metrics_recorder = self._get_metrics()
+            if metrics_recorder is not None:
                 metrics = [get_metrics_from_exportable_doc(doc) for doc in exportable]
-                self.metrics.emit_metrics(metrics=metrics, tenant_id=tenant_id)
+                metrics_recorder.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             try:
                 result = await asyncio.to_thread(
                     lambda: self._build_task_result(
@@ -1130,9 +1182,20 @@ class DoclingProcessorCoordinatorDeployment:
         # Pipeline timing histograms stay empty unless the operator also sets
         # DOCLING_DEBUG_PROFILE_PIPELINE_TIMINGS=true, which docling reads on
         # startup to enable ConversionResult.timings collection.
-        self.metrics = RayMetricsRecorder() if config.generate_metrics else None
+        # Lazily-initialized (and periodically refreshed) by _get_metrics();
+        # see _refresh_metrics_recorder for why this isn't built here.
+        self.metrics: RayMetricsRecorder | None = None
+        self._metrics_call_count = 0
 
         _log.setLevel(self.config.log_level.upper())
+
+    def _get_metrics(self) -> RayMetricsRecorder | None:
+        self.metrics, self._metrics_call_count = _refresh_metrics_recorder(
+            self.metrics, self._metrics_call_count, self.config.generate_metrics
+        )
+        if self.metrics is not None:
+            self._metrics_call_count += 1
+        return self.metrics
 
     async def process_task(self, task: Task) -> DoclingTaskResult:
         task_start = datetime.datetime.now(datetime.timezone.utc)
@@ -1512,9 +1575,10 @@ class DoclingProcessorCoordinatorDeployment:
                         # once finalization is done. Error shells (inline
                         # ExportableDocuments) are also released here.
                         del slice_refs
-                    if self.metrics is not None:
+                    metrics_recorder = self._get_metrics()
+                    if metrics_recorder is not None:
                         tenant_id = task.metadata.get("tenant_id", "default")
-                        self.metrics.emit_metrics(
+                        metrics_recorder.emit_metrics(
                             metrics=[slice_metrics], tenant_id=tenant_id
                         )
                     return task_result
