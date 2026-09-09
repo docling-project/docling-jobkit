@@ -77,6 +77,8 @@ from docling.models.factories import (
 from docling.models.inference_engines.vlm.base import VlmEngineType
 from docling.pipeline.vlm_pipeline import VlmPipeline
 
+from docling_jobkit.public_errors import PipelineInitializationError
+
 _log = logging.getLogger(__name__)
 
 # Chunking presets defined in jobkit
@@ -1908,11 +1910,20 @@ class DoclingConverterManager:
         options: ConvertDocumentsOptions,
         headers: Optional[dict[str, Any]] = None,
     ) -> Iterable[ConversionResult]:
-        self.parse_chunking_options(options)
-        pdf_format_option = self.get_pdf_pipeline_opts(options)
-        converter = self.get_converter(pdf_format_option)
-        with self._cache_lock:
-            converter.initialize_pipeline(format=InputFormat.PDF)
+        # Everything up to and including initialize_pipeline() is converter
+        # *setup*: it depends only on the request options and artifacts_path, not
+        # on any document (convert_all() below is lazy -- document data is only
+        # touched when the caller iterates the result). A failure here is
+        # therefore request-wide, not per-document. Tag it by type so lifecycle
+        # owners classify it structurally instead of sniffing the error text.
+        try:
+            self.parse_chunking_options(options)
+            pdf_format_option = self.get_pdf_pipeline_opts(options)
+            converter = self.get_converter(pdf_format_option)
+            with self._cache_lock:
+                converter.initialize_pipeline(format=InputFormat.PDF)
+        except Exception as exc:
+            raise PipelineInitializationError(str(exc)) from exc
 
         results: Iterator[ConversionResult] = converter.convert_all(
             sources,

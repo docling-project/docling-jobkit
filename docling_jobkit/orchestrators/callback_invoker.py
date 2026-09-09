@@ -10,6 +10,7 @@ from docling.datamodel.service.callbacks import (
     ProgressCallbackRequest,
     ProgressDocumentCompleted,
     ProgressSetNumDocs,
+    ProgressTaskCompleted,
     ProgressUpdateProcessed,
 )
 
@@ -34,7 +35,10 @@ class CallbackInvoker:
         callbacks: list[CallbackSpec],
         task_id: str,
         progress: Union[
-            ProgressSetNumDocs, ProgressDocumentCompleted, ProgressUpdateProcessed
+            ProgressSetNumDocs,
+            ProgressDocumentCompleted,
+            ProgressUpdateProcessed,
+            ProgressTaskCompleted,
         ],
     ) -> None:
         """
@@ -57,7 +61,10 @@ class CallbackInvoker:
         callbacks: list[CallbackSpec],
         task_id: str,
         progress: Union[
-            ProgressSetNumDocs, ProgressDocumentCompleted, ProgressUpdateProcessed
+            ProgressSetNumDocs,
+            ProgressDocumentCompleted,
+            ProgressUpdateProcessed,
+            ProgressTaskCompleted,
         ],
     ) -> None:
         """Internal async method to invoke all callbacks."""
