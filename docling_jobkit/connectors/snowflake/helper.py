@@ -1,0 +1,361 @@
+import gzip
+import json
+import logging
+import re
+import time
+import zlib
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Iterator, TypeVar
+
+from docling_jobkit.connectors.snowflake.models import (
+    SnowflakeChunkTarget,
+    SnowflakeConnectionCoordinates,
+    SnowflakeCoordinates,
+    SnowflakeDocTarget,
+)
+from docling_jobkit.convert.materialization import SourceLimitExceededError
+
+_log = logging.getLogger(__name__)
+
+_TableTarget = SnowflakeDocTarget | SnowflakeChunkTarget
+_T = TypeVar("_T")
+
+_MAX_RETRIES = 3
+_BACKOFF_BASE = 1.0
+
+_DECOMPRESS_CHUNK_SIZE = 1024 * 1024
+
+if TYPE_CHECKING:
+    from snowflake.snowpark import Session
+
+
+def is_snowflake_authentication_error(exc: BaseException) -> bool:
+    from snowflake.connector.errors import (
+        DatabaseError,
+        ForbiddenError,
+        OperationalError,
+        ProgrammingError,
+    )
+
+    if isinstance(exc, (OperationalError, ProgrammingError)):
+        return False
+    return isinstance(exc, (DatabaseError, ForbiddenError))
+
+
+def is_snowflake_unavailable_error(exc: BaseException) -> bool:
+    from snowflake.connector.errors import HttpError, OperationalError
+
+    return isinstance(exc, (OperationalError, HttpError))
+
+
+def _is_retryable_error(exc: BaseException) -> bool:
+    if is_snowflake_unavailable_error(exc):
+        return True
+
+    # Check for rate limiting/quota errors in message
+    from snowflake.connector.errors import ProgrammingError
+
+    if isinstance(exc, ProgrammingError):
+        msg = str(exc).lower()
+        if any(keyword in msg for keyword in ("quota", "throttl", "rate limit")):
+            return True
+
+    return False
+
+
+def with_retry(
+    operation: Callable[[], _T],
+    operation_name: str,
+    max_retries: int = _MAX_RETRIES,
+) -> _T:
+    for attempt in range(max_retries + 1):
+        try:
+            return operation()
+        except Exception as exc:
+            is_last_attempt = attempt == max_retries
+
+            if not _is_retryable_error(exc) or is_last_attempt:
+                raise
+
+            wait = _BACKOFF_BASE * (2**attempt)
+            _log.warning(
+                "Transient error in %s (attempt %d/%d): %s. Retrying in %.1fs...",
+                operation_name,
+                attempt + 1,
+                max_retries,
+                exc,
+                wait,
+            )
+            time.sleep(wait)
+
+    # Type checker needs explicit raise (unreachable but required for type safety)
+    raise RuntimeError("Retry loop exhausted")
+
+
+def _load_private_key_der(pem_data: str, passphrase: str | None = None) -> bytes:
+    """Convert PEM-encoded private key to DER format (Snowflake requirement).
+
+    Snowflake expects private keys in base64-encoded DER format, not PEM.
+    """
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import serialization
+
+    pem_bytes = pem_data.encode("utf-8")
+    passphrase_bytes = passphrase.encode("utf-8") if passphrase else None
+
+    private_key = serialization.load_pem_private_key(
+        pem_bytes,
+        password=passphrase_bytes,
+        backend=default_backend(),
+    )
+
+    return private_key.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+
+def get_snowflake_connection(
+    coords: SnowflakeConnectionCoordinates,
+) -> "Session":
+    """Create a Snowpark session from connection coordinates."""
+    from snowflake.snowpark import Session
+
+    config: dict[str, Any] = {
+        "account": coords.account,
+        "user": coords.user,
+        "warehouse": coords.warehouse,
+        "database": coords.database,
+        "schema": coords.db_schema,
+    }
+    if coords.role:
+        config["role"] = coords.role
+
+    if coords.password is not None:
+        config["password"] = coords.password.get_secret_value()
+    else:
+        if coords.private_key is None:
+            raise ValueError("Either password or private_key must be provided")
+
+        # Snowflake/Snowpark expects DER format, not PEM
+        pem_key = coords.private_key.get_secret_value()
+        passphrase = (
+            coords.private_key_passphrase.get_secret_value()
+            if coords.private_key_passphrase
+            else None
+        )
+        der_key = _load_private_key_der(pem_key, passphrase)
+        config["private_key"] = der_key
+
+    return Session.builder.configs(config).create()
+
+
+# Valid unquoted Snowflake identifier
+_UNQUOTED_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+
+
+def stage_ref(coords: SnowflakeCoordinates) -> str:
+    for name in (coords.database, coords.db_schema, coords.stage):
+        if not _UNQUOTED_IDENTIFIER.match(name):
+            raise ValueError(f"Unsafe Snowflake identifier: {name!r}")
+    return f"{coords.database}.{coords.db_schema}.{coords.stage}"
+
+
+def list_stage_files(
+    session: "Session",
+    coords: SnowflakeCoordinates,
+) -> Iterator[dict[str, object]]:
+    path = f"@{stage_ref(coords)}"
+    if coords.prefix:
+        prefix = coords.prefix.lstrip("/")
+        if "'" in prefix or "\\" in prefix:
+            raise ValueError(
+                f"Snowflake prefix cannot contain single quotes or backslashes: {prefix!r}"
+            )
+        path = f"{path}/{prefix}"
+
+    sql = f"LIST '{path}'"
+    if coords.pattern:
+        if "'" in coords.pattern or "\\" in coords.pattern:
+            raise ValueError(
+                f"Snowflake PATTERN cannot contain single quotes or backslashes: {coords.pattern!r}"
+            )
+        sql += f" PATTERN = '{coords.pattern}'"
+
+    max_num_elements = coords.max_num_elements
+    yielded = 0
+
+    # to_local_iterator() streams rows via a server-side cursor instead of collect() buffering the whole thing
+    iterator = session.sql(sql).to_local_iterator()
+    while max_num_elements is None or yielded < max_num_elements:
+        try:
+            row = next(iterator)
+        except StopIteration:
+            return
+
+        # LIST includes zero-byte directory-marker objects, skip those
+        if str(row["name"]).endswith("/"):
+            continue
+
+        yielded += 1
+        yield row.as_dict()
+
+
+def relative_path_from_list_name(name: str) -> str:
+    """LIST returns '<stage>/<relative path>'; drop the leading stage segment."""
+    return name.split("/", 1)[1] if "/" in name else name
+
+
+def _decompress_gzip_bounded(data: bytes, max_size: int | None) -> bytes:
+    """Decompress gzip data, aborting once the decompressed output would exceed max_size."""
+    if max_size is None:
+        return gzip.decompress(data)
+
+    decompressor = zlib.decompressobj(
+        wbits=zlib.MAX_WBITS | 16
+    )  # tells decompressor to expect gzip format (headers etc.)
+    chunks: list[bytes] = []
+    total = 0
+    remaining = data
+    while True:
+        chunk = decompressor.decompress(remaining, _DECOMPRESS_CHUNK_SIZE)
+        remaining = decompressor.unconsumed_tail
+        total += len(chunk)
+        if total > max_size:
+            raise SourceLimitExceededError(
+                f"Decompressed size exceeds max_file_size={max_size} bytes"
+            )
+        chunks.append(chunk)
+        if not remaining and decompressor.eof:
+            break
+    return b"".join(chunks)
+
+
+def download_stage_file(
+    session: "Session",
+    coords: SnowflakeCoordinates,
+    relative_path: str,
+    *,
+    max_file_size: int | None = None,
+) -> tuple[bytes, str]:
+    """Download one file from stage via Snowpark's in-memory streaming.
+    Snowpark provides an in-memory file streaming API (session.file.get_stream)
+    snowflake-connector-python did not provide in-memory file streaming
+
+    Snowflake's PUT defaults to AUTO_COMPRESS=TRUE and adds '.gz' suffix at upload
+    time, so that suffix reliably indicates the file needs decompressing here.
+    We use decompress=False and manually handle decompression based on filename.
+    """
+    stage_path = f"@{stage_ref(coords)}/{relative_path}"
+
+    # Snowpark streams file directly into memory - no temp files needed
+    # Use decompress=False to get raw bytes, then manually decompress if .gz
+    file_stream = session.file.get_stream(stage_path, decompress=False)
+    try:
+        data = file_stream.read()
+    finally:
+        file_stream.close()
+
+    # Manually decompress if filename indicates gzip compression
+    display_name = Path(relative_path).name
+    if display_name.endswith(".gz"):
+        data = _decompress_gzip_bounded(data, max_file_size)
+        display_name = display_name[:-3]  # ".gz"
+
+    return data, display_name
+
+
+def table_ref(target: _TableTarget) -> str:
+    for name in (target.database, target.db_schema, target.table):
+        if not _UNQUOTED_IDENTIFIER.match(name):
+            raise ValueError(f"Unsafe Snowflake identifier: {name!r}")
+    return f"{target.database}.{target.db_schema}.{target.table}"
+
+
+def upsert_table_rows(
+    session: "Session",
+    target: _TableTarget,
+    id_field: str,
+    rows: list[dict[str, Any]],
+) -> None:
+    """Upsert many rows in a single multi-row MERGE, keyed on id_field."""
+    if not rows:
+        return
+
+    columns = list(rows[0].keys())
+    for row in rows:
+        if set(row.keys()) != set(columns):
+            raise ValueError(
+                f"All rows in a batch must have the same columns. "
+                f"Expected {set(columns)}, got {set(row.keys())}"
+            )
+    if id_field not in columns:
+        raise ValueError(f"Row is missing id field {id_field!r}; cannot upsert.")
+
+    # id_field/columns come from user config (id_field, chunk_id_field,
+    # FieldMappings-derived names) and are spliced unquoted into the SQL
+    # below, so validate them as identifiers the same way table_ref() does.
+    for name in columns:
+        if not _UNQUOTED_IDENTIFIER.match(name):
+            raise ValueError(f"Unsafe Snowflake column name: {name!r}")
+
+    # Row values are untrusted document content, so bind them as query
+    # parameters (qmark placeholders) instead of formatting SQL literals.
+    values_rows = []
+    params: list[Any] = []
+    for row in rows:
+        placeholders = []
+        for c in columns:
+            value = row[c]
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value)
+            params.append(value)
+            placeholders.append("?")
+        values_rows.append(f"({', '.join(placeholders)})")
+    values_clause = ", ".join(values_rows)
+
+    update_list = ", ".join(f"t.{c} = s.{c}" for c in columns if c != id_field)
+    insert_columns = ", ".join(columns)
+    insert_values = ", ".join(f"s.{c}" for c in columns)
+
+    # No non-id columns (e.g. an empty `mappings`) -> nothing to update on a
+    # match, so the MERGE only needs an insert branch.
+    when_matched = f"WHEN MATCHED THEN UPDATE SET {update_list} " if update_list else ""
+
+    sql = (
+        f"MERGE INTO {table_ref(target)} AS t "
+        f"USING (VALUES {values_clause}) AS s ({', '.join(columns)}) "
+        f"ON t.{id_field} = s.{id_field} "
+        f"{when_matched}"
+        f"WHEN NOT MATCHED THEN INSERT ({insert_columns}) VALUES ({insert_values})"
+    )
+
+    session.sql(sql, params=params).collect()
+
+    _log.debug("Upserted %d rows to table %s", len(rows), table_ref(target))
+
+
+def upsert_table_row(
+    session: "Session",
+    target: _TableTarget,
+    id_field: str,
+    row: dict[str, Any],
+) -> None:
+    """Upsert a single row"""
+    upsert_table_rows(session, target, id_field, [row])
+
+
+__all__ = [
+    "download_stage_file",
+    "get_snowflake_connection",
+    "is_snowflake_authentication_error",
+    "is_snowflake_unavailable_error",
+    "list_stage_files",
+    "relative_path_from_list_name",
+    "stage_ref",
+    "table_ref",
+    "upsert_table_row",
+    "upsert_table_rows",
+    "with_retry",
+]
