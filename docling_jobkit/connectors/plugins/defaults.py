@@ -53,6 +53,7 @@ def source_connectors():
     from docling_jobkit.connectors.sharepoint.source_processor import (
         SharePointSourceProcessor,
     )
+    from docling_jobkit.connectors.spark.source_processor import SparkSourceProcessor
 
     connectors = [
         HttpSourceProcessor,
@@ -65,6 +66,7 @@ def source_connectors():
         GoogleDriveSourceProcessor,
         GoogleCloudStorageSourceProcessor,
         SharePointSourceProcessor,
+        SparkSourceProcessor,
     ):
         _register_if_available(connectors, cls)
 
@@ -103,6 +105,7 @@ def target_connectors():
     from docling_jobkit.connectors.sharepoint.target_processor import (
         SharePointTargetProcessor,
     )
+    from docling_jobkit.connectors.spark.target_processor import SparkTargetProcessor
 
     connectors = [
         LocalPathTargetProcessor,
@@ -118,6 +121,7 @@ def target_connectors():
         AstraDBTargetProcessor,
         SharePointTargetProcessor,
         KafkaTargetProcessor,
+        SparkTargetProcessor,
     ):
         _register_if_available(connectors, cls)
 

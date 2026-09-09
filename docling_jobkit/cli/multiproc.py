@@ -20,6 +20,7 @@ from rich.progress import (
 from docling.datamodel.service.options import ConvertDocumentsOptions
 
 from docling_jobkit.connectors.auth_context import allow_interactive_auth
+from docling_jobkit.connectors.connector_factory import get_source_connector_factory
 from docling_jobkit.connectors.source_processor import DocumentChunk
 from docling_jobkit.connectors.source_processor_factory import get_source_processor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
@@ -111,15 +112,64 @@ def _process_source(
     with get_source_processor(
         source, allow_external_plugins=allow_external_plugins
     ) as source_processor:
-        # Check if source supports chunking
-        try:
-            chunks_iter = source_processor.iterate_document_chunks(batch_size)
-        except RuntimeError as e:
-            err_console.print(f"[red]❌ Source does not support chunking: {e}[/red]")
+        # Check if source supports chunking before attempting it
+        source_factory = get_source_connector_factory(allow_external_plugins)
+        if not source_factory.is_expandable(source):
             err_console.print(
-                "[yellow]Hint: Only S3 and Google Drive sources support batch processing[/yellow]"
+                "[yellow]Source does not support batch processing; "
+                "falling back to single-driver mode[/yellow]"
             )
-            raise typer.Exit(1)
+            # Fall back to iterate_documents() — same as cli/local.py
+            cm_config = DoclingConverterManagerConfig(
+                artifacts_path=artifacts_path,
+                enable_remote_services=enable_remote_services,
+            )
+            manager = DoclingConverterManager(config=cm_config)
+            chunking_options = manager.parse_chunking_options(config.options)
+
+            target_configs = (
+                config.targets
+                if config.targets is not None
+                else ([config.target] if config.target else [])
+            )
+            target_processors = [
+                get_target_processor(t, allow_external_plugins=allow_external_plugins)
+                for t in target_configs
+            ]
+
+            result_processor = ResultsProcessor(
+                target_processors=target_processors,
+                to_formats=[v.value for v in config.options.to_formats],
+                generate_page_images=config.options.include_page_images,
+                generate_picture_images=config.options.include_images,
+                chunking_options=chunking_options,
+            )
+
+            # Process sequentially in this process (no multiprocessing)
+            doc_count = 0
+            for item in result_processor.process_documents(
+                manager.convert_documents(
+                    sources=source_processor.iterate_documents(),
+                    options=config.options,
+                )
+            ):
+                doc_count += 1
+
+            # Return a single synthetic batch result
+            batch_results.append(
+                BatchResult(
+                    chunk_index=0,
+                    num_documents=doc_count,
+                    num_succeeded=doc_count,  # Simplified - actual success tracked in result_processor
+                    num_failed=0,
+                    failed_documents=[],
+                    processing_time=0.0,
+                )
+            )
+            return batch_results
+
+        # Chunked path
+        chunks_iter = source_processor.iterate_document_chunks(batch_size)
 
         # Process batches in parallel with progress tracking. Chunks are streamed
         # from the source and submitted to the pool as they are produced — only the
@@ -147,7 +197,7 @@ def _process_source(
                     target_configs = (
                         config.targets
                         if config.targets is not None
-                        else [config.target]
+                        else ([config.target] if config.target else [])
                     )
                     for chunk in chunks_iter:
                         total_documents += len(chunk.refs)

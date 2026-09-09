@@ -1,0 +1,32 @@
+options:
+  do_ocr: false
+  to_formats:
+    - json
+
+sources:
+  - kind: spark
+    # Databricks workspace hostname
+    host: your-workspace.cloud.databricks.com
+    
+    # Databricks Serverless SQL Warehouse authentication
+    auth:
+      kind: databricks_serverless
+      # Personal Access Token (PAT) with SQL + Files scope
+      # Settings --> User --> Developer --> Access tokens --> Generate new token
+      token: your_PAT
+      # SQL Warehouse HTTP path
+      # SQL Warehouses --> Pick your warehouse --> Connection Details --> HTTP path
+      http_path: /sql/1.0/warehouses/abc123def456
+    
+    # Table containing binary document content
+    table: catalog.schema.documents_content
+    
+    # Content mode: reads binary content from table
+    # Loads partition into memory - use for small-medium datasets
+    content_column: file_content
+    filename_column: filename
+    
+
+targets:
+  - kind: local_path
+    path: ./output_documents

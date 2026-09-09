@@ -1,0 +1,34 @@
+options:
+  do_ocr: false
+  to_formats:
+    - json
+
+sources:
+  - kind: spark
+    # Databricks workspace hostname
+    host: your-workspace.cloud.databricks.com
+    
+    # Databricks Serverless SQL Warehouse authentication
+    auth:
+      kind: databricks_serverless
+      # Personal Access Token (PAT) with SQL + Files scope
+      # Settings --> User --> Developer --> Access tokens --> Generate new token
+      token: your_PAT
+      # SQL Warehouse HTTP path
+      # SQL Warehouses --> Pick your warehouse --> Connection Details --> HTTP path
+      http_path: /sql/1.0/warehouses/abc123def456
+    
+    # Table containing URLs to documents in Databricks Volumes
+    table: catalog.schema.documents_url
+    
+    # URL mode: reads URLs from table, downloads on-demand
+    url_column: file_path
+    id_column: doc_id
+    filename_column: filename
+    
+    # Optional: limit number of documents processed
+    # max_num_elements: 100
+
+targets:
+  - kind: local_path
+    path: ./output_documents

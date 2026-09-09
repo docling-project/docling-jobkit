@@ -321,6 +321,7 @@ def _export_chunking_result(
         )
 
 
+# TODO: Should accept a hash, fall back to filename. Avoid filename collisions
 def _chunk_row_payload(
     chunk: ChunkedDocumentResultItem,
     target: ChunkFieldSlots,

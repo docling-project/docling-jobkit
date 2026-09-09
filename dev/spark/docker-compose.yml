@@ -1,0 +1,33 @@
+# Local Spark Connect server for smoke-testing the spark source connector.
+#
+# The image tag is pinned to match the project's pyspark client (4.2.0): the
+# Spark Connect wire protocol must agree between client and server.
+#
+# Usage: see dev/spark/README.md
+services:
+  spark-connect:
+    image: apache/spark:4.2.0-scala2.13-java17-python3-ubuntu
+    container_name: docling-spark-connect
+    environment:
+      SPARK_NO_DAEMONIZE: "1"
+      HOME: /tmp
+    # Managed tables land in the warehouse dir below.
+    command:
+      - /opt/spark/sbin/start-connect-server.sh
+      - --packages
+      - org.apache.spark:spark-connect_2.13:4.2.0
+      - --conf
+      - spark.jars.ivy=/tmp/.ivy2
+      - --conf
+      - spark.connect.grpc.binding.port=15002
+      - --conf
+      - spark.sql.warehouse.dir=/opt/spark/work-dir/warehouse
+    ports:
+      - "15002:15002" 
+      - "4040:4040"    # Spark UI (optional, handy while a job runs)
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/15002' 2>/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
