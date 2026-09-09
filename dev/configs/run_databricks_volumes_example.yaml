@@ -1,0 +1,15 @@
+options:
+  do_ocr: false
+  to_formats:
+    - json
+
+sources:
+  - kind: databricks_volumes
+    workspace_host: dbc-xxxxxxx.cloud.databricks.com
+    token: xxx
+    volume_path: /Volume/<path-to-docs>/
+    max_num_elements: 10 # optional
+
+targets:
+  - kind: local_path
+    path: ./output_documents
