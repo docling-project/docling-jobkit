@@ -92,3 +92,44 @@ def test_results_processor_uses_narrow_base_target_processor_contract(tmp_path: 
     assert uploaded_targets[3].endswith("input.md")
     assert uploaded_targets[4].endswith("input.pdf")
     assert uploaded_targets[5].endswith("input.txt")
+
+
+def test_results_processor_keys_artifacts_by_basename(tmp_path: Path):
+    """Artifact keys must not carry the source path (#229).
+
+    A nested/absolute source path used to end up inside every target key, and
+    ``temp_dir / <absolute name>`` resolved back to the source directory, so the
+    exported JSON was written next to its own input.
+    """
+    source_dir = tmp_path / "input"
+    source_dir.mkdir()
+    input_path = source_dir / "doc.pdf"
+    input_path.write_bytes(b"%PDF-1.4")
+
+    input_doc = InputDocument(
+        path_or_stream=input_path,
+        format=InputFormat.PDF,
+        backend=_DummyBackend,
+    )
+    conv_res = ConversionResult(
+        input=input_doc,
+        status=ConversionStatus.SUCCESS,
+        document=_FakeDoc.model_construct(),
+    )
+
+    target_processor = _RecordingTargetProcessor()
+    with target_processor:
+        list(
+            ResultsProcessor(
+                target_processors=[target_processor],
+                to_formats=["json", "md"],
+                scratch_dir=tmp_path / "scratch",
+            ).process_documents([conv_res])
+        )
+
+    uploaded_targets = sorted(
+        target for target, _content_type, _obj in target_processor.uploads
+    )
+    assert uploaded_targets == ["json/doc.json", "md/doc.md", "pdf/doc.pdf"]
+    # The export must not have contaminated the source directory.
+    assert sorted(p.name for p in source_dir.iterdir()) == ["doc.pdf"]

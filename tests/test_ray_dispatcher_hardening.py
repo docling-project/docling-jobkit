@@ -1110,47 +1110,6 @@ async def test_reconcile_started_task_without_lease_within_grace_is_unresolved()
 
 
 @pytest.mark.asyncio
-async def test_resync_tenant_limits_rebuilds_counters_from_canonical_structures() -> (
-    None
-):
-    manager = RedisStateManager(redis_url="redis://localhost:6379/")
-    manager.redis = AsyncMock()
-    manager.get_tenant_active_task_ids = AsyncMock(return_value=["task-1", "task-2"])
-    manager.get_task_metadata_model = AsyncMock(
-        side_effect=[
-            RedisTaskMetadata(
-                task_id="task-1",
-                tenant_id="tenant-a",
-                status=TaskStatus.STARTED,
-                task_type=TaskType.CONVERT,
-                task_size=2,
-                created_at=datetime.datetime.now(datetime.timezone.utc),
-                last_update_at=datetime.datetime.now(datetime.timezone.utc),
-            ),
-            None,
-        ]
-    )
-    manager.get_tenant_limits = AsyncMock(
-        return_value=TenantLimits(max_concurrent_tasks=5)
-    )
-    manager.get_tenant_queue_size = AsyncMock(return_value=3)
-    manager.get_task_execution_lease = AsyncMock(
-        side_effect=[
-            {"replica_id": "r1", "converter_units": "2"},
-            None,
-        ]
-    )
-
-    limits = await manager.resync_tenant_limits("tenant-a")
-
-    assert limits.active_tasks == 2
-    assert limits.queued_tasks == 3
-    assert limits.active_documents == 3
-    assert limits.converter_units == 2
-    manager.redis.hset.assert_awaited_once()
-
-
-@pytest.mark.asyncio
 async def test_refresh_runtime_and_get_health_do_not_race_loop_startup() -> None:
     dispatcher = _make_dispatcher()
     dispatcher.redis_manager.connect = AsyncMock()

@@ -226,7 +226,13 @@ class ResultsProcessor:
                         temp_dir = Path(tmpdirname)
                         if conv_res.status == ConversionStatus.SUCCESS:
                             doc_hash = conv_res.input.document_hash
-                            name_without_ext = os.path.splitext(conv_res.input.file)[0]
+                            # Use the basename only: ``input.file`` can be a full
+                            # (even absolute) path, and letting it through would
+                            # both leak that path into every target key and make
+                            # ``temp_dir / name`` resolve back to the source
+                            # directory. The rest of the codebase identifies
+                            # artifacts by ``file.stem`` for the same reason.
+                            name_without_ext = Path(conv_res.input.file).stem
                             _log.debug(f"Converted {doc_hash} now saving results")
 
                             # ── Format upload phase ──────────────────────

@@ -15,7 +15,7 @@ from docling.datamodel.service.chunking import BaseChunkerOptions
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.tasks import TaskType
 
-from docling_jobkit.config.target_config import S3PresignedConfig
+from docling_jobkit.config.target_config import PresignedConfig
 from docling_jobkit.convert.chunking import DocumentChunkerManager
 from docling_jobkit.convert.manager import DoclingConverterManager
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
@@ -34,7 +34,7 @@ class LocalOrchestratorConfig(BaseModel):
     shared_models: bool = False
     scratch_dir: Optional[Path] = None
     result_removal_delay: int = 300  # seconds until result is deleted after fetch
-    s3_presigned_config: S3PresignedConfig | None = None
+    presigned_config: PresignedConfig | None = None
     allowed_target_kinds: Optional[set[str]] = None
 
 

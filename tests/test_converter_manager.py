@@ -2,6 +2,14 @@
 
 import pytest
 
+from docling.datamodel.picture_classification_options import (
+    DocumentPictureClassifierOptions,
+)
+from docling.datamodel.pipeline_options import (
+    CodeFormulaVlmOptions,
+    PictureDescriptionVlmEngineOptions,
+)
+
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
@@ -37,6 +45,46 @@ class TestPresetRegistryBuilding:
         assert "smoldocling" in manager.vlm_preset_registry
         # Other presets should not be in registry
         # (We can't test for specific presets without knowing all Docling presets)
+
+    def test_default_vlm_preset_is_reachable_by_its_own_id(self):
+        """The configured default must also be selectable by name.
+
+        Every other registry excludes the alias "default" from its loop, so that the
+        alias entry survives. The VLM loop excluded default_vlm_preset instead, which
+        dropped a real Docling preset id -- and with the stock config that id is
+        "granite_docling", so the shipped default was the one preset a request could
+        not name.
+        """
+        config = DoclingConverterManagerConfig(
+            default_vlm_preset="granite_docling",
+        )
+        manager = DoclingConverterManager(config)
+
+        assert "granite_docling" in manager.vlm_preset_registry
+        # ...and the alias still resolves to it rather than being overwritten.
+        assert manager.vlm_preset_registry["default"]["preset_id"] == "granite_docling"
+
+        by_id = manager._parse_vlm_options(
+            ConvertDocumentsOptions(vlm_pipeline_preset="granite_docling")
+        )
+        by_alias = manager._parse_vlm_options(
+            ConvertDocumentsOptions(vlm_pipeline_preset="default")
+        )
+        assert by_id == by_alias
+
+    def test_an_explicit_vlm_allowlist_still_restricts(self):
+        """Registering the default by name must not widen an explicit allowlist."""
+        config = DoclingConverterManagerConfig(
+            default_vlm_preset="granite_docling",
+            allowed_vlm_presets=["smoldocling"],
+        )
+        manager = DoclingConverterManager(config)
+
+        assert sorted(manager.vlm_preset_registry) == ["default", "smoldocling"]
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._parse_vlm_options(
+                ConvertDocumentsOptions(vlm_pipeline_preset="qwen")
+            )
 
     def test_custom_presets_added(self):
         """Test that custom presets are added to the registry."""
@@ -610,3 +658,122 @@ class TestGetVlmOptionsFromPreset:
         )
         assert options is not None
         assert options == custom_options
+
+
+class TestBuiltInPresetsAllowedByDefault:
+    """`allowed_*_presets=None` is documented as "None means all are allowed".
+
+    The VLM, OCR, chunking and table-structure registries honour that: with no
+    allow-list they enumerate every built-in preset. Picture-description,
+    code/formula and picture-classification instead only ever registered the
+    ``default`` alias, so every real Docling preset id was rejected with
+    "Allowed presets: default" -- the opposite of the documented contract.
+    """
+
+    @pytest.mark.parametrize(
+        "registry_name, expected_ids",
+        [
+            (
+                "picture_description_preset_registry",
+                PictureDescriptionVlmEngineOptions.list_preset_ids(),
+            ),
+            (
+                "code_formula_preset_registry",
+                CodeFormulaVlmOptions.list_preset_ids(),
+            ),
+            (
+                "picture_classification_preset_registry",
+                DocumentPictureClassifierOptions.list_preset_ids(),
+            ),
+        ],
+    )
+    def test_all_built_in_presets_registered_without_allow_list(
+        self, registry_name, expected_ids
+    ):
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        registry = getattr(manager, registry_name)
+
+        assert set(registry) == {"default", *expected_ids}
+
+    @pytest.mark.parametrize(
+        "config_field, registry_name, allowed",
+        [
+            (
+                "allowed_picture_description_presets",
+                "picture_description_preset_registry",
+                ["smolvlm"],
+            ),
+            (
+                "allowed_code_formula_presets",
+                "code_formula_preset_registry",
+                ["granite_docling"],
+            ),
+            (
+                "allowed_picture_classification_presets",
+                "picture_classification_preset_registry",
+                ["document_figure_classifier_v2"],
+            ),
+        ],
+    )
+    def test_allow_list_still_restricts(self, config_field, registry_name, allowed):
+        """An explicit allow-list must keep excluding everything else."""
+        config = DoclingConverterManagerConfig(**{config_field: allowed})
+        manager = DoclingConverterManager(config)
+
+        assert set(getattr(manager, registry_name)) == {"default", *allowed}
+
+    def test_layout_registry_is_kind_based_and_unchanged(self):
+        """Layout presets are factory *kinds*, not stage preset ids.
+
+        `_parse_layout_options` resolves a docling-source layout preset with
+        `layout_factory.create_options(kind=preset_id)`, so enumerating
+        `LayoutObjectDetectionOptions.list_preset_ids()` here would register ids
+        the factory cannot build. Layout is deliberately left alone.
+        """
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        assert set(manager.layout_preset_registry) == {"default"}
+
+
+class TestConvertDocumentsSetupFailureTagging:
+    """convert_documents() tags data-independent setup failures by type.
+
+    Any failure in the eager setup span (option resolution through
+    initialize_pipeline) must surface as PipelineInitializationError so lifecycle
+    owners classify it as request-wide, never as a per-document failure. The
+    subsequent convert_all() is lazy, so nothing document-specific runs here.
+    """
+
+    def test_pre_init_setup_failure_is_tagged(self, monkeypatch):
+        from docling_jobkit.public_errors import PipelineInitializationError
+
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+        # A pre-init step (option resolution) blowing up -- e.g. an unavailable
+        # OCR engine -- must be tagged, not leak as a bare exception.
+        monkeypatch.setattr(
+            manager,
+            "get_pdf_pipeline_opts",
+            lambda options: (_ for _ in ()).throw(RuntimeError("OCR engine missing")),
+        )
+        with pytest.raises(PipelineInitializationError):
+            list(
+                manager.convert_documents(sources=[], options=ConvertDocumentsOptions())
+            )
+
+    def test_pipeline_init_failure_is_tagged(self, monkeypatch):
+        from docling_jobkit.public_errors import PipelineInitializationError
+
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        class _BadConverter:
+            def initialize_pipeline(self, *a, **k):
+                raise FileNotFoundError("Model 'x' not found in artifacts_path.")
+
+        monkeypatch.setattr(manager, "parse_chunking_options", lambda options: None)
+        monkeypatch.setattr(manager, "get_pdf_pipeline_opts", lambda options: object())
+        monkeypatch.setattr(manager, "get_converter", lambda opts: _BadConverter())
+        with pytest.raises(PipelineInitializationError):
+            list(
+                manager.convert_documents(sources=[], options=ConvertDocumentsOptions())
+            )

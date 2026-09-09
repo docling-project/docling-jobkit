@@ -8,7 +8,7 @@ from typing import Any, Optional
 from pydantic import AliasChoices, Field, PositiveFloat, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from docling_jobkit.config.target_config import S3PresignedConfig
+from docling_jobkit.config.target_config import PresignedConfig
 
 _log = logging.getLogger(__name__)
 
@@ -430,7 +430,7 @@ class RayOrchestratorConfig(BaseSettings):
         default=False,
         description="Return raw infrastructure exception detail in public task/document errors",
     )
-    s3_presigned_config: S3PresignedConfig | None = Field(
+    presigned_config: PresignedConfig | None = Field(
         default=None,
         description="Optional server-managed presigned URL target configuration.",
     )
