@@ -30,7 +30,9 @@ _BACKOFF_BASE_S = 0.5
 _RETRYABLE_4XX_STATUS = {429}
 
 
-def _with_exponential_retry(fn: Callable[[], Any], operation: str) -> Any:
+def _with_exponential_retry(
+    fn: Callable[[], Any], operation: str, *, source_kind: str = "spark"
+) -> Any:
     """Helper for exponential retries on transient errors."""
     for attempt in range(_MAX_RETRIES + 1):
         try:
@@ -42,7 +44,7 @@ def _with_exponential_retry(fn: Callable[[], Any], operation: str) -> Any:
             if attempt == _MAX_RETRIES:
                 raise SourceConnectorUnavailableError(
                     "Source document could not be reached.",
-                    source_kind="spark",
+                    source_kind=source_kind,
                 ) from exc
         except requests.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else None
@@ -58,7 +60,7 @@ def _with_exponential_retry(fn: Callable[[], Any], operation: str) -> Any:
                 )
                 raise error_type(
                     str(exc),
-                    source_kind="spark",
+                    source_kind=source_kind,
                     **(
                         {"retryable": False}
                         if error_type is SourceConnectorUnavailableError
@@ -68,7 +70,7 @@ def _with_exponential_retry(fn: Callable[[], Any], operation: str) -> Any:
             if attempt == _MAX_RETRIES:
                 raise SourceConnectorUnavailableError(
                     str(exc),
-                    source_kind="spark",
+                    source_kind=source_kind,
                 ) from exc
 
         wait = _BACKOFF_BASE_S * (2**attempt)
@@ -91,14 +93,16 @@ def _hostname_of(value: str) -> str:
     return (parsed.hostname or value).lower()
 
 
-def _validate_databricks_url(url: str, expected_host: str) -> None:
+def _validate_databricks_url(
+    url: str, expected_host: str, *, source_kind: str = "spark"
+) -> None:
     """Only allow https URLs on the configured Databricks workspace host (for now)."""
     parsed = urlparse(url)
     if parsed.scheme != "https":
         raise SourceConnectorPolicyError(
             f"Refusing to fetch document URL with scheme {parsed.scheme!r}; "
             "only https Databricks workspace URLs are allowed.",
-            source_kind="spark",
+            source_kind=source_kind,
         )
 
     url_host = (parsed.hostname or "").lower()
@@ -107,7 +111,7 @@ def _validate_databricks_url(url: str, expected_host: str) -> None:
         raise SourceConnectorPolicyError(
             f"Refusing to send the workspace token to {url_host!r}; expected "
             f"the configured Databricks workspace host {expected!r}.",
-            source_kind="spark",
+            source_kind=source_kind,
         )
 
 
@@ -117,6 +121,7 @@ def download_document_from_url(
     *,
     expected_host: str,
     max_file_size: int | None = None,
+    source_kind: str = "spark",
 ) -> BytesIO:
     """Download document from Databricks Files API URL with Bearer token auth.
 
@@ -125,7 +130,7 @@ def download_document_from_url(
 
     Streams the response into a bounded buffer respecting max_file_size
     """
-    _validate_databricks_url(url, expected_host)
+    _validate_databricks_url(url, expected_host, source_kind=source_kind)
     limit = normalize_max_file_size(max_file_size)
     response = _with_exponential_retry(
         lambda: requests.get(
@@ -136,6 +141,7 @@ def download_document_from_url(
             allow_redirects=False,
         ),
         "download document",
+        source_kind=source_kind,
     )
 
     if 300 <= response.status_code < 400:
@@ -143,7 +149,7 @@ def download_document_from_url(
             f"Document URL {url!r} returned a redirect ({response.status_code}); "
             "redirects are not followed to avoid leaking the workspace token "
             "to an unverified host.",
-            source_kind="spark",
+            source_kind=source_kind,
         )
 
     buffer = BytesIO()
