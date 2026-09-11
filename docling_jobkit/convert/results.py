@@ -105,7 +105,7 @@ def _build_processed_docs_item(
         debug_enabled=debug_error_details,
     )
     return ProcessedDocsItem(
-        source=str(exportable_document.file),
+        source=exportable_document.source_uri or str(exportable_document.file),
         status=exportable_document.status,
         error=summary_error
         or (
@@ -278,7 +278,7 @@ def _build_document_completed_item(
         num_pictures = len(exportable_document.document.pictures)
 
     return DocumentCompletedItem(
-        source=str(exportable_document.file),
+        source=exportable_document.source_uri or str(exportable_document.file),
         status=exportable_document.status,
         document_type=document_type,
         num_pages=num_pages,

@@ -6,7 +6,10 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from docling.datamodel.service.callbacks import CallbackSpec, ProgressCallbackRequest
 from docling.datamodel.service.chunking import BaseChunkerOptions
-from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.options import (
+    ConvertDocumentsOptions,
+    ExtractDocumentsOptions,
+)
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
@@ -112,6 +115,7 @@ class BaseOrchestrator(ABC):
         callbacks: list[CallbackSpec] | None = None,
         metadata: dict[str, Any] | None = None,
         targets: list[TaskTarget] | None = None,
+        extract_options: ExtractDocumentsOptions | None = None,
     ) -> Task:
         pass
 
