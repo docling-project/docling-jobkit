@@ -2,7 +2,6 @@ import logging
 import time
 from io import BytesIO
 from typing import Any, BinaryIO, Callable, Iterator, Optional, Union
-from urllib.parse import urlparse
 
 import requests
 
@@ -145,51 +144,23 @@ def iter_directory(host: str, token: str, path: str) -> Iterator[dict]:
             return
 
 
-def _hostname_of(value: str) -> str:
-    """Extract a bare hostname from a config value that may or may not
-    include a scheme"""
-    parsed = urlparse(value if "://" in value else f"//{value}")
-    return (parsed.hostname or value).lower()
-
-
-def _validate_databricks_url(url: str, expected_host: str) -> None:
-    parsed = urlparse(url)
-    if parsed.scheme != "https":
-        raise SourceConnectorPolicyError(
-            f"Refusing to fetch document URL with scheme {parsed.scheme!r}; "
-            "only https Databricks workspace URLs are allowed.",
-            source_kind=_SOURCE_KIND,
-        )
-
-    url_host = (parsed.hostname or "").lower()
-    expected = _hostname_of(expected_host)
-    if url_host != expected:
-        raise SourceConnectorPolicyError(
-            f"Refusing to send the workspace token to {url_host!r}; expected "
-            f"the configured Databricks workspace host {expected!r}.",
-            source_kind=_SOURCE_KIND,
-        )
-
-
-def download_document_from_url(
-    url: str,
-    auth_token: str,
+def download_document(
+    host: str,
+    token: str,
+    path: str,
     *,
-    expected_host: str,
     max_file_size: Optional[int] = None,
 ) -> BytesIO:
-    """Download a document from a Databricks Files API URL with Bearer token auth.
-
-    expected_host is the configured Databricks workspace host. Requires
-    https and disallows redirects. Streams the response into a bounded
-    buffer respecting max_file_size.
+    """Download a document via ``GET /api/2.0/fs/files{path}`` with Bearer
+    token auth. Disallows redirects and streams the response into a
+    bounded buffer respecting max_file_size.
     """
-    _validate_databricks_url(url, expected_host)
+    url = f"https://{host}/api/2.0/fs/files{path}"
     limit = normalize_max_file_size(max_file_size)
     response = _with_source_retry(
         lambda: requests.get(
             url,
-            headers={"Authorization": f"Bearer {auth_token}"},
+            headers={"Authorization": f"Bearer {token}"},
             timeout=30,
             stream=True,
             allow_redirects=False,
@@ -251,7 +222,7 @@ def _with_target_retry(
 def ensure_directory(host: str, token: str, path: str) -> None:
     """Idempotent ``mkdir -p`` via ``PUT /api/2.0/fs/directories{path}``.
 
-    Called once from the target processor's ``_initialize()`` since the
+    Called once from the target processor's _initialize() since the
     Files API upload endpoint does not document auto-creating parent
     directories, unlike object stores which have no real directory concept.
     """

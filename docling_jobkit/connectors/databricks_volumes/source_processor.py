@@ -7,7 +7,7 @@ from typing_extensions import override
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.databricks_volumes.helper import (
-    download_document_from_url,
+    download_document,
     iter_directory,
 )
 from docling_jobkit.connectors.databricks_volumes.models import (
@@ -124,11 +124,10 @@ class DatabricksVolumesSourceProcessor(
             identifier.path,
         )
 
-        url = f"https://{self._coords.workspace_host}/api/2.0/fs/files{identifier.path}"
-        buffer = download_document_from_url(
-            url,
+        buffer = download_document(
+            self._coords.workspace_host,
             self._coords.token.get_secret_value(),
-            expected_host=self._coords.workspace_host,
+            identifier.path,
             max_file_size=max_file_size,
         )
         return DocumentStream(name=identifier.name, stream=buffer)

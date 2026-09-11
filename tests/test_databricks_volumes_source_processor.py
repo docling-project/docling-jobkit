@@ -117,7 +117,7 @@ def test_fetch_document_by_id_rejects_oversized_before_download(coords):
         processor._fetch_document_by_id(identifier, max_file_size=8000)
 
 
-def test_fetch_document_by_id_builds_files_api_url(coords):
+def test_fetch_document_by_id_downloads_via_files_api(coords):
     processor = DatabricksVolumesSourceProcessor(coords)
 
     identifier = DatabricksVolumeFileIdentifier(
@@ -125,16 +125,15 @@ def test_fetch_document_by_id_builds_files_api_url(coords):
     )
 
     with patch(
-        "docling_jobkit.connectors.databricks_volumes.source_processor.download_document_from_url",
+        "docling_jobkit.connectors.databricks_volumes.source_processor.download_document",
         return_value=BytesIO(b"content"),
     ) as mock_download:
         stream = processor._fetch_document_by_id(identifier)
 
     assert stream.name == "a.pdf"
     mock_download.assert_called_once_with(
-        "https://dbc-xxxxxxx.cloud.databricks.com"
-        "/api/2.0/fs/files/Volumes/main/default/docs/a.pdf",
+        "dbc-xxxxxxx.cloud.databricks.com",
         "tok",
-        expected_host="dbc-xxxxxxx.cloud.databricks.com",
+        "/Volumes/main/default/docs/a.pdf",
         max_file_size=None,
     )
