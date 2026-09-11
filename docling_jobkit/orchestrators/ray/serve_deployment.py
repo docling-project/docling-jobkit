@@ -47,6 +47,11 @@ from docling_jobkit.convert.chunking import (
     DocumentChunkerManager,
     process_chunkable_results,
 )
+from docling_jobkit.convert.extraction_manager import (
+    DocumentExtractionManager,
+    DocumentExtractionManagerConfig,
+)
+from docling_jobkit.convert.extraction_results import process_extraction_results
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
@@ -64,7 +69,10 @@ from docling_jobkit.convert.results import (
     _process_exportable_results_internal,
     process_exportable_results,
 )
-from docling_jobkit.convert.source_expansion import expand_task_sources
+from docling_jobkit.convert.source_expansion import (
+    expand_task_sources,
+    expand_task_sources_with_identities,
+)
 from docling_jobkit.datamodel.exportable_document import (
     ExportableDocument,
     source_to_public_uri,
@@ -100,6 +108,7 @@ from docling_jobkit.orchestrators.ray.models import (
     ConverterFailureResult,
     ConverterRequest,
     ConverterTaskResult,
+    ExtractPassthroughRequest,
     MaterializedConvertRequest,
     PassthroughTaskRequest,
     SliceConvertRequest,
@@ -671,6 +680,9 @@ class DoclingProcessorConverterDeployment:
             self.replica_id,
         )
         self.cm = DoclingConverterManager(config=converter_manager_config)
+        # Extraction manager shares the converter config's limits/plugins/artifacts
+        # and carries its own operator model-gating fields (see §3.3/§3.5).
+        self.ecm: DocumentExtractionManager | None = None
         _log.setLevel(self.config.log_level.upper())
         self.scratch_dir = config.scratch_dir
         if self.scratch_dir is not None:
@@ -706,6 +718,76 @@ class DoclingProcessorConverterDeployment:
                         expected_doc_count=request.expected_doc_count,
                         start_time=request_start,
                     )
+                )
+            except Exception as exc:
+                return ConverterFailureResult(
+                    failure=classify_ray_public_task_failure(
+                        exc,
+                        task_id=request.task.task_id,
+                        phase=FailurePhase.EXECUTION,
+                        details={
+                            "task_size": str(len(request.task.sources)),
+                            "target_kind": task_target_kind(request.task),
+                        },
+                    )
+                )
+            self.documents_processed += result.task_result.num_converted
+        elif isinstance(request, ExtractPassthroughRequest):
+            request_start = time.monotonic()
+            extract_options = request.task.extract_options
+            if extract_options is None:
+                raise RuntimeError("Extraction task is missing extract_options.")
+            expanded = await self._run_with_retry(
+                request.task.task_id,
+                lambda: expand_task_sources_with_identities(
+                    request.task,
+                    max_file_size=self.converter_manager_config.max_file_size,
+                    allow_external_plugins=(
+                        self.converter_manager_config.allow_external_plugins
+                    ),
+                ),
+                task=request.task,
+            )
+            if isinstance(expanded, ConverterFailureResult):
+                return expanded
+            extract_sources, identities, headers = expanded
+            callback_invoker = CallbackInvoker() if request.task.callbacks else None
+            if callback_invoker is not None:
+                callback_invoker.invoke_callbacks_async(
+                    callbacks=request.task.callbacks,
+                    task_id=request.task.task_id,
+                    progress=ProgressSetNumDocs(num_docs=len(extract_sources)),
+                )
+            ext_results = await self._run_with_retry(
+                request.task.task_id,
+                lambda: list(
+                    self._get_extraction_manager().extract_documents(
+                        sources=extract_sources,
+                        options=extract_options,
+                        headers=headers,
+                    )
+                ),
+                task=request.task,
+            )
+            if isinstance(ext_results, ConverterFailureResult):
+                return ext_results
+            try:
+                task_result, processed_docs = await asyncio.to_thread(
+                    lambda: process_extraction_results(
+                        request.task,
+                        ext_results,
+                        identities,
+                        presigned_config=self.config.presigned_config,
+                        callback_invoker=callback_invoker,
+                        debug_error_details=self.config.debug_error_details,
+                        allow_external_plugins=(
+                            self.converter_manager_config.allow_external_plugins
+                        ),
+                        start_time=request_start,
+                    )
+                )
+                result = ConverterTaskResult(
+                    task_result=task_result, processed_docs=processed_docs
                 )
             except Exception as exc:
                 return ConverterFailureResult(
@@ -864,6 +946,28 @@ class DoclingProcessorConverterDeployment:
             chunker_manager = DocumentChunkerManager()
             self._chunker_manager = chunker_manager
         return chunker_manager
+
+    def _get_extraction_manager(self) -> DocumentExtractionManager:
+        manager = self.ecm
+        if manager is None:
+            config = self.converter_manager_config
+            manager = DocumentExtractionManager(
+                DocumentExtractionManagerConfig(
+                    artifacts_path=config.artifacts_path,
+                    options_cache_size=config.options_cache_size,
+                    enable_remote_services=config.enable_remote_services,
+                    allow_external_plugins=config.allow_external_plugins,
+                    max_num_pages=config.max_num_pages,
+                    max_file_size=config.max_file_size,
+                    default_extraction_preset=config.default_extraction_preset,
+                    allowed_extraction_presets=config.allowed_extraction_presets,
+                    allow_custom_extraction_config=config.allow_custom_extraction_config,
+                    allowed_extraction_engines=config.allowed_extraction_engines,
+                    allowed_formats=config.allowed_extraction_formats,
+                )
+            )
+            self.ecm = manager
+        return manager
 
     def _build_task_result(
         self,
@@ -1365,6 +1469,8 @@ class DoclingProcessorCoordinatorDeployment:
             return await self._process_convert_task(task, workdir)
         if task.task_type == TaskType.CHUNK:
             return await self._process_chunk_task(task, workdir)
+        if task.task_type == TaskType.EXTRACT:
+            return await self._process_extract_task(task, workdir)
         raise ValueError(f"Unknown task type: {task.task_type}")
 
     async def _process_convert_task(
@@ -1515,6 +1621,20 @@ class DoclingProcessorCoordinatorDeployment:
         del workdir
         converter_result = await self._run_single_converter_call(
             task, PassthroughTaskRequest(task=task)
+        )
+        if isinstance(converter_result, ConverterFailureResult):
+            return converter_result
+        return converter_result.task_result
+
+    async def _process_extract_task(
+        self, task: Task, workdir: Path
+    ) -> DoclingTaskResult | ConverterFailureResult:
+        # Own passthrough: one converter call, sources expanded in place (no S3
+        # fan-out or page slicing).
+        del workdir
+        converter_result = await self._run_single_converter_call(
+            task,
+            ExtractPassthroughRequest(task=task),
         )
         if isinstance(converter_result, ConverterFailureResult):
             return converter_result
