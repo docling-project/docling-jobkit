@@ -56,7 +56,12 @@ class TaskDatabricksVolumesSource(DatabricksVolumesCoordinates):
     kind: Literal["databricks_volumes"] = "databricks_volumes"
 
 
+class TaskDatabricksVolumesTarget(DatabricksVolumesCoordinates):
+    kind: Literal["databricks_volumes"] = "databricks_volumes"
+
+
 __all__ = [
     "DatabricksVolumesCoordinates",
     "TaskDatabricksVolumesSource",
+    "TaskDatabricksVolumesTarget",
 ]
