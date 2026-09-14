@@ -1453,7 +1453,7 @@ requires-dist = [
     { name = "confluent-kafka", marker = "extra == 'kafka'", specifier = ">=2.5.0,<3" },
     { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", specifier = ">=2.94.0,<3.0.0" },
     { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", specifier = ">=2.95.0,<3.0.0" },
-    { name = "docling-slim", extras = ["standard"], specifier = ">=2.124.0,<3.0.0" },
+    { name = "docling-slim", extras = ["standard"], specifier = ">=2.127.0,<3.0.0" },
     { name = "google-api-python-client", marker = "extra == 'gdrive'", specifier = ">=2.183.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'gdrive'", specifier = ">=1.2.2" },
     { name = "google-cloud-storage", marker = "extra == 'gcloudstorage'", specifier = ">=2.10.0" },
@@ -3173,7 +3173,7 @@ wheels = [
 
 [[package]]
 name = "mlx-audio"
-version = "0.5.3"
+version = "0.5.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub", marker = "sys_platform == 'darwin'" },
@@ -3188,9 +3188,9 @@ dependencies = [
     { name = "tqdm", marker = "sys_platform == 'darwin'" },
     { name = "transformers", marker = "sys_platform == 'darwin'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/60/e8/54d02c8bb50fc5b2cae0fbcb459acf78f1fbb316f20f758a8f56824aa407/mlx_audio-0.5.3.tar.gz", hash = "sha256:9e96f1ee68bc81e7ba74d85b8eab213384c8cd8c6f66ccd12034ded7cb5cd167", size = 1709447, upload-time = "2026-09-07T19:44:40.285Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b0/71/07fc039c603d8fb6531a2eca75b18b150c4ee9f3780c03ba20538a576f32/mlx_audio-0.5.4.tar.gz", hash = "sha256:3e1895860d9a636360a9377b5651239f5197e649d56fe25f1382cac6f2ed1e55", size = 1725509, upload-time = "2026-09-14T15:26:06.632Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/84/c2/2876e6ff4811b1d6a43e1480947dd6580d02dba16f34724b2e3645090997/mlx_audio-0.5.3-py3-none-any.whl", hash = "sha256:8d920b2dcbcf37b5fd2bbb070e21a9a33442bf231a754e0d39387e65986bd830", size = 2057098, upload-time = "2026-09-07T19:44:38.581Z" },
+    { url = "https://files.pythonhosted.org/packages/76/99/08dbae6b2e7771b3f9cf55c8c160d104f8c41c6c71dffebe785ed1344248/mlx_audio-0.5.4-py3-none-any.whl", hash = "sha256:d350ecc43a65b94b1578381370be64229948f79aef9ff599d20adb65e38351b3", size = 2077152, upload-time = "2026-09-14T15:26:04.598Z" },
 ]
 
 [[package]]
