@@ -1,5 +1,5 @@
 from io import BytesIO
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 import requests
@@ -52,6 +52,85 @@ def test_initialize_ensures_directory(dbvol_coords):
     )
 
 
+def test_upload_creates_the_nested_parent_directory(dbvol_coords):
+    """target_filename is always nested (json/, md/, pdf/, ...), and the Files
+    API upload endpoint does not create missing parents."""
+    processor = DatabricksVolumesTargetProcessor(dbvol_coords)
+
+    with (
+        patch(
+            "docling_jobkit.connectors.databricks_volumes.target_processor.ensure_directory"
+        ) as mock_ensure,
+        patch(
+            "docling_jobkit.connectors.databricks_volumes.target_processor.upload_document"
+        ),
+    ):
+        processor._initialize()
+        processor.upload_object(b"{}", "json/doc.json", "application/json")
+
+    assert mock_ensure.call_args_list[-1] == call(
+        "dbc-xxxxxxx.cloud.databricks.com", "tok", "/Volumes/main/default/output/json"
+    )
+
+
+def test_parent_directories_are_created_once_per_prefix(dbvol_coords, tmp_path):
+    """mkdir is per distinct output prefix, not per document."""
+    processor = DatabricksVolumesTargetProcessor(dbvol_coords)
+    local = tmp_path / "doc.html"
+    local.write_bytes(b"<html></html>")
+
+    with (
+        patch(
+            "docling_jobkit.connectors.databricks_volumes.target_processor.ensure_directory"
+        ) as mock_ensure,
+        patch(
+            "docling_jobkit.connectors.databricks_volumes.target_processor.upload_document"
+        ),
+    ):
+        processor._initialize()
+        processor.upload_object(b"a", "json/a.json", "application/json")
+        processor.upload_object(b"b", "json/b.json", "application/json")
+        processor.upload_object("md", "md/a.md", "text/markdown")
+        processor.upload_file(local, "html/a.html", "text/html")
+        processor.upload_object(b"top", "summary.txt", "text/plain")
+
+    ensured = [c.args[2] for c in mock_ensure.call_args_list]
+    assert ensured == [
+        "/Volumes/main/default/output",
+        "/Volumes/main/default/output/json",
+        "/Volumes/main/default/output/md",
+        "/Volumes/main/default/output/html",
+    ]
+
+
+def test_finalize_clears_the_directory_cache(dbvol_coords):
+    """A reopened processor must not assume directories from a previous cycle
+    still exist."""
+    processor = DatabricksVolumesTargetProcessor(dbvol_coords)
+
+    with (
+        patch(
+            "docling_jobkit.connectors.databricks_volumes.target_processor.ensure_directory"
+        ) as mock_ensure,
+        patch(
+            "docling_jobkit.connectors.databricks_volumes.target_processor.upload_document"
+        ),
+    ):
+        processor._initialize()
+        processor.upload_object(b"a", "json/a.json", "application/json")
+        processor._finalize()
+        processor._initialize()
+        processor.upload_object(b"a", "json/a.json", "application/json")
+
+    ensured = [c.args[2] for c in mock_ensure.call_args_list]
+    assert ensured == [
+        "/Volumes/main/default/output",
+        "/Volumes/main/default/output/json",
+        "/Volumes/main/default/output",
+        "/Volumes/main/default/output/json",
+    ]
+
+
 def test_upload_file_reads_from_disk_and_uploads(dbvol_coords, tmp_path):
     processor = DatabricksVolumesTargetProcessor(dbvol_coords)
     file_path = tmp_path / "doc.json"
@@ -66,9 +145,14 @@ def test_upload_file_reads_from_disk_and_uploads(dbvol_coords, tmp_path):
         captured["data"] = data.read()
         captured["content_type"] = content_type
 
-    with patch(
-        "docling_jobkit.connectors.databricks_volumes.target_processor.upload_document",
-        side_effect=_capture,
+    with (
+        patch(
+            "docling_jobkit.connectors.databricks_volumes.target_processor.upload_document",
+            side_effect=_capture,
+        ),
+        patch(
+            "docling_jobkit.connectors.databricks_volumes.target_processor.ensure_directory"
+        ),
     ):
         processor.upload_file(file_path, "output/doc.json", "application/json")
 
@@ -84,9 +168,14 @@ def test_upload_file_reads_from_disk_and_uploads(dbvol_coords, tmp_path):
 def test_upload_object_bytes(dbvol_coords):
     processor = DatabricksVolumesTargetProcessor(dbvol_coords)
 
-    with patch(
-        "docling_jobkit.connectors.databricks_volumes.target_processor.upload_document"
-    ) as mock_upload:
+    with (
+        patch(
+            "docling_jobkit.connectors.databricks_volumes.target_processor.upload_document"
+        ) as mock_upload,
+        patch(
+            "docling_jobkit.connectors.databricks_volumes.target_processor.ensure_directory"
+        ),
+    ):
         processor.upload_object(b"raw bytes", "output/doc.json", "application/json")
 
     mock_upload.assert_called_once_with(
@@ -101,9 +190,14 @@ def test_upload_object_bytes(dbvol_coords):
 def test_upload_object_str_is_utf8_encoded(dbvol_coords):
     processor = DatabricksVolumesTargetProcessor(dbvol_coords)
 
-    with patch(
-        "docling_jobkit.connectors.databricks_volumes.target_processor.upload_document"
-    ) as mock_upload:
+    with (
+        patch(
+            "docling_jobkit.connectors.databricks_volumes.target_processor.upload_document"
+        ) as mock_upload,
+        patch(
+            "docling_jobkit.connectors.databricks_volumes.target_processor.ensure_directory"
+        ),
+    ):
         processor.upload_object("héllo", "output/doc.txt", "text/plain")
 
     mock_upload.assert_called_once_with(
@@ -119,9 +213,14 @@ def test_upload_object_file_like_passthrough(dbvol_coords):
     processor = DatabricksVolumesTargetProcessor(dbvol_coords)
     buf = BytesIO(b"stream contents")
 
-    with patch(
-        "docling_jobkit.connectors.databricks_volumes.target_processor.upload_document"
-    ) as mock_upload:
+    with (
+        patch(
+            "docling_jobkit.connectors.databricks_volumes.target_processor.upload_document"
+        ) as mock_upload,
+        patch(
+            "docling_jobkit.connectors.databricks_volumes.target_processor.ensure_directory"
+        ),
+    ):
         processor.upload_object(buf, "output/doc.bin", "application/octet-stream")
 
     mock_upload.assert_called_once_with(
@@ -140,6 +239,9 @@ def test_target_authentication_error_is_client_actionable(dbvol_coords):
         patch(
             "docling_jobkit.connectors.databricks_volumes.target_processor.upload_document",
             side_effect=_make_http_exc(403),
+        ),
+        patch(
+            "docling_jobkit.connectors.databricks_volumes.target_processor.ensure_directory"
         ),
         pytest.raises(
             ConnectorAuthenticationError,

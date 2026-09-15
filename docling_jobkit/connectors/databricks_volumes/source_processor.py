@@ -11,7 +11,7 @@ from docling_jobkit.connectors.databricks_volumes.helper import (
     iter_directory,
 )
 from docling_jobkit.connectors.databricks_volumes.models import (
-    DatabricksVolumesCoordinates,
+    DatabricksVolumesSourceCoordinates,
     TaskDatabricksVolumesSource,
 )
 from docling_jobkit.connectors.source_processor import (
@@ -34,9 +34,11 @@ class DatabricksVolumeFileIdentifier(BaseModel):
 
 
 class DatabricksVolumesSourceProcessor(
-    BaseSourceProcessor[DatabricksVolumesCoordinates, DatabricksVolumeFileIdentifier]
+    BaseSourceProcessor[
+        DatabricksVolumesSourceCoordinates, DatabricksVolumeFileIdentifier
+    ]
 ):
-    def __init__(self, coords: DatabricksVolumesCoordinates):
+    def __init__(self, coords: DatabricksVolumesSourceCoordinates):
         super().__init__(coords)
         self._coords = coords
 
@@ -62,9 +64,13 @@ class DatabricksVolumesSourceProcessor(
     def _finalize(self) -> None:
         pass
 
-    def _list_document_ids(self) -> Iterator[DatabricksVolumeFileIdentifier]:
-        max_elements = self._coords.max_num_elements
-        yielded = 0
+    def _iter_entries(self) -> Iterator[dict]:
+        """Walk the volume subtree depth-first, yielding file entries only.
+
+        The stack holds directory paths, not files, so peak memory is bounded by
+        the directory count rather than the file count, and only one directory
+        listing generator is live at a time.
+        """
         stack = [self._coords.volume_path]
         while stack:
             current = stack.pop()
@@ -73,25 +79,50 @@ class DatabricksVolumesSourceProcessor(
                 self._coords.token.get_secret_value(),
                 current,
             ):
-                if max_elements is not None and yielded >= max_elements:
-                    return
-                if entry.get("is_directory"):
-                    stack.append(entry["path"])
+                path = entry.get("path")
+                if not path:
+                    # A listing entry we cannot address is not actionable; skip
+                    # it rather than dying on a KeyError that would surface to
+                    # the client as an internal error.
+                    _log.warning(
+                        "Databricks Volumes: listing entry without a path under "
+                        "%s, skipping",
+                        current,
+                    )
                     continue
-                yielded += 1
-                yield DatabricksVolumeFileIdentifier(
-                    path=entry["path"],
-                    name=entry["name"],
-                    size=entry.get("file_size", 0),
-                    last_modified=entry.get("last_modified"),
-                )
+                if entry.get("is_directory"):
+                    stack.append(path)
+                    continue
+                yield entry
+
+    def _list_document_ids(self) -> Iterator[DatabricksVolumeFileIdentifier]:
+        max_elements = self._coords.max_num_elements
+        yielded = 0
+        for entry in self._iter_entries():
+            if max_elements is not None and yielded >= max_elements:
+                return
+            path = entry["path"]
+            yielded += 1
+            yield DatabricksVolumeFileIdentifier(
+                path=path,
+                # `name` is documented but not worth a KeyError if absent —
+                # the trailing path segment is the same value.
+                name=entry.get("name") or path.rsplit("/", 1)[-1],
+                size=entry.get("file_size", 0),
+                last_modified=entry.get("last_modified"),
+            )
 
     def _count_documents(self) -> int:
+        # Counts raw listing entries instead of going through
+        # _list_document_ids(), which would build and immediately discard one
+        # pydantic model per file just to increment a counter.
         max_elements = self._coords.max_num_elements
         count = 0
-        for _ in self._list_document_ids():
+        for _ in self._iter_entries():
             count += 1
-        return min(count, max_elements) if max_elements is not None else count
+            if max_elements is not None and count >= max_elements:
+                return max_elements
+        return count
 
     @override
     def _make_document_ref(

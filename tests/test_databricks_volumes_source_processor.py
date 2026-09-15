@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from docling_jobkit.connectors.databricks_volumes.models import (
-    DatabricksVolumesCoordinates,
+    DatabricksVolumesSourceCoordinates,
 )
 from docling_jobkit.connectors.databricks_volumes.source_processor import (
     DatabricksVolumeFileIdentifier,
@@ -14,8 +14,8 @@ from docling_jobkit.convert.materialization import SourceLimitExceededError
 
 
 @pytest.fixture
-def coords() -> DatabricksVolumesCoordinates:
-    return DatabricksVolumesCoordinates(
+def coords() -> DatabricksVolumesSourceCoordinates:
+    return DatabricksVolumesSourceCoordinates(
         workspace_host="dbc-xxxxxxx.cloud.databricks.com",
         token="tok",
         volume_path="/Volumes/main/default/docs",

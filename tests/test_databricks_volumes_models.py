@@ -3,7 +3,9 @@ from pydantic import ValidationError
 
 from docling_jobkit.connectors.databricks_volumes.models import (
     DatabricksVolumesCoordinates,
+    DatabricksVolumesSourceCoordinates,
     TaskDatabricksVolumesSource,
+    TaskDatabricksVolumesTarget,
 )
 
 
@@ -23,7 +25,6 @@ def test_accepts_valid_coordinates():
     assert coords.workspace_host == "dbc-xxxxxxx.cloud.databricks.com"
     assert coords.token.get_secret_value() == "tok"
     assert coords.volume_path == "/Volumes/main/default/docs"
-    assert coords.max_num_elements is None
 
 
 def test_rejects_workspace_host_with_scheme():
@@ -50,3 +51,21 @@ def test_task_source_carries_kind_discriminator():
     source = TaskDatabricksVolumesSource(**_coords())
 
     assert source.kind == "databricks_volumes"
+
+
+def test_source_coordinates_carry_max_num_elements():
+    coords = DatabricksVolumesSourceCoordinates(**_coords())
+
+    assert coords.max_num_elements is None
+    assert (
+        DatabricksVolumesSourceCoordinates(
+            **_coords(max_num_elements=5)
+        ).max_num_elements
+        == 5
+    )
+
+
+def test_target_has_no_max_num_elements():
+    """max_num_elements caps source enumeration and means nothing on a target."""
+    assert "max_num_elements" not in TaskDatabricksVolumesTarget.model_fields
+    assert "max_num_elements" in TaskDatabricksVolumesSource.model_fields

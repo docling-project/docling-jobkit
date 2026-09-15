@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field, SecretStr, field_validator
 
 
 class DatabricksVolumesCoordinates(BaseModel):
+    """Connection details shared by the source and target connectors."""
+
     workspace_host: Annotated[
         str,
         Field(
@@ -32,11 +34,6 @@ class DatabricksVolumesCoordinates(BaseModel):
         ),
     ]
 
-    max_num_elements: Annotated[
-        Optional[int],
-        Field(description="Optional cap on the number of files processed."),
-    ] = None
-
     @field_validator("workspace_host")
     @classmethod
     def _no_scheme(cls, v: str) -> str:
@@ -52,7 +49,21 @@ class DatabricksVolumesCoordinates(BaseModel):
         return v.rstrip("/")
 
 
-class TaskDatabricksVolumesSource(DatabricksVolumesCoordinates):
+class DatabricksVolumesSourceCoordinates(DatabricksVolumesCoordinates):
+    """Source-only coordinates.
+
+    ``max_num_elements`` caps enumeration and is meaningless on a target, so it
+    lives here rather than on the shared base — the same split the other
+    connectors make between their source and target coordinate models.
+    """
+
+    max_num_elements: Annotated[
+        Optional[int],
+        Field(description="Optional cap on the number of files processed."),
+    ] = None
+
+
+class TaskDatabricksVolumesSource(DatabricksVolumesSourceCoordinates):
     kind: Literal["databricks_volumes"] = "databricks_volumes"
 
 
@@ -62,6 +73,7 @@ class TaskDatabricksVolumesTarget(DatabricksVolumesCoordinates):
 
 __all__ = [
     "DatabricksVolumesCoordinates",
+    "DatabricksVolumesSourceCoordinates",
     "TaskDatabricksVolumesSource",
     "TaskDatabricksVolumesTarget",
 ]

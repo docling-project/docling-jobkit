@@ -6,6 +6,7 @@ from typing import Any, BinaryIO, Callable, Iterator, Optional, Union
 import requests
 
 from docling_jobkit.connectors.errors import (
+    SourceConnectorAuthenticationError,
     SourceConnectorPolicyError,
     SourceConnectorUnavailableError,
 )
@@ -21,6 +22,42 @@ _SOURCE_KIND = "databricks_volumes"
 _MAX_RETRIES = 3
 _BACKOFF_BASE_S = 0.5
 _RETRYABLE_4XX_STATUS = {429}
+_AUTH_STATUS = {401, 403}
+_POLICY_STATUS = {404, 413, 415, 422}
+
+# Transport failures worth another attempt. Kept explicit rather than catching
+# requests.RequestException wholesale so malformed-request bugs (InvalidURL,
+# MissingSchema, ...) still surface immediately instead of being retried.
+_TRANSPORT_ERRORS = (
+    requests.Timeout,
+    requests.ConnectionError,
+    requests.exceptions.ChunkedEncodingError,
+    requests.exceptions.ContentDecodingError,
+)
+
+# Client-safe explanations keyed by status. Deliberately free of the request URL:
+# these strings are surfaced verbatim to API clients by
+# ``build_public_task_error``, and the workspace host and volume path should not
+# ride along in a failure message.
+_SOURCE_STATUS_HINTS = {
+    404: (
+        "Databricks Volumes path not found (HTTP 404); verify volume_path. Note "
+        "that the Files API also returns 404 when listing an existing but empty "
+        "Unity Catalog volume."
+    ),
+    413: "Databricks Volumes rejected the request as too large (HTTP 413).",
+    415: "Databricks Volumes rejected the content type (HTTP 415).",
+    422: "Databricks Volumes could not process the request (HTTP 422).",
+}
+
+
+def _safe_source_message(status: Optional[int]) -> str:
+    if status is None:
+        return "Databricks Volumes request failed."
+    hint = _SOURCE_STATUS_HINTS.get(status)
+    if hint is not None:
+        return hint
+    return f"Databricks Volumes request failed (HTTP {status})."
 
 
 def _retry_call(
@@ -53,7 +90,7 @@ def _retry_call(
                 raise terminal_error(exc, status) from exc
             if attempt == _MAX_RETRIES:
                 raise exhausted_http_error(exc) from exc
-        except (requests.Timeout, requests.ConnectionError) as exc:
+        except _TRANSPORT_ERRORS as exc:
             if attempt == _MAX_RETRIES:
                 raise exhausted_network_error(exc) from exc
 
@@ -71,19 +108,19 @@ def _retry_call(
 
 
 def _source_terminal_error(exc: requests.HTTPError, status: int) -> BaseException:
-    error_type = (
-        SourceConnectorPolicyError
-        if status in {401, 403, 404, 413, 415, 422}
-        else SourceConnectorUnavailableError
-    )
-    return error_type(
-        str(exc),
-        source_kind=_SOURCE_KIND,
-        **(
-            {"retryable": False}
-            if error_type is SourceConnectorUnavailableError
-            else {}
-        ),
+    del exc  # Never echoed back: str(HTTPError) embeds the full request URL.
+    if status in _AUTH_STATUS:
+        return SourceConnectorAuthenticationError(
+            "Databricks Volumes authentication failed; verify permissions and "
+            "supply valid credentials.",
+            source_kind=_SOURCE_KIND,
+        )
+    if status in _POLICY_STATUS:
+        return SourceConnectorPolicyError(
+            _safe_source_message(status), source_kind=_SOURCE_KIND
+        )
+    return SourceConnectorUnavailableError(
+        _safe_source_message(status), source_kind=_SOURCE_KIND, retryable=False
     )
 
 
@@ -95,7 +132,10 @@ def _with_source_retry(fn: Callable[[], Any], operation: str) -> Any:
         passthrough=lambda exc: False,
         terminal_error=_source_terminal_error,
         exhausted_http_error=lambda exc: SourceConnectorUnavailableError(
-            str(exc), source_kind=_SOURCE_KIND
+            _safe_source_message(
+                exc.response.status_code if exc.response is not None else None
+            ),
+            source_kind=_SOURCE_KIND,
         ),
         exhausted_network_error=lambda exc: SourceConnectorUnavailableError(
             "Databricks Volumes could not be reached.", source_kind=_SOURCE_KIND
@@ -114,6 +154,7 @@ def list_directory_page(
     """One page of ``GET /api/2.0/fs/directories{path}``.
 
     Returns the raw JSON body: {"contents": [...], "next_page_token": ...}.
+    ``page_size`` is capped at 1000 by the Files API.
     """
     params: dict[str, Any] = {"page_size": page_size}
     if page_token:
@@ -128,7 +169,16 @@ def list_directory_page(
         )
 
     response = _with_source_retry(_do, "list directory")
-    return response.json()
+    try:
+        return response.json()
+    except ValueError as exc:
+        # A proxy or captive portal answering 200 with non-JSON, or a truncated
+        # body. Translated here so it lands as a typed source failure instead of
+        # escaping as a bare ValueError and being reported as an internal error.
+        raise SourceConnectorUnavailableError(
+            "Databricks Volumes returned a malformed directory listing.",
+            source_kind=_SOURCE_KIND,
+        ) from exc
 
 
 def iter_directory(host: str, token: str, path: str) -> Iterator[dict]:
@@ -154,42 +204,52 @@ def download_document(
     """Download a document via ``GET /api/2.0/fs/files{path}`` with Bearer
     token auth. Disallows redirects and streams the response into a
     bounded buffer respecting max_file_size.
+
+    The body stream is consumed *inside* the retried callable so that a
+    connection dropped mid-download is retried and translated like any other
+    transport failure, rather than escaping untyped from a loop that ran after
+    the retry helper had already returned. The response is always closed, so
+    aborting early on the size limit cannot strand the socket.
     """
     url = f"https://{host}/api/2.0/fs/files{path}"
     limit = normalize_max_file_size(max_file_size)
-    response = _with_source_retry(
-        lambda: requests.get(
+
+    def _do() -> BytesIO:
+        response = requests.get(
             url,
             headers={"Authorization": f"Bearer {token}"},
             timeout=30,
             stream=True,
             allow_redirects=False,
-        ),
-        "download document",
-    )
-
-    if 300 <= response.status_code < 400:
-        raise SourceConnectorPolicyError(
-            f"Document URL {url!r} returned a redirect ({response.status_code}); "
-            "redirects are not followed to avoid leaking the workspace token "
-            "to an unverified host.",
-            source_kind=_SOURCE_KIND,
         )
+        try:
+            if 300 <= response.status_code < 400:
+                raise SourceConnectorPolicyError(
+                    f"Document path {path!r} returned a redirect "
+                    f"({response.status_code}); redirects are not followed to "
+                    "avoid leaking the workspace token to an unverified host.",
+                    source_kind=_SOURCE_KIND,
+                )
+            response.raise_for_status()
 
-    buffer = BytesIO()
-    bytes_seen = 0
-    for chunk in response.iter_content(chunk_size=1 << 16):
-        if not chunk:
-            continue
-        bytes_seen += len(chunk)
-        if limit is not None and bytes_seen > limit:
-            raise SourceLimitExceededError(
-                f"Source {url!r} exceeds max_file_size={limit} bytes"
-            )
-        buffer.write(chunk)
+            buffer = BytesIO()
+            bytes_seen = 0
+            for chunk in response.iter_content(chunk_size=1 << 16):
+                if not chunk:
+                    continue
+                bytes_seen += len(chunk)
+                if limit is not None and bytes_seen > limit:
+                    raise SourceLimitExceededError(
+                        f"Source '{path}' exceeds max_file_size={limit} bytes"
+                    )
+                buffer.write(chunk)
+        finally:
+            response.close()
 
-    buffer.seek(0)
-    return buffer
+        buffer.seek(0)
+        return buffer
+
+    return _with_source_retry(_do, "download document")
 
 
 def is_databricks_target_authentication_error(exc: BaseException) -> bool:
@@ -199,7 +259,7 @@ def is_databricks_target_authentication_error(exc: BaseException) -> bool:
     return (
         isinstance(exc, requests.HTTPError)
         and exc.response is not None
-        and exc.response.status_code in {401, 403}
+        and exc.response.status_code in _AUTH_STATUS
     )
 
 
@@ -211,8 +271,12 @@ def _with_target_retry(
         fn,
         operation,
         passthrough=is_databricks_target_authentication_error,
-        terminal_error=lambda exc, status: TargetWriteError(str(exc)),
-        exhausted_http_error=lambda exc: TargetWriteError(str(exc)),
+        terminal_error=lambda exc, status: TargetWriteError(
+            f"Databricks Volumes rejected the write (HTTP {status})."
+        ),
+        exhausted_http_error=lambda exc: TargetWriteError(
+            "Databricks Volumes rejected the write after retries."
+        ),
         exhausted_network_error=lambda exc: TargetWriteError(
             "Databricks Volumes could not be reached."
         ),
@@ -222,9 +286,11 @@ def _with_target_retry(
 def ensure_directory(host: str, token: str, path: str) -> None:
     """Idempotent ``mkdir -p`` via ``PUT /api/2.0/fs/directories{path}``.
 
-    Called once from the target processor's _initialize() since the
-    Files API upload endpoint does not document auto-creating parent
-    directories, unlike object stores which have no real directory concept.
+    The Files API documents this endpoint as creating any missing parent
+    directories and as succeeding when the directory already exists, so one
+    call per distinct parent prefix is enough. The upload endpoint
+    (``PUT /api/2.0/fs/files``) makes no such guarantee, which is why the
+    target processor calls this for every directory it is about to write into.
     """
 
     def _do() -> requests.Response:
