@@ -36,6 +36,9 @@ def source_connectors():
     from docling_jobkit.connectors.azure_blob.source_processor import (
         AzureBlobSourceProcessor,
     )
+    from docling_jobkit.connectors.databricks_volumes.source_processor import (
+        DatabricksVolumesSourceProcessor,
+    )
     from docling_jobkit.connectors.filenet.source_processor import (
         FileNetSourceProcessor,
     )
@@ -58,6 +61,7 @@ def source_connectors():
         HttpSourceProcessor,
         LocalPathSourceProcessor,
         FileNetSourceProcessor,
+        DatabricksVolumesSourceProcessor,
     ]
     for cls in (
         S3SourceProcessor,
@@ -77,6 +81,9 @@ def target_connectors():
     )
     from docling_jobkit.connectors.azure_blob.target_processor import (
         AzureBlobTargetProcessor,
+    )
+    from docling_jobkit.connectors.databricks_volumes.target_processor import (
+        DatabricksVolumesTargetProcessor,
     )
     from docling_jobkit.connectors.google_cloud_storage.target_processor import (
         GoogleCloudStorageTargetProcessor,
@@ -107,6 +114,7 @@ def target_connectors():
     connectors = [
         LocalPathTargetProcessor,
         HttpPutTargetProcessor,
+        DatabricksVolumesTargetProcessor,
     ]
     for cls in (
         S3TargetProcessor,
