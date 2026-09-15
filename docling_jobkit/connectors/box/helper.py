@@ -20,25 +20,52 @@ _ITEM_FIELDS = ["id", "name", "type", "size", "modified_at"]
 # Box's own default is 100.
 _PAGE_SIZE = 1000
 
-# Terminal statuses that describe the *request*, not the credentials (401/403, handled
-# by is_box_authentication_error) and not an outage (429/5xx). 404 is the one that
-# matters in practice: an unresolvable folder_id or file_ids entry. 400 covers the
-# token endpoint's `invalid_grant` for a wrong enterprise_id/user_id.
+# Terminal statuses that describe the *request*, not the credentials and not an
+# outage (429/5xx). 404 is the one that matters in practice: an unresolvable
+# folder_id or file_ids entry.
 _POLICY_STATUS = (400, 404, 405, 409, 413, 415, 422)
+
+# OAuth2 failures come back from POST /oauth2/token as HTTP 400 with the real cause
+# in the body's `error`, not as a 401. Observed live: a wrong enterprise_id/user_id
+# gives 'invalid_grant' / "Grant credentials are invalid", and an app that has not
+# been authorized in the Admin Console gives 'invalid_grant' / "App is not yet
+# authorized for use". Without this, a credentials problem falls into _POLICY_STATUS
+# and is reported to the operator as "verify 'folder_id'", pointing at the wrong
+# thing entirely.
+_AUTH_ERROR_CODES = frozenset(
+    {"invalid_grant", "invalid_client", "unauthorized_client", "access_denied"}
+)
+
+
+def _oauth_error_code(exc: BaseException) -> str | None:
+    """The OAuth2 `error` code in a Box error body, when there is one."""
+    from box_sdk_gen import BoxAPIError
+
+    if not isinstance(exc, BoxAPIError):
+        return None
+    body = exc.response_info.body or {}
+    code = body.get("error") if isinstance(body, dict) else None
+    return code if isinstance(code, str) else None
 
 
 def is_box_authentication_error(exc: BaseException) -> bool:
     from box_sdk_gen import BoxAPIError
 
-    return isinstance(exc, BoxAPIError) and exc.response_info.status_code in (401, 403)
+    if not isinstance(exc, BoxAPIError):
+        return False
+    if exc.response_info.status_code in (401, 403):
+        return True
+    return _oauth_error_code(exc) in _AUTH_ERROR_CODES
 
 
 def is_box_policy_error(exc: BaseException) -> bool:
     from box_sdk_gen import BoxAPIError
 
-    return isinstance(exc, BoxAPIError) and (
-        exc.response_info.status_code in _POLICY_STATUS
-    )
+    if not isinstance(exc, BoxAPIError):
+        return False
+    if _oauth_error_code(exc) in _AUTH_ERROR_CODES:
+        return False  # credentials, not a bad request — see is_box_authentication_error
+    return exc.response_info.status_code in _POLICY_STATUS
 
 
 def is_box_unavailable_error(exc: BaseException) -> bool:

@@ -177,3 +177,49 @@ def test_status_codes_land_in_exactly_one_family(box_api_error, status, predicat
         if getattr(helper, name)(exc)
     }
     assert matched == {predicate}
+
+
+@pytest.mark.parametrize(
+    "error_code, description",
+    [
+        ("invalid_grant", "Grant credentials are invalid"),
+        ("invalid_grant", "App is not yet authorized for use"),
+        ("invalid_client", "The client credentials are invalid"),
+    ],
+)
+def test_oauth_token_failures_are_auth_not_policy(error_code, description):
+    """POST /oauth2/token reports credential problems as HTTP 400, not 401.
+
+    Both strings are real Box responses. Classifying them by status alone lands
+    them in _POLICY_STATUS, so an operator with a wrong subject id or an
+    unauthorized app is told to check 'folder_id' instead.
+    """
+    from box_sdk_gen import BoxAPIError
+    from box_sdk_gen.box.errors import RequestInfo, ResponseInfo
+
+    exc = BoxAPIError(
+        request_info=RequestInfo(
+            method="POST",
+            url="https://api.box.com/oauth2/token",
+            query_params={},
+            headers={},
+        ),
+        response_info=ResponseInfo(
+            status_code=400,
+            headers={},
+            body={"error": error_code, "error_description": description},
+        ),
+        message="400",
+    )
+
+    assert helper.is_box_authentication_error(exc) is True
+    assert helper.is_box_policy_error(exc) is False
+
+
+def test_plain_bad_request_stays_policy(box_api_error):
+    """A 400 without an OAuth error code is still a bad request, not a credential
+    failure — the two must not collapse into one another."""
+    exc = box_api_error(400)
+
+    assert helper.is_box_policy_error(exc) is True
+    assert helper.is_box_authentication_error(exc) is False

@@ -169,8 +169,10 @@ def test_unresolvable_folder_does_not_leak_the_sdk_error_text(
     box_ccg_source_config, box_api_error
 ):
     """A 404 is a client-actionable config mistake, so its message is returned to
-    the caller verbatim — which is exactly why it must be a fixed string. Box
-    renders the full request, Authorization header included, into str(exc)."""
+    the caller verbatim — which is why it must be a fixed string rather than the
+    SDK's. str(BoxAPIError) is a multi-paragraph dump of the whole exchange (URL,
+    headers, body, Box request ids); its secrets are redacted only for as long as
+    the SDK's own sanitizer key list keeps covering them."""
     processor = _proc(box_ccg_source_config)
 
     with patch(f"{_HELPER}.list_folder_items", side_effect=box_api_error(404)):
