@@ -44,6 +44,7 @@ def test_builtin_source_connectors_registered():
     assert set(factory.registered_kinds) == {
         "filenet",
         "azure_blob",
+        "databricks_volumes",
         "file",
         "google_cloud_storage",
         "http",
@@ -70,6 +71,7 @@ def test_builtin_target_connectors_registered():
         "opensearch_chunks",
         "astradb_chunks",
         "sharepoint",
+        "databricks_volumes",
     }
 
 
