@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'darwin'",
@@ -1262,32 +1262,6 @@ nvtx = [
 ]
 
 [[package]]
-name = "datasets"
-version = "5.0.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "dill", marker = "sys_platform == 'darwin'" },
-    { name = "filelock", marker = "sys_platform == 'darwin'" },
-    { name = "fsspec", extra = ["http"], marker = "sys_platform == 'darwin'" },
-    { name = "httpx", marker = "sys_platform == 'darwin'" },
-    { name = "huggingface-hub", marker = "sys_platform == 'darwin'" },
-    { name = "multiprocess", marker = "sys_platform == 'darwin'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and sys_platform == 'darwin'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and sys_platform == 'darwin'" },
-    { name = "packaging", marker = "sys_platform == 'darwin'" },
-    { name = "pandas", marker = "sys_platform == 'darwin'" },
-    { name = "pyarrow", marker = "sys_platform == 'darwin'" },
-    { name = "pyyaml", marker = "sys_platform == 'darwin'" },
-    { name = "requests", marker = "sys_platform == 'darwin'" },
-    { name = "tqdm", marker = "sys_platform == 'darwin'" },
-    { name = "xxhash", marker = "sys_platform == 'darwin'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0a/5b/836516269d4f618efe621661cfb6f9acc57e6f95265db3efaee48a5ffe04/datasets-5.0.1.tar.gz", hash = "sha256:ce22bb851efd7494f08aad33b940803784434f6e77763d00679a0dc45fcf686a", size = 641498, upload-time = "2026-07-28T11:09:12.016Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/44/0b/98fc6eb83333508ca5f44c52b3e287ea8137a0ad582714e2cbc67a02154b/datasets-5.0.1-py3-none-any.whl", hash = "sha256:9fbf73688f8c18f7529b4fe592abd04015f81d1e58001e4bac73ffb2b39d7cc4", size = 559079, upload-time = "2026-07-28T11:09:10.266Z" },
-]
-
-[[package]]
 name = "defusedxml"
 version = "0.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1350,7 +1324,7 @@ wheels = [
 
 [[package]]
 name = "docling-core"
-version = "2.93.0"
+version = "2.96.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "defusedxml" },
@@ -1363,19 +1337,21 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
+    { name = "requests" },
     { name = "tabulate" },
     { name = "typer" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/10/33/e30a27d8da4ce3414cce522ec31fcbc842430141b60424c1ea99c903d3e2/docling_core-2.93.0.tar.gz", hash = "sha256:0bdf6f42b0c83ca4dcd3916e6d1fbcfdc87168d93f192e00a1d2b0c55d5357d4", size = 363160, upload-time = "2026-09-01T10:47:45.115Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/66/28/772135dd81a6e0d1a3ef8ebf28896a2e342d637e2374b8dced00a34369e0/docling_core-2.96.1.tar.gz", hash = "sha256:1d33be46d1a284585df0b8f57f5cd815d85126b5a81c3310e84238b6c8889ce7", size = 377852, upload-time = "2026-09-15T07:32:57.824Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/26/e2/3edceae55162002a8f9484436e0fbfc589bd26b2a98af677d4a9780a3134/docling_core-2.93.0-py3-none-any.whl", hash = "sha256:5c0b9df0d4f5a969928968484b4736a4201b61d41f5132ce9fbcba00a50be5e8", size = 296557, upload-time = "2026-09-01T10:47:43.65Z" },
+    { url = "https://files.pythonhosted.org/packages/be/f0/ee691277477dbbf3e25a046a97a96bee1ea7cdddf0f4b9cb8cf0770a19dd/docling_core-2.96.1-py3-none-any.whl", hash = "sha256:17ed0c525a0c364ed6ff6cab09e817fcff5142dca9c113ed0f61b4f23a278852", size = 302945, upload-time = "2026-09-15T07:32:55.996Z" },
 ]
 
 [package.optional-dependencies]
 chunking = [
     { name = "semchunk" },
-    { name = "transformers" },
+    { name = "transformers", version = "5.8.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'darwin'" },
+    { name = "transformers", version = "5.17.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
     { name = "tree-sitter" },
     { name = "tree-sitter-c" },
     { name = "tree-sitter-javascript" },
@@ -1385,7 +1361,7 @@ chunking = [
 
 [[package]]
 name = "docling-ibm-models"
-version = "4.0.1"
+version = "4.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
@@ -1395,16 +1371,17 @@ dependencies = [
     { name = "safetensors", extra = ["torch"] },
     { name = "torch" },
     { name = "torchvision" },
-    { name = "transformers" },
+    { name = "transformers", version = "5.8.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'darwin'" },
+    { name = "transformers", version = "5.17.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8e/ef/4eefa24b0ab174cd2cf8ab3d2fab8c67e99be49cc147e35090b735395ae1/docling_ibm_models-4.0.1.tar.gz", hash = "sha256:47d490d0e45a56c48a4064970339547ba9d759129353a209879d81977c6fb80a", size = 77758, upload-time = "2026-09-01T08:20:17.43Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8e/e1/ae8c897ccf2f7137ae4ea07af2631b816b38b7382a792095077dc20907ab/docling_ibm_models-4.0.2.tar.gz", hash = "sha256:cfc2e265d9ee5dc7bc4fe001916851adedba1d8020584d170b35da2d79321f8d", size = 77561, upload-time = "2026-09-03T11:25:24.157Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c9/f1/6c0ec59ec13d3d9250b14f47739a9573b222b7a41ec106321f4fd0e8683a/docling_ibm_models-4.0.1-py3-none-any.whl", hash = "sha256:05f70f2b6c0f26ab93598afdb686cc8568720bda3006f99c6eb29e7e414545a4", size = 69447, upload-time = "2026-09-01T08:20:16.157Z" },
+    { url = "https://files.pythonhosted.org/packages/95/d1/acb1fff3b414f80d25ec4c83fc61fc0e668ab40a83689b28b7806772f8f7/docling_ibm_models-4.0.2-py3-none-any.whl", hash = "sha256:821d343a5d90cc8613029013b7634a18cb600f58c563c6c9ea029974aed80b10", size = 69400, upload-time = "2026-09-03T11:25:22.962Z" },
 ]
 
 [[package]]
 name = "docling-jobkit"
-version = "3.5.0"
+version = "3.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
@@ -1490,7 +1467,7 @@ requires-dist = [
     { name = "confluent-kafka", marker = "extra == 'kafka'", specifier = ">=2.5.0,<3" },
     { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", specifier = ">=2.94.0,<3.0.0" },
     { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", specifier = ">=2.95.0,<3.0.0" },
-    { name = "docling-slim", extras = ["standard"], specifier = ">=2.124.0,<3.0.0" },
+    { name = "docling-slim", extras = ["standard"], specifier = ">=2.127.0,<3.0.0" },
     { name = "google-api-python-client", marker = "extra == 'gdrive'", specifier = ">=2.183.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'gdrive'", specifier = ">=1.2.2" },
     { name = "google-cloud-storage", marker = "extra == 'gcloudstorage'", specifier = ">=2.10.0" },
@@ -1574,21 +1551,22 @@ wheels = [
 
 [[package]]
 name = "docling-slim"
-version = "2.124.0"
+version = "2.127.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
     { name = "docling-core" },
     { name = "filetype" },
+    { name = "langcodes" },
     { name = "pluggy" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "requests" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/de/27/00eca3d23ab634c4f04dd67d35a37016ac9bf84fd227d53b29ccfc476ba3/docling_slim-2.124.0.tar.gz", hash = "sha256:f38f0fb4d325d189cd2bae4ff53c236582191b211e39ec0c565a5d619ac700b3", size = 623720, upload-time = "2026-08-31T13:37:51.275Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/09/e1/cd31f78c82a3a7cfc52238c5ab7e03ab3e1fa3e834c77639f3093d308e1d/docling_slim-2.127.0.tar.gz", hash = "sha256:c1d7c793c8528eb97112274e6c5609c9a5afa7966ae4c3f29806b22f1f23925c", size = 679966, upload-time = "2026-09-14T08:58:05.681Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/21/2d/adf978d7e60fa02d357845c82841546b34dc86663122490677716440e567/docling_slim-2.124.0-py3-none-any.whl", hash = "sha256:2c7c667394d3eae9080bc15143ed6f1d39a4838090d9e3f29be212606e6676bd", size = 780430, upload-time = "2026-08-31T13:37:49.26Z" },
+    { url = "https://files.pythonhosted.org/packages/93/b9/ef355818fd08b01b50d22e01980321c2336d50384da97bed2a6353656835/docling_slim-2.127.0-py3-none-any.whl", hash = "sha256:aee124e7ada544d8f2776d2e39aaa14a6c38d8252ae8db530bda2b4afe0c0fa2", size = 844545, upload-time = "2026-09-14T08:58:03.684Z" },
 ]
 
 [package.optional-dependencies]
@@ -1603,7 +1581,8 @@ models-vlm-inline = [
     { name = "mlx-vlm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "peft" },
     { name = "qwen-vl-utils" },
-    { name = "transformers" },
+    { name = "transformers", version = "5.8.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'darwin'" },
+    { name = "transformers", version = "5.17.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
 ]
 standard = [
     { name = "accelerate" },
@@ -1886,11 +1865,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/10/a1/ae4e3e5003468d6391d2c77b6fa1cd73bd5d13511d81c642d7b28ac90ed4/fsspec-2026.6.0.tar.gz", hash = "sha256:f5bac145310fe30e16e1471bd6840b2d990d609e872251d7e674241822abf01a", size = 313646, upload-time = "2026-06-16T01:57:28.105Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/22/4222d7ddf3da30f363edaa98e329c2bce6c65497c9cb2810931c8b2c0fbc/fsspec-2026.6.0-py3-none-any.whl", hash = "sha256:02e0b71817df9b2169dc30a16832045764def1191b43dcff5bb85bdee212d2a1", size = 203949, upload-time = "2026-06-16T01:57:26.358Z" },
-]
-
-[package.optional-dependencies]
-http = [
-    { name = "aiohttp", marker = "sys_platform == 'darwin'" },
 ]
 
 [[package]]
@@ -2707,6 +2681,15 @@ wheels = [
 ]
 
 [[package]]
+name = "langcodes"
+version = "3.5.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a9/75/f9edc5d72945019312f359e69ded9f82392a81d49c5051ed3209b100c0d2/langcodes-3.5.1.tar.gz", hash = "sha256:40bff315e01b01d11c2ae3928dd4f5cbd74dd38f9bd912c12b9a3606c143f731", size = 191084, upload-time = "2025-12-02T16:22:01.627Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dd/c1/d10b371bcba7abce05e2b33910e39c33cfa496a53f13640b7b8e10bb4d2b/langcodes-3.5.1-py3-none-any.whl", hash = "sha256:b6a9c25c603804e2d169165091d0cdb23934610524a21d226e4f463e8e958a72", size = 183050, upload-time = "2025-12-02T16:21:59.954Z" },
+]
+
+[[package]]
 name = "latex2mathml"
 version = "3.81.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3194,13 +3177,12 @@ wheels = [
 
 [[package]]
 name = "mlx-audio"
-version = "0.4.6"
+version = "0.5.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub", marker = "sys_platform == 'darwin'" },
     { name = "miniaudio", marker = "sys_platform == 'darwin'" },
     { name = "mlx", marker = "sys_platform == 'darwin'" },
-    { name = "mlx-lm", marker = "sys_platform == 'darwin'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and sys_platform == 'darwin'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and sys_platform == 'darwin'" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and sys_platform == 'darwin'" },
@@ -3208,30 +3190,11 @@ dependencies = [
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
     { name = "sounddevice", marker = "sys_platform == 'darwin'" },
     { name = "tqdm", marker = "sys_platform == 'darwin'" },
-    { name = "transformers", marker = "sys_platform == 'darwin'" },
+    { name = "transformers", version = "5.17.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e7/02/40b042713edf6f8f7714f711a2fc5191b871c4c39d79df6e7726de6a81e9/mlx_audio-0.4.6.tar.gz", hash = "sha256:9f377ba4c0927af06526ed2d03b2fa44eb158d83385da96422da17c926b8589f", size = 1488412, upload-time = "2026-07-25T09:07:07.729Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b0/71/07fc039c603d8fb6531a2eca75b18b150c4ee9f3780c03ba20538a576f32/mlx_audio-0.5.4.tar.gz", hash = "sha256:3e1895860d9a636360a9377b5651239f5197e649d56fe25f1382cac6f2ed1e55", size = 1725509, upload-time = "2026-09-14T15:26:06.632Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/e6/f8c4a521567d3a4494ad0a5e88f16cc9b516b784e7cb5aa4768775e346ca/mlx_audio-0.4.6-py3-none-any.whl", hash = "sha256:cd9c3958d50bf3f30fc78d64fc1b638f84961a6aadb0731582a5c16efe7bb7e5", size = 1792380, upload-time = "2026-07-25T09:07:06.157Z" },
-]
-
-[[package]]
-name = "mlx-lm"
-version = "0.31.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "jinja2", marker = "sys_platform == 'darwin'" },
-    { name = "mlx", marker = "sys_platform == 'darwin'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and sys_platform == 'darwin'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and sys_platform == 'darwin'" },
-    { name = "protobuf", marker = "sys_platform == 'darwin'" },
-    { name = "pyyaml", marker = "sys_platform == 'darwin'" },
-    { name = "sentencepiece", marker = "sys_platform == 'darwin'" },
-    { name = "transformers", marker = "sys_platform == 'darwin'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/84/94/9a38d6b0c6fcca995b9136c94eb7da1e9c5165652edf228b96b29960fa7a/mlx_lm-0.31.3.tar.gz", hash = "sha256:61eb0e3ba09444f77f874aff295401d7ccd20b39495cbbce0c782a15474ce733", size = 304318, upload-time = "2026-04-22T07:37:27.922Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/90/02/9a67b8e4f87e3e2e5cd7b1ad79304b93c09a0db6af34bee75e6551c06c60/mlx_lm-0.31.3-py3-none-any.whl", hash = "sha256:758cfddf1180053b7613db76fad3d246a331a2a905808e1164a275621fc983b8", size = 408890, upload-time = "2026-04-22T07:37:25.965Z" },
+    { url = "https://files.pythonhosted.org/packages/76/99/08dbae6b2e7771b3f9cf55c8c160d104f8c41c6c71dffebe785ed1344248/mlx_audio-0.5.4-py3-none-any.whl", hash = "sha256:d350ecc43a65b94b1578381370be64229948f79aef9ff599d20adb65e38351b3", size = 2077152, upload-time = "2026-09-14T15:26:04.598Z" },
 ]
 
 [[package]]
@@ -3246,30 +3209,31 @@ wheels = [
 
 [[package]]
 name = "mlx-vlm"
-version = "0.6.4"
+version = "0.7.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "datasets", marker = "sys_platform == 'darwin'" },
     { name = "fastapi", marker = "sys_platform == 'darwin'" },
+    { name = "jinja2", marker = "sys_platform == 'darwin'" },
     { name = "llguidance", marker = "sys_platform == 'darwin'" },
     { name = "miniaudio", marker = "sys_platform == 'darwin'" },
     { name = "mlx", marker = "sys_platform == 'darwin'" },
     { name = "mlx-audio", marker = "sys_platform == 'darwin'" },
-    { name = "mlx-lm", marker = "sys_platform == 'darwin'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and sys_platform == 'darwin'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and sys_platform == 'darwin'" },
     { name = "opencv-python", marker = "sys_platform == 'darwin'" },
     { name = "pillow", marker = "sys_platform == 'darwin'" },
     { name = "python-multipart", marker = "sys_platform == 'darwin'" },
     { name = "requests", marker = "sys_platform == 'darwin'" },
+    { name = "sentencepiece", marker = "sys_platform == 'darwin'" },
     { name = "starlette", marker = "sys_platform == 'darwin'" },
     { name = "tqdm", marker = "sys_platform == 'darwin'" },
-    { name = "transformers", marker = "sys_platform == 'darwin'" },
+    { name = "transformers", version = "5.17.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
     { name = "uvicorn", marker = "sys_platform == 'darwin'" },
+    { name = "websockets", marker = "sys_platform == 'darwin'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/22/de/03810d375be44e04a0889a7709aa72d8f187ec94a5172dea3d91051032e4/mlx_vlm-0.6.4.tar.gz", hash = "sha256:2a911692aedc3861ae26f4057b1c05dcb9abfb954d50123df3ef63eab0c58e29", size = 1453442, upload-time = "2026-07-06T21:11:12.567Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/62/7fb872fd4c4cb2b8069afde85f08590098d0689efc588eab01bedb2d741b/mlx_vlm-0.7.1.tar.gz", hash = "sha256:b8abd3cc7e3513d9915bf9f6903833c697dc4c3084c2acdc880029c33e331a03", size = 2326562, upload-time = "2026-09-14T18:09:51.229Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6e/4d/45bc2462366fcec5fe7ffc1803d21c3042e9f4d55fdcf7c617a5b4af3c61/mlx_vlm-0.6.4-py3-none-any.whl", hash = "sha256:23810d8aa7b8610d6a5e9b3e24a0f81e768e131efdcb224e570b08147d763aa7", size = 1735033, upload-time = "2026-07-06T21:11:10.809Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/fc/7fbd894db247582bfa16df9b0b7514a47e9c3971836fc8d3fbd9f6efdbe8/mlx_vlm-0.7.1-py3-none-any.whl", hash = "sha256:d9696bc3a2e961f43b5948a101dc0c966b5989d382e6910c37e2f3d555bc3408", size = 2924465, upload-time = "2026-09-14T18:09:49.737Z" },
 ]
 
 [[package]]
@@ -4135,12 +4099,12 @@ resolution-markers = [
     "python_full_version < '3.11' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "coloredlogs", marker = "python_full_version < '3.11'" },
-    { name = "flatbuffers", marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "packaging", marker = "python_full_version < '3.11'" },
-    { name = "protobuf", marker = "python_full_version < '3.11'" },
-    { name = "sympy", marker = "python_full_version < '3.11'" },
+    { name = "coloredlogs", marker = "python_full_version < '3.11' and sys_platform == 'darwin'" },
+    { name = "flatbuffers", marker = "python_full_version < '3.11' and sys_platform == 'darwin'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and sys_platform == 'darwin'" },
+    { name = "packaging", marker = "python_full_version < '3.11' and sys_platform == 'darwin'" },
+    { name = "protobuf", marker = "python_full_version < '3.11' and sys_platform == 'darwin'" },
+    { name = "sympy", marker = "python_full_version < '3.11' and sys_platform == 'darwin'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/35/d6/311b1afea060015b56c742f3531168c1644650767f27ef40062569960587/onnxruntime-1.23.2-cp310-cp310-macosx_13_0_arm64.whl", hash = "sha256:a7730122afe186a784660f6ec5807138bf9d792fa1df76556b27307ea9ebcbe3", size = 17195934, upload-time = "2025-10-27T23:06:14.143Z" },
@@ -4184,12 +4148,12 @@ resolution-markers = [
     "python_full_version < '3.11' and sys_platform != 'darwin'",
 ]
 dependencies = [
-    { name = "coloredlogs", marker = "python_full_version < '3.11'" },
-    { name = "flatbuffers", marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "packaging", marker = "python_full_version < '3.11'" },
-    { name = "protobuf", marker = "python_full_version < '3.11'" },
-    { name = "sympy", marker = "python_full_version < '3.11'" },
+    { name = "coloredlogs", marker = "python_full_version < '3.11' and sys_platform != 'darwin'" },
+    { name = "flatbuffers", marker = "python_full_version < '3.11' and sys_platform != 'darwin'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and sys_platform != 'darwin'" },
+    { name = "packaging", marker = "python_full_version < '3.11' and sys_platform != 'darwin'" },
+    { name = "protobuf", marker = "python_full_version < '3.11' and sys_platform != 'darwin'" },
+    { name = "sympy", marker = "python_full_version < '3.11' and sys_platform != 'darwin'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/ae/39283748c68a96be4f5f8a9561e0e3ca92af1eae6c2b1c07fb1da5f65cd1/onnxruntime_gpu-1.23.2-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:18de50c6c8eea50acc405ea13d299aec593e46478d7a22cd32cdbbdf7c42899d", size = 300525411, upload-time = "2025-10-22T16:56:08.415Z" },
@@ -4507,7 +4471,8 @@ dependencies = [
     { name = "safetensors" },
     { name = "torch" },
     { name = "tqdm" },
-    { name = "transformers" },
+    { name = "transformers", version = "5.8.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'darwin'" },
+    { name = "transformers", version = "5.17.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b4/08/02541a2c29be7c78698f73d438bc0e733b214f3f35ec5db79fca8da8fc61/peft-0.20.0.tar.gz", hash = "sha256:4769c8093a4ca145fd6fb3fd4dd50449675f5fe46434ad1e98b285a132d4b1d0", size = 880503, upload-time = "2026-07-28T13:46:01.85Z" }
 wheels = [
@@ -6844,13 +6809,22 @@ wheels = [
 name = "tokenizers"
 version = "0.22.2"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "(python_full_version >= '3.15' and sys_platform == 'linux') or (python_full_version >= '3.15' and sys_platform == 'win32')",
+    "(python_full_version == '3.14.*' and sys_platform == 'linux') or (python_full_version == '3.14.*' and sys_platform == 'win32')",
+    "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'linux') or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32')",
+    "(python_full_version == '3.11.*' and sys_platform == 'linux') or (python_full_version == '3.11.*' and sys_platform == 'win32')",
+    "python_full_version >= '3.15' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version < '3.11' and sys_platform != 'darwin'",
+]
 dependencies = [
-    { name = "huggingface-hub" },
+    { name = "huggingface-hub", marker = "sys_platform != 'darwin'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/73/6f/f80cfef4a312e1fb34baf7d85c72d4411afde10978d4657f8cdd811d3ccc/tokenizers-0.22.2.tar.gz", hash = "sha256:473b83b915e547aa366d1eee11806deaf419e17be16310ac0a14077f1e28f917", size = 372115, upload-time = "2026-01-05T10:45:15.988Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/92/97/5dbfabf04c7e348e655e907ed27913e03db0923abb5dfdd120d7b25630e1/tokenizers-0.22.2-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:544dd704ae7238755d790de45ba8da072e9af3eea688f698b137915ae959281c", size = 3100275, upload-time = "2026-01-05T10:41:02.158Z" },
-    { url = "https://files.pythonhosted.org/packages/2e/47/174dca0502ef88b28f1c9e06b73ce33500eedfac7a7692108aec220464e7/tokenizers-0.22.2-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:1e418a55456beedca4621dbab65a318981467a2b188e982a23e117f115ce5001", size = 2981472, upload-time = "2026-01-05T10:41:00.276Z" },
     { url = "https://files.pythonhosted.org/packages/d6/84/7990e799f1309a8b87af6b948f31edaa12a3ed22d11b352eaf4f4b2e5753/tokenizers-0.22.2-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:2249487018adec45d6e3554c71d46eb39fa8ea67156c640f7513eb26f318cec7", size = 3290736, upload-time = "2026-01-05T10:40:32.165Z" },
     { url = "https://files.pythonhosted.org/packages/78/59/09d0d9ba94dcd5f4f1368d4858d24546b4bdc0231c2354aa31d6199f0399/tokenizers-0.22.2-cp39-abi3-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:25b85325d0815e86e0bac263506dd114578953b7b53d7de09a6485e4a160a7dd", size = 3168835, upload-time = "2026-01-05T10:40:38.847Z" },
     { url = "https://files.pythonhosted.org/packages/47/50/b3ebb4243e7160bda8d34b731e54dd8ab8b133e50775872e7a434e524c28/tokenizers-0.22.2-cp39-abi3-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:bfb88f22a209ff7b40a576d5324bf8286b519d7358663db21d6246fb17eea2d5", size = 3521673, upload-time = "2026-01-05T10:40:56.614Z" },
@@ -6868,6 +6842,26 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/46/cd/e4851401f3d8f6f45d8480262ab6a5c8cb9c4302a790a35aa14eeed6d2fd/tokenizers-0.22.2-pp310-pypy310_pp73-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:e10bf9113d209be7cd046d40fbabbaf3278ff6d18eb4da4c500443185dc1896c", size = 3161308, upload-time = "2026-01-05T10:40:40.737Z" },
     { url = "https://files.pythonhosted.org/packages/6f/6e/55553992a89982cd12d4a66dddb5e02126c58677ea3931efcbe601d419db/tokenizers-0.22.2-pp310-pypy310_pp73-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:64d94e84f6660764e64e7e0b22baa72f6cd942279fdbb21d46abd70d179f0195", size = 3718964, upload-time = "2026-01-05T10:40:46.56Z" },
     { url = "https://files.pythonhosted.org/packages/59/8c/b1c87148aa15e099243ec9f0cf9d0e970cc2234c3257d558c25a2c5304e6/tokenizers-0.22.2-pp310-pypy310_pp73-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:f01a9c019878532f98927d2bacb79bbb404b43d3437455522a00a30718cdedb5", size = 3373542, upload-time = "2026-01-05T10:40:52.803Z" },
+]
+
+[[package]]
+name = "tokenizers"
+version = "0.23.2"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.15' and sys_platform == 'darwin'",
+    "python_full_version == '3.14.*' and sys_platform == 'darwin'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'darwin'",
+    "python_full_version == '3.11.*' and sys_platform == 'darwin'",
+    "python_full_version < '3.11' and sys_platform == 'darwin'",
+]
+dependencies = [
+    { name = "huggingface-hub", marker = "sys_platform == 'darwin'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/18/1e/bc6587c5ab643b2e17776cace9070a2ae73549c86bffac9934a600bf3c31/tokenizers-0.23.2.tar.gz", hash = "sha256:7f0f085686b9de0d0079e6f874ae053600db64c5d13049e0bbc0119926d25aac", size = 385745, upload-time = "2026-09-03T08:55:42.89Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4d/ed/8a443528baa6fac8dfe8c3b75b038c63ac92bb539bcabe311e227c718173/tokenizers-0.23.2-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:85a9a357a3764aecc904ee76bdaf8cf1ad8e5a67a1b929a487c4a39b49ed0e90", size = 3148852, upload-time = "2026-09-03T08:55:30.874Z" },
+    { url = "https://files.pythonhosted.org/packages/67/49/22da045a91732384d3a3771816bf188dc5a1f702c32e635afa7c679c0bef/tokenizers-0.23.2-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:986670e43691469dcee610ea0f846f91a8f84e91fc6f7a48d4c064414c0ec2bf", size = 3101593, upload-time = "2026-09-03T08:55:28.587Z" },
 ]
 
 [[package]]
@@ -7052,21 +7046,60 @@ wheels = [
 name = "transformers"
 version = "5.8.1"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "(python_full_version >= '3.15' and sys_platform == 'linux') or (python_full_version >= '3.15' and sys_platform == 'win32')",
+    "(python_full_version == '3.14.*' and sys_platform == 'linux') or (python_full_version == '3.14.*' and sys_platform == 'win32')",
+    "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'linux') or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32')",
+    "(python_full_version == '3.11.*' and sys_platform == 'linux') or (python_full_version == '3.11.*' and sys_platform == 'win32')",
+    "python_full_version >= '3.15' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version < '3.11' and sys_platform != 'darwin'",
+]
 dependencies = [
-    { name = "huggingface-hub" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "packaging" },
-    { name = "pyyaml" },
-    { name = "regex" },
-    { name = "safetensors" },
-    { name = "tokenizers" },
-    { name = "tqdm" },
-    { name = "typer" },
+    { name = "huggingface-hub", marker = "sys_platform != 'darwin'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and sys_platform != 'darwin'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and sys_platform != 'darwin'" },
+    { name = "packaging", marker = "sys_platform != 'darwin'" },
+    { name = "pyyaml", marker = "sys_platform != 'darwin'" },
+    { name = "regex", marker = "sys_platform != 'darwin'" },
+    { name = "safetensors", marker = "sys_platform != 'darwin'" },
+    { name = "tokenizers", version = "0.22.2", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'darwin'" },
+    { name = "tqdm", marker = "sys_platform != 'darwin'" },
+    { name = "typer", marker = "sys_platform != 'darwin'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e7/e6/4134ea2fbea322cddc7ffc94a0d8ee47fe32ce8e876b320cd37d88edfc4d/transformers-5.8.1.tar.gz", hash = "sha256:4dd5b6de4105725104d84fd6abd74b305f4debfc251b38c648ee5dd087cf543b", size = 8532019, upload-time = "2026-05-13T03:21:57.234Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fc/b1/8be7e7ef0b5200491312201918b6125ef9c9df9dd0f0240ccef9ac824e6b/transformers-5.8.1-py3-none-any.whl", hash = "sha256:5340fb95962162cdfdae5cc91d7f8fedd92ed75216c1154c5e1f590fcf56dd0e", size = 10632882, upload-time = "2026-05-13T03:21:52.876Z" },
+]
+
+[[package]]
+name = "transformers"
+version = "5.17.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.15' and sys_platform == 'darwin'",
+    "python_full_version == '3.14.*' and sys_platform == 'darwin'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'darwin'",
+    "python_full_version == '3.11.*' and sys_platform == 'darwin'",
+    "python_full_version < '3.11' and sys_platform == 'darwin'",
+]
+dependencies = [
+    { name = "huggingface-hub", marker = "sys_platform == 'darwin'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and sys_platform == 'darwin'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and sys_platform == 'darwin'" },
+    { name = "packaging", marker = "sys_platform == 'darwin'" },
+    { name = "pyyaml", marker = "sys_platform == 'darwin'" },
+    { name = "regex", marker = "sys_platform == 'darwin'" },
+    { name = "safetensors", marker = "sys_platform == 'darwin'" },
+    { name = "tokenizers", version = "0.23.2", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "tqdm", marker = "sys_platform == 'darwin'" },
+    { name = "typer", marker = "sys_platform == 'darwin'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/9e/750649904a065007a838981785b2bd8d9ff26154c6c341ac67d0b7f82c68/transformers-5.17.0.tar.gz", hash = "sha256:a153be279169b55b92d8000bf4af294aed684503d091cca7804da2dd8a9de000", size = 9817878, upload-time = "2026-09-09T15:39:56.886Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/d0/c502b60d684adbd98a8dc7d5bb866842772b816ac4354e4608be240041ae/transformers-5.17.0-py3-none-any.whl", hash = "sha256:78ec1ce21579b38dfb83950a0658cd119f87212a2fcfdff478096ce9d6c03801", size = 12295140, upload-time = "2026-09-09T15:39:53.746Z" },
 ]
 
 [[package]]
@@ -7779,35 +7812,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/46/2c/c06ef49dc36e7954e55b802a8b231770d286a9758b3d936bd1e04ce5ba88/xlsxwriter-3.2.9.tar.gz", hash = "sha256:254b1c37a368c444eac6e2f867405cc9e461b0ed97a3233b2ac1e574efb4140c", size = 215940, upload-time = "2025-09-16T00:16:21.63Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3a/0c/3662f4a66880196a590b202f0db82d919dd2f89e99a27fadef91c4a33d41/xlsxwriter-3.2.9-py3-none-any.whl", hash = "sha256:9a5db42bc5dff014806c58a20b9eae7322a134abb6fce3c92c181bfb275ec5b3", size = 175315, upload-time = "2025-09-16T00:16:20.108Z" },
-]
-
-[[package]]
-name = "xxhash"
-version = "4.0.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f6/a5/1386f35da1475fcaeef42581deae73417c6d2a6a0b2d2e8914de18844dcd/xxhash-4.0.1.tar.gz", hash = "sha256:d55bf4ef10eb09b8b6866790e083d26d087d84caa3cc0946ba87c3ca7ecaf7b7", size = 101513, upload-time = "2026-08-17T08:24:08.557Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/91/2a/7d79952633fccbf9c2a59cc1dfe9d073f9edfceb052ba9bff5075e31408d/xxhash-4.0.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:9b1dddc257279417d93c9e59420d49ef90aece90d7a01996db3aade74b0281b1", size = 36229, upload-time = "2026-08-17T08:20:10.259Z" },
-    { url = "https://files.pythonhosted.org/packages/64/8d/d95e810c9a2930906f1fbd0e38f77554abb8e042a190aa9cbb24da39e9a2/xxhash-4.0.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:04f9a24de11a6647666d5302fd73d6a5224ce50ddc965fb0bb44cee736e6bd7c", size = 36228, upload-time = "2026-08-17T08:20:36.641Z" },
-    { url = "https://files.pythonhosted.org/packages/75/c9/cf736f6db8c3273af18925061572db0d4357818a9ce425f4b5fb0021918e/xxhash-4.0.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:515a822c73abbf6a0b7c70976d9662be342835c9d78b8dc7c023411f39c35dbc", size = 36195, upload-time = "2026-08-17T08:35:13.004Z" },
-    { url = "https://files.pythonhosted.org/packages/8f/fb/0b04b68d6c5bc71c7a2c344f1287327b67e607f28fbcfd937697caca64b6/xxhash-4.0.1-cp312-cp312-pyemscripten_2024_0_wasm32.whl", hash = "sha256:0163b5d259de23ae9e07b7eabf435ce4704f6f205589a2b154e6af4be985ce1b", size = 20767, upload-time = "2026-08-17T08:21:00.806Z" },
-    { url = "https://files.pythonhosted.org/packages/3c/91/76f3f5385faa9886a36f21fcc603f40b4c0c40ce622382f133160c48b4d9/xxhash-4.0.1-cp313-cp313-ios_13_0_arm64_iphoneos.whl", hash = "sha256:4e5141543c7f7fe3087500bbb4ac2845cb528a980aa91f8f1e661e2292ff4a5d", size = 34708, upload-time = "2026-08-17T08:35:24.614Z" },
-    { url = "https://files.pythonhosted.org/packages/9a/4a/f48f0e3e1b1ab072979fff2a5be899234e28090883e8b519d0b10215d708/xxhash-4.0.1-cp313-cp313-ios_13_0_arm64_iphonesimulator.whl", hash = "sha256:f09ee747e2a5f876cc5ad56947734811828335e13b403dd8ea1e06d77a9dd48d", size = 35650, upload-time = "2026-08-17T08:21:09.337Z" },
-    { url = "https://files.pythonhosted.org/packages/da/e0/934af8d99bb5885711006bec30a691f728edd513d2c40f053f887d8e7577/xxhash-4.0.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:cd878d32f5c6cbce9783f8d6897561fb772211edba9dde49d85672b88ed45276", size = 35895, upload-time = "2026-08-17T08:35:16.53Z" },
-    { url = "https://files.pythonhosted.org/packages/27/b8/93795ca5898ec7d7d0455283ad261c0fc76b4f0c0a69e86233bd7badb0bd/xxhash-4.0.1-cp313-cp313-pyemscripten_2025_0_wasm32.whl", hash = "sha256:87aa309a93bd5ec13f14309a305ff4e9bf74c5363fc46c264c0a22edfd5b0670", size = 20581, upload-time = "2026-08-17T08:21:39.207Z" },
-    { url = "https://files.pythonhosted.org/packages/2f/c5/8085881a538983be0fd1c865d5df236242fea496044e2c8ca32b9f2ba39c/xxhash-4.0.1-cp314-cp314-ios_13_0_arm64_iphoneos.whl", hash = "sha256:4528cf80ebbbf57d40edfb31521ae265daa6dd636d615b1cf0ac86209579e59d", size = 34734, upload-time = "2026-08-17T08:35:33.68Z" },
-    { url = "https://files.pythonhosted.org/packages/d3/94/8803d13c968fc75ca434eea991d29ac5fd8a36b4afc9a6a9803c53933db4/xxhash-4.0.1-cp314-cp314-ios_13_0_arm64_iphonesimulator.whl", hash = "sha256:90cb2a1c9cc503a054a19612b48ff6e8e47805f618bdb3224a07568aad03a37e", size = 35671, upload-time = "2026-08-17T08:21:48.322Z" },
-    { url = "https://files.pythonhosted.org/packages/90/9d/f66cf6935f528e575f1ae4d6560d376e7587569747186f4fae8777cadc1b/xxhash-4.0.1-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:d9f3848ffaf010bdbabdbf4c25641fa258b6227ff27bc74a4d06edef521a4873", size = 35904, upload-time = "2026-08-17T08:21:37.358Z" },
-    { url = "https://files.pythonhosted.org/packages/0b/96/35b1c02177ae26234892c2310fb4822ba62411acccbf425ab8f9fd99354a/xxhash-4.0.1-cp314-cp314-pyemscripten_2026_0_wasm32.whl", hash = "sha256:67e57b834e07ed973cee7b6da1548ff28a56458d77696fd2a5f397f340694848", size = 20563, upload-time = "2026-08-17T08:35:11.924Z" },
-    { url = "https://files.pythonhosted.org/packages/c5/8e/e18998ec465fb977bc74272e5bf3c2e886c13b014cbef916cd607802c709/xxhash-4.0.1-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:43e5f9169e73d0f0db33b5f6b8554bcce69ac278c966daf83d5eb4eb2f13829f", size = 36306, upload-time = "2026-08-17T08:35:52.853Z" },
-    { url = "https://files.pythonhosted.org/packages/79/87/49a260e685d1a74c56a69432a8ee0527ddcbd684a3c51f87edc3b75639c5/xxhash-4.0.1-cp315-cp315-ios_13_0_arm64_iphoneos.whl", hash = "sha256:1bc591533fc975614f7e13594daee76af96b8e1fbcf8de76c8773858fa9e7cea", size = 34788, upload-time = "2026-08-17T08:23:09.014Z" },
-    { url = "https://files.pythonhosted.org/packages/6c/ef/50d72ed2170dae872e1c0fe333d0908e0a2afbffe74c5c9037d5406a4b89/xxhash-4.0.1-cp315-cp315-ios_13_0_arm64_iphonesimulator.whl", hash = "sha256:567cbc630302a46a8ecfd943b309ccf5372bb3718f1f3762d452df30f033bcf0", size = 35746, upload-time = "2026-08-17T08:36:05.557Z" },
-    { url = "https://files.pythonhosted.org/packages/f1/9d/45e7520a7856e13800a5dc8cd038d34c6372429465b163af0c5722f16918/xxhash-4.0.1-cp315-cp315-macosx_11_0_arm64.whl", hash = "sha256:3088dadbffa33c29e0518578430a7dff2e901a212e487aefa5faaa0dc06dad34", size = 35986, upload-time = "2026-08-17T08:23:25.854Z" },
-    { url = "https://files.pythonhosted.org/packages/a7/f5/adaf8101cd7f143191a0b390600294d83924b32cb13770fde8803dce27a2/xxhash-4.0.1-cp315-cp315-pyemscripten_2026_5_wasm32.whl", hash = "sha256:99054b838b74d8d3995ea0d410976ae967c46207ae22d6ddfc535e809197dab9", size = 20569, upload-time = "2026-08-17T08:36:11.952Z" },
-    { url = "https://files.pythonhosted.org/packages/c0/3d/436497e775b647b3b3e9a4ffe8c76c59fa4aa7a9fab6447cb59acf1b50ea/xxhash-4.0.1-cp315-cp315t-macosx_11_0_arm64.whl", hash = "sha256:45e88111ebe331de478ef8d4293efbe88f3cf8b863386c9a2357136b838e1af0", size = 36378, upload-time = "2026-08-17T08:35:36.18Z" },
-    { url = "https://files.pythonhosted.org/packages/0a/e6/f238693bfdd642adb59c99683964d46d9947fe721ff44d3bd850ae675407/xxhash-4.0.1-graalpy312-graalpy250_312_native-macosx_11_0_arm64.whl", hash = "sha256:4a76345f5aceb4ec404918edf9c7f2b5507db864dc0d7455982009ac0890b57b", size = 34453, upload-time = "2026-08-17T08:23:49.795Z" },
-    { url = "https://files.pythonhosted.org/packages/b6/03/909926dcedb64ceee629e18d8dffa758f9d3fdbe01e25530ce2bf0eaf9d0/xxhash-4.0.1-pp310-pypy310_pp73-macosx_11_0_arm64.whl", hash = "sha256:e53926e76131a74e79cc0b39fa712c227875f180afc68646bd1e1d8a17e60313", size = 33467, upload-time = "2026-08-17T08:24:12.924Z" },
-    { url = "https://files.pythonhosted.org/packages/22/15/34b7f72e9b5a8bfd7e6178de9e1e342bc3de9f07111a5ae26c00506d9edf/xxhash-4.0.1-pp311-pypy311_pp73-macosx_11_0_arm64.whl", hash = "sha256:3c2445edafc300cc40feb6a25a8356a971c30cd0bf47b5349c2ad74c508343b1", size = 33519, upload-time = "2026-08-17T08:36:03.04Z" },
 ]
 
 [[package]]
