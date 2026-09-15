@@ -3,16 +3,14 @@ from typing import Annotated, Literal, Optional
 from pydantic import BaseModel, Field, SecretStr, model_validator
 
 
-class BoxSource(BaseModel):
-    """Box source connector configuration.
+class BoxCoords(BaseModel):
+    """Shared auth model
 
     Supports both CCG (client credentials grant) and more strict JWT
     JWT takes precedence when its fields are included on top of CCGs (layered)
 
     auth_mode inferred by presence of JWT fields
     """
-
-    kind: Literal["box"] = "box"
 
     client_id: Annotated[
         str,
@@ -82,7 +80,32 @@ class BoxSource(BaseModel):
         ),
     ] = None
 
-    # optional params
+    @model_validator(mode="after")
+    def _validate_auth(self) -> "BoxCoords":
+        jwt_fields = (self.jwt_key_id, self.private_key, self.private_key_passphrase)
+        if any(f is not None for f in jwt_fields) and not all(
+            f is not None for f in jwt_fields
+        ):
+            raise ValueError(
+                "'jwt_key_id', 'private_key', and 'private_key_passphrase' must all "
+                "be provided together for JWT authentication."
+            )
+        if bool(self.enterprise_id) == bool(self.user_id):
+            raise ValueError(
+                "Exactly one of 'enterprise_id' or 'user_id' must be provided."
+            )
+        return self
+
+    @property
+    def auth_mode(self) -> Literal["jwt", "ccg"]:
+        return "jwt" if self.private_key is not None else "ccg"
+
+
+class BoxSource(BoxCoords):
+    """Box source connector configuration."""
+
+    kind: Literal["box"] = "box"
+
     folder_id: Annotated[
         str,
         Field(
@@ -117,25 +140,22 @@ class BoxSource(BaseModel):
         ),
     ] = None
 
-    @model_validator(mode="after")
-    def _validate_auth(self) -> "BoxSource":
-        jwt_fields = (self.jwt_key_id, self.private_key, self.private_key_passphrase)
-        if any(f is not None for f in jwt_fields) and not all(
-            f is not None for f in jwt_fields
-        ):
-            raise ValueError(
-                "'jwt_key_id', 'private_key', and 'private_key_passphrase' must all "
-                "be provided together for JWT authentication."
-            )
-        if bool(self.enterprise_id) == bool(self.user_id):
-            raise ValueError(
-                "Exactly one of 'enterprise_id' or 'user_id' must be provided."
-            )
-        return self
 
-    @property
-    def auth_mode(self) -> Literal["jwt", "ccg"]:
-        return "jwt" if self.private_key is not None else "ccg"
+class BoxTarget(BoxCoords):
+    """Box target connector configuration."""
+
+    kind: Literal["box"] = "box"
+
+    folder_id: Annotated[
+        str,
+        Field(
+            default="0",
+            description=(
+                "ID of the Box folder to upload into. Defaults to '0', the root "
+                "folder of the authenticated identity's content."
+            ),
+        ),
+    ] = "0"
 
 
-__all__ = ["BoxSource"]
+__all__ = ["BoxCoords", "BoxSource", "BoxTarget"]
