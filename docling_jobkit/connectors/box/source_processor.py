@@ -9,6 +9,7 @@ from docling.datamodel.base_models import DocumentStream
 
 from docling_jobkit.connectors.box.helper import (
     is_box_authentication_error,
+    is_box_policy_error,
     is_box_unavailable_error,
 )
 from docling_jobkit.connectors.box.models import BoxSource
@@ -20,6 +21,23 @@ from docling_jobkit.connectors.source_processor import (
 from docling_jobkit.convert.materialization import (
     SourceLimitExceededError,
     normalize_max_file_size,
+)
+
+# One spelling of the mapping for every Box call site: an unclassified escape here
+# is reported to the client as a non-retryable "internal error", so the three
+# families (credentials / bad request / transport) must stay in lockstep across
+# _initialize, _list_document_ids, _count_documents and _fetch_document_by_id.
+_map_box_errors = map_connector_authentication_errors(
+    "Box",
+    is_box_authentication_error,
+    source=True,
+    source_kind="box",
+    is_unavailable_error=is_box_unavailable_error,
+    is_policy_error=is_box_policy_error,
+    policy_message=(
+        "Box rejected the request for the configured source; verify 'folder_id', "
+        "'file_ids' and that the authenticated identity can see them."
+    ),
 )
 
 
@@ -43,13 +61,7 @@ class BoxSourceProcessor(BaseSourceProcessor[BoxSource, BoxFileIdentifier]):
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
         return (BoxSource,)
 
-    @map_connector_authentication_errors(
-        "Box",
-        is_box_authentication_error,
-        source=True,
-        source_kind="box",
-        is_unavailable_error=is_box_unavailable_error,
-    )
+    @_map_box_errors
     def _initialize(self):
         from docling_jobkit.connectors.box.helper import check_connection, get_client
 
@@ -59,13 +71,7 @@ class BoxSourceProcessor(BaseSourceProcessor[BoxSource, BoxFileIdentifier]):
     def _finalize(self):
         return
 
-    @map_connector_authentication_errors(
-        "Box",
-        is_box_authentication_error,
-        source=True,
-        source_kind="box",
-        is_unavailable_error=is_box_unavailable_error,
-    )
+    @_map_box_errors
     def _list_document_ids(self) -> Iterator[BoxFileIdentifier]:
         """List document IDs based on source configuration."""
         from docling_jobkit.connectors.box.helper import (
@@ -91,23 +97,21 @@ class BoxSourceProcessor(BaseSourceProcessor[BoxSource, BoxFileIdentifier]):
         for meta in metas:
             yield BoxFileIdentifier(**meta)
 
-    @map_connector_authentication_errors(
-        "Box",
-        is_box_authentication_error,
-        source=True,
-        source_kind="box",
-        is_unavailable_error=is_box_unavailable_error,
-    )
+    @_map_box_errors
     def _count_documents(self) -> int:
+        # Explicit ids are already the answer. Counting by re-listing would cost one
+        # files.get_file_by_id round-trip per id, doubling the API calls made before
+        # a single document is converted (Box has no batch-get; SharePoint's
+        # list_items_by_id folds its lookups into one execute_query, and FileNet
+        # short-circuits the same way).
+        if self._config.file_ids:
+            count = len(self._config.file_ids)
+            max_num = self._config.max_num_elements
+            return min(count, max_num) if max_num is not None else count
+
         return sum(1 for _ in self._list_document_ids())
 
-    @map_connector_authentication_errors(
-        "Box",
-        is_box_authentication_error,
-        source=True,
-        source_kind="box",
-        is_unavailable_error=is_box_unavailable_error,
-    )
+    @_map_box_errors
     def _fetch_document_by_id(
         self, identifier: BoxFileIdentifier, *, max_file_size: int | None = None
     ) -> DocumentStream:

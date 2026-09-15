@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from box_sdk_gen import BoxClient
 
 from docling_jobkit.connectors.box.models import BoxSource
+from docling_jobkit.connectors.errors import SourceConnectorPolicyError
 
 _log = logging.getLogger(__name__)
 
@@ -19,6 +20,12 @@ _ITEM_FIELDS = ["id", "name", "type", "size", "modified_at"]
 # Box's own default is 100.
 _PAGE_SIZE = 1000
 
+# Terminal statuses that describe the *request*, not the credentials (401/403, handled
+# by is_box_authentication_error) and not an outage (429/5xx). 404 is the one that
+# matters in practice: an unresolvable folder_id or file_ids entry. 400 covers the
+# token endpoint's `invalid_grant` for a wrong enterprise_id/user_id.
+_POLICY_STATUS = (400, 404, 405, 409, 413, 415, 422)
+
 
 def is_box_authentication_error(exc: BaseException) -> bool:
     from box_sdk_gen import BoxAPIError
@@ -26,13 +33,36 @@ def is_box_authentication_error(exc: BaseException) -> bool:
     return isinstance(exc, BoxAPIError) and exc.response_info.status_code in (401, 403)
 
 
-def is_box_unavailable_error(exc: BaseException) -> bool:
-    from box_sdk_gen import BoxAPIError, RequestException
+def is_box_policy_error(exc: BaseException) -> bool:
+    from box_sdk_gen import BoxAPIError
 
-    if isinstance(exc, RequestException):
-        return True
+    return isinstance(exc, BoxAPIError) and (
+        exc.response_info.status_code in _POLICY_STATUS
+    )
+
+
+def is_box_unavailable_error(exc: BaseException) -> bool:
+    from box_sdk_gen import BoxAPIError, BoxSDKError, RequestException
+
+    # BoxAPIError first: it subclasses BoxSDKError, and only its status decides.
     if isinstance(exc, BoxAPIError):
         return exc.response_info.status_code in (429, 500, 502, 503, 504)
+
+    # A drop *during* the response body. `iter_content` is consumed outside the
+    # SDK's own try/except, so requests' exception surfaces unwrapped here.
+    if isinstance(exc, RequestException):
+        return True
+
+    # Connect / DNS / read-timeout failures never reach us as RequestException:
+    # BoxNetworkClient catches them around the request call and re-raises a bare
+    # BoxSDKError carrying the original in `.error`. Matching on that wrapped cause
+    # keeps this narrow — the SDK's other BoxSDKError sites (upload retries of a
+    # non-seekable stream, browser-environment guards) are not transport failures
+    # and must stay non-retryable. Without this branch the single most common
+    # transient failure is reported to the client as a permanent internal error.
+    if isinstance(exc, BoxSDKError):
+        return isinstance(getattr(exc, "error", None), RequestException)
+
     return False
 
 
@@ -41,9 +71,17 @@ def get_client(config: BoxSource) -> BoxClient:
     from box_sdk_gen import BoxCCGAuth, BoxClient, BoxJWTAuth, CCGConfig, JWTConfig
 
     if config.auth_mode == "jwt":
-        assert config.jwt_key_id is not None
-        assert config.private_key is not None
-        assert config.private_key_passphrase is not None
+        if (
+            config.jwt_key_id is None
+            or config.private_key is None
+            or config.private_key_passphrase is None
+        ):  # pragma: no cover - guaranteed by BoxSource._validate_auth
+            raise SourceConnectorPolicyError(
+                "Box JWT authentication requires 'jwt_key_id', 'private_key' and "
+                "'private_key_passphrase'.",
+                source_kind="box",
+            )
+        _require_jwt_dependencies()
         jwt_config = JWTConfig(
             client_id=config.client_id,
             client_secret=config.client_secret.get_secret_value(),
@@ -64,12 +102,42 @@ def get_client(config: BoxSource) -> BoxClient:
     return BoxClient(auth=BoxCCGAuth(config=ccg_config))
 
 
+def _require_jwt_dependencies() -> None:
+    """Fail legibly when the JWT auth path's optional dependencies are absent.
+
+    ``check_dependencies`` deliberately probes only ``box_sdk_gen``: CCG auth works
+    without PyJWT/cryptography, so probing them there would unregister the whole
+    connector for CCG-only installs. They are pulled in by the ``box`` extra via
+    ``boxsdk[jwt]``; a hand-pinned bare ``boxsdk`` would otherwise surface the SDK's
+    ImportError as an opaque "internal error" only once a task is already running.
+    """
+    try:
+        import jwt  # noqa: F401
+    except ImportError as exc:
+        raise SourceConnectorPolicyError(
+            "Box JWT authentication requires the PyJWT and cryptography packages; "
+            "install the 'box' extra (which pulls boxsdk[jwt]).",
+            source_kind="box",
+        ) from exc
+
+
 def check_connection(client: BoxClient) -> None:
     """Validate creds by making a single lightweight authenticated call."""
     client.users.get_user_me()
 
 
 def _to_file_meta(item: Any) -> dict[str, Any]:
+    if item.size is None:
+        # `size` is Optional in the SDK schema even when requested through `fields`.
+        # Without it max_file_size cannot be enforced before the download, so the
+        # item is refused rather than silently treated as zero-length — but as a
+        # classified, client-readable failure instead of a raw ValidationError out
+        # of BoxFileIdentifier, which would surface as "internal error".
+        raise SourceConnectorPolicyError(
+            f"Box item {item.id!r} ({item.name!r}) was returned without a 'size' "
+            "attribute and cannot be size-checked before download.",
+            source_kind="box",
+        )
     return {
         "id": item.id,
         "name": item.name,
@@ -79,20 +147,29 @@ def _to_file_meta(item: Any) -> dict[str, Any]:
 
 
 def _iter_folder_page(client: BoxClient, folder_id: str) -> Iterator[Any]:
-    """Yield every entry of *folder_id* one server page at a time (offset paging)."""
-    offset = 0
+    """Yield every entry of *folder_id* one server page at a time (marker paging).
+
+    Marker rather than offset: Box documents offset paging as "not guaranteed to
+    work reliably for high offset values and may fail for large datasets", which is
+    exactly the shape of a recursive tree walk, and an offset walk over a folder
+    being written to concurrently silently skips or repeats entries. ``next_marker``
+    also ends the listing exactly, instead of inferring the end from a short page —
+    a page shorter than the requested limit is not a documented end-of-list signal.
+    """
+    marker: str | None = None
     while True:
         page = client.folders.get_folder_items(
             folder_id,
             fields=_ITEM_FIELDS,
-            offset=offset,
+            usemarker=True,
+            marker=marker,
             limit=_PAGE_SIZE,
         )
-        entries = page.entries or []
-        yield from entries
-        if len(entries) < _PAGE_SIZE:
+        yield from page.entries or []
+
+        marker = page.next_marker
+        if not marker:
             return
-        offset += _PAGE_SIZE
 
 
 def list_folder_items(
@@ -114,7 +191,9 @@ def list_folder_items(
                 pending.append(item.id)
                 continue
             if not isinstance(item, FileFull):
-                continue  # WebLink entries are not downloadable documents
+                # WebLink entries are not downloadable documents.
+                _log.debug("Skipping non-file Box entry %s (%s)", item.id, type(item))
+                continue
 
             yield _to_file_meta(item)
             yielded += 1
@@ -141,6 +220,7 @@ __all__ = [
     "fetch_file_by_id",
     "get_client",
     "is_box_authentication_error",
+    "is_box_policy_error",
     "is_box_unavailable_error",
     "list_folder_items",
 ]

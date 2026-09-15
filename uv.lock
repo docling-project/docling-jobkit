@@ -560,6 +560,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/25/22/5a24b1e48ff64433f6ebe7d01bc3fe56c14306f1d852487f3ed02636ac28/boxsdk-10.14.0-py3-none-any.whl", hash = "sha256:99eaa85a2ffe1a38a1710f440bdf7608297fc795c4c91096e358769e3837dea9", size = 621539, upload-time = "2026-08-05T10:59:07.036Z" },
 ]
 
+[package.optional-dependencies]
+jwt = [
+    { name = "cryptography" },
+    { name = "pyjwt" },
+]
+
 [[package]]
 name = "certifi"
 version = "2026.7.22"
@@ -1426,7 +1432,7 @@ azure = [
     { name = "azure-storage-blob" },
 ]
 box = [
-    { name = "boxsdk" },
+    { name = "boxsdk", extra = ["jwt"] },
 ]
 gcloudstorage = [
     { name = "google-cloud-storage" },
@@ -1491,7 +1497,7 @@ requires-dist = [
     { name = "astrapy", marker = "extra == 'astradb'", specifier = ">=1.0.0,<2" },
     { name = "azure-storage-blob", marker = "extra == 'azure'", specifier = ">=12.19.0" },
     { name = "boto3", specifier = "~=1.35" },
-    { name = "boxsdk", marker = "extra == 'box'", specifier = ">=10" },
+    { name = "boxsdk", extras = ["jwt"], marker = "extra == 'box'", specifier = ">=10" },
     { name = "codeflare-sdk", marker = "python_full_version >= '3.11' and python_full_version < '3.14' and extra == 'ray'", specifier = ">=0.20.0" },
     { name = "confluent-kafka", marker = "extra == 'kafka'", specifier = ">=2.5.0,<3" },
     { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", specifier = ">=2.94.0,<3.0.0" },
