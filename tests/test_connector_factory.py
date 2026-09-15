@@ -52,6 +52,7 @@ def test_builtin_source_connectors_registered():
         "sharepoint",
         "local_path",
         "google_drive",
+        "box",
     }
 
 
@@ -86,8 +87,9 @@ def test_builtin_target_connectors_registered():
             "azure.storage.blob",
             {"AzureBlobSourceProcessor", "AzureBlobTargetProcessor"},
         ),
+        ("box_sdk_gen", {"BoxSourceProcessor"}),
     ],
-    ids=["sharepoint", "s3", "azure_blob"],
+    ids=["sharepoint", "s3", "azure_blob", "box"],
 )
 def test_connectors_are_skipped_when_their_sdk_is_missing(monkeypatch, module, skipped):
     """Every connector behind an optional extra must declare check_dependencies().

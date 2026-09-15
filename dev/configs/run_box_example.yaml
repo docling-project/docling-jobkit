@@ -1,0 +1,42 @@
+options:
+  do_ocr: false
+  to_formats:
+    - json
+
+sources:
+  - kind: box
+    client_id: "" # Box custom app client ID
+    client_secret: "" # Box custom app client secret
+
+    # auth: provide enterprise_id (service account) or user_id (impersonation).
+    # enterprise_id authenticates as the app's own Service Account, a separate
+    # Box identity with an empty root folder by default. It can only see
+    # folders explicitly shared with it. 
+    # user_id instead impersonates a real Box user directly, so it sees that 
+    # user's own files with no sharing step.
+
+    #enterprise_id: "" # Box enterprise ID (Service Account mode)
+    user_id: "" # Box user ID (impersonation mode)
+
+    # JWT auth (optional): set all three of these to switch from CCG to JWT.
+
+    # Field mapping from JWT JSON to this config:
+    #   enterpriseID                         -> enterprise_id (above)
+    #   boxAppSettings.clientID              -> client_id (above)
+    #   boxAppSettings.clientSecret          -> client_secret (above)
+    #   boxAppSettings.appAuth.publicKeyID   -> jwt_key_id
+    #   boxAppSettings.appAuth.privateKey    -> private_key (full PEM block, header/footer included)
+    #   boxAppSettings.appAuth.passphrase    -> private_key_passphrase
+
+    #jwt_key_id: ""
+    #private_key_passphrase: "" 
+    #private_key: 
+
+    # optional params
+    #folder_id: "0" # folder to read from, recurses subfolders. "0" = root
+    #file_ids: [] # explicit file ids, if set overrides folder traversal
+    #max_num_elements: # set this to cap it to a specific num, default is all
+
+target:
+  kind: local_path
+  path: ./output_documents/

@@ -8,6 +8,7 @@ import pytest_asyncio
 from aiohttp import web
 from pydantic import SecretStr
 
+from docling_jobkit.connectors.box.models import BoxSource
 from docling_jobkit.datamodel.callback import ProgressKind
 from docling_jobkit.datamodel.sharepoint_coords import (
     SharePointConnection,
@@ -84,6 +85,55 @@ def sp_target_coords() -> SharePointTargetCoordinates:
         client_secret=SecretStr("secret"),
         site_url="https://contoso.sharepoint.com/sites/Marketing",
         folder_path="out",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Box
+#
+# The config model is pure pydantic, but ``box_api_error`` needs box_sdk_gen, so
+# that import stays inside the factory — importing it here would break collection
+# of the whole suite for anyone without the ``box`` extra.
+# ---------------------------------------------------------------------------
+
+_BOX_CREDS = {"client_id": "client-id", "enterprise_id": "enterprise-id"}
+
+
+@pytest.fixture
+def box_api_error() -> Callable[[int], Exception]:
+    """Build a BoxAPIError carrying *status*."""
+    from box_sdk_gen import BoxAPIError
+    from box_sdk_gen.box.errors import RequestInfo, ResponseInfo
+
+    def _make(status: int) -> BoxAPIError:
+        return BoxAPIError(
+            request_info=RequestInfo(
+                method="GET",
+                url="https://api.box.com/2.0",
+                query_params={},
+                headers={},
+            ),
+            response_info=ResponseInfo(status_code=status, headers={}),
+            message="error",
+        )
+
+    return _make
+
+
+@pytest.fixture
+def box_ccg_source_config() -> BoxSource:
+    return BoxSource(**_BOX_CREDS, client_secret=SecretStr("secret"))
+
+
+@pytest.fixture
+def box_jwt_source_config() -> BoxSource:
+    return BoxSource(
+        client_id="client-id",
+        client_secret=SecretStr("secret"),
+        enterprise_id="enterprise-id",
+        jwt_key_id="key-id",
+        private_key=SecretStr("private-key"),
+        private_key_passphrase=SecretStr("passphrase"),
     )
 
 
