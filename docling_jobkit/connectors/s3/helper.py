@@ -81,6 +81,7 @@ def get_s3_connection(coords: S3Coordinates):
         verify=coords.verify_ssl,
         aws_access_key_id=coords.access_key,
         aws_secret_access_key=coords.secret_key,
+        region_name=coords.region,
         config=config,
     )
 
@@ -90,6 +91,7 @@ def get_s3_connection(coords: S3Coordinates):
         verify=coords.verify_ssl,
         aws_access_key_id=coords.access_key,
         aws_secret_access_key=coords.secret_key,
+        region_name=coords.region,
         config=config,
     )
 

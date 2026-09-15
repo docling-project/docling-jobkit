@@ -1,3 +1,18 @@
+## [v3.5.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.5.0) - 2026-09-01
+
+### Feature
+
+* **ray:** Add terminal task completion callbacks ([#221](https://github.com/docling-project/docling-jobkit/issues/221)) ([`c7cb97d`](https://github.com/docling-project/docling-jobkit/commit/c7cb97df83e8f12733206aabc8b31750cb124429))
+* Add Azure Blob presigned artifact storage ([#204](https://github.com/docling-project/docling-jobkit/issues/204)) ([`2f89084`](https://github.com/docling-project/docling-jobkit/commit/2f890847c00ea8d88c3383b1238c2f29fbe449f0))
+
+### Fix
+
+* **ray:** Prevent tenant limit counter races ([#240](https://github.com/docling-project/docling-jobkit/issues/240)) ([`b75b78d`](https://github.com/docling-project/docling-jobkit/commit/b75b78d71fe8e4836c4818a87415348f1d643ed6))
+* **results_processor:** Key artifacts by basename, not by source path (#229) ([#234](https://github.com/docling-project/docling-jobkit/issues/234)) ([`0060845`](https://github.com/docling-project/docling-jobkit/commit/006084530b2c9a114f8d92f6265fdb69641453af))
+* **manager:** Register the configured default VLM preset under its own id ([#235](https://github.com/docling-project/docling-jobkit/issues/235)) ([`0571dbc`](https://github.com/docling-project/docling-jobkit/commit/0571dbc4c835f5e305a2c66b4cb17d7c31087552))
+* **local_path:** Enforce max_file_size before reading the file ([#232](https://github.com/docling-project/docling-jobkit/issues/232)) ([`cc0f91b`](https://github.com/docling-project/docling-jobkit/commit/cc0f91b348ca827c99a29b08e51bed17680b7cd5))
+* **manager:** Register the built-in presets that no allow-list is meant to exclude (#230) ([#236](https://github.com/docling-project/docling-jobkit/issues/236)) ([`8bade50`](https://github.com/docling-project/docling-jobkit/commit/8bade503803377a41a20afff25d27777cd9651a4))
+
 ## [v3.4.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.4.0) - 2026-08-20
 
 ### Feature
