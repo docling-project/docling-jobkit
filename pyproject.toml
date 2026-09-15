@@ -61,16 +61,17 @@ onnxruntime = [
 # asr = [
 #     "docling[asr]~=2.53",
 # ]
+
 rq = [
     "rq~=2.4",
     "msgpack~=1.1",
 ]
 ray = [
-    "ray[serve]~=2.52 ; python_version < '3.14'",
+    "ray[serve]~=2.54",
     "redis[hiredis]>=4.2,<8.0.0",
     "msgpack~=1.1",
     "psutil>=6.0.0",
-    "codeflare-sdk>=0.20.0; python_version >= '3.11' and python_version < '3.14'",
+    "codeflare-sdk>=0.37.0; python_version >= '3.11'",
 ]
 gdrive = [
     "google-api-python-client>=2.183.0",
@@ -98,6 +99,7 @@ sharepoint = [
     "office365-rest-python-client>=2.6.2; python_version >= '3.11'",
 ]
 
+
 [dependency-groups]
 dev = [
     "coverage>=7.8.0",
@@ -108,7 +110,7 @@ dev = [
     "pytest-check~=2.4",
     "pytest-cov>=6.1.1",
     "python-semantic-release~=7.32",
-    "ray[serve]~=2.52 ; python_version < '3.14'",
+    "ray[serve]~=2.54",
     "redis[hiredis]>=4.2,<8.0.0",
     "msgpack~=1.1",
     "psutil>=6.0.0",
@@ -127,6 +129,15 @@ dev = [
 
 [tool.uv]
 package = true
+
+# Ray Serve's internal proto handling (ray/serve/_private/config.py) breaks
+# against protobuf's newer upb-based API - AttributeError: FieldDescriptor
+# object has no attribute 'label'. Ray's own metadata only weakly declares
+# protobuf>=3.20.3, which doesn't reflect this runtime incompatibility.
+override-dependencies = [
+  "protobuf<7",
+]
+
 
 [tool.hatch.build.targets.sdist]
 include = ["docling_jobkit"]
