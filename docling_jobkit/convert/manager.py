@@ -19,6 +19,7 @@ from docling.backend.pdf_backend import PdfDocumentBackend
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import DocumentStream, InputFormat
+from docling.datamodel.chart_extraction_options import ChartExtractionVlmEngineOptions
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.picture_classification_options import (
     DocumentPictureClassifierOptions,
@@ -132,6 +133,13 @@ class CodeFormulaCustomPresetInfo(TypedDict):
     options: CodeFormulaVlmOptions
 
 
+class ChartExtractionCustomPresetInfo(TypedDict):
+    """Info for a custom chart extraction preset."""
+
+    source: Literal["custom"]
+    options: ChartExtractionVlmEngineOptions
+
+
 class ChunkingCustomPresetInfo(TypedDict):
     """Info for a custom chunking preset."""
 
@@ -145,6 +153,7 @@ PictureDescriptionPresetInfo = Union[
     DoclingPresetInfo, PictureDescriptionCustomPresetInfo
 ]
 CodeFormulaPresetInfo = Union[DoclingPresetInfo, CodeFormulaCustomPresetInfo]
+ChartExtractionPresetInfo = Union[DoclingPresetInfo, ChartExtractionCustomPresetInfo]
 
 
 class LayoutCustomPresetInfo(TypedDict):
@@ -191,6 +200,7 @@ AnyPresetInfo = Union[
     VlmPresetInfo,
     PictureDescriptionPresetInfo,
     CodeFormulaPresetInfo,
+    ChartExtractionPresetInfo,
     ChunkingPresetInfo,
     LayoutPresetInfo,
     PictureClassificationPresetInfo,
@@ -281,6 +291,28 @@ class DoclingConverterManagerConfig(BaseModel):
     allow_custom_code_formula_config: bool = Field(
         default=False,
         description="Whether users can specify custom code/formula configurations.",
+    )
+
+    # Chart Extraction Control
+    default_chart_extraction_preset: str = Field(
+        default="granite_vision_v4",
+        description='Default chart extraction preset to use when user specifies "default".',
+    )
+    allowed_chart_extraction_presets: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed chart extraction preset IDs. None means all are allowed.",
+    )
+    custom_chart_extraction_presets: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Custom chart extraction presets. Maps preset ID to ChartExtractionVlmEngineOptions.",
+    )
+    allowed_chart_extraction_engines: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed chart extraction engine types. None means all are allowed.",
+    )
+    allow_custom_chart_extraction_config: bool = Field(
+        default=False,
+        description="Whether users can specify custom chart extraction configurations.",
     )
 
     # === NEW: Kind Selection Control ===
@@ -672,6 +704,37 @@ class DoclingConverterManager:
             preset_options,
         ) in self.config.custom_code_formula_presets.items():
             self.code_formula_preset_registry[preset_id] = {
+                "source": "custom",
+                "options": preset_options,
+            }
+
+        # Chart Extraction Registry
+        self.chart_extraction_preset_registry: dict[str, ChartExtractionPresetInfo] = {}
+
+        self.chart_extraction_preset_registry["default"] = {
+            "source": "docling",
+            "preset_id": self.config.default_chart_extraction_preset,
+        }
+
+        # Add Docling built-in presets (if allowed)
+        if self.config.allowed_chart_extraction_presets is None:
+            # Allow all Docling presets
+            preset_ids = ChartExtractionVlmEngineOptions.list_preset_ids()
+        else:
+            preset_ids = self.config.allowed_chart_extraction_presets
+        for preset_id in preset_ids:
+            if preset_id != "default":
+                self.chart_extraction_preset_registry[preset_id] = {
+                    "source": "docling",
+                    "preset_id": preset_id,
+                }
+
+        # Add custom presets
+        for (
+            preset_id,
+            preset_options,
+        ) in self.config.custom_chart_extraction_presets.items():
+            self.chart_extraction_preset_registry[preset_id] = {
                 "source": "custom",
                 "options": preset_options,
             }
@@ -1248,6 +1311,62 @@ class DoclingConverterManager:
 
         return None
 
+    def _parse_chart_extraction_options(
+        self, request: ConvertDocumentsOptions
+    ) -> Optional[ChartExtractionVlmEngineOptions]:
+        """Parse chart extraction options from preset OR custom config."""
+        if request.chart_extraction_preset:
+            return self._get_options_from_preset(
+                request.chart_extraction_preset,
+                self.chart_extraction_preset_registry,
+                "Chart extraction",
+                self.config.allowed_chart_extraction_engines,
+                ChartExtractionVlmEngineOptions.from_preset,
+                ChartExtractionVlmEngineOptions,
+            )
+
+        if request.chart_extraction_custom_config:
+            self._validate_custom_config_allowed("chart_extraction")
+
+            # If it's already a ChartExtractionVlmEngineOptions object, validate and return
+            if isinstance(
+                request.chart_extraction_custom_config,
+                ChartExtractionVlmEngineOptions,
+            ):
+                if self.config.allowed_chart_extraction_engines is not None:
+                    engine_type = request.chart_extraction_custom_config.engine_options.engine_type
+                    self._validate_engine_allowed(
+                        engine_type, self.config.allowed_chart_extraction_engines
+                    )
+                return request.chart_extraction_custom_config
+
+            # If it's a dict, convert it to ChartExtractionVlmEngineOptions
+            if isinstance(request.chart_extraction_custom_config, dict):
+                config_dict = request.chart_extraction_custom_config.copy()
+
+                if self.config.allowed_chart_extraction_engines is not None:
+                    engine_options_dict = config_dict.get("engine_options", {})
+                    engine_type = engine_options_dict.get("engine_type", "")
+                    self._validate_engine_allowed(
+                        engine_type, self.config.allowed_chart_extraction_engines
+                    )
+
+                # Instantiate the correct engine options class
+                if "engine_options" in config_dict and isinstance(
+                    config_dict["engine_options"], dict
+                ):
+                    config_dict["engine_options"] = self._instantiate_engine_options(
+                        config_dict["engine_options"]
+                    )
+
+                return ChartExtractionVlmEngineOptions.model_validate(config_dict)
+
+            raise ValueError(
+                f"Invalid chart_extraction_custom_config type: {type(request.chart_extraction_custom_config)}"
+            )
+
+        return None
+
     def parse_chunking_options(
         self, request: ConvertDocumentsOptions
     ) -> ChunkingOptionType | None:
@@ -1697,6 +1816,11 @@ class DoclingConverterManager:
         new_code_formula_options = self._parse_code_formula_options(request)
         if new_code_formula_options is not None:
             pipeline_options.code_formula_options = new_code_formula_options
+
+        # === NEW ENGINE-BASED APPROACH for Chart Extraction ===
+        new_chart_extraction_options = self._parse_chart_extraction_options(request)
+        if new_chart_extraction_options is not None:
+            pipeline_options.chart_extraction_options = new_chart_extraction_options
 
         # `do_pdf_heading_hierarchy` is the request-level switch, while the nested
         # options carry only the fine-tuning, so the pipeline's own `enabled` flag
