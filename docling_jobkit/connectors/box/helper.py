@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any, BinaryIO, Callable, Iterator, Protocol, TypeVar
 
 if TYPE_CHECKING:
-    from box_sdk_gen import BoxClient
+    from box_sdk_gen import BoxClient, FileFull, UploadSession
 
-from docling_jobkit.connectors.box.models import BoxSource
+from docling_jobkit.connectors.box.models import BoxCoords
 from docling_jobkit.connectors.errors import SourceConnectorPolicyError
+from docling_jobkit.public_errors import TargetWriteError
 
 _log = logging.getLogger(__name__)
 
@@ -93,7 +96,7 @@ def is_box_unavailable_error(exc: BaseException) -> bool:
     return False
 
 
-def get_client(config: BoxSource) -> BoxClient:
+def get_client(config: BoxCoords) -> BoxClient:
     """Build an authenticated Box client for either JWT or CCG auth."""
     from box_sdk_gen import BoxCCGAuth, BoxClient, BoxJWTAuth, CCGConfig, JWTConfig
 
@@ -241,13 +244,241 @@ def download_file(client: BoxClient, file_id: str) -> BytesIO:
     return buffer
 
 
+# Box reports 50 MB as the limit for the basic file upload path
+# Need chunked-session for large files
+_CHUNKED_THRESHOLD = 50 * 1024 * 1024
+
+
+def _is_box_conflict_error(exc: BaseException) -> bool:
+    """True for the 409 Box returns when an item with the target name already
+    exists in the destination folder (``item_name_in_use``)."""
+    from box_sdk_gen import BoxAPIError
+
+    return isinstance(exc, BoxAPIError) and exc.response_info.status_code == 409
+
+
+class _NamedBoxItem(Protocol):
+    name: str
+
+
+_T = TypeVar("_T", bound=_NamedBoxItem)
+
+
+def _find_item_by_name(
+    client: BoxClient, folder_id: str, name: str, *, want_type: type[_T]
+) -> _T | None:
+    """Return the entry named *name* of type *want_type* directly under
+    *folder_id*, or ``None``. Non-recursive — only used to resolve one path
+    segment (subfolder lookup) or one upload target (conflict resolution),
+    never to walk a whole tree.
+    """
+    for item in _iter_folder_page(client, folder_id):
+        if isinstance(item, want_type) and item.name == name:
+            return item
+    return None
+
+
+def get_or_create_subfolder(client: BoxClient, parent_id: str, name: str) -> str:
+    """Return the id of the subfolder *name* under *parent_id*, creating it if
+    it does not exist yet.
+    """
+    from box_sdk_gen import BoxAPIError, CreateFolderParent, FolderMini
+
+    existing = _find_item_by_name(client, parent_id, name, want_type=FolderMini)
+    if existing is not None:
+        return existing.id
+
+    try:
+        created = client.folders.create_folder(name, CreateFolderParent(id=parent_id))
+        return created.id
+    except BoxAPIError as exc:
+        if exc.response_info.status_code != 409:
+            raise
+        # Created concurrently by another worker writing into the same batch;
+        # adopt the winner's folder rather than fail the upload.
+        winner = _find_item_by_name(client, parent_id, name, want_type=FolderMini)
+        if winner is None:  # pragma: no cover - defensive, should not happen
+            raise
+        return winner.id
+
+
+def resolve_target_folder(
+    client: BoxClient,
+    root_folder_id: str,
+    target_filename: str,
+    cache: dict[str, str],
+) -> tuple[str, str]:
+    """Resolve ``target_filename`` (e.g. ``"json/doc.json"``) to
+    ``(leaf_folder_id, leaf_name)`` under *root_folder_id*, creating any
+    missing subfolders. *cache* is keyed by the relative parent path
+    (e.g. ``"json"``) and reused across calls so a batch walks each subfolder
+    only once.
+    """
+    *parts, leaf_name = target_filename.split("/")
+    folder_id = root_folder_id
+    relative = ""
+    for part in parts:
+        relative = f"{relative}/{part}" if relative else part
+        cached = cache.get(relative)
+        if cached is not None:
+            folder_id = cached
+            continue
+        folder_id = get_or_create_subfolder(client, folder_id, part)
+        cache[relative] = folder_id
+
+    return folder_id, leaf_name
+
+
+def _sha1_b64(data: bytes) -> str:
+    return base64.b64encode(hashlib.sha1(data).digest()).decode()
+
+
+def _upload_via_chunked_session(
+    client: BoxClient,
+    create_session: Callable[[], UploadSession],
+    stream: BinaryIO,
+    file_size: int,
+) -> FileFull:
+    """Drive a Box chunked-upload session to completion.
+
+    SDK's upload_big_file only creates new files. It calls
+    create_file_upload_session() internally and has no way to target an
+    existing file. To preserve Box version history on overwrite, we instead
+    drive create_file_upload_session_for_existing_file() through this same
+    loop; it's passed in as a lambda by the large-file helpers below.
+    Generalized to accept either session-creation call, since the part-upload
+    + commit loop is identical after that point.
+    """
+    session = create_session()
+    part_size = session.part_size
+    parts = []
+    whole_file_hash = hashlib.sha1()
+    offset = 0
+
+    while offset < file_size:
+        chunk = stream.read(part_size)
+        if not chunk:
+            break
+        content_range = f"bytes {offset}-{offset + len(chunk) - 1}/{file_size}"
+        uploaded = client.chunked_uploads.upload_file_part(
+            session.id,
+            BytesIO(chunk),
+            digest=f"sha={_sha1_b64(chunk)}",
+            content_range=content_range,
+        )
+        parts.append(uploaded.part)
+        whole_file_hash.update(chunk)
+        offset += len(chunk)
+
+    committed = client.chunked_uploads.create_file_upload_session_commit(
+        session.id,
+        parts,
+        digest=f"sha={base64.b64encode(whole_file_hash.digest()).decode()}",
+    )
+    return committed.entries[0]
+
+
+def _upload_new_large_file(
+    client: BoxClient, folder_id: str, name: str, stream: BinaryIO, size: int
+) -> FileFull:
+    return _upload_via_chunked_session(
+        client,
+        lambda: client.chunked_uploads.create_file_upload_session(
+            folder_id, size, name
+        ),
+        stream,
+        size,
+    )
+
+
+def _overwrite_large_file(
+    client: BoxClient, file_id: str, name: str, stream: BinaryIO, size: int
+) -> FileFull:
+    return _upload_via_chunked_session(
+        client,
+        lambda: client.chunked_uploads.create_file_upload_session_for_existing_file(
+            file_id, size, file_name=name
+        ),
+        stream,
+        size,
+    )
+
+
+def upload_document(
+    client: BoxClient,
+    folder_id: str,
+    target_name: str,
+    stream: BinaryIO,
+    size: int,
+) -> None:
+    """Upload *stream* (*size* bytes) as *target_name* into *folder_id*.
+
+    Overwrites (creating a new Box version) if an item with that name already
+    exists. Routes through the chunked-session APIs above based on file size.
+    """
+    from box_sdk_gen import (
+        BoxAPIError,
+        FileFull,
+        UploadFileAttributes,
+        UploadFileAttributesParentField,
+        UploadFileVersionAttributes,
+    )
+
+    try:
+        if size < _CHUNKED_THRESHOLD:
+            client.uploads.upload_file(
+                UploadFileAttributes(
+                    name=target_name,
+                    parent=UploadFileAttributesParentField(id=folder_id),
+                ),
+                stream,
+            )
+        else:
+            _upload_new_large_file(client, folder_id, target_name, stream, size)
+        return
+    except BoxAPIError as exc:
+        if not _is_box_conflict_error(exc):
+            _raise_box_target_error(exc)
+
+    existing = _find_item_by_name(client, folder_id, target_name, want_type=FileFull)
+    if existing is None:  # pragma: no cover - defensive, conflict implies existence
+        raise TargetWriteError(
+            f"Box reported a name conflict for {target_name!r} but the "
+            "existing item could not be found to overwrite it."
+        )
+
+    stream.seek(0)
+    try:
+        if size < _CHUNKED_THRESHOLD:
+            client.uploads.upload_file_version(
+                existing.id, UploadFileVersionAttributes(name=target_name), stream
+            )
+        else:
+            _overwrite_large_file(client, existing.id, target_name, stream, size)
+    except BoxAPIError as exc:
+        _raise_box_target_error(exc)
+
+
+def _raise_box_target_error(exc: BaseException) -> None:
+    """Translate an unclassified Box write failure into ``TargetWriteError``."""
+    if is_box_authentication_error(exc):
+        raise exc
+    status = getattr(getattr(exc, "response_info", None), "status_code", None)
+    raise TargetWriteError(
+        f"Box rejected the upload (HTTP {status})." if status else "Box upload failed."
+    ) from exc
+
+
 __all__ = [
     "check_connection",
     "download_file",
     "fetch_file_by_id",
     "get_client",
+    "get_or_create_subfolder",
     "is_box_authentication_error",
     "is_box_policy_error",
     "is_box_unavailable_error",
     "list_folder_items",
+    "resolve_target_folder",
+    "upload_document",
 ]

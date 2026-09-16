@@ -86,6 +86,9 @@ def target_connectors():
     from docling_jobkit.connectors.azure_blob.target_processor import (
         AzureBlobTargetProcessor,
     )
+    from docling_jobkit.connectors.box.target_processor import (
+        BoxTargetProcessor,
+    )
     from docling_jobkit.connectors.databricks_volumes.target_processor import (
         DatabricksVolumesTargetProcessor,
     )
@@ -130,6 +133,7 @@ def target_connectors():
         AstraDBTargetProcessor,
         SharePointTargetProcessor,
         KafkaTargetProcessor,
+        BoxTargetProcessor,
     ):
         _register_if_available(connectors, cls)
 
