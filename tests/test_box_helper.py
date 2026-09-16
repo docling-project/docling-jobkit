@@ -1,3 +1,7 @@
+import base64
+import hashlib
+from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -223,3 +227,138 @@ def test_plain_bad_request_stays_policy(box_api_error):
 
     assert helper.is_box_policy_error(exc) is True
     assert helper.is_box_authentication_error(exc) is False
+
+
+# Large-file chunked upload
+
+
+def _sha1_digest(data: bytes) -> str:
+    return f"sha={base64.b64encode(hashlib.sha1(data).digest()).decode()}"
+
+
+def _chunked_client(part_size: int, *, committed_id: str = "committed-id") -> MagicMock:
+    """A client whose ``chunked_uploads`` methods behave like Box's real ones
+    just enough to drive ``_upload_via_chunked_session`` end to end.
+
+    Both session-creation calls return the same session shape (an id and a
+    part_size), each part upload echoes back a `.part` descriptor carrying the
+    bytes it received, and commit returns the finished file as `.entries[0]`.
+    """
+    client = MagicMock()
+    session = SimpleNamespace(id="sess-1", part_size=part_size)
+    client.chunked_uploads.create_file_upload_session.return_value = session
+    client.chunked_uploads.create_file_upload_session_for_existing_file.return_value = (
+        session
+    )
+
+    def _upload_part(session_id, body, *, digest, content_range):
+        return SimpleNamespace(
+            part=SimpleNamespace(
+                data=body.read(), digest=digest, content_range=content_range
+            )
+        )
+
+    client.chunked_uploads.upload_file_part.side_effect = _upload_part
+    client.chunked_uploads.create_file_upload_session_commit.return_value = (
+        SimpleNamespace(
+            entries=[FileFull(id=committed_id, name="whatever.pdf", size=1)]
+        )
+    )
+    return client
+
+
+def test_chunked_session_splits_streams_hashes_and_commits_parts_in_order():
+    client = _chunked_client(part_size=4, committed_id="new-file-id")
+    data = b"0123456789"  # 10 bytes over part_size=4 -> chunks of 4, 4, 2
+
+    result = helper._upload_via_chunked_session(
+        client,
+        lambda: client.chunked_uploads.create_file_upload_session(
+            "0", len(data), "f.pdf"
+        ),
+        BytesIO(data),
+        len(data),
+    )
+
+    calls = client.chunked_uploads.upload_file_part.call_args_list
+    assert all(hasattr(c.args[1], "read") for c in calls)
+    assert [c.kwargs["content_range"] for c in calls] == [
+        "bytes 0-3/10",
+        "bytes 4-7/10",
+        "bytes 8-9/10",
+    ]
+    assert [c.kwargs["digest"] for c in calls] == [
+        _sha1_digest(b"0123"),
+        _sha1_digest(b"4567"),
+        _sha1_digest(b"89"),
+    ]
+
+    args, kwargs = client.chunked_uploads.create_file_upload_session_commit.call_args
+    session_id, parts = args
+    assert session_id == "sess-1"
+    assert [p.data for p in parts] == [b"0123", b"4567", b"89"]
+    assert kwargs["digest"] == _sha1_digest(data)
+    assert result.id == "new-file-id"
+
+
+def test_new_vs_overwrite_large_file_use_the_correct_session_call():
+    client = _chunked_client(part_size=100)
+    data = b"x" * 10
+
+    helper._upload_new_large_file(
+        client, "folder-1", "big.pdf", BytesIO(data), len(data)
+    )
+    client.chunked_uploads.create_file_upload_session.assert_called_once_with(
+        "folder-1", len(data), "big.pdf"
+    )
+    client.chunked_uploads.create_file_upload_session_for_existing_file.assert_not_called()
+
+    helper._overwrite_large_file(client, "file-99", "big.pdf", BytesIO(data), len(data))
+    client.chunked_uploads.create_file_upload_session_for_existing_file.assert_called_once_with(
+        "file-99", len(data), file_name="big.pdf"
+    )
+
+
+@pytest.mark.parametrize(
+    ("size", "expects_chunked"),
+    [
+        (10, True),  # == threshold: `size < _CHUNKED_THRESHOLD`, so already "large"
+        (9, False),  # just under: still the simple path
+    ],
+)
+def test_upload_document_routes_on_the_threshold_boundary(
+    monkeypatch, size, expects_chunked
+):
+    monkeypatch.setattr(helper, "_CHUNKED_THRESHOLD", 10)
+    client = _chunked_client(part_size=4)
+    data = b"x" * size
+
+    helper.upload_document(client, "folder-1", "f.pdf", BytesIO(data), size)
+
+    assert client.chunked_uploads.create_file_upload_session.called is expects_chunked
+    assert client.uploads.upload_file.called is not expects_chunked
+
+
+def test_upload_document_large_file_conflict_falls_back_to_a_version_session(
+    monkeypatch, box_api_error
+):
+    """A 409 on the initial large-file session creation must resolve the
+    existing file and retry as create_file_upload_session_for_existing_file,
+    re-reading the whole stream from the start."""
+    monkeypatch.setattr(helper, "_CHUNKED_THRESHOLD", 10)
+    client = _chunked_client(part_size=4)
+    existing = FileFull(id="existing-id", name="big.pdf", size=10)
+    client.folders.get_folder_items.return_value = _FakeItems([existing])
+    client.chunked_uploads.create_file_upload_session.side_effect = box_api_error(409)
+    data = b"0123456789"
+
+    helper.upload_document(client, "folder-1", "big.pdf", BytesIO(data), len(data))
+
+    client.chunked_uploads.create_file_upload_session_for_existing_file.assert_called_once_with(
+        "existing-id", len(data), file_name="big.pdf"
+    )
+    # The stream must have been rewound and re-read in full on retry, not
+    # left partially consumed from the failed first attempt.
+    args, _ = client.chunked_uploads.create_file_upload_session_commit.call_args
+    _, parts = args
+    assert b"".join(p.data for p in parts) == data
