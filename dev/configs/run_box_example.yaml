@@ -37,6 +37,12 @@ sources:
     #file_ids: [] # explicit file ids, if set overrides folder traversal
     #max_num_elements: # set this to cap it to a specific num, default is all
 
-target:
-  kind: local_path
-  path: ./output_documents/
+targets:
+  - kind: box
+    client_id: ""
+    client_secret: ""
+    #enterprise_id: ""
+    user_id: ""
+
+    # optionally specify folder to write results to, "0" = root as default
+    #folder_id: "0" 
