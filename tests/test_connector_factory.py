@@ -72,6 +72,7 @@ def test_builtin_target_connectors_registered():
         "astradb_chunks",
         "sharepoint",
         "databricks_volumes",
+        "box",
     }
 
 
