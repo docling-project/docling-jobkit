@@ -57,8 +57,17 @@ def map_connector_authentication_errors(
     source_kind: str = "connector",
     is_unavailable_error: Callable[[BaseException], bool] | None = None,
     unavailable_message: str = "Source could not be reached.",
+    is_policy_error: Callable[[BaseException], bool] | None = None,
+    policy_message: str = "Source could not be read; verify the configured source.",
 ) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
-    """Translate recognized SDK auth failures from a connector method."""
+    """Translate recognized SDK auth failures from a connector method.
+
+    ``is_policy_error`` covers the terminal, client-actionable failures that are
+    neither credentials nor an outage -- a folder or item id that does not resolve,
+    a rejected request. They are reported to the client verbatim, so the message is
+    a fixed string rather than the SDK exception text: several SDKs render request
+    headers (including ``Authorization``) into ``str(exc)``.
+    """
 
     def translate(exc: Exception) -> NoReturn:
         error_type = (
@@ -75,6 +84,11 @@ def map_connector_authentication_errors(
     def translate_or_raise(exc: Exception) -> NoReturn:
         if is_authentication_error(exc):
             translate(exc)
+        if source and is_policy_error and is_policy_error(exc):
+            raise SourceConnectorPolicyError(
+                policy_message,
+                source_kind=source_kind,
+            ) from exc
         if source and is_unavailable_error and is_unavailable_error(exc):
             raise SourceConnectorUnavailableError(
                 unavailable_message,
