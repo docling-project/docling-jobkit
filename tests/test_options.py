@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 
 from docling.backend.docling_parse_backend import (
-    DoclingParseDocumentBackend,
     ThreadedDoclingParseDocumentBackend,
 )
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
@@ -106,7 +105,7 @@ def test_options_validator():
         opts = ConvertDocumentsOptions(pdf_backend=pdf_backend)
         pipeline_opts = m.get_pdf_pipeline_opts(opts)
         assert pipeline_opts.pipeline_options is not None
-        assert pipeline_opts.backend == DoclingParseDocumentBackend
+        assert pipeline_opts.backend == ThreadedDoclingParseDocumentBackend
 
     opts = ConvertDocumentsOptions(
         pipeline=ProcessingPipeline.VLM,
@@ -134,7 +133,10 @@ def test_backend_mapping_standard_and_vlm():
 
     cases = [
         (None, ThreadedDoclingParseDocumentBackend),  # omitted -> service-model default
-        (PdfBackend.DOCLING_PARSE, DoclingParseDocumentBackend),
+        (
+            PdfBackend.DOCLING_PARSE,
+            ThreadedDoclingParseDocumentBackend,
+        ),  # deprecated, normalizes to THREADED
         (PdfBackend.THREADED_DOCLING_PARSE, ThreadedDoclingParseDocumentBackend),
         (PdfBackend.PYPDFIUM2, PyPdfiumDocumentBackend),
     ]
