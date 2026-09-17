@@ -1,3 +1,22 @@
+## [v3.7.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.7.0) - 2026-09-17
+
+### Feature
+
+* **ray:** Application metrics ([#242](https://github.com/docling-project/docling-jobkit/issues/242)) ([`ad67ba6`](https://github.com/docling-project/docling-jobkit/commit/ad67ba687db3a644867aa3c9da69429ab80db5ec))
+* Box connector ([#243](https://github.com/docling-project/docling-jobkit/issues/243)) ([`e800d71`](https://github.com/docling-project/docling-jobkit/commit/e800d71aed9cc8184e44c39f84e7902fedcde386))
+
+## [v3.6.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.6.0) - 2026-09-15
+
+### Feature
+
+* Databricks volumes ([#247](https://github.com/docling-project/docling-jobkit/issues/247)) ([`8068311`](https://github.com/docling-project/docling-jobkit/commit/8068311d38fa1c92e909c432c17bbd115e3d8852))
+* Adds region support for s3 connector ([#248](https://github.com/docling-project/docling-jobkit/issues/248)) ([`028c8e0`](https://github.com/docling-project/docling-jobkit/commit/028c8e02071c74ca0bbc6266eaea88e44e7d81a0))
+
+### Fix
+
+* **manager:** Point default_code_formula_preset at a real Docling preset (#230) ([#233](https://github.com/docling-project/docling-jobkit/issues/233)) ([`5ce0ede`](https://github.com/docling-project/docling-jobkit/commit/5ce0ede2b37ad5eafc5178de61404c372ba49c67))
+* Honor md_compact_tables when exporting markdown ([#239](https://github.com/docling-project/docling-jobkit/issues/239)) ([`4054edb`](https://github.com/docling-project/docling-jobkit/commit/4054edbc8d84cb1798c3c6e9d4d7f2acb40acd40))
+
 ## [v3.5.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.5.0) - 2026-09-01
 
 ### Feature

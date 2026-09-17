@@ -104,6 +104,11 @@ from docling_jobkit.orchestrators.ray.failure_classification import (
 from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
 )
+from docling_jobkit.orchestrators.ray.metrics_recorder import RayMetricsRecorder
+from docling_jobkit.orchestrators.ray.metrics_utils import (
+    ConversionMetrics,
+    get_metrics_from_exportable_doc,
+)
 from docling_jobkit.orchestrators.ray.models import (
     ConverterFailureResult,
     ConverterRequest,
@@ -127,6 +132,41 @@ from docling_jobkit.public_errors import (
 _log = logging.getLogger(__name__)
 
 _SOURCE_CHUNK_CALLBACK_MODE = CallbackMode.CHILD_ONLY
+
+# Number of emit_* calls between recreations of an actor's RayMetricsRecorder.
+# Constructing RayMetricsRecorder() eagerly at actor __init__ time registers
+# its OpenTelemetry instruments during actor startup -- the exact window
+# where a transient GCS connection hiccup has been observed to silently
+# wedge that registration: emit_metrics() keeps succeeding with no error,
+# but the metric never reaches /metrics. Deferring creation to first use
+# (see _refresh_metrics_recorder) avoids the highest-risk window, since
+# Serve only routes traffic to a replica once it is already confirmed
+# healthy. Periodically recreating the instruments thereafter bounds how
+# long a wedge -- at startup or later -- can persist without a full actor
+# restart; Ray's metrics backend already aggregates same-named metrics
+# across actors by design, so re-registering under the same name mid-life
+# is safe and picked up seamlessly by Prometheus as a continuation of the
+# same series.
+_METRICS_RECORDER_REFRESH_INTERVAL = 2000
+
+
+def _refresh_metrics_recorder(
+    current: RayMetricsRecorder | None,
+    call_count: int,
+    generate_metrics: bool,
+) -> tuple[RayMetricsRecorder | None, int]:
+    """Return a (possibly newly constructed) metrics recorder and call count.
+
+    Lazily creates the recorder on first use, then periodically recreates it
+    every _METRICS_RECORDER_REFRESH_INTERVAL calls to self-heal a wedged
+    registration. See the module-level comment above for why this exists.
+    """
+    if not generate_metrics:
+        return None, 0
+    if current is None or call_count >= _METRICS_RECORDER_REFRESH_INTERVAL:
+        return RayMetricsRecorder(), 0
+    return current, call_count
+
 
 # Back-off between retries when a coordinator is fully starved of converter units
 # (the tenant's whole budget is held by its own sibling tasks and nothing is in
@@ -614,6 +654,7 @@ def _assemble_slice_results(
     return ExportableDocument(
         file=successful_results[0].file,
         document_hash=successful_results[0].document_hash,
+        document_type=successful_results[0].document_type,
         status=final_status,
         errors=errors,
         timings=_merge_timings(ordered_results),
@@ -635,15 +676,22 @@ def _finalize_slice_results(
     allow_external_plugins: bool,
     chunker_manager: Optional[DocumentChunkerManager] = None,
     chunking_options: Any = None,
-) -> DoclingTaskResult:
-    """Fetch child slice outputs, merge them, and build the parent task result."""
+) -> tuple[DoclingTaskResult, ConversionMetrics]:
+    """Fetch child slice outputs, merge them, and build the parent task result.
+
+    Returns the task result alongside the merged document's metrics record
+    (see get_metrics_from_exportable_doc); the caller emits it through the
+    coordinator's own RayMetricsRecorder, since the coordinator constructs
+    one whenever generate_metrics is enabled.
+    """
     # This is the only place where full slice documents enter the coordinator's
     # heap, and it runs inside the slice_finalization_semaphore guard.
     slice_results: list[ExportableDocument] = ray.get(slice_refs)
+    merged_document = _assemble_slice_results(slice_results)
 
-    return process_exportable_results(
+    task_result = process_exportable_results(
         task=task,
-        exportable_documents=[_assemble_slice_results(slice_results)],
+        exportable_documents=[merged_document],
         work_dir=work_dir,
         presigned_config=presigned_config,
         callback_invoker=callback_invoker,
@@ -653,6 +701,7 @@ def _finalize_slice_results(
         chunker_manager=chunker_manager,
         chunking_options=chunking_options,
     )
+    return task_result, get_metrics_from_exportable_doc(merged_document)
 
 
 @serve.deployment
@@ -694,8 +743,24 @@ class DoclingProcessorConverterDeployment:
         self.memory_warnings = 0
         self._chunker_manager: DocumentChunkerManager | None = None
 
+        # Pipeline timing histograms stay empty unless the operator also sets
+        # DOCLING_DEBUG_PROFILE_PIPELINE_TIMINGS=true, which docling reads on
+        # startup to enable ConversionResult.timings collection.
+        # Lazily-initialized (and periodically refreshed) by _get_metrics();
+        # see _refresh_metrics_recorder for why this isn't built here.
+        self.metrics: RayMetricsRecorder | None = None
+        self._metrics_call_count = 0
+
+    def _get_metrics(self) -> RayMetricsRecorder | None:
+        self.metrics, self._metrics_call_count = _refresh_metrics_recorder(
+            self.metrics, self._metrics_call_count, self.config.generate_metrics
+        )
+        if self.metrics is not None:
+            self._metrics_call_count += 1
+        return self.metrics
+
     async def process_converter_request(
-        self, request: ConverterRequest
+        self, request: ConverterRequest, tenant_id: str
     ) -> ConverterTaskResult | ConverterFailureResult | ObjectRef:
         if self.config.enable_oom_protection and PSUTIL_AVAILABLE:
             await self._check_memory()
@@ -708,8 +773,15 @@ class DoclingProcessorConverterDeployment:
                 task=request.task,
             )
             if isinstance(conv_results, ConverterFailureResult):
+                metrics_recorder = self._get_metrics()
+                if metrics_recorder is not None:
+                    metrics_recorder.emit_failure_metrics(tenant_id=tenant_id)
                 return conv_results
             exportable = _to_exportable_documents(request.task, conv_results)
+            metrics_recorder = self._get_metrics()
+            if metrics_recorder is not None:
+                metrics = [get_metrics_from_exportable_doc(doc) for doc in exportable]
+                metrics_recorder.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             try:
                 result = await asyncio.to_thread(
                     lambda: self._build_task_result(
@@ -807,8 +879,18 @@ class DoclingProcessorConverterDeployment:
             conv_results = await self._run_with_retry(
                 request.filename,
                 lambda: self._convert_materialized_request(request),
+                task=request.task,
             )
+            if isinstance(conv_results, ConverterFailureResult):
+                metrics_recorder = self._get_metrics()
+                if metrics_recorder is not None:
+                    metrics_recorder.emit_failure_metrics(tenant_id=tenant_id)
+                return conv_results
             exportable = _to_exportable_documents(request.task, conv_results)
+            metrics_recorder = self._get_metrics()
+            if metrics_recorder is not None:
+                metrics = [get_metrics_from_exportable_doc(doc) for doc in exportable]
+                metrics_recorder.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             try:
                 result = await asyncio.to_thread(
                     lambda: self._build_task_result(
@@ -839,10 +921,17 @@ class DoclingProcessorConverterDeployment:
                 task=request.task,
             )
             if isinstance(conv_results, ConverterFailureResult):
+                metrics_recorder = self._get_metrics()
+                if metrics_recorder is not None:
+                    metrics_recorder.emit_failure_metrics(tenant_id=tenant_id)
                 return conv_results
             exportable = _to_exportable_documents_from_chunk(
                 request.chunk, conv_results
             )
+            metrics_recorder = self._get_metrics()
+            if metrics_recorder is not None:
+                metrics = [get_metrics_from_exportable_doc(doc) for doc in exportable]
+                metrics_recorder.emit_metrics(metrics=metrics, tenant_id=tenant_id)
             try:
                 result = await asyncio.to_thread(
                     lambda: self._build_task_result(
@@ -1194,7 +1283,23 @@ class DoclingProcessorCoordinatorDeployment:
         # presets during slice finalization (the coordinator does not convert).
         self._converter_manager: Optional[DoclingConverterManager] = None
 
+        # Pipeline timing histograms stay empty unless the operator also sets
+        # DOCLING_DEBUG_PROFILE_PIPELINE_TIMINGS=true, which docling reads on
+        # startup to enable ConversionResult.timings collection.
+        # Lazily-initialized (and periodically refreshed) by _get_metrics();
+        # see _refresh_metrics_recorder for why this isn't built here.
+        self.metrics: RayMetricsRecorder | None = None
+        self._metrics_call_count = 0
+
         _log.setLevel(self.config.log_level.upper())
+
+    def _get_metrics(self) -> RayMetricsRecorder | None:
+        self.metrics, self._metrics_call_count = _refresh_metrics_recorder(
+            self.metrics, self._metrics_call_count, self.config.generate_metrics
+        )
+        if self.metrics is not None:
+            self._metrics_call_count += 1
+        return self.metrics
 
     async def process_task(self, task: Task) -> DoclingTaskResult:
         task_start = datetime.datetime.now(datetime.timezone.utc)
@@ -1554,7 +1659,7 @@ class DoclingProcessorCoordinatorDeployment:
                     callback_invoker = CallbackInvoker() if task.callbacks else None
                     try:
                         async with self._slice_finalization_semaphore:
-                            return await asyncio.to_thread(
+                            task_result, slice_metrics = await asyncio.to_thread(
                                 _finalize_slice_results,
                                 task=task,
                                 slice_refs=slice_refs,
@@ -1576,6 +1681,13 @@ class DoclingProcessorCoordinatorDeployment:
                         # once finalization is done. Error shells (inline
                         # ExportableDocuments) are also released here.
                         del slice_refs
+                    metrics_recorder = self._get_metrics()
+                    if metrics_recorder is not None:
+                        tenant_id = task.metadata.get("tenant_id", "default")
+                        metrics_recorder.emit_metrics(
+                            metrics=[slice_metrics], tenant_id=tenant_id
+                        )
+                    return task_result
                 else:
                     converter_result = await self._run_single_converter_call(
                         task,
@@ -1675,7 +1787,9 @@ class DoclingProcessorCoordinatorDeployment:
                 f"Task {task.task_id} was terminalized before converter dispatch"
             )
         try:
-            return await self.converter_handle.process_converter_request.remote(request)
+            return await self.converter_handle.process_converter_request.remote(
+                request=request, tenant_id=tenant_id
+            )
         finally:
             await self.redis_manager.release_converter_units(tenant_id, task.task_id, 1)
 
@@ -1931,15 +2045,17 @@ class DoclingProcessorCoordinatorDeployment:
         expected_doc_count: int,
     ) -> ConverterTaskResult:
         child_task = task.model_copy(update={"sources": [chunk.source]})
+        tenant_id = task.metadata.get("tenant_id", "default")
         # The chunk carries only source + refs, so it is safe to cloudpickle as-is.
         # The converter reconstructs its own source processor from chunk.source and
         # fetches each ref via fetch_converter_source_by_ref().
         return await self.converter_handle.process_converter_request.remote(
-            SourceChunkConvertRequest(
+            request=SourceChunkConvertRequest(
                 task=child_task,
                 chunk=chunk,
                 expected_doc_count=expected_doc_count,
-            )
+            ),
+            tenant_id=tenant_id,
         )
 
     def _should_materialize_pdf(self, task: Task) -> bool:
@@ -1997,7 +2113,11 @@ class DoclingProcessorCoordinatorDeployment:
                     if granted == 0:
                         break  # at tenant ceiling; drain an in-flight slice first
                     in_flight.add(
-                        asyncio.create_task(self._execute_slice_request(next_request))
+                        asyncio.create_task(
+                            self._execute_slice_request(
+                                request=next_request, tenant_id=tenant_id
+                            )
+                        )
                     )
                     next_request = next(pending_requests, None)
                 if not in_flight:
@@ -2022,12 +2142,16 @@ class DoclingProcessorCoordinatorDeployment:
 
         return collected_results
 
-    async def _execute_slice_request(self, request: SliceConvertRequest) -> ObjectRef:
+    async def _execute_slice_request(
+        self, request: SliceConvertRequest, tenant_id: str
+    ) -> ObjectRef:
         try:
             # On success the converter returns an ObjectRef pointing to the
             # ExportableDocument in the plasma store — the coordinator never
             # holds the document object itself while waiting for other slices.
-            return await self.converter_handle.process_converter_request.remote(request)
+            return await self.converter_handle.process_converter_request.remote(
+                request=request, tenant_id=tenant_id
+            )
         except Exception as exc:
             _log.warning(
                 "Coordinator replica %s: slice %s for %s failed: %s",
