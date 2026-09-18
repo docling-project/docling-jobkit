@@ -1278,15 +1278,19 @@ class DoclingProcessorCoordinatorDeployment:
             )
             if (
                 terminalization.status_changed
-                and terminalization.final_status == TaskStatus.SUCCESS
                 and terminalization.result_key is not None
             ):
-                emit_task_completed_callback(task, "success")
+                emit_task_completed_callback(
+                    task,
+                    "failure"
+                    if terminalization.final_status == TaskStatus.FAILURE
+                    else "success",
+                )
                 try:
                     await self.redis_manager.publish_update(
                         TaskUpdate(
                             task_id=task.task_id,
-                            task_status=TaskStatus.SUCCESS,
+                            task_status=terminalization.final_status,
                             result_key=terminalization.result_key,
                             progress=None,
                         )
