@@ -288,6 +288,8 @@ class RayOrchestrator(BaseOrchestrator):
             "namespace": config.ray_namespace,
             "runtime_env": config.ray_runtime_env,
         }
+        if config.generate_metrics:
+            init_kwargs["_metrics_export_port"] = config.metrics_port
 
         if config.ray_object_store_memory:
             try:

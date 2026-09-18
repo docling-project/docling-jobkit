@@ -1,3 +1,10 @@
+## [v3.7.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.7.0) - 2026-09-17
+
+### Feature
+
+* **ray:** Application metrics ([#242](https://github.com/docling-project/docling-jobkit/issues/242)) ([`ad67ba6`](https://github.com/docling-project/docling-jobkit/commit/ad67ba687db3a644867aa3c9da69429ab80db5ec))
+* Box connector ([#243](https://github.com/docling-project/docling-jobkit/issues/243)) ([`e800d71`](https://github.com/docling-project/docling-jobkit/commit/e800d71aed9cc8184e44c39f84e7902fedcde386))
+
 ## [v3.6.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.6.0) - 2026-09-15
 
 ### Feature

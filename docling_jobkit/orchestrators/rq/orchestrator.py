@@ -549,9 +549,22 @@ class RQOrchestrator(BaseOrchestrator):
                     try:
                         task = await self.get_raw_task(task_id=data.task_id)
                         if task.is_completed():
-                            _log.debug(
-                                "Task already completed. No update will be done."
-                            )
+                            # A status poll may have rebuilt this task from the
+                            # RQ job before this update arrived; that rebuild
+                            # carries no error_message. Keep the worker's
+                            # reason instead of dropping it.
+                            if (
+                                data.task_status == TaskStatus.FAILURE
+                                and task.task_status == TaskStatus.FAILURE
+                                and task.error_message is None
+                                and data.error_message is not None
+                            ):
+                                task.error_message = data.error_message
+                                await self._on_task_status_changed(task)
+                            else:
+                                _log.debug(
+                                    "Task already completed. No update will be done."
+                                )
                             continue
 
                         # Update the status
