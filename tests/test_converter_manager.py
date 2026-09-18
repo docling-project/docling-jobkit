@@ -2,6 +2,7 @@
 
 import pytest
 
+from docling.datamodel.chart_extraction_options import ChartExtractionVlmEngineOptions
 from docling.datamodel.picture_classification_options import (
     DocumentPictureClassifierOptions,
 )
@@ -123,6 +124,19 @@ class TestPresetRegistryBuilding:
 
         assert "default" in manager.code_formula_preset_registry
 
+    def test_chart_extraction_registry(self):
+        """Test chart extraction preset registry."""
+        config = DoclingConverterManagerConfig(
+            default_chart_extraction_preset="granite_vision_v4",
+        )
+        manager = DoclingConverterManager(config)
+
+        assert "default" in manager.chart_extraction_preset_registry
+        assert (
+            manager.chart_extraction_preset_registry["default"]["preset_id"]
+            == "granite_vision_v4"
+        )
+
 
 class TestPresetValidation:
     """Test that invalid presets are rejected."""
@@ -175,6 +189,20 @@ class TestPresetValidation:
         with pytest.raises(ValueError, match="not allowed"):
             manager._validate_preset(
                 "nonexistent", manager.code_formula_preset_registry, "Code/formula"
+            )
+
+    def test_invalid_chart_extraction_preset_rejected(self):
+        """Test that invalid chart extraction preset raises error."""
+        config = DoclingConverterManagerConfig(
+            allowed_chart_extraction_presets=["granite_vision_v4"],
+        )
+        manager = DoclingConverterManager(config)
+
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._validate_preset(
+                "nonexistent",
+                manager.chart_extraction_preset_registry,
+                "Chart extraction",
             )
 
 
@@ -231,6 +259,7 @@ class TestCustomConfigValidation:
                 "allow_custom_picture_classification_config",
             ),
             ("ocr", "allow_custom_ocr_config"),
+            ("chart_extraction", "allow_custom_chart_extraction_config"),
         ],
     )
     def test_stage_custom_config_not_allowed(self, config_type, config_field):
@@ -251,6 +280,7 @@ class TestCustomConfigValidation:
                 "allow_custom_picture_classification_config",
             ),
             ("ocr", "allow_custom_ocr_config"),
+            ("chart_extraction", "allow_custom_chart_extraction_config"),
         ],
     )
     def test_stage_custom_config_allowed(self, config_type, config_field):
@@ -359,6 +389,7 @@ class TestOptionsParsingPreset:
             ("vlm_pipeline_preset", "_parse_vlm_options"),
             ("picture_description_preset", "_parse_picture_description_options"),
             ("code_formula_preset", "_parse_code_formula_options"),
+            ("chart_extraction_preset", "_parse_chart_extraction_options"),
             ("table_structure_preset", "_parse_table_structure_options"),
             ("layout_preset", "_parse_layout_options"),
             ("ocr_preset", "_parse_ocr_options"),
@@ -724,6 +755,10 @@ class TestBuiltInPresetsAllowedByDefault:
                 "picture_classification_preset_registry",
                 DocumentPictureClassifierOptions.list_preset_ids(),
             ),
+            (
+                "chart_extraction_preset_registry",
+                ChartExtractionVlmEngineOptions.list_preset_ids(),
+            ),
         ],
     )
     def test_all_built_in_presets_registered_without_allow_list(
@@ -753,6 +788,11 @@ class TestBuiltInPresetsAllowedByDefault:
                 "picture_classification_preset_registry",
                 ["document_figure_classifier_v2"],
             ),
+            (
+                "allowed_chart_extraction_presets",
+                "chart_extraction_preset_registry",
+                ["granite_vision_v4"],
+            ),
         ],
     )
     def test_allow_list_still_restricts(self, config_field, registry_name, allowed):
@@ -773,6 +813,152 @@ class TestBuiltInPresetsAllowedByDefault:
         manager = DoclingConverterManager(DoclingConverterManagerConfig())
 
         assert set(manager.layout_preset_registry) == {"default"}
+
+
+class TestChartExtraction:
+    """Full-coverage tests for the chart extraction stage."""
+
+    def test_parse_chart_extraction_options_with_preset(self):
+        """Parsing chart extraction options from a named preset returns options."""
+        config = DoclingConverterManagerConfig(
+            default_chart_extraction_preset="granite_vision_v4",
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(chart_extraction_preset="default")
+
+        options = manager._parse_chart_extraction_options(request)
+        assert options is not None
+        assert isinstance(options, ChartExtractionVlmEngineOptions)
+
+    def test_parse_chart_extraction_options_without_preset_returns_none(self):
+        """When no preset or custom config is given, returns None."""
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        request = ConvertDocumentsOptions()
+
+        options = manager._parse_chart_extraction_options(request)
+        assert options is None
+
+    def test_chart_extraction_custom_preset_by_name(self):
+        """A custom chart extraction preset registered by name is validated."""
+        config = DoclingConverterManagerConfig(
+            custom_chart_extraction_presets={
+                "my_chart_preset": {
+                    "engine_options": {
+                        "engine_type": "api",
+                        "url": "http://localhost:8000/v1/chat/completions",
+                        "params": {"model": "granite-vision"},
+                    },
+                    "model_spec": {
+                        "name": "granite-vision",
+                        "default_repo_id": "ibm-granite/granite-vision-4.1-4b",
+                        "prompt": "<chart2csv>",
+                        "response_format": "plaintext",
+                    },
+                    "chart2csv": True,
+                }
+            },
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(chart_extraction_preset="my_chart_preset")
+        options = manager._parse_chart_extraction_options(request)
+
+        assert isinstance(options, ChartExtractionVlmEngineOptions)
+
+    def test_chart_extraction_custom_config_not_allowed(self):
+        """Custom chart extraction config is rejected when not allowed."""
+        config = DoclingConverterManagerConfig(
+            allow_custom_chart_extraction_config=False,
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(
+            chart_extraction_custom_config={
+                "engine_options": {
+                    "engine_type": "api",
+                    "url": "http://localhost:8000/v1/chat/completions",
+                    "params": {"model": "granite-vision"},
+                },
+                "model_spec": {
+                    "name": "granite-vision",
+                    "default_repo_id": "ibm-granite/granite-vision-4.1-4b",
+                    "prompt": "<chart2csv>",
+                    "response_format": "plaintext",
+                },
+            }
+        )
+
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._parse_chart_extraction_options(request)
+
+    def test_chart_extraction_custom_config_allowed(self):
+        """Custom chart extraction config is accepted when allowed."""
+        config = DoclingConverterManagerConfig(
+            allow_custom_chart_extraction_config=True,
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(
+            chart_extraction_custom_config={
+                "engine_options": {
+                    "engine_type": "api",
+                    "url": "http://localhost:8000/v1/chat/completions",
+                    "params": {"model": "granite-vision"},
+                },
+                "model_spec": {
+                    "name": "granite-vision",
+                    "default_repo_id": "ibm-granite/granite-vision-4.1-4b",
+                    "prompt": "<chart2csv>",
+                    "response_format": "plaintext",
+                },
+            }
+        )
+
+        options = manager._parse_chart_extraction_options(request)
+        assert isinstance(options, ChartExtractionVlmEngineOptions)
+
+    def test_chart_extraction_engine_not_allowed(self):
+        """Engine allowlist is enforced for chart extraction custom config."""
+        config = DoclingConverterManagerConfig(
+            allow_custom_chart_extraction_config=True,
+            allowed_chart_extraction_engines=["mlx"],
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(
+            chart_extraction_custom_config={
+                "engine_options": {
+                    "engine_type": "transformers",
+                },
+                "model_spec": {
+                    "name": "granite-vision",
+                    "default_repo_id": "ibm-granite/granite-vision-4.1-4b",
+                    "prompt": "<chart2csv>",
+                    "response_format": "plaintext",
+                },
+            }
+        )
+
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._parse_chart_extraction_options(request)
+
+    def test_chart_extraction_wired_into_standard_pipeline(self):
+        """Chart extraction options are forwarded to PdfPipelineOptions."""
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        request = ConvertDocumentsOptions(
+            do_chart_extraction=True,
+            chart_extraction_preset="default",
+        )
+        pdf_format_option = manager.get_pdf_pipeline_opts(request)
+        pipeline_opts = pdf_format_option.pipeline_options
+
+        assert pipeline_opts.do_chart_extraction is True
+        assert isinstance(
+            pipeline_opts.chart_extraction_options, ChartExtractionVlmEngineOptions
+        )
 
 
 class TestConvertDocumentsSetupFailureTagging:
