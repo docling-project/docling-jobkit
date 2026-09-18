@@ -1010,6 +1010,14 @@ class DoclingConverterManager:
                 "Custom OCR configuration is not allowed. "
                 "Please use a preset or contact your administrator."
             )
+        elif (
+            config_type == "chart_extraction"
+            and not self.config.allow_custom_chart_extraction_config
+        ):
+            raise ValueError(
+                "Custom chart extraction configuration is not allowed. "
+                "Please use a preset or contact your administrator."
+            )
 
     def _validate_engine_allowed(
         self, engine_type: str, allowed_engines: Optional[list[str]]
