@@ -17,7 +17,10 @@ from ray.serve.schema import ApplicationStatus
 from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.chunking import BaseChunkerOptions
-from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.options import (
+    ConvertDocumentsOptions,
+    ExtractDocumentsOptions,
+)
 from docling.datamodel.service.requests import FileSourceRequest
 from docling.datamodel.service.tasks import TaskType
 
@@ -633,6 +636,7 @@ class RayOrchestrator(BaseOrchestrator):
         callbacks: list[CallbackSpec] | None = None,
         metadata: dict[str, Any] | None = None,
         targets: list[TaskTarget] | None = None,
+        extract_options: ExtractDocumentsOptions | None = None,
     ) -> Task:
         """Enqueue a task for processing.
 
@@ -704,6 +708,7 @@ class RayOrchestrator(BaseOrchestrator):
                     "targets": resolved_targets,
                     "convert_options": convert_options,
                     "chunking_options": chunking_options,
+                    "extract_options": extract_options,
                     "chunking_export_options": chunking_export_options,
                     "callbacks": callbacks or [],
                     "metadata": metadata or {},

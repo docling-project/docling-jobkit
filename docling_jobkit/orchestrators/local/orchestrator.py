@@ -12,7 +12,10 @@ from pydantic import BaseModel
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.chunking import BaseChunkerOptions
-from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.options import (
+    ConvertDocumentsOptions,
+    ExtractDocumentsOptions,
+)
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.config.target_config import PresignedConfig
@@ -70,6 +73,7 @@ class LocalOrchestrator(BaseOrchestrator):
         callbacks: list[CallbackSpec] | None = None,
         metadata: dict[str, Any] | None = None,
         targets: list[TaskTarget] | None = None,
+        extract_options: ExtractDocumentsOptions | None = None,
     ) -> Task:
         if options is not None and convert_options is None:
             convert_options = options
@@ -90,6 +94,7 @@ class LocalOrchestrator(BaseOrchestrator):
                 "sources": sources,
                 "convert_options": convert_options,
                 "chunking_options": chunking_options,
+                "extract_options": extract_options,
                 "chunking_export_options": chunking_export_options,
                 "targets": resolved_targets,
                 "callbacks": callbacks or [],

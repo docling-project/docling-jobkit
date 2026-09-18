@@ -428,6 +428,33 @@ class DoclingConverterManagerConfig(BaseModel):
         description="Whether users can specify custom OCR configurations.",
     )
 
+    # === Extraction model gating (/extract endpoint) ===
+    # Read by DocumentExtractionManager; the operator decides which extraction
+    # model(s) a client may run against (mirrors the per-stage gates above).
+    default_extraction_preset: str = Field(
+        default="nuextract_2b",
+        description="Default extraction preset served when a client sends only a template.",
+    )
+    allowed_extraction_presets: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Allow-list of extraction preset IDs (subset of "
+            "ExtractionVlmOptions.list_preset_ids()). None allows any registered preset."
+        ),
+    )
+    allow_custom_extraction_config: bool = Field(
+        default=False,
+        description="Whether clients may send a raw extraction model spec (custom config).",
+    )
+    allowed_extraction_engines: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed extraction VLM engine types. None allows all.",
+    )
+    allowed_extraction_formats: Optional[list[InputFormat]] = Field(
+        default=None,
+        description="Input formats enabled for extraction. None uses Docling defaults.",
+    )
+
 
 # Custom serializer for PdfFormatOption
 # (model_dump_json does not work with some classes)
