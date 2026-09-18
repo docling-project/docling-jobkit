@@ -549,9 +549,22 @@ class RQOrchestrator(BaseOrchestrator):
                     try:
                         task = await self.get_raw_task(task_id=data.task_id)
                         if task.is_completed():
-                            _log.debug(
-                                "Task already completed. No update will be done."
-                            )
+                            # A status poll may have rebuilt this task from the
+                            # RQ job before this update arrived; that rebuild
+                            # carries no error_message. Keep the worker's
+                            # reason instead of dropping it.
+                            if (
+                                data.task_status == TaskStatus.FAILURE
+                                and task.task_status == TaskStatus.FAILURE
+                                and task.error_message is None
+                                and data.error_message is not None
+                            ):
+                                task.error_message = data.error_message
+                                await self._on_task_status_changed(task)
+                            else:
+                                _log.debug(
+                                    "Task already completed. No update will be done."
+                                )
                             continue
 
                         # Update the status
@@ -710,13 +723,17 @@ class RQOrchestrator(BaseOrchestrator):
                                         connection=self._redis_conn,
                                     )
                                     job.set_status(JobStatus.FAILED)
+                                    registry.remove_executions(job)
+                                except NoSuchJobError:
+                                    _log.debug(
+                                        f"RQ job {tid} no longer exists, "
+                                        f"skipping started-registry cleanup"
+                                    )
                                 except Exception:
                                     _log.debug(
-                                        f"Could not set RQ job {tid} "
-                                        f"status to FAILED (may already "
-                                        f"be gone)"
+                                        f"Could not clean up RQ state for "
+                                        f"task {tid} (may already be gone)"
                                     )
-                                registry.remove(tid)
 
                             await asyncio.to_thread(_mark_rq_failed, task_id)
                             _log.info(

@@ -36,6 +36,9 @@ def source_connectors():
     from docling_jobkit.connectors.azure_blob.source_processor import (
         AzureBlobSourceProcessor,
     )
+    from docling_jobkit.connectors.box.source_processor import (
+        BoxSourceProcessor,
+    )
     from docling_jobkit.connectors.databricks_volumes.source_processor import (
         DatabricksVolumesSourceProcessor,
     )
@@ -69,6 +72,7 @@ def source_connectors():
         GoogleDriveSourceProcessor,
         GoogleCloudStorageSourceProcessor,
         SharePointSourceProcessor,
+        BoxSourceProcessor,
     ):
         _register_if_available(connectors, cls)
 
@@ -81,6 +85,9 @@ def target_connectors():
     )
     from docling_jobkit.connectors.azure_blob.target_processor import (
         AzureBlobTargetProcessor,
+    )
+    from docling_jobkit.connectors.box.target_processor import (
+        BoxTargetProcessor,
     )
     from docling_jobkit.connectors.databricks_volumes.target_processor import (
         DatabricksVolumesTargetProcessor,
@@ -126,6 +133,7 @@ def target_connectors():
         AstraDBTargetProcessor,
         SharePointTargetProcessor,
         KafkaTargetProcessor,
+        BoxTargetProcessor,
     ):
         _register_if_available(connectors, cls)
 

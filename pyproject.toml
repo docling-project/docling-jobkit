@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "docling-jobkit"
-version = "3.6.0"  # DO NOT EDIT, updated automatically
+version = "3.7.0"  # DO NOT EDIT, updated automatically
 description = "Running a distributed job processing documents with Docling."
 readme = "README.md"
 license = "MIT"
@@ -42,7 +42,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "docling-slim[standard]>=2.127.0,<3.0.0",
+    "docling-slim[standard]>=2.129.0,<3.0.0",
     "pydantic~=2.10",
     "pydantic-settings~=2.4",
     "boto3~=1.35",
@@ -61,16 +61,17 @@ onnxruntime = [
 # asr = [
 #     "docling[asr]~=2.53",
 # ]
+
 rq = [
     "rq~=2.4",
     "msgpack~=1.1",
 ]
 ray = [
-    "ray[serve]~=2.52 ; python_version < '3.14'",
+    "ray[serve]~=2.54",
     "redis[hiredis]>=4.2,<8.0.0",
     "msgpack~=1.1",
     "psutil>=6.0.0",
-    "codeflare-sdk>=0.20.0; python_version >= '3.11' and python_version < '3.14'",
+    "codeflare-sdk>=0.37.0; python_version >= '3.11'",
 ]
 gdrive = [
     "google-api-python-client>=2.183.0",
@@ -97,6 +98,14 @@ sharepoint = [
     "office365-rest-python-client>=2.6.2,<3.0.0; python_version < '3.11'",
     "office365-rest-python-client>=2.6.2; python_version >= '3.11'",
 ]
+box = [
+    # The `boxsdk` distribution at 10.x ships the *generated* SDK, i.e. the
+    # `box_sdk_gen` module — the name mismatch is Box's, not a typo here.
+    # The [jwt] extra (PyJWT + cryptography) is what BoxJWTAuth needs; without it
+    # the JWT auth path raises ImportError on the first token exchange.
+    "boxsdk[jwt]>=10",
+]
+
 
 [dependency-groups]
 dev = [
@@ -108,7 +117,7 @@ dev = [
     "pytest-check~=2.4",
     "pytest-cov>=6.1.1",
     "python-semantic-release~=7.32",
-    "ray[serve]~=2.52 ; python_version < '3.14'",
+    "ray[serve]~=2.54",
     "redis[hiredis]>=4.2,<8.0.0",
     "msgpack~=1.1",
     "psutil>=6.0.0",
@@ -121,12 +130,21 @@ dev = [
 ]
 
 [tool.uv.sources]
-docling-slim = { git = "https://github.com/docling-project/docling/", branch = "feat-chart-extraction-engines" }
+# docling-slim = { git = "https://github.com/docling-project/docling/", branch = "main" }
 # docling-slim = { path = "../docling", editable = true }
 
 
 [tool.uv]
 package = true
+
+# Ray Serve's internal proto handling (ray/serve/_private/config.py) breaks
+# against protobuf's newer upb-based API - AttributeError: FieldDescriptor
+# object has no attribute 'label'. Ray's own metadata only weakly declares
+# protobuf>=3.20.3, which doesn't reflect this runtime incompatibility.
+override-dependencies = [
+  "protobuf<7",
+]
+
 
 [tool.hatch.build.targets.sdist]
 include = ["docling_jobkit"]
@@ -242,6 +260,7 @@ module = [
     "codeflare_sdk.*",
     "opensearchpy.*",
     "confluent_kafka.*",
+    "box_sdk_gen.*",
 ]
 ignore_missing_imports = true
 

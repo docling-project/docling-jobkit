@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 from urllib.parse import urlunsplit
 
 from boto3.session import Session
@@ -26,6 +26,12 @@ from docling.datamodel.service.sources import S3Coordinates
 from docling_jobkit.connectors.artifact_paths import hash_path_component
 
 logging.basicConfig(level=logging.INFO)
+
+
+class _S3CredentialKwargs(TypedDict, total=False):
+    aws_access_key_id: str
+    aws_secret_access_key: str
+
 
 _S3_AUTH_ERROR_CODES = {
     "AccessDenied",
@@ -63,6 +69,18 @@ def is_s3_unavailable_error(exc: BaseException) -> bool:
 
 
 def get_s3_connection(coords: S3Coordinates):
+    access_key = coords.access_key
+    secret_key = coords.secret_key
+    if (access_key is None) != (secret_key is None):
+        raise ValueError("access_key and secret_key must be provided together")
+
+    credential_kwargs: _S3CredentialKwargs = {}
+    if access_key is not None and secret_key is not None:
+        credential_kwargs = {
+            "aws_access_key_id": access_key,
+            "aws_secret_access_key": secret_key,
+        }
+
     session = Session()
 
     config = Config(
@@ -79,20 +97,18 @@ def get_s3_connection(coords: S3Coordinates):
         "s3",
         endpoint_url=endpoint,
         verify=coords.verify_ssl,
-        aws_access_key_id=coords.access_key,
-        aws_secret_access_key=coords.secret_key,
         region_name=coords.region,
         config=config,
+        **credential_kwargs,
     )
 
     resource: S3ServiceResource = session.resource(
         "s3",
         endpoint_url=endpoint,
         verify=coords.verify_ssl,
-        aws_access_key_id=coords.access_key,
-        aws_secret_access_key=coords.secret_key,
         region_name=coords.region,
         config=config,
+        **credential_kwargs,
     )
 
     return client, resource
