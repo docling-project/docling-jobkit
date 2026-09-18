@@ -12,7 +12,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from docling.datamodel.base_models import ConversionStatus, DocumentStream
-from docling.datamodel.extraction import ExtractedPageData
+from docling.datamodel.extraction import (
+    DocumentScope,
+    ExtractionItem,
+    ExtractionTarget,
+    ExtractionTemplate,
+    PageScope,
+)
 from docling.datamodel.extraction_options import ChannelSelection, ExtractionVlmOptions
 from docling.datamodel.service.callbacks import CallbackSpec, ProgressKind
 from docling.datamodel.service.options import ExtractDocumentsOptions
@@ -21,6 +27,7 @@ from docling.datamodel.service.responses import (
     ArtifactRef,
     DoclingTaskResult,
     DocumentArtifactItem,
+    ExtractionDocumentResult,
     ExtractionTaskResult,
     PresignedArtifactResult,
 )
@@ -48,6 +55,15 @@ from docling_jobkit.convert.source_expansion import expand_task_sources_with_ide
 from docling_jobkit.datamodel.source_identity import SourceIdentity
 from docling_jobkit.datamodel.task import Task
 
+
+def _target(field="amount"):
+    return ExtractionTarget(
+        output_schema={"type": "object", "properties": {field: {"type": "number"}}},
+        template=ExtractionTemplate(format="nuextract", value={field: "number"}),
+        instructions=f"Extract {field} only.",
+    )
+
+
 # --- model-selection gating (the security boundary) ------------------------
 
 
@@ -55,7 +71,7 @@ def test_default_preset_resolves_to_operator_model():
     ecm = DocumentExtractionManager(
         DocumentExtractionManagerConfig(default_extraction_preset="granite_vision_4_1")
     )
-    vlm = ecm.resolve_extraction_model(ExtractDocumentsOptions(template="x"))
+    vlm = ecm.resolve_extraction_model(ExtractDocumentsOptions(target=_target()))
     expected = ExtractionVlmOptions.from_preset("granite_vision_4_1")
     assert vlm.model_spec.name == expected.model_spec.name
 
@@ -68,7 +84,7 @@ def test_preset_rejected_when_not_in_allow_list():
     )
     with pytest.raises(ValueError, match="not allowed"):
         ecm.resolve_extraction_model(
-            ExtractDocumentsOptions(template="x", extraction_preset="nuextract_2b")
+            ExtractDocumentsOptions(target=_target(), extraction_preset="nuextract_2b")
         )
 
 
@@ -77,7 +93,7 @@ def test_custom_config_rejected_unless_operator_opts_in():
     with pytest.raises(ValueError, match="not allowed"):
         ecm.resolve_extraction_model(
             ExtractDocumentsOptions(
-                template="x", extraction_custom_config={"model_spec": {}}
+                target=_target(), extraction_custom_config={"model_spec": {}}
             )
         )
 
@@ -86,7 +102,9 @@ def test_unknown_preset_reports_available_presets():
     ecm = DocumentExtractionManager(DocumentExtractionManagerConfig())
     with pytest.raises(ValueError, match="not found"):
         ecm.resolve_extraction_model(
-            ExtractDocumentsOptions(template="x", extraction_preset="does_not_exist")
+            ExtractDocumentsOptions(
+                target=_target(), extraction_preset="does_not_exist"
+            )
         )
 
 
@@ -100,68 +118,122 @@ def test_remote_engine_rejected_when_remote_services_are_disabled():
 
     with pytest.raises(ValueError, match="Remote extraction services are disabled"):
         ecm.resolve_extraction_model(
-            ExtractDocumentsOptions(template="x", extraction_custom_config=custom)
+            ExtractDocumentsOptions(target=_target(), extraction_custom_config=custom)
         )
 
 
-def test_equivalent_options_reuse_extractor(monkeypatch):
-    init_count = 0
-    seen = {}
+def test_cached_extractor_isolates_targets_and_stable_configuration(monkeypatch):
+    initialized = []
+    calls = []
 
     class FakeExtractor:
         def __init__(self, **kwargs):
-            nonlocal init_count
-            init_count += 1
-            pipeline_options = next(
-                iter(kwargs["extraction_format_options"].values())
-            ).pipeline_options
-            seen["channels"] = pipeline_options.input_channels
-            seen["model"] = pipeline_options.vlm_options.model_spec.name
+            initialized.append(
+                next(
+                    iter(kwargs["extraction_format_options"].values())
+                ).pipeline_options
+            )
 
-        def extract_all(self, *args, **kwargs):
-            del args
-            seen["template"] = kwargs["template"]
+        def extract_all(self, sources, **kwargs):
+            calls.append(kwargs)
             return iter(())
 
     monkeypatch.setattr(extraction_manager, "DocumentExtractor", FakeExtractor)
-    ecm = DocumentExtractionManager(DocumentExtractionManagerConfig())
-    template = {"invoice": {"total": "number"}}
-    options = ExtractDocumentsOptions(
-        template=template,
-        extraction_preset="nuextract_2b",
-        input_channels=ChannelSelection.TEXT,
+    ecm = DocumentExtractionManager(
+        DocumentExtractionManagerConfig(
+            enable_remote_services=True,
+            allow_custom_extraction_config=True,
+            max_num_pages=9,
+            max_file_size=1000,
+        )
     )
-
-    list(ecm.extract_documents([], options))
-    list(ecm.extract_documents([], options))
-
-    assert init_count == 1
-    assert seen == {
-        "channels": ChannelSelection.TEXT,
-        "model": ExtractionVlmOptions.from_preset("nuextract_2b").model_spec.name,
-        "template": template,
+    custom = ExtractionVlmOptions.from_preset("lift").model_copy(
+        update={
+            "engine_options": ApiVlmEngineOptions(engine_type=VlmEngineType.API),
+            "output_mode": "schema_constrained",
+        }
+    )
+    options = ExtractDocumentsOptions(
+        target=_target().model_copy(
+            update={
+                "template": ExtractionTemplate(
+                    format="example_json", value={"amount": 10}
+                )
+            }
+        ),
+        extraction_custom_config=custom,
+        input_channels=ChannelSelection.TEXT,
+        page_range=(5, 8),
+    )
+    second = options.model_copy(
+        update={
+            "target": _target("tax").model_copy(
+                update={
+                    "template": ExtractionTemplate(
+                        format="example_json", value={"tax": 2}
+                    )
+                }
+            )
+        }
+    )
+    headers = {"Authorization": "Bearer test"}
+    list(ecm.extract_documents([], options, headers=headers))
+    list(ecm.extract_documents([], second, headers=headers))
+    assert len(initialized) == 1
+    assert initialized[0].vlm_options.output_mode == "prompt_only"
+    assert initialized[0].input_channels == ChannelSelection.TEXT
+    assert custom.output_mode == "schema_constrained"
+    assert [call["target"] for call in calls] == [options.target, second.target]
+    assert calls[0] == {
+        "target": options.target,
+        "page_range": (5, 8),
+        "max_num_pages": 9,
+        "max_file_size": 1000,
+        "headers": headers,
+        "raises_on_error": False,
     }
+    for changed in (
+        {"output_mode": "schema_constrained"},
+        {"input_channels": ChannelSelection.IMAGE},
+    ):
+        list(ecm.extract_documents([], options.model_copy(update=changed)))
+    assert len(initialized) == 3
+    assert initialized[1].vlm_options.output_mode == "schema_constrained"
+
+
+def test_constrained_mode_rejects_local_engine():
+    ecm = DocumentExtractionManager(DocumentExtractionManagerConfig())
+    with pytest.raises(ValueError, match="vLLM API"):
+        ecm.resolve_extraction_model(
+            ExtractDocumentsOptions(target=_target(), output_mode="schema_constrained")
+        )
 
 
 # --- results bridging + envelope -------------------------------------------
 
 
-def _facade_result(filename: str, status: ConversionStatus, pages):
+def _facade_result(filename: str, status: ConversionStatus, items):
     return SimpleNamespace(
         input=SimpleNamespace(file=PurePath(filename), format=None),
         status=status,
         errors=[],
-        pages=pages,
+        items=items,
     )
 
 
-def test_to_result_item_bridges_pages_and_basename():
-    page = ExtractedPageData(page_no=1, extracted_data={"k": "v"}, raw_text="t")
+def test_to_result_item_bridges_items_identity_and_basename():
+    page = ExtractionItem(
+        scope=PageScope(page_no=5), extracted_data={"k": "v"}, raw_text="t"
+    )
     item = to_result_item(
-        _facade_result("/abs/doc1.pdf", ConversionStatus.SUCCESS, [page])
+        _facade_result("/abs/doc1.pdf", ConversionStatus.SUCCESS, [page]),
+        SourceIdentity(3, "s3://in/doc1.pdf", "doc1"),
     )
     assert item.filename == "doc1.pdf"  # basename only, not the leaked abs path
-    assert item.pages[0].extracted_data == {"k": "v"}
+    assert item.items[0].extracted_data == {"k": "v"}
+    assert item.items[0].scope == PageScope(page_no=5)
+    assert (item.source_index, item.source_uri) == (3, "s3://in/doc1.pdf")
+    assert "input" not in item.model_dump()
 
 
 def test_in_body_result_envelope_counts_and_round_trips():
@@ -169,9 +241,35 @@ def test_in_body_result_envelope_counts_and_round_trips():
         _facade_result(
             "doc1.pdf",
             ConversionStatus.SUCCESS,
-            [ExtractedPageData(page_no=1, extracted_data={"a": 1})],
+            [
+                ExtractionItem(
+                    scope=PageScope(page_no=5),
+                    extracted_data={"a": 1},
+                    raw_text='{"a": 1}',
+                    validation_status="passed",
+                    usage={"total_tokens": 12},
+                )
+            ],
         ),
-        _facade_result("doc2.png", ConversionStatus.FAILURE, []),
+        _facade_result(
+            "doc2.md",
+            ConversionStatus.PARTIAL_SUCCESS,
+            [
+                ExtractionItem(
+                    scope=DocumentScope(),
+                    extracted_data={"a": "bad"},
+                    raw_text="bad",
+                    errors=["schema failed"],
+                    validation_status="failed",
+                ),
+                ExtractionItem(
+                    scope=DocumentScope(),
+                    errors=["timeout"],
+                    validation_status="not_run",
+                ),
+            ],
+        ),
+        _facade_result("doc3.png", ConversionStatus.FAILURE, []),
     ]
     task = Task(
         task_id="t1",
@@ -179,7 +277,7 @@ def test_in_body_result_envelope_counts_and_round_trips():
         sources=[],
         target=InBodyTarget(),
         callbacks=[CallbackSpec(url="https://example.com/callback")],
-        extract_options=ExtractDocumentsOptions(template="x"),
+        extract_options=ExtractDocumentsOptions(target=_target()),
     )
     identities = [
         SourceIdentity(
@@ -192,13 +290,14 @@ def test_in_body_result_envelope_counts_and_round_trips():
         task, results, identities, callback_invoker=callback_invoker
     )
     assert isinstance(tr.result, ExtractionTaskResult)
-    assert (tr.num_converted, tr.num_succeeded, tr.num_failed) == (2, 1, 1)
-    assert len(processed) == 2
+    assert (tr.num_converted, tr.num_succeeded, tr.num_failed) == (3, 1, 1)
+    assert len(processed) == 3
     progresses = [
         call.kwargs["progress"]
         for call in callback_invoker.invoke_callbacks_async.call_args_list
     ]
     assert [progress.kind for progress in progresses] == [
+        ProgressKind.DOCUMENT_COMPLETED,
         ProgressKind.DOCUMENT_COMPLETED,
         ProgressKind.DOCUMENT_COMPLETED,
         ProgressKind.UPDATE_PROCESSED,
@@ -208,7 +307,9 @@ def test_in_body_result_envelope_counts_and_round_trips():
     # Survives the DoclingTaskResult discriminated union (the Redis hop).
     again = DoclingTaskResult.model_validate_json(tr.model_dump_json())
     assert again.result.kind == "ExtractionResult"
-    assert len(again.result.documents) == 2
+    assert len(again.result.documents) == 3
+    assert again.result.documents == tr.result.documents
+    assert tr.num_partially_succeeded == 1
 
     task_again = Task.model_validate_json(task.model_dump_json())
     assert task_again.task_type == TaskType.EXTRACT
@@ -221,7 +322,7 @@ def test_empty_extraction_is_an_error():
         task_type=TaskType.EXTRACT,
         sources=[],
         target=InBodyTarget(),
-        extract_options=ExtractDocumentsOptions(template="x"),
+        extract_options=ExtractDocumentsOptions(target=_target()),
     )
     with pytest.raises(RuntimeError, match="No documents"):
         process_extraction_results(task, [], [])
@@ -229,6 +330,8 @@ def test_empty_extraction_is_an_error():
 
 def test_storage_keys_do_not_collide_and_callbacks_report_every_document(monkeypatch):
     uploaded: list[str] = []
+    payloads = []
+    events = []
 
     class FakeFactory:
         @staticmethod
@@ -249,7 +352,9 @@ def test_storage_keys_do_not_collide_and_callbacks_report_every_document(monkeyp
             del args
 
         def upload_object(self, *, obj, target_filename, content_type):
-            del obj, content_type
+            del content_type
+            events.append("upload")
+            payloads.append(ExtractionDocumentResult.model_validate_json(obj))
             uploaded.append(target_filename)
             if len(uploaded) == 2:
                 raise RuntimeError("storage write failed")
@@ -273,7 +378,7 @@ def test_storage_keys_do_not_collide_and_callbacks_report_every_document(monkeyp
             bucket="out",
         ),
         callbacks=[CallbackSpec(url="https://example.com/callback")],
-        extract_options=ExtractDocumentsOptions(template="x"),
+        extract_options=ExtractDocumentsOptions(target=_target()),
     )
     results = [
         _facade_result("same.pdf", ConversionStatus.SUCCESS, []),
@@ -292,6 +397,9 @@ def test_storage_keys_do_not_collide_and_callbacks_report_every_document(monkeyp
         ),
     ]
     callback_invoker = MagicMock()
+    callback_invoker.invoke_callbacks_async.side_effect = lambda **kwargs: (
+        events.append(kwargs["progress"].kind)
+    )
 
     task_result, processed = process_extraction_results(
         task, results, identities, callback_invoker=callback_invoker
@@ -314,6 +422,14 @@ def test_storage_keys_do_not_collide_and_callbacks_report_every_document(monkeyp
         ProgressKind.DOCUMENT_COMPLETED,
         ProgressKind.UPDATE_PROCESSED,
     ]
+    assert events == [
+        "upload",
+        ProgressKind.DOCUMENT_COMPLETED,
+        "upload",
+        ProgressKind.DOCUMENT_COMPLETED,
+        ProgressKind.UPDATE_PROCESSED,
+    ]
+    assert payloads[0] == to_result_item(results[0], identities[0])
     assert task_result.num_succeeded == 1
     assert task_result.num_partially_succeeded == 0
     assert task_result.num_failed == 1
@@ -371,7 +487,7 @@ def test_presigned_result_keeps_source_identity_and_artifact_metadata(monkeypatc
         task_type=TaskType.EXTRACT,
         sources=[],
         target=PresignedUrlTarget(),
-        extract_options=ExtractDocumentsOptions(template="x"),
+        extract_options=ExtractDocumentsOptions(target=_target()),
     )
 
     task_result, _ = process_extraction_results(
@@ -386,7 +502,7 @@ def test_presigned_result_keeps_source_identity_and_artifact_metadata(monkeypatc
     assert str(document.artifacts[0].uri) == "https://example.com/report.json"
 
 
-def test_source_expansion_preserves_public_uri_and_global_index(monkeypatch):
+def test_source_expansion_preserves_public_uri_and_original_index(monkeypatch):
     refs = [
         SourceDocumentRef(
             id="a", source_index=0, source_uri="s3://in/a/same.pdf", filename="same.pdf"
@@ -428,18 +544,20 @@ def test_source_expansion_preserves_public_uri_and_global_index(monkeypatch):
                 access_key="key",
                 secret_key="secret",
                 bucket="in",
-            )
+            ),
+            DocumentStream(name="last.md", stream=BytesIO(b"text")),
         ],
-        extract_options=ExtractDocumentsOptions(template="x"),
+        extract_options=ExtractDocumentsOptions(target=_target()),
     )
 
     sources, identities, headers = expand_task_sources_with_identities(task)
 
-    assert len(sources) == 2
+    assert len(sources) == 3
     assert headers is None
     assert [(i.source_index, i.source_uri) for i in identities] == [
         (0, "s3://in/a/same.pdf"),
-        (1, "s3://in/b/same.pdf"),
+        (0, "s3://in/b/same.pdf"),
+        (1, "last.md"),
     ]
 
 
@@ -491,11 +609,11 @@ async def test_ray_extraction_emits_full_nonterminal_callback_sequence(
         sources=[source],
         target=InBodyTarget(),
         callbacks=[CallbackSpec(url="https://example.com/callback")],
-        extract_options=ExtractDocumentsOptions(template="x"),
+        extract_options=ExtractDocumentsOptions(target=_target()),
     )
 
     result = await converter.process_converter_request(
-        ExtractPassthroughRequest(task=task)
+        ExtractPassthroughRequest(task=task), tenant_id="default"
     )
 
     assert "expected_doc_count" not in ExtractPassthroughRequest.model_fields

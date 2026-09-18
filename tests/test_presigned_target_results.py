@@ -1,7 +1,8 @@
 import base64
 from datetime import datetime, timezone
 from hashlib import sha256
-from pathlib import Path
+from pathlib import Path, PurePath
+from types import SimpleNamespace
 from typing import ClassVar, Literal
 from unittest.mock import MagicMock
 
@@ -9,12 +10,14 @@ import pytest
 from pydantic import BaseModel
 
 from docling.datamodel.base_models import ConversionStatus, OutputFormat
+from docling.datamodel.extraction import ExtractionItem, PageScope
 from docling.datamodel.service.callbacks import CallbackSpec, ProgressKind
 from docling.datamodel.service.requests import (
     AnyHttpSourceRequest as HttpSource,
     FileSourceRequest as FileSource,
     S3SourceRequest as S3Coordinates,
 )
+from docling.datamodel.service.responses import ExtractionDocumentResult
 from docling.datamodel.service.sources import AzureBlobCoordinates
 from docling.datamodel.service.targets import (
     AzureBlobTarget,
@@ -34,10 +37,15 @@ from docling_jobkit.connectors.artifact_paths import hash_path_component
 from docling_jobkit.connectors.connector_factory import TargetConnectorFactory
 from docling_jobkit.connectors.s3.helper import check_target_has_source_converted
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
+from docling_jobkit.convert.extraction_results import (
+    process_extraction_results,
+    to_result_item,
+)
 from docling_jobkit.convert.results import process_exportable_results
 from docling_jobkit.datamodel.convert import ConvertDocumentsOptions
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import PresignedArtifactResult, RemoteTargetResult
+from docling_jobkit.datamodel.source_identity import SourceIdentity
 from docling_jobkit.datamodel.task import Task
 
 
@@ -1019,3 +1027,71 @@ def test_process_exportable_results_tracks_partial_success_counts(
     assert task_result.num_succeeded == 1
     assert task_result.num_partially_succeeded == 1
     assert task_result.num_failed == 0
+
+
+@pytest.mark.parametrize("backend", ["s3", "azure"])
+def test_extraction_presigned_artifacts_isolate_documents_from_one_source(
+    monkeypatch, backend
+):
+    uploaded = []
+    if backend == "s3":
+        client = _FakeS3Client()
+        monkeypatch.setattr(
+            "docling_jobkit.connectors.s3.target_processor.get_s3_connection",
+            lambda _coords: (client, object()),
+        )
+        uploaded = client.uploads
+        config = _make_s3_presigned_config()
+    else:
+        container = _FakeAzureContainerClient()
+        monkeypatch.setattr(
+            "docling_jobkit.connectors.azure_blob.helper.get_azure_blob_connection",
+            lambda _coords: (_FakeAzureServiceClient(), container),
+        )
+        monkeypatch.setattr(
+            "docling_jobkit.connectors.azure_blob.upload_support.upload_azure_blob_file",
+            lambda blob_client, filename, content_type, metadata=None: uploaded.append(
+                {"key": blob_client.name, "content": Path(filename).read_bytes()}
+            ),
+        )
+        monkeypatch.setattr(
+            "azure.storage.blob.generate_blob_sas", lambda **kwargs: "sig=test"
+        )
+        config = _make_azure_presigned_config()
+    identities = [
+        SourceIdentity(2, f"s3://in/{name}/same.pdf", hash_path_component(name))
+        for name in ("a", "b")
+    ]
+    results = [
+        SimpleNamespace(
+            input=SimpleNamespace(file=PurePath("same.pdf"), format=None),
+            status=ConversionStatus.PARTIAL_SUCCESS,
+            errors=[],
+            items=[
+                ExtractionItem(
+                    scope=PageScope(page_no=7),
+                    extracted_data={"total": 1},
+                    raw_text="answer",
+                    validation_status="failed",
+                    errors=["schema failed"],
+                    usage={"total_tokens": 10},
+                )
+            ],
+        )
+        for _ in identities
+    ]
+    result, _ = process_extraction_results(
+        _make_task(), results, identities, presigned_config=config
+    )
+    assert isinstance(result.result, PresignedArtifactResult)
+    assert result.num_partially_succeeded == 2
+    assert len(uploaded) == 2
+    for document, upload, facade, identity in zip(
+        result.result.documents, uploaded, results, identities
+    ):
+        assert (document.source_index, document.source_uri) == (2, identity.source_uri)
+        assert len(document.artifacts) == 1
+        assert upload["key"] in str(document.artifacts[0].uri)
+        assert ExtractionDocumentResult.model_validate_json(
+            upload["content"]
+        ) == to_result_item(facade, identity)

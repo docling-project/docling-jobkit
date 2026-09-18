@@ -56,13 +56,13 @@ def expand_task_sources_with_identities(
         convert_sources.append(source)
         identities.append(
             SourceIdentity(
-                source_index=len(identities),
+                source_index=source_index,
                 source_uri=source_uri,
                 source_key=hash_path_component(source_uri),
             )
         )
 
-    for source in task.sources:
+    for source_index, source in enumerate(task.sources):
         if isinstance(source, DocumentStream):
             append(source, source.name)
         elif isinstance(source, BaseModel):

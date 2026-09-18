@@ -20,7 +20,7 @@ from typing import Optional, Union
 from pydantic import BaseModel
 
 from docling.datamodel.base_models import DocumentStream, InputFormat
-from docling.datamodel.extraction import ExtractionResult
+from docling.datamodel.extraction import DocumentExtractionResult
 from docling.datamodel.extraction_options import (
     ChannelSelection,
     ExtractionVlmOptions,
@@ -134,14 +134,16 @@ class DocumentExtractionManager:
             raise ValueError(
                 "Remote extraction services are disabled by server policy."
             )
-        return resolved
+        return ExtractionVlmOptions.model_validate(
+            {**resolved.model_dump(), "output_mode": options.output_mode}
+        )
 
     def extract_documents(
         self,
         sources: Iterable[Union[Path, str, DocumentStream]],
         options: ExtractDocumentsOptions,
         headers: Optional[dict[str, str]] = None,
-    ) -> Iterable[ExtractionResult]:
+    ) -> Iterable[DocumentExtractionResult]:
         vlm_options = self.resolve_extraction_model(options)
         pipe_opts = VlmExtractionPipelineOptions(
             vlm_options=vlm_options,
@@ -156,10 +158,10 @@ class DocumentExtractionManager:
         with self._cache_lock:
             extractor = self._get_extractor(pipe_opts.model_dump_json(), formats)
         # raises_on_error=False: per-document failures surface as FAILURE status
-        # on each ExtractionResult rather than aborting the whole task.
+        # on each DocumentExtractionResult rather than aborting the whole task.
         return extractor.extract_all(
             sources,
-            template=options.template,
+            target=options.target,
             page_range=options.page_range,
             max_num_pages=self.config.max_num_pages,
             max_file_size=self.config.max_file_size,

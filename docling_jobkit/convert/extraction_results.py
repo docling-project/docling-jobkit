@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 
 from docling.datamodel.base_models import ConversionStatus
-from docling.datamodel.extraction import ExtractionResult
+from docling.datamodel.extraction import DocumentExtractionResult
 from docling.datamodel.service.callbacks import ProcessedDocsItem
 from docling.datamodel.service.responses import (
     DoclingTaskResult,
     DocumentArtifactItem,
-    ExtractionResultItem,
+    ExtractionDocumentResult,
     ExtractionTaskResult,
     PresignedArtifactResult,
     RemoteTargetResult,
@@ -42,17 +42,21 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
-def to_result_item(result: ExtractionResult) -> ExtractionResultItem:
-    return ExtractionResultItem(
+def to_result_item(
+    result: DocumentExtractionResult, source: SourceIdentity
+) -> ExtractionDocumentResult:
+    return ExtractionDocumentResult(
+        source_index=source.source_index,
+        source_uri=source.source_uri,
         filename=result.input.file.name,
         status=result.status,
         errors=result.errors,
-        pages=result.pages,
+        items=result.items,
     )
 
 
 def _callback_document(
-    result: ExtractionResult, source: SourceIdentity
+    result: DocumentExtractionResult, source: SourceIdentity
 ) -> ExportableDocument:
     return ExportableDocument(
         file=result.input.file,
@@ -66,7 +70,7 @@ def _callback_document(
 
 def process_extraction_results(
     task: Task,
-    extraction_results: Iterable[ExtractionResult],
+    extraction_results: Iterable[DocumentExtractionResult],
     identities: list[SourceIdentity],
     *,
     presigned_config: PresignedConfig | None = None,
@@ -94,7 +98,7 @@ def process_extraction_results(
     if target_mode == "database":
         raise ValueError("Database/vector targets are not supported for extraction.")
 
-    items: list[ExtractionResultItem] = []
+    items: list[ExtractionDocumentResult] = []
     processed_docs: list[ProcessedDocsItem] = []
     presigned_documents: list[DocumentArtifactItem] = []
     with (
@@ -117,7 +121,7 @@ def process_extraction_results(
             except Exception as exc:
                 target_error = exc
         for index, (result, source) in enumerate(zip(results, identities)):
-            item = to_result_item(result)
+            item = to_result_item(result, source)
             callback_document = _callback_document(result, source)
             presigned_document = None
             if processor is not None or target_error is not None:
@@ -127,7 +131,7 @@ def process_extraction_results(
                     if target_error is not None:
                         raise target_error
                     if target_mode == "presigned":
-                        json_path = tmp_dir / f"{source.source_index:06d}.json"
+                        json_path = tmp_dir / f"{index:06d}.json"
                         json_path.write_text(
                             item.model_dump_json(indent=2), encoding="utf-8"
                         )
