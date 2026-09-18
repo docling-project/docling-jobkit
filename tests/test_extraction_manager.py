@@ -76,6 +76,28 @@ def test_default_preset_resolves_to_operator_model():
     assert vlm.model_spec.name == expected.model_spec.name
 
 
+@pytest.mark.parametrize(
+    "preset", ["nuextract_2b", "granite_vision_4_1", "nuextract_3", "lift"]
+)
+def test_startup_resolves_stable_default_without_task_target(preset):
+    ecm = DocumentExtractionManager(
+        DocumentExtractionManagerConfig(default_extraction_preset=preset)
+    )
+    resolved = ecm.resolve_extraction_model()
+    assert resolved.model_spec == ExtractionVlmOptions.from_preset(preset).model_spec
+    assert resolved.output_mode == "prompt_only"
+    assert ecm._get_extractor.cache_info().currsize == 0
+
+
+def test_startup_applies_default_preset_and_engine_allow_lists():
+    for config in (
+        DocumentExtractionManagerConfig(allowed_extraction_presets=[]),
+        DocumentExtractionManagerConfig(allowed_extraction_engines=["api"]),
+    ):
+        with pytest.raises(ValueError, match="not allowed"):
+            DocumentExtractionManager(config).resolve_extraction_model()
+
+
 def test_preset_rejected_when_not_in_allow_list():
     ecm = DocumentExtractionManager(
         DocumentExtractionManagerConfig(

@@ -100,10 +100,10 @@ class DocumentExtractionManager:
             raise ValueError(str(exc)) from exc
 
     def resolve_extraction_model(
-        self, options: ExtractDocumentsOptions
+        self, options: ExtractDocumentsOptions | None = None
     ) -> ExtractionVlmOptions:
-        """Operator-gated model selection (mirrors convert's custom-config gate)."""
-        if options.extraction_custom_config is not None:
+        """Operator-gated model selection; no task guidance is needed at startup."""
+        if options is not None and options.extraction_custom_config is not None:
             if not self.config.allow_custom_extraction_config:
                 raise ValueError(
                     "Custom extraction configuration is not allowed. "
@@ -115,7 +115,7 @@ class DocumentExtractionManager:
                 if isinstance(custom, ExtractionVlmOptions)
                 else ExtractionVlmOptions.model_validate(custom)
             )
-        elif options.extraction_preset:
+        elif options is not None and options.extraction_preset:
             resolved = self._resolve_preset(options.extraction_preset)
         else:
             resolved = self._resolve_preset(self.config.default_extraction_preset)
@@ -135,7 +135,12 @@ class DocumentExtractionManager:
                 "Remote extraction services are disabled by server policy."
             )
         return ExtractionVlmOptions.model_validate(
-            {**resolved.model_dump(), "output_mode": options.output_mode}
+            {
+                **resolved.model_dump(),
+                "output_mode": options.output_mode
+                if options is not None
+                else "prompt_only",
+            }
         )
 
     def extract_documents(
