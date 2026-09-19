@@ -296,10 +296,8 @@ def _materialize_document_exports(
     if export_txt:
         fname = output_dir / f"{doc_filename}.txt"
         _log.info(f"writing TXT output to {fname}")
-        exportable_document.document.save_as_markdown(
-            filename=fname,
-            strict_text=True,
-            image_mode=ImageRefMode.PLACEHOLDER,
+        fname.write_text(
+            exportable_document.document.export_to_text(), encoding="utf-8"
         )
         generated.append(
             _ExportedArtifactFile(
