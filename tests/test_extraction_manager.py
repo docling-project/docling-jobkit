@@ -11,13 +11,20 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from docling.datamodel.base_models import ConversionStatus, DocumentStream
+from docling.datamodel.base_models import (
+    ConversionStatus,
+    DoclingComponentType,
+    DocumentStream,
+    ErrorItem,
+    FailureCategory,
+)
 from docling.datamodel.extraction import (
     DocumentScope,
     ExtractionItem,
     ExtractionTarget,
     ExtractionTemplate,
     PageScope,
+    VlmInferenceMetadata,
 )
 from docling.datamodel.extraction_options import ChannelSelection, ExtractionVlmOptions
 from docling.datamodel.service.callbacks import CallbackSpec, ProgressKind
@@ -54,6 +61,15 @@ from docling_jobkit.convert.extraction_results import (
 from docling_jobkit.convert.source_expansion import expand_task_sources_with_identities
 from docling_jobkit.datamodel.source_identity import SourceIdentity
 from docling_jobkit.datamodel.task import Task
+
+
+def _item_error(message: str) -> ErrorItem:
+    return ErrorItem(
+        component_type=DoclingComponentType.MODEL,
+        module_name="ExtractionVlmPipeline",
+        error_message=message,
+        category=FailureCategory.INFERENCE_FAILURE,
+    )
 
 
 def _target(field="amount"):
@@ -269,7 +285,7 @@ def test_in_body_result_envelope_counts_and_round_trips():
                     extracted_data={"a": 1},
                     raw_text='{"a": 1}',
                     validation_status="passed",
-                    usage={"total_tokens": 12},
+                    inference_metadata=VlmInferenceMetadata(usage={"total_tokens": 12}),
                 )
             ],
         ),
@@ -281,12 +297,12 @@ def test_in_body_result_envelope_counts_and_round_trips():
                     scope=DocumentScope(),
                     extracted_data={"a": "bad"},
                     raw_text="bad",
-                    errors=["schema failed"],
+                    errors=[_item_error("schema failed")],
                     validation_status="failed",
                 ),
                 ExtractionItem(
                     scope=DocumentScope(),
-                    errors=["timeout"],
+                    errors=[_item_error("timeout")],
                     validation_status="not_run",
                 ),
             ],
@@ -354,6 +370,7 @@ def test_storage_keys_do_not_collide_and_callbacks_report_every_document(monkeyp
     uploaded: list[str] = []
     payloads = []
     events = []
+    processor_kwargs = []
 
     class FakeFactory:
         @staticmethod
@@ -384,11 +401,13 @@ def test_storage_keys_do_not_collide_and_callbacks_report_every_document(monkeyp
     monkeypatch.setattr(
         extraction_results, "get_target_connector_factory", lambda _: FakeFactory()
     )
-    monkeypatch.setattr(
-        extraction_results,
-        "get_target_processor",
-        lambda *args, **kwargs: FakeProcessor(),
-    )
+
+    def get_processor(*args, **kwargs):
+        del args
+        processor_kwargs.append(kwargs)
+        return FakeProcessor()
+
+    monkeypatch.setattr(extraction_results, "get_target_processor", get_processor)
     task = Task(
         task_id="t1",
         task_type=TaskType.EXTRACT,
@@ -427,9 +446,10 @@ def test_storage_keys_do_not_collide_and_callbacks_report_every_document(monkeyp
         task, results, identities, callback_invoker=callback_invoker
     )
 
+    assert processor_kwargs == [{"allow_external_plugins": False}]
     assert uploaded == [
-        f"default/t1/{identities[0].source_key}/same.json",
-        f"default/t1/{identities[1].source_key}/same.json",
+        f"default/t1/{identities[0].source_key}/same.extraction.json",
+        f"default/t1/{identities[1].source_key}/same.extraction.json",
     ]
     assert [item.source for item in processed] == [
         "s3://in/a/same.pdf",

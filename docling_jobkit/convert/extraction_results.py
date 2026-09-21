@@ -110,14 +110,22 @@ def process_extraction_results(
         target_error: Exception | None = None
         if target_mode in {"artifacts", "presigned"}:
             try:
-                processor = stack.enter_context(
-                    get_target_processor(
-                        target,
-                        allow_external_plugins=allow_external_plugins,
-                        presigned_config=presigned_config,
-                        task=task,
+                if target_mode == "presigned":
+                    processor = stack.enter_context(
+                        get_target_processor(
+                            target,
+                            allow_external_plugins=allow_external_plugins,
+                            presigned_config=presigned_config,
+                            task=task,
+                        )
                     )
-                )
+                else:
+                    processor = stack.enter_context(
+                        get_target_processor(
+                            target,
+                            allow_external_plugins=allow_external_plugins,
+                        )
+                    )
             except Exception as exc:
                 target_error = exc
         for index, (result, source) in enumerate(zip(results, identities)):
@@ -126,7 +134,10 @@ def process_extraction_results(
             presigned_document = None
             if processor is not None or target_error is not None:
                 stem = item.filename.rsplit(".", 1)[0] or item.filename
-                target_filename = f"{stem}.json"
+                # One JSON envelope per document (a single ExtractionDocumentResult),
+                # so per-document files stay plain JSON; only the in-body response
+                # groups these same envelopes into a JSON list.
+                target_filename = f"{stem}.extraction.json"
                 try:
                     if target_error is not None:
                         raise target_error

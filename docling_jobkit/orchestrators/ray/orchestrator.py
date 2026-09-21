@@ -70,6 +70,12 @@ def _validate_expandable_source_targets(
     )
     if not has_expandable_source:
         return
+    if task_type == TaskType.EXTRACT:
+        # Extraction always runs a single passthrough call (see
+        # _process_extract_task / expand_task_sources_with_identities) rather
+        # than CONVERT's S3 fan-out handler, so it has no storage-target
+        # requirement here.
+        return
 
     target_factory = get_target_connector_factory(allow_external_plugins)
     result_mode = (

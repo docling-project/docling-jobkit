@@ -9,8 +9,18 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import BaseModel
 
-from docling.datamodel.base_models import ConversionStatus, OutputFormat
-from docling.datamodel.extraction import ExtractionItem, PageScope
+from docling.datamodel.base_models import (
+    ConversionStatus,
+    DoclingComponentType,
+    ErrorItem,
+    FailureCategory,
+    OutputFormat,
+)
+from docling.datamodel.extraction import (
+    ExtractionItem,
+    PageScope,
+    VlmInferenceMetadata,
+)
 from docling.datamodel.service.callbacks import CallbackSpec, ProgressKind
 from docling.datamodel.service.requests import (
     AnyHttpSourceRequest as HttpSource,
@@ -1073,8 +1083,16 @@ def test_extraction_presigned_artifacts_isolate_documents_from_one_source(
                     extracted_data={"total": 1},
                     raw_text="answer",
                     validation_status="failed",
-                    errors=["schema failed"],
-                    usage={"total_tokens": 10},
+                    errors=[
+                        ErrorItem(
+                            component_type=DoclingComponentType.MODEL,
+                            module_name="ExtractionVlmPipeline",
+                            error_message="schema failed",
+                            category=FailureCategory.INFERENCE_FAILURE,
+                            page_no=7,
+                        )
+                    ],
+                    inference_metadata=VlmInferenceMetadata(usage={"total_tokens": 10}),
                 )
             ],
         )

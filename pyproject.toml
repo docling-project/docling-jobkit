@@ -42,7 +42,9 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "docling-slim[standard]>=2.128.0,<3.0.0",
+    # Local extraction checkout still reports 2.126.0. Raise this to the first
+    # published extraction-contract version before release.
+    "docling-slim[standard]>=2.126.0,<3.0.0",
     "pydantic~=2.10",
     "pydantic-settings~=2.4",
     "boto3~=1.35",
@@ -130,6 +132,8 @@ dev = [
 ]
 
 [tool.uv.sources]
+docling-slim = { git = "git+ssh://git@github.com/docling-project/docling.git", branch = "cau/extraction-api-service-models" }
+
 # docling-slim = { git = "https://github.com/docling-project/docling/", branch = "main" }
 # docling-slim = { path = "../docling", editable = true }
 
