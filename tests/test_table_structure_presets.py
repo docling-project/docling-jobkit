@@ -173,6 +173,29 @@ def test_preset_with_legacy_fields():
     assert options.mode.value == "accurate"
 
 
+def test_legacy_override_inherits_default_preset():
+    """Legacy non-default fields inherit the configured default preset (#675)."""
+    config = DoclingConverterManagerConfig(
+        default_table_structure_preset="tableformer_v1_fast"
+    )
+    manager = DoclingConverterManager(config)
+    request = ConvertDocumentsOptions(table_cell_matching=False)
+    options = manager._parse_table_structure_options(request)
+    assert options.mode.value == "fast"
+    assert options.do_cell_matching is False
+
+
+def test_legacy_path_with_unknown_default_preset_raises():
+    """Unknown default preset raises in the legacy path, like Option 2."""
+    config = DoclingConverterManagerConfig(
+        default_table_structure_preset="nonexistent_preset"
+    )
+    manager = DoclingConverterManager(config)
+    request = ConvertDocumentsOptions(table_cell_matching=False)
+    with pytest.raises(ValueError, match="Unknown table structure preset"):
+        manager._parse_table_structure_options(request)
+
+
 def test_default_legacy_fields_dont_pass_parameters():
     """Test that default legacy fields don't pass unnecessary parameters to factory."""
     config = DoclingConverterManagerConfig()
