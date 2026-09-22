@@ -128,9 +128,14 @@ class DocumentExtractionManager:
                 if isinstance(custom, ExtractionVlmOptions)
                 else ExtractionVlmOptions.model_validate(custom)
             )
-        elif options is not None and options.extraction_preset:
+        elif (
+            options is not None
+            and options.extraction_preset
+            and options.extraction_preset != "default"
+        ):
             resolved = self._resolve_preset(options.extraction_preset)
         else:
+            # Unset or the explicit "default" sentinel -> operator default.
             resolved = self._resolve_preset(self.config.default_extraction_preset)
 
         engine = resolved.engine_options.engine_type

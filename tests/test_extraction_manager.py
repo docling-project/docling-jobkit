@@ -92,6 +92,22 @@ def test_default_preset_resolves_to_operator_model():
     assert vlm.model_spec.name == expected.model_spec.name
 
 
+def test_explicit_default_sentinel_resolves_to_operator_default():
+    # "default" is an alias for the operator default, not a real preset id, so
+    # it must resolve even when an allow-list excludes it.
+    ecm = DocumentExtractionManager(
+        DocumentExtractionManagerConfig(
+            default_extraction_preset="granite_vision_4_1",
+            allowed_extraction_presets=["granite_vision_4_1"],
+        )
+    )
+    vlm = ecm.resolve_extraction_model(
+        ExtractDocumentsOptions(extraction_preset="default")
+    )
+    expected = ExtractionVlmOptions.from_preset("granite_vision_4_1")
+    assert vlm.model_spec.name == expected.model_spec.name
+
+
 @pytest.mark.parametrize(
     "preset", ["nuextract_2b", "granite_vision_4_1", "nuextract_3", "lift"]
 )
