@@ -612,10 +612,18 @@ class DoclingConverterManager:
         self.vlm_preset_registry: dict[str, VlmPresetInfo] = {}
 
         # ALWAYS add "default" preset (stable, guaranteed)
-        self.vlm_preset_registry["default"] = {
-            "source": "docling",
-            "preset_id": self.config.default_vlm_preset,
-        }
+        if self.config.default_vlm_preset in self.config.custom_vlm_presets:
+            self.vlm_preset_registry["default"] = {
+                "source": "custom",
+                "options": self.config.custom_vlm_presets[
+                    self.config.default_vlm_preset
+                ],
+            }
+        else:
+            self.vlm_preset_registry["default"] = {
+                "source": "docling",
+                "preset_id": self.config.default_vlm_preset,
+            }
 
         # Add Docling built-in presets (if allowed)
         if self.config.allowed_vlm_presets is None:
@@ -647,10 +655,21 @@ class DoclingConverterManager:
             str, PictureDescriptionPresetInfo
         ] = {}
 
-        self.picture_description_preset_registry["default"] = {
-            "source": "docling",
-            "preset_id": self.config.default_picture_description_preset,
-        }
+        if (
+            self.config.default_picture_description_preset
+            in self.config.custom_picture_description_presets
+        ):
+            self.picture_description_preset_registry["default"] = {
+                "source": "custom",
+                "options": self.config.custom_picture_description_presets[
+                    self.config.default_picture_description_preset
+                ],
+            }
+        else:
+            self.picture_description_preset_registry["default"] = {
+                "source": "docling",
+                "preset_id": self.config.default_picture_description_preset,
+            }
 
         # Add Docling built-in presets (if allowed)
         if self.config.allowed_picture_description_presets is None:
@@ -679,10 +698,21 @@ class DoclingConverterManager:
         # Code/Formula Registry
         self.code_formula_preset_registry: dict[str, CodeFormulaPresetInfo] = {}
 
-        self.code_formula_preset_registry["default"] = {
-            "source": "docling",
-            "preset_id": self.config.default_code_formula_preset,
-        }
+        if (
+            self.config.default_code_formula_preset
+            in self.config.custom_code_formula_presets
+        ):
+            self.code_formula_preset_registry["default"] = {
+                "source": "custom",
+                "options": self.config.custom_code_formula_presets[
+                    self.config.default_code_formula_preset
+                ],
+            }
+        else:
+            self.code_formula_preset_registry["default"] = {
+                "source": "docling",
+                "preset_id": self.config.default_code_formula_preset,
+            }
 
         # Add Docling built-in presets (if allowed)
         if self.config.allowed_code_formula_presets is None:
@@ -711,10 +741,21 @@ class DoclingConverterManager:
         # Chart Extraction Registry
         self.chart_extraction_preset_registry: dict[str, ChartExtractionPresetInfo] = {}
 
-        self.chart_extraction_preset_registry["default"] = {
-            "source": "docling",
-            "preset_id": self.config.default_chart_extraction_preset,
-        }
+        if (
+            self.config.default_chart_extraction_preset
+            in self.config.custom_chart_extraction_presets
+        ):
+            self.chart_extraction_preset_registry["default"] = {
+                "source": "custom",
+                "options": self.config.custom_chart_extraction_presets[
+                    self.config.default_chart_extraction_preset
+                ],
+            }
+        else:
+            self.chart_extraction_preset_registry["default"] = {
+                "source": "docling",
+                "preset_id": self.config.default_chart_extraction_preset,
+            }
 
         # Add Docling built-in presets (if allowed)
         if self.config.allowed_chart_extraction_presets is None:
@@ -1212,16 +1253,6 @@ class DoclingConverterManager:
         self, request: ConvertDocumentsOptions
     ) -> Optional[Any]:
         """Parse picture description options from preset OR custom config."""
-        if request.picture_description_preset:
-            return self._get_options_from_preset(
-                request.picture_description_preset,
-                self.picture_description_preset_registry,
-                "Picture description",
-                self.config.allowed_picture_description_engines,
-                PictureDescriptionVlmEngineOptions.from_preset,
-                PictureDescriptionVlmEngineOptions,
-            )
-
         if request.picture_description_custom_config:
             self._validate_custom_config_allowed("picture_description")
 
@@ -1262,22 +1293,23 @@ class DoclingConverterManager:
                 f"Invalid picture_description_custom_config type: {type(request.picture_description_custom_config)}"
             )
 
+        if request.picture_description_preset or request.do_picture_description:
+            preset_id = request.picture_description_preset or "default"
+            return self._get_options_from_preset(
+                preset_id,
+                self.picture_description_preset_registry,
+                "Picture description",
+                self.config.allowed_picture_description_engines,
+                PictureDescriptionVlmEngineOptions.from_preset,
+                PictureDescriptionVlmEngineOptions,
+            )
+
         return None
 
     def _parse_code_formula_options(
         self, request: ConvertDocumentsOptions
     ) -> Optional[Any]:
         """Parse code/formula options from preset OR custom config."""
-        if request.code_formula_preset:
-            return self._get_options_from_preset(
-                request.code_formula_preset,
-                self.code_formula_preset_registry,
-                "Code/formula",
-                self.config.allowed_code_formula_engines,
-                CodeFormulaVlmOptions.from_preset,
-                CodeFormulaVlmOptions,
-            )
-
         if request.code_formula_custom_config:
             self._validate_custom_config_allowed("code_formula")
 
@@ -1317,22 +1349,27 @@ class DoclingConverterManager:
                 f"Invalid code_formula_custom_config type: {type(request.code_formula_custom_config)}"
             )
 
+        if (
+            request.code_formula_preset
+            or request.do_code_enrichment
+            or request.do_formula_enrichment
+        ):
+            preset_id = request.code_formula_preset or "default"
+            return self._get_options_from_preset(
+                preset_id,
+                self.code_formula_preset_registry,
+                "Code/formula",
+                self.config.allowed_code_formula_engines,
+                CodeFormulaVlmOptions.from_preset,
+                CodeFormulaVlmOptions,
+            )
+
         return None
 
     def _parse_chart_extraction_options(
         self, request: ConvertDocumentsOptions
     ) -> Optional[ChartExtractionVlmEngineOptions]:
         """Parse chart extraction options from preset OR custom config."""
-        if request.chart_extraction_preset:
-            return self._get_options_from_preset(
-                request.chart_extraction_preset,
-                self.chart_extraction_preset_registry,
-                "Chart extraction",
-                self.config.allowed_chart_extraction_engines,
-                ChartExtractionVlmEngineOptions.from_preset,
-                ChartExtractionVlmEngineOptions,
-            )
-
         if request.chart_extraction_custom_config:
             self._validate_custom_config_allowed("chart_extraction")
 
@@ -1371,6 +1408,17 @@ class DoclingConverterManager:
 
             raise ValueError(
                 f"Invalid chart_extraction_custom_config type: {type(request.chart_extraction_custom_config)}"
+            )
+
+        if request.chart_extraction_preset or request.do_chart_extraction:
+            preset_id = request.chart_extraction_preset or "default"
+            return self._get_options_from_preset(
+                preset_id,
+                self.chart_extraction_preset_registry,
+                "Chart extraction",
+                self.config.allowed_chart_extraction_engines,
+                ChartExtractionVlmEngineOptions.from_preset,
+                ChartExtractionVlmEngineOptions,
             )
 
         return None
