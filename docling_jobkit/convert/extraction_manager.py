@@ -20,7 +20,7 @@ from typing import Optional, Union
 from pydantic import BaseModel, Field
 
 from docling.datamodel.base_models import DocumentStream, InputFormat
-from docling.datamodel.extraction import DocumentExtractionResult
+from docling.datamodel.extraction import DocumentExtractionResult, ExtractionTarget
 from docling.datamodel.extraction_options import (
     ChannelSelection,
     ExtractionVlmOptions,
@@ -159,6 +159,7 @@ class DocumentExtractionManager:
     def extract_documents(
         self,
         sources: Iterable[Union[Path, str, DocumentStream]],
+        extraction_target: ExtractionTarget,
         options: ExtractDocumentsOptions,
         headers: Optional[dict[str, str]] = None,
     ) -> Iterable[DocumentExtractionResult]:
@@ -179,7 +180,7 @@ class DocumentExtractionManager:
         # on each DocumentExtractionResult rather than aborting the whole task.
         return extractor.extract_all(
             sources,
-            target=options.target,
+            target=extraction_target,
             page_range=options.page_range,
             max_num_pages=self.config.max_num_pages,
             max_file_size=self.config.max_file_size,

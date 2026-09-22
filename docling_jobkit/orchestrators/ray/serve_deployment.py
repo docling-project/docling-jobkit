@@ -759,7 +759,7 @@ class DoclingProcessorConverterDeployment:
             self._metrics_call_count += 1
         return self.metrics
 
-    async def process_converter_request(
+    async def process_converter_request(  # noqa: C901
         self, request: ConverterRequest, tenant_id: str
     ) -> ConverterTaskResult | ConverterFailureResult | ObjectRef:
         if self.config.enable_oom_protection and PSUTIL_AVAILABLE:
@@ -809,6 +809,9 @@ class DoclingProcessorConverterDeployment:
             extract_options = request.task.extract_options
             if extract_options is None:
                 raise RuntimeError("Extraction task is missing extract_options.")
+            extract_target = request.task.extract_target
+            if extract_target is None:
+                raise RuntimeError("Extraction task is missing extract_target.")
             expanded = await self._run_with_retry(
                 request.task.task_id,
                 lambda: expand_task_sources_with_identities(
@@ -835,6 +838,7 @@ class DoclingProcessorConverterDeployment:
                 lambda: list(
                     self._get_extraction_manager().extract_documents(
                         sources=extract_sources,
+                        extraction_target=extract_target,
                         options=extract_options,
                         headers=headers,
                     )

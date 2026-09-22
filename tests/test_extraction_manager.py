@@ -87,7 +87,7 @@ def test_default_preset_resolves_to_operator_model():
     ecm = DocumentExtractionManager(
         DocumentExtractionManagerConfig(default_extraction_preset="granite_vision_4_1")
     )
-    vlm = ecm.resolve_extraction_model(ExtractDocumentsOptions(target=_target()))
+    vlm = ecm.resolve_extraction_model(ExtractDocumentsOptions())
     expected = ExtractionVlmOptions.from_preset("granite_vision_4_1")
     assert vlm.model_spec.name == expected.model_spec.name
 
@@ -132,7 +132,7 @@ def test_operator_defined_preset_can_be_default_and_override_builtin():
     assert ecm.resolve_extraction_model().scale == 1.25
     assert (
         ecm.resolve_extraction_model(
-            ExtractDocumentsOptions(target=_target(), extraction_preset="nuextract_2b")
+            ExtractDocumentsOptions(extraction_preset="nuextract_2b")
         ).scale
         == 1.25
     )
@@ -146,7 +146,7 @@ def test_preset_rejected_when_not_in_allow_list():
     )
     with pytest.raises(ValueError, match="not allowed"):
         ecm.resolve_extraction_model(
-            ExtractDocumentsOptions(target=_target(), extraction_preset="nuextract_2b")
+            ExtractDocumentsOptions(extraction_preset="nuextract_2b")
         )
 
 
@@ -154,9 +154,7 @@ def test_custom_config_rejected_unless_operator_opts_in():
     ecm = DocumentExtractionManager(DocumentExtractionManagerConfig())
     with pytest.raises(ValueError, match="not allowed"):
         ecm.resolve_extraction_model(
-            ExtractDocumentsOptions(
-                target=_target(), extraction_custom_config={"model_spec": {}}
-            )
+            ExtractDocumentsOptions(extraction_custom_config={"model_spec": {}})
         )
 
 
@@ -164,9 +162,7 @@ def test_unknown_preset_reports_available_presets():
     ecm = DocumentExtractionManager(DocumentExtractionManagerConfig())
     with pytest.raises(ValueError, match="not found"):
         ecm.resolve_extraction_model(
-            ExtractDocumentsOptions(
-                target=_target(), extraction_preset="does_not_exist"
-            )
+            ExtractDocumentsOptions(extraction_preset="does_not_exist")
         )
 
 
@@ -180,7 +176,7 @@ def test_remote_engine_rejected_when_remote_services_are_disabled():
 
     with pytest.raises(ValueError, match="Remote extraction services are disabled"):
         ecm.resolve_extraction_model(
-            ExtractDocumentsOptions(target=_target(), extraction_custom_config=custom)
+            ExtractDocumentsOptions(extraction_custom_config=custom)
         )
 
 
@@ -216,38 +212,36 @@ def test_cached_extractor_isolates_targets_and_stable_configuration(monkeypatch)
         }
     )
     options = ExtractDocumentsOptions(
-        target=_target().model_copy(
-            update={
-                "template": ExtractionTemplate(
-                    format="example_json", value={"amount": 10}
-                )
-            }
-        ),
         extraction_custom_config=custom,
         input_channels=ChannelSelection.TEXT,
         page_range=(5, 8),
     )
-    second = options.model_copy(
+    target1 = _target().model_copy(
         update={
-            "target": _target("tax").model_copy(
-                update={
-                    "template": ExtractionTemplate(
-                        format="example_json", value={"tax": 2}
-                    )
-                }
-            )
+            "template": ExtractionTemplate(format="example_json", value={"amount": 10})
         }
     )
+    target2 = _target("tax").model_copy(
+        update={"template": ExtractionTemplate(format="example_json", value={"tax": 2})}
+    )
     headers = {"Authorization": "Bearer test"}
-    list(ecm.extract_documents([], options, headers=headers))
-    list(ecm.extract_documents([], second, headers=headers))
+    list(
+        ecm.extract_documents(
+            [], extraction_target=target1, options=options, headers=headers
+        )
+    )
+    list(
+        ecm.extract_documents(
+            [], extraction_target=target2, options=options, headers=headers
+        )
+    )
     assert len(initialized) == 1
     assert initialized[0].vlm_options.output_mode == "prompt_only"
     assert initialized[0].input_channels == ChannelSelection.TEXT
     assert custom.output_mode == "schema_constrained"
-    assert [call["target"] for call in calls] == [options.target, second.target]
+    assert [call["target"] for call in calls] == [target1, target2]
     assert calls[0] == {
-        "target": options.target,
+        "target": target1,
         "page_range": (5, 8),
         "max_num_pages": 9,
         "max_file_size": 1000,
@@ -258,7 +252,13 @@ def test_cached_extractor_isolates_targets_and_stable_configuration(monkeypatch)
         {"output_mode": "schema_constrained"},
         {"input_channels": ChannelSelection.IMAGE},
     ):
-        list(ecm.extract_documents([], options.model_copy(update=changed)))
+        list(
+            ecm.extract_documents(
+                [],
+                extraction_target=target1,
+                options=options.model_copy(update=changed),
+            )
+        )
     assert len(initialized) == 3
     assert initialized[1].vlm_options.output_mode == "schema_constrained"
 
@@ -267,7 +267,7 @@ def test_constrained_mode_rejects_local_engine():
     ecm = DocumentExtractionManager(DocumentExtractionManagerConfig())
     with pytest.raises(ValueError, match="vLLM API"):
         ecm.resolve_extraction_model(
-            ExtractDocumentsOptions(target=_target(), output_mode="schema_constrained")
+            ExtractDocumentsOptions(output_mode="schema_constrained")
         )
 
 
@@ -339,7 +339,8 @@ def test_in_body_result_envelope_counts_and_round_trips():
         sources=[],
         target=InBodyTarget(),
         callbacks=[CallbackSpec(url="https://example.com/callback")],
-        extract_options=ExtractDocumentsOptions(target=_target()),
+        extract_target=_target(),
+        extract_options=ExtractDocumentsOptions(),
     )
     identities = [
         SourceIdentity(
@@ -376,6 +377,7 @@ def test_in_body_result_envelope_counts_and_round_trips():
     task_again = Task.model_validate_json(task.model_dump_json())
     assert task_again.task_type == TaskType.EXTRACT
     assert task_again.extract_options == task.extract_options
+    assert task_again.extract_target == task.extract_target
 
 
 def test_empty_extraction_is_an_error():
@@ -384,7 +386,8 @@ def test_empty_extraction_is_an_error():
         task_type=TaskType.EXTRACT,
         sources=[],
         target=InBodyTarget(),
-        extract_options=ExtractDocumentsOptions(target=_target()),
+        extract_target=_target(),
+        extract_options=ExtractDocumentsOptions(),
     )
     with pytest.raises(RuntimeError, match="No documents"):
         process_extraction_results(task, [], [])
@@ -443,7 +446,8 @@ def test_storage_keys_do_not_collide_and_callbacks_report_every_document(monkeyp
             bucket="out",
         ),
         callbacks=[CallbackSpec(url="https://example.com/callback")],
-        extract_options=ExtractDocumentsOptions(target=_target()),
+        extract_target=_target(),
+        extract_options=ExtractDocumentsOptions(),
     )
     results = [
         _facade_result("same.pdf", ConversionStatus.SUCCESS, []),
@@ -553,7 +557,8 @@ def test_presigned_result_keeps_source_identity_and_artifact_metadata(monkeypatc
         task_type=TaskType.EXTRACT,
         sources=[],
         target=PresignedUrlTarget(),
-        extract_options=ExtractDocumentsOptions(target=_target()),
+        extract_target=_target(),
+        extract_options=ExtractDocumentsOptions(),
     )
 
     task_result, _ = process_extraction_results(
@@ -613,7 +618,8 @@ def test_source_expansion_preserves_public_uri_and_original_index(monkeypatch):
             ),
             DocumentStream(name="last.md", stream=BytesIO(b"text")),
         ],
-        extract_options=ExtractDocumentsOptions(target=_target()),
+        extract_target=_target(),
+        extract_options=ExtractDocumentsOptions(),
     )
 
     sources, identities, headers = expand_task_sources_with_identities(task)
@@ -675,7 +681,8 @@ async def test_ray_extraction_emits_full_nonterminal_callback_sequence(
         sources=[source],
         target=InBodyTarget(),
         callbacks=[CallbackSpec(url="https://example.com/callback")],
-        extract_options=ExtractDocumentsOptions(target=_target()),
+        extract_target=_target(),
+        extract_options=ExtractDocumentsOptions(),
     )
 
     result = await converter.process_converter_request(
