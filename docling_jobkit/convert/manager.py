@@ -1293,7 +1293,17 @@ class DoclingConverterManager:
                 f"Invalid picture_description_custom_config type: {type(request.picture_description_custom_config)}"
             )
 
-        if request.picture_description_preset or request.do_picture_description:
+        # Only use the engine-based path when no legacy field is set; if
+        # picture_description_local / picture_description_api is provided the
+        # caller intends the legacy branch, so let _apply_*_pipeline_options
+        # handle it there instead.
+        legacy_set = (
+            request.picture_description_local is not None
+            or request.picture_description_api is not None
+        )
+        if not legacy_set and (
+            request.picture_description_preset or request.do_picture_description
+        ):
             preset_id = request.picture_description_preset or "default"
             return self._get_options_from_preset(
                 preset_id,

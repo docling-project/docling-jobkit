@@ -867,6 +867,46 @@ class TestChartExtraction:
 
         assert isinstance(options, ChartExtractionVlmEngineOptions)
 
+    def test_chart_extraction_custom_preset_as_default(self):
+        """When default_chart_extraction_preset is a custom preset, 'default' resolves to custom API options."""
+        config = DoclingConverterManagerConfig(
+            default_chart_extraction_preset="my_kserve_preset",
+            allowed_chart_extraction_presets=["my_kserve_preset"],
+            allowed_chart_extraction_engines=["api"],
+            custom_chart_extraction_presets={
+                "my_kserve_preset": {
+                    "engine_options": {
+                        "engine_type": "api",
+                        "url": "http://vlm-inference:8080/v1/chat/completions",
+                        "params": {"model": "granite-vision-4-1-4b"},
+                    },
+                    "model_spec": {
+                        "name": "granite-vision-4-1-4b",
+                        "default_repo_id": "ibm-granite/granite-vision-4.1-4b",
+                        "prompt": "<chart2csv>",
+                        "response_format": "plaintext",
+                    },
+                }
+            },
+        )
+        manager = DoclingConverterManager(config)
+
+        # 1. Request with do_chart_extraction=True without setting chart_extraction_preset explicitly
+        request = ConvertDocumentsOptions(do_chart_extraction=True)
+        options = manager._parse_chart_extraction_options(request)
+
+        assert isinstance(options, ChartExtractionVlmEngineOptions)
+        assert options.engine_options.engine_type.value == "api"
+
+        # 2. Standard PDF pipeline options wiring
+        pdf_format_opts = manager.get_pdf_pipeline_opts(request)
+        pipeline_opts = pdf_format_opts.pipeline_options
+        assert pipeline_opts.do_chart_extraction is True
+        assert (
+            pipeline_opts.chart_extraction_options.engine_options.engine_type.value
+            == "api"
+        )
+
     def test_chart_extraction_custom_config_not_allowed(self):
         """Custom chart extraction config is rejected when not allowed."""
         config = DoclingConverterManagerConfig(
