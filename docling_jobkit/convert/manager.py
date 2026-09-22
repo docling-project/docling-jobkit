@@ -20,6 +20,7 @@ from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.document import ConversionResult
+from docling.datamodel.extraction_options import ExtractionVlmOptions
 from docling.datamodel.picture_classification_options import (
     DocumentPictureClassifierOptions,
 )
@@ -438,9 +439,13 @@ class DoclingConverterManagerConfig(BaseModel):
     allowed_extraction_presets: Optional[list[str]] = Field(
         default=None,
         description=(
-            "Allow-list of extraction preset IDs (subset of "
-            "ExtractionVlmOptions.list_preset_ids()). None allows any registered preset."
+            "Allow-list of built-in and custom extraction preset IDs. "
+            "None allows any configured preset."
         ),
+    )
+    custom_extraction_presets: dict[str, ExtractionVlmOptions] = Field(
+        default_factory=dict,
+        description="Custom extraction presets defined by the server operator.",
     )
     allow_custom_extraction_config: bool = Field(
         default=False,

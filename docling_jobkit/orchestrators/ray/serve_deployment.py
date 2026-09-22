@@ -1050,6 +1050,7 @@ class DoclingProcessorConverterDeployment:
                     max_file_size=config.max_file_size,
                     default_extraction_preset=config.default_extraction_preset,
                     allowed_extraction_presets=config.allowed_extraction_presets,
+                    custom_extraction_presets=config.custom_extraction_presets,
                     allow_custom_extraction_config=config.allow_custom_extraction_config,
                     allowed_extraction_engines=config.allowed_extraction_engines,
                     allowed_formats=config.allowed_extraction_formats,

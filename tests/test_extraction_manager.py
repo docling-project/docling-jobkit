@@ -114,6 +114,30 @@ def test_startup_applies_default_preset_and_engine_allow_lists():
             DocumentExtractionManager(config).resolve_extraction_model()
 
 
+def test_operator_defined_preset_can_be_default_and_override_builtin():
+    custom = ExtractionVlmOptions.from_preset("nuextract_2b").model_copy(
+        update={"scale": 1.25}
+    )
+    ecm = DocumentExtractionManager(
+        DocumentExtractionManagerConfig(
+            default_extraction_preset="server_model",
+            allowed_extraction_presets=["server_model", "nuextract_2b"],
+            custom_extraction_presets={
+                "server_model": custom,
+                "nuextract_2b": custom,
+            },
+        )
+    )
+
+    assert ecm.resolve_extraction_model().scale == 1.25
+    assert (
+        ecm.resolve_extraction_model(
+            ExtractDocumentsOptions(target=_target(), extraction_preset="nuextract_2b")
+        ).scale
+        == 1.25
+    )
+
+
 def test_preset_rejected_when_not_in_allow_list():
     ecm = DocumentExtractionManager(
         DocumentExtractionManagerConfig(

@@ -17,7 +17,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.extraction import DocumentExtractionResult
@@ -52,8 +52,11 @@ class DocumentExtractionManagerConfig(BaseModel):
 
     # Operator model-selection gating (the security boundary).
     default_extraction_preset: str = "nuextract_2b"
-    # Subset of ExtractionVlmOptions.list_preset_ids(); None allows any registered id.
+    # None allows any built-in or operator-defined preset id.
     allowed_extraction_presets: Optional[list[str]] = None
+    custom_extraction_presets: dict[str, ExtractionVlmOptions] = Field(
+        default_factory=dict
+    )
     allow_custom_extraction_config: bool = False
     allowed_extraction_engines: Optional[list[str]] = None
 
@@ -93,11 +96,21 @@ class DocumentExtractionManager:
                 f"Extraction preset {preset_id!r} is not allowed. "
                 f"Allowed presets: {', '.join(allowed)}"
             )
+        if preset_id in self.config.custom_extraction_presets:
+            return self.config.custom_extraction_presets[preset_id]
         try:
             return ExtractionVlmOptions.from_preset(preset_id)
         except KeyError as exc:
-            # Surface docling's "available presets" message as a request error.
-            raise ValueError(str(exc)) from exc
+            available = sorted(
+                {
+                    *self.config.custom_extraction_presets,
+                    *ExtractionVlmOptions.list_preset_ids(),
+                }
+            )
+            raise ValueError(
+                f"Extraction preset {preset_id!r} not found. "
+                f"Available presets: {available}"
+            ) from exc
 
     def resolve_extraction_model(
         self, options: ExtractDocumentsOptions | None = None
