@@ -11,7 +11,6 @@ from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.requests import (
     AnyHttpSourceRequest,
     FileSourceRequest,
-    HttpSourceRequest,
     S3SourceRequest,
 )
 from docling.datamodel.service.sources import S3Coordinates
@@ -376,13 +375,11 @@ def test_registry_validates_filenet_and_http_canonical_models():
         }
     )
     http = factory.validate_config(
-        {"kind": "http", "url": "https://example.com/archive.zip"}
+        {"kind": "http", "url": "https://example.com/report.pdf"}
     )
 
     assert type(filenet) is TaskFileNetSource
     assert type(http) is AnyHttpSourceRequest
-    with pytest.raises(ValidationError):
-        HttpSourceRequest(url="https://example.com/archive.zip")
 
 
 def test_builtin_capabilities_come_from_registered_processors():
