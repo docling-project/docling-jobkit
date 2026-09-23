@@ -33,6 +33,7 @@ from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, validate_task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
+from docling_jobkit.orchestrators.result_status import task_status_from_result
 from docling_jobkit.orchestrators.rq.orchestrator import (
     _HEARTBEAT_INTERVAL,
     _HEARTBEAT_TTL,
@@ -216,7 +217,7 @@ def _run_docling_task(
                 orchestrator_config.sub_channel,
                 _TaskUpdate(
                     task_id=task_id,
-                    task_status=TaskStatus.SUCCESS,
+                    task_status=task_status_from_result(processed_results),
                     result_key=result_key,
                 ).model_dump_json(),
             )

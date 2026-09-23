@@ -35,6 +35,7 @@ from docling_jobkit.orchestrators.ray.models import (
     TenantStats,
     TenantTaskCounters,
 )
+from docling_jobkit.orchestrators.result_status import task_status_from_result
 from docling_jobkit.orchestrators.serialization import (
     dump_model_with_secrets,
     make_msgpack_safe,
@@ -922,7 +923,7 @@ class RedisStateManager:
         task_size: int,
         result: DoclingTaskResult,
     ) -> TaskTerminalizationResult:
-        """Durably finalize a task to SUCCESS exactly once."""
+        """Durably finalize a task with a result exactly once."""
         result_key = f"{self.results_prefix}:task:{task_id}:result"
         result_data = self._serialize_stored_outcome(
             StoredSuccessOutcome(result=result)
@@ -931,7 +932,7 @@ class RedisStateManager:
             tenant_id=tenant_id,
             task_id=task_id,
             task_size=task_size,
-            terminal_status=TaskStatus.SUCCESS,
+            terminal_status=task_status_from_result(result),
             result_key=result_key,
             result_data=result_data,
         )
@@ -1081,10 +1082,7 @@ class RedisStateManager:
                         status_changed=status_changed,
                         capacity_released=was_active,
                         result_key=(
-                            result_key
-                            if terminal_status == TaskStatus.SUCCESS
-                            and final_status == TaskStatus.SUCCESS
-                            else None
+                            result_key if failure is None and status_changed else None
                         ),
                     )
                 except WatchError:
