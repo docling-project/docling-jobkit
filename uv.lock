@@ -1486,9 +1486,9 @@ requires-dist = [
     { name = "boxsdk", extras = ["jwt"], marker = "extra == 'box'", specifier = ">=10" },
     { name = "codeflare-sdk", marker = "python_full_version >= '3.11' and extra == 'ray'", specifier = ">=0.37.0" },
     { name = "confluent-kafka", marker = "extra == 'kafka'", specifier = ">=2.5.0,<3" },
-    { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", git = "ssh://git@github.com/docling-project/docling.git?branch=cau%2Fextraction-api-service-models" },
-    { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", git = "ssh://git@github.com/docling-project/docling.git?branch=cau%2Fextraction-api-service-models" },
-    { name = "docling-slim", extras = ["standard"], git = "ssh://git@github.com/docling-project/docling.git?branch=cau%2Fextraction-api-service-models" },
+    { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", git = "https://github.com/docling-project/docling.git?branch=cau%2Fextraction-api-service-models" },
+    { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", git = "https://github.com/docling-project/docling.git?branch=cau%2Fextraction-api-service-models" },
+    { name = "docling-slim", extras = ["standard"], git = "https://github.com/docling-project/docling.git?branch=cau%2Fextraction-api-service-models" },
     { name = "google-api-python-client", marker = "extra == 'gdrive'", specifier = ">=2.183.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'gdrive'", specifier = ">=1.2.2" },
     { name = "google-cloud-storage", marker = "extra == 'gcloudstorage'", specifier = ">=2.10.0" },
@@ -1573,7 +1573,7 @@ wheels = [
 [[package]]
 name = "docling-slim"
 version = "2.129.0"
-source = { git = "ssh://git@github.com/docling-project/docling.git?branch=cau%2Fextraction-api-service-models#1d3f63d2761054ed676aba2c045335c386aa1335" }
+source = { git = "https://github.com/docling-project/docling.git?branch=cau%2Fextraction-api-service-models#804c4014c256950ab7ef371366a8b6b8e2d1053e" }
 dependencies = [
     { name = "certifi" },
     { name = "docling-core" },

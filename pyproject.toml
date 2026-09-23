@@ -132,7 +132,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-docling-slim = { git = "git+ssh://git@github.com/docling-project/docling.git", branch = "cau/extraction-api-service-models" }
+docling-slim = { git = "git+https://github.com/docling-project/docling.git", branch = "cau/extraction-api-service-models" }
 
 # docling-slim = { git = "https://github.com/docling-project/docling/", branch = "main" }
 # docling-slim = { path = "../docling", editable = true }
