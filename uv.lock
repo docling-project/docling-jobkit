@@ -1573,7 +1573,7 @@ wheels = [
 [[package]]
 name = "docling-slim"
 version = "2.129.0"
-source = { git = "https://github.com/docling-project/docling.git?branch=cau%2Fextraction-api-service-models#804c4014c256950ab7ef371366a8b6b8e2d1053e" }
+source = { git = "https://github.com/docling-project/docling.git?branch=cau%2Fextraction-api-service-models#7f237215b1e321c961785fa853feee43b907db98" }
 dependencies = [
     { name = "certifi" },
     { name = "docling-core" },
