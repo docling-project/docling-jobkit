@@ -33,6 +33,7 @@ from docling.datamodel.service.responses import FailurePhase, PublicFailureInfo
 from docling.datamodel.service.sources import FileSource, HttpSource, S3Coordinates
 from docling.datamodel.service.targets import PresignedUrlTarget
 from docling.datamodel.service.tasks import TaskType
+from docling.datamodel.settings import settings as docling_settings
 from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
 
@@ -717,6 +718,8 @@ class DoclingProcessorConverterDeployment:
 
         self.config = config
         self.converter_manager_config = converter_manager_config
+        # Let docling's model-backend clients include raw transport errors.
+        docling_settings.debug.error_details = config.debug_error_details
 
         try:
             replica_context = serve.get_replica_context()
