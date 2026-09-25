@@ -32,6 +32,7 @@ from docling_jobkit.datamodel.exportable_document import (
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, validate_task
 from docling_jobkit.datamodel.task_meta import TaskStatus
+from docling_jobkit.orchestrators._redis_url import sync_pool_from_url
 from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
 from docling_jobkit.orchestrators.rq.orchestrator import (
     _HEARTBEAT_INTERVAL,
@@ -280,7 +281,9 @@ class CustomRQWorker(SimpleWorker):
         key = f"{self.orchestrator_config.heartbeat_key_prefix}:{job_id}"
         conn = None
         try:
-            conn = sync_redis.Redis.from_url(self.orchestrator_config.redis_url)
+            conn = sync_redis.Redis(
+                connection_pool=sync_pool_from_url(self.orchestrator_config.redis_url)
+            )
             # Write immediately so the key exists before the first watchdog scan.
             conn.set(key, "1", ex=_HEARTBEAT_TTL)
             while not stop_event.wait(timeout=_HEARTBEAT_INTERVAL):

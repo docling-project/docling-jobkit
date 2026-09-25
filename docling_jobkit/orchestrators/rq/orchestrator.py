@@ -32,6 +32,10 @@ from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget, validate_task
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
+from docling_jobkit.orchestrators._redis_url import (
+    async_pool_from_url,
+    sync_pool_from_url,
+)
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
     TaskNotFoundError,
@@ -100,7 +104,7 @@ class RQOrchestrator(BaseOrchestrator):
     @staticmethod
     def make_rq_queue(config: RQOrchestratorConfig) -> tuple[redis.Redis, Queue]:
         # Create connection pool with configurable size
-        pool = redis.ConnectionPool.from_url(
+        pool = sync_pool_from_url(
             config.redis_url,
             max_connections=config.redis_max_connections,
             socket_timeout=config.redis_socket_timeout,
@@ -133,7 +137,7 @@ class RQOrchestrator(BaseOrchestrator):
         self._redis_conn, self._rq_queue = self.make_rq_queue(self.config)
 
         # Create async connection pool with same configuration
-        self._async_redis_pool = async_redis.ConnectionPool.from_url(
+        self._async_redis_pool = async_pool_from_url(
             self.config.redis_url,
             max_connections=config.redis_max_connections,
             socket_timeout=config.redis_socket_timeout,
