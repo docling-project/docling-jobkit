@@ -95,6 +95,14 @@ _WATCHDOG_GRACE_PERIOD = (
 _RQ_JOB_GONE = _RQJobGone()
 _TASK_METADATA_PREFIX = "docling:tasks:"
 
+# Task-update subscription: re-subscribe backoff after the connection drops
+# (reset by a successful subscribe), poll window and PING interval on the
+# dedicated connection. The last two match the Ray orchestrator's subscriber.
+_PUBSUB_RETRY_MIN_DELAY = 1.0
+_PUBSUB_RETRY_MAX_DELAY = 30.0
+_PUBSUB_POLL_TIMEOUT = 15.0
+_PUBSUB_HEALTH_CHECK_INTERVAL = 15.0
+
 
 class RQOrchestrator(BaseOrchestrator):
     @staticmethod
@@ -533,82 +541,134 @@ class RQOrchestrator(BaseOrchestrator):
             except Exception as exc:
                 _log.error(f"Zombie reaper error: {exc}")
 
-    async def _listen_for_updates(self):
-        pubsub = self._async_redis_conn.pubsub()
+    def _build_pubsub_redis(self) -> async_redis.Redis:
+        """Build the dedicated client for the task-update subscription.
 
-        # Subscribe to a single channel
-        await pubsub.subscribe(self.config.sub_channel)
+        Unlike the command pool, this connection has no read socket_timeout: a
+        subscriber waits for the next published message, so an idle gap is
+        expected, not a failure. A dead connection is still detected through
+        the PING health check and TCP keepalive. Same approach as the Ray
+        orchestrator's subscriber (ray/redis_helper.py).
+        """
+        return async_redis.Redis.from_url(
+            self.config.redis_url,
+            socket_timeout=None,
+            socket_connect_timeout=self.config.redis_socket_connect_timeout,
+            socket_keepalive=True,
+            health_check_interval=_PUBSUB_HEALTH_CHECK_INTERVAL,
+        )
 
-        _log.debug("Listening for updates...")
+    async def _listen_for_updates(self) -> None:
+        """Apply task updates published by the workers, for the orchestrator's lifetime.
 
-        # Listen for messages
+        The subscription is re-established whenever the Redis connection drops.
+        Without that, a single Redis restart or network blip ended the listener
+        silently: workers kept publishing updates, but nobody was subscribed any
+        more and in-memory task status stopped moving until the process was
+        restarted. Only cancellation ends the listener.
+
+        Updates published while the subscription is down are not replayed; a
+        status poll still rebuilds such a task from its RQ job.
+        """
+        client: Optional[async_redis.Redis] = None
+        delay = _PUBSUB_RETRY_MIN_DELAY
         try:
-            async for message in pubsub.listen():
-                if message["type"] == "message":
-                    data = _TaskUpdate.model_validate_json(message["data"])
-                    try:
-                        task = await self.get_raw_task(task_id=data.task_id)
-                        if task.is_completed():
-                            # A status poll may have rebuilt this task from the
-                            # RQ job before this update arrived; that rebuild
-                            # carries no error_message. Keep the worker's
-                            # reason instead of dropping it.
-                            if (
-                                data.task_status == TaskStatus.FAILURE
-                                and task.task_status == TaskStatus.FAILURE
-                                and task.error_message is None
-                                and data.error_message is not None
-                            ):
-                                task.error_message = data.error_message
-                                await self._on_task_status_changed(task)
-                            else:
-                                _log.debug(
-                                    "Task already completed. No update will be done."
-                                )
+            while True:
+                pubsub = None
+                try:
+                    if client is None:
+                        client = self._build_pubsub_redis()
+                    pubsub = client.pubsub()
+                    await pubsub.subscribe(self.config.sub_channel)
+                    _log.debug("Listening for updates...")
+                    delay = _PUBSUB_RETRY_MIN_DELAY
+                    while True:
+                        message = await pubsub.get_message(
+                            ignore_subscribe_messages=True,
+                            timeout=_PUBSUB_POLL_TIMEOUT,
+                        )
+                        if message is None or message["type"] != "message":
                             continue
+                        try:
+                            await self._apply_update(message)
+                        except Exception:
+                            _log.exception("Failed to apply a task update, skipping it")
+                except (
+                    redis.exceptions.ConnectionError,
+                    redis.exceptions.TimeoutError,
+                ) as exc:
+                    _log.warning(
+                        f"Pub/sub connection lost ({exc}), resubscribing in {delay:.0f}s"
+                    )
+                    # Drop the possibly broken client; the next round builds a new one.
+                    if client is not None:
+                        try:
+                            await client.aclose()
+                        except Exception:
+                            pass
+                        client = None
+                finally:
+                    if pubsub is not None:
+                        try:
+                            await pubsub.aclose()
+                        except Exception:
+                            pass
 
-                        # Update the status
-                        task.set_status(data.task_status)
-                        # Store error message on failure
-                        if (
-                            data.task_status == TaskStatus.FAILURE
-                            and data.error_message is not None
-                        ):
-                            task.error_message = data.error_message
-                        # Update the results lookup
-                        if (
-                            data.task_status == TaskStatus.SUCCESS
-                            and data.result_key is not None
-                        ):
-                            self._task_result_keys[data.task_id] = data.result_key
-
-                        await self._on_task_status_changed(task)
-
-                        if self.notifier:
-                            try:
-                                await self.notifier.notify_task_subscribers(
-                                    task.task_id
-                                )
-                                await self.notifier.notify_queue_positions()
-                            except Exception as e:
-                                _log.error(
-                                    f"Notifier error for task {data.task_id}: {e}"
-                                )
-
-                    except TaskNotFoundError:
-                        _log.warning(f"Task {data.task_id} not found.")
-        except (
-            asyncio.CancelledError,
-            redis.exceptions.ConnectionError,
-            redis.exceptions.TimeoutError,
-        ):
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, _PUBSUB_RETRY_MAX_DELAY)
+        except asyncio.CancelledError:
             _log.debug("Pub/sub listener stopped (shutdown).")
         finally:
-            try:
-                await pubsub.unsubscribe(self.config.sub_channel)
-                await pubsub.aclose()
-            except Exception:
-                pass
+            if client is not None:
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
+
+    async def _apply_update(self, message: dict) -> None:
+        data = _TaskUpdate.model_validate_json(message["data"])
+        try:
+            task = await self.get_raw_task(task_id=data.task_id)
+            if task.is_completed():
+                # A status poll may have rebuilt this task from the
+                # RQ job before this update arrived; that rebuild
+                # carries no error_message. Keep the worker's
+                # reason instead of dropping it.
+                if (
+                    data.task_status == TaskStatus.FAILURE
+                    and task.task_status == TaskStatus.FAILURE
+                    and task.error_message is None
+                    and data.error_message is not None
+                ):
+                    task.error_message = data.error_message
+                    await self._on_task_status_changed(task)
+                else:
+                    _log.debug("Task already completed. No update will be done.")
+                return
+
+            # Update the status
+            task.set_status(data.task_status)
+            # Store error message on failure
+            if (
+                data.task_status == TaskStatus.FAILURE
+                and data.error_message is not None
+            ):
+                task.error_message = data.error_message
+            # Update the results lookup
+            if data.task_status == TaskStatus.SUCCESS and data.result_key is not None:
+                self._task_result_keys[data.task_id] = data.result_key
+
+            await self._on_task_status_changed(task)
+
+            if self.notifier:
+                try:
+                    await self.notifier.notify_task_subscribers(task.task_id)
+                    await self.notifier.notify_queue_positions()
+                except Exception as e:
+                    _log.error(f"Notifier error for task {data.task_id}: {e}")
+
+        except TaskNotFoundError:
+            _log.warning(f"Task {data.task_id} not found.")
 
     async def _watchdog_task(self) -> None:
         """Detect orphaned STARTED tasks whose worker heartbeat key has expired.
