@@ -67,18 +67,18 @@ def _make_orchestrator(
     orch._rq_queue = MagicMock()
     orch._redis_gate = RedisCallerGate(config.redis_gate_concurrency or 1)
     orch._rq_job_function = "docling_jobkit.orchestrators.rq.worker.docling_task"
+    # The subscription runs on its own client; point it at the mocked one.
+    orch._build_pubsub_redis = lambda: orch._async_redis_conn
     return orch
-
-
-async def _fake_listen(messages):
-    for msg in messages:
-        yield msg
 
 
 def _make_pubsub(messages):
     pubsub = MagicMock()
     pubsub.subscribe = AsyncMock()
-    pubsub.listen.return_value = _fake_listen(messages)
+    pubsub.aclose = AsyncMock()
+    # The listener runs until cancelled: end the feed with a cancellation so
+    # the test's await returns once the messages are consumed.
+    pubsub.get_message = AsyncMock(side_effect=[*messages, asyncio.CancelledError()])
     return pubsub
 
 
