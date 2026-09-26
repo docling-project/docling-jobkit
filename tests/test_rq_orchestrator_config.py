@@ -3,6 +3,7 @@
 from unittest.mock import patch
 
 import pytest
+from rq import Queue
 
 from docling.datamodel.service.requests import HttpSourceRequest
 from docling.datamodel.service.targets import InBodyTarget
@@ -112,4 +113,11 @@ class TestJobTimeoutOnEnqueue:
             targets=[InBodyTarget()],
         )
 
-        assert captured["kwargs"]["timeout"] == job_timeout
+        # Check what rq itself reads from these arguments, not just that some
+        # argument was passed: when `kwargs=` is given explicitly, rq keeps only
+        # the options it knows by name and silently drops the rest, so an
+        # unknown spelling such as `timeout=` never reaches the job.
+        enqueue_args = Queue.parse_args(
+            orchestrator._rq_job_function, **captured["kwargs"]
+        )
+        assert enqueue_args.timeout == job_timeout
