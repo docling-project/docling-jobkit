@@ -18,9 +18,13 @@ from rq.job import Job, JobStatus
 from rq.registry import StartedJobRegistry
 
 from docling.datamodel.base_models import DocumentStream
+from docling.datamodel.extraction import ExtractionTarget
 from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.chunking import BaseChunkerOptions
-from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.options import (
+    ConvertDocumentsOptions,
+    ExtractDocumentsOptions,
+)
 from docling.datamodel.service.requests import FileSourceRequest
 from docling.datamodel.service.targets import InBodyTarget
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
@@ -165,6 +169,8 @@ class RQOrchestrator(BaseOrchestrator):
         callbacks: list[CallbackSpec] | None = None,
         metadata: dict[str, Any] | None = None,
         targets: list[TaskTarget] | None = None,
+        extract_options: ExtractDocumentsOptions | None = None,
+        extract_target: ExtractionTarget | None = None,
     ) -> Task:
         resolved_targets = self._resolve_enqueue_targets(target, targets)
         self._validate_targets(resolved_targets)
@@ -200,6 +206,8 @@ class RQOrchestrator(BaseOrchestrator):
                     "sources": rq_sources,
                     "convert_options": convert_options,
                     "chunking_options": chunking_options,
+                    "extract_options": extract_options,
+                    "extract_target": extract_target,
                     "chunking_export_options": chunking_export_options,
                     "targets": resolved_targets,
                     "callbacks": callbacks or [],

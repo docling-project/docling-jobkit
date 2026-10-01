@@ -39,7 +39,9 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
         super().__init__(s3_presigned_config.s3_coords)
         self._config = s3_presigned_config
         self._task = task
-        self._uploaded_artifacts: dict[int, list[tuple[ArtifactType, str, str]]] = {}
+        self._uploaded_artifacts: dict[
+            SourceIdentity, list[tuple[ArtifactType, str, str]]
+        ] = {}
 
     @classmethod
     def get_config_types(cls) -> tuple[type[BaseModel], ...]:
@@ -73,7 +75,7 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
             content_type=mime_type,
             metadata=metadata,
         )
-        self._uploaded_artifacts.setdefault(source.source_index, []).append(
+        self._uploaded_artifacts.setdefault(source, []).append(
             (artifact_type, mime_type, object_key)
         )
 
@@ -87,7 +89,7 @@ class S3PresignedTargetProcessor(S3TargetProcessor):
         timings: dict[str, ProfilingItem],
         confidence: ConfidenceScores | None = None,
     ) -> DocumentArtifactItem:
-        uploaded = self._uploaded_artifacts.get(source.source_index, [])
+        uploaded = self._uploaded_artifacts.get(source, [])
         expires_at = datetime.now(timezone.utc) + timedelta(
             seconds=self._config.url_expiration
         )

@@ -14,6 +14,7 @@ from rq import SimpleWorker, get_current_job
 from docling.datamodel.base_models import DocumentStream
 from docling.datamodel.service.sources import FileSource
 from docling.datamodel.service.tasks import TaskType
+from docling.datamodel.settings import settings as docling_settings
 
 from docling_jobkit.convert.chunking import (
     DocumentChunkerManager,
@@ -256,6 +257,8 @@ class CustomRQWorker(SimpleWorker):
         **kwargs,
     ):
         self.orchestrator_config = orchestrator_config
+        # Let docling's model-backend clients include raw transport errors.
+        docling_settings.debug.error_details = orchestrator_config.debug_error_details
         self.conversion_manager = DoclingConverterManager(cm_config)
         self.scratch_dir = scratch_dir
 

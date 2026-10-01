@@ -15,8 +15,12 @@ from pydantic import (
 )
 
 from docling.datamodel.base_models import DocumentStream
+from docling.datamodel.extraction import ExtractionTarget
 from docling.datamodel.service.callbacks import CallbackSpec
-from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.options import (
+    ConvertDocumentsOptions,
+    ExtractDocumentsOptions,
+)
 from docling.datamodel.service.responses import PublicFailureInfo
 from docling.datamodel.service.targets import InBodyTarget, ZipTarget
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
@@ -103,6 +107,8 @@ class Task(BaseModel):
         Optional[ChunkingOptionType],
         Field(discriminator="chunker"),
     ] = None
+    extract_options: Optional[ExtractDocumentsOptions] = None
+    extract_target: Optional[ExtractionTarget] = None
     chunking_export_options: ChunkingExportOptions = ChunkingExportOptions()
     callbacks: list[CallbackSpec] = []
     # scratch_dir: Optional[Path] = None

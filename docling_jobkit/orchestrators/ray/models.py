@@ -253,6 +253,17 @@ class PassthroughTaskRequest(BaseModel):
     )
 
 
+class ExtractPassthroughRequest(BaseModel):
+    """Passthrough extraction request (no S3 fan-out, no page slicing).
+
+    Parallel to ``PassthroughTaskRequest`` but for ``TaskType.EXTRACT``: the
+    converter replica expands the sources in place and runs one ``extract_all``.
+    """
+
+    kind: str = Field(default="extract_passthrough")
+    task: Task = Field(description="Original parent extraction task")
+
+
 class MaterializedConvertRequest(BaseModel):
     kind: str = Field(default="materialized_convert")
     artifact_ref: Any = Field(description="Ray ObjectRef with shared PDF bytes")
@@ -283,6 +294,7 @@ class SliceConvertRequest(BaseModel):
 
 ConverterRequest = (
     PassthroughTaskRequest
+    | ExtractPassthroughRequest
     | MaterializedConvertRequest
     | SourceChunkConvertRequest
     | SliceConvertRequest

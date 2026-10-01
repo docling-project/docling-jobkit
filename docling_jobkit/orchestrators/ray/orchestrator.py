@@ -15,9 +15,13 @@ from ray import serve
 from ray.serve.schema import ApplicationStatus
 
 from docling.datamodel.base_models import DocumentStream
+from docling.datamodel.extraction import ExtractionTarget
 from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.chunking import BaseChunkerOptions
-from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.options import (
+    ConvertDocumentsOptions,
+    ExtractDocumentsOptions,
+)
 from docling.datamodel.service.requests import FileSourceRequest
 from docling.datamodel.service.tasks import TaskType
 
@@ -66,6 +70,12 @@ def _validate_expandable_source_targets(
         for source in sources
     )
     if not has_expandable_source:
+        return
+    if task_type == TaskType.EXTRACT:
+        # Extraction always runs a single passthrough call (see
+        # _process_extract_task / expand_task_sources_with_identities) rather
+        # than CONVERT's S3 fan-out handler, so it has no storage-target
+        # requirement here.
         return
 
     target_factory = get_target_connector_factory(allow_external_plugins)
@@ -633,6 +643,8 @@ class RayOrchestrator(BaseOrchestrator):
         callbacks: list[CallbackSpec] | None = None,
         metadata: dict[str, Any] | None = None,
         targets: list[TaskTarget] | None = None,
+        extract_options: ExtractDocumentsOptions | None = None,
+        extract_target: ExtractionTarget | None = None,
     ) -> Task:
         """Enqueue a task for processing.
 
@@ -704,6 +716,8 @@ class RayOrchestrator(BaseOrchestrator):
                     "targets": resolved_targets,
                     "convert_options": convert_options,
                     "chunking_options": chunking_options,
+                    "extract_options": extract_options,
+                    "extract_target": extract_target,
                     "chunking_export_options": chunking_export_options,
                     "callbacks": callbacks or [],
                     "metadata": metadata or {},
