@@ -1549,13 +1549,36 @@ class DoclingConverterManager:
             return table_options
 
         # Option 3: Legacy fields (backward compatibility)
-        # Use default kind with legacy fields (table_mode, table_cell_matching)
-        # Only pass legacy parameters if they're not at defaults to avoid passing
-        # unsupported parameters to kinds that don't support them
-        kind = self.config.default_table_structure_kind
+        # Resolve the base kind + options from the configured default preset
+        # so a non-default default_table_structure_preset is honored, then
+        # apply only non-default legacy fields as sparse overrides. Explicit
+        # presets (Option 2) are unaffected and still ignore legacy fields.
+        preset_id = self.config.default_table_structure_preset
+        preset_info = self.table_structure_preset_registry.get(preset_id)
+        if not preset_info:
+            raise ValueError(f"Unknown table structure preset: {preset_id}")
+        if preset_info["source"] != "custom":
+            raise ValueError(f"Preset '{preset_id}' has invalid source")
 
-        # Build kwargs only with non-default legacy parameters
-        kwargs: dict[str, Any] = {}
+        config_dict = preset_info["options"].copy()
+        kind = config_dict.get("kind")
+        if not kind:
+            raise ValueError(f"Preset '{preset_id}' must include a 'kind' field")
+
+        self._validate_kind_allowed(
+            kind,
+            self.config.allowed_table_structure_kinds,
+            self.config.default_table_structure_kind,
+            "table_structure",
+        )
+        self._validate_kind_available(
+            kind, self.available_table_structure_kinds, "table_structure"
+        )
+
+        # Build kwargs from the preset base, overriding only with non-default
+        # legacy parameters to avoid passing unsupported parameters to kinds
+        # that don't support them
+        kwargs: dict[str, Any] = {k: v for k, v in config_dict.items() if k != "kind"}
         default_table_options = TableStructureOptions()
 
         if request.table_mode != default_table_options.mode:
