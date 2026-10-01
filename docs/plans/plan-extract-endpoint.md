@@ -8,6 +8,6 @@ Updated 2026-10-01. [Jobkit PR #249](https://github.com/docling-project/docling-
 - Source expansion preserves original request index and expanded source identity.
 - Ray executes extraction; Local/RQ retain task plumbing but Serve rejects execution with 501.
 - Durable JSON envelopes retain document/item errors, scopes, validation and inference metadata. In-body, presigned and direct artifact result routing are implemented. Target-write failure becomes a document failure.
-- Uploads precede document callbacks; independent callback threads do not guarantee arrival order. Item failure reasons are projected into callbacks by October 1 local changes.
+- Uploads precede document callbacks; independent callback threads do not guarantee arrival order. Item failure reasons are projected into callbacks by the published October 1 fixes.
 
 See [the review/finalization handoff](extract-endpoint-review-handoff.md) for tests and remaining delivery work. No custom Core checkout is required. Raise dependency floors and remove the temporary Docling Git branch source after publication.
