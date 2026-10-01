@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from itertools import islice
-from typing import Any, Generic, Iterator, Sequence, TypeVar
+from typing import Generic, Iterator, Sequence, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 
@@ -12,49 +12,7 @@ SourceT = TypeVar("SourceT")  # root source type per connector
 ConverterSource = str | DocumentStream
 
 
-def _rebuild_parametrized_model(cls: type[BaseModel], state: dict[str, Any]) -> Any:
-    """Reconstruct a pickled instance of a dynamically-parametrized generic model.
-
-    Paired with ``_PicklableGenericModel.__reduce__`` below. ``cls`` is always the
-    plain (unparametrized) generic origin, never the dynamically-created
-    parametrized alias -- see that class for why.
-    """
-    obj = cls.__new__(cls)
-    obj.__setstate__(state)
-    return obj
-
-
-class _PicklableGenericModel(BaseModel):
-    """Mixin fixing pickling of Generic[...] subscripted instances.
-
-    Pydantic v2 creates a brand-new class the first time a generic model is
-    subscripted (e.g. ``SourceDocumentRef[S3FileIdentifier]``), cached but never
-    registered as a real attribute of this module. Standard ``pickle`` needs to
-    locate a class by ``module.qualname`` to reconstruct it, and that lookup fails
-    for these -- e.g. ``PicklingError: Can't pickle <class
-    '...SourceDocumentRef[S3FileIdentifier]'>: attribute lookup
-    SourceDocumentRef[S3FileIdentifier] on ...source_processor failed``. Ray's
-    cloudpickle send side tolerates this (it can embed a class definition inline
-    instead of requiring a lookup), but the pickle5 out-of-band receive side
-    falls back to stdlib ``pickle.loads`` and does not, surfacing as an unrelated
-    ``KeyError: 'type'`` deep inside Ray's own deserialization instead of a clear
-    pickling error.
-
-    Fixed by reducing through the plain, statically-defined, always-importable
-    origin class (``__pydantic_generic_metadata__["origin"]``) instead of the
-    parametrized alias. Pydantic's own ``__getstate__``/``__setstate__`` restores
-    the real field values directly (e.g. the concrete ``S3FileIdentifier``
-    instance already sitting in ``id``) without needing the parametrization again
-    at reconstruction time, so this is safe for any field type, not just the
-    specific connector types in use today.
-    """
-
-    def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
-        origin = type(self).__pydantic_generic_metadata__.get("origin") or type(self)
-        return (_rebuild_parametrized_model, (origin, self.__getstate__()))
-
-
-class SourceDocumentRef(_PicklableGenericModel, Generic[FileIdentifierT]):
+class SourceDocumentRef(BaseModel, Generic[FileIdentifierT]):
     """Connector-native document reference safe to pass between processes."""
 
     id: FileIdentifierT
@@ -63,7 +21,7 @@ class SourceDocumentRef(_PicklableGenericModel, Generic[FileIdentifierT]):
     filename: str
 
 
-class DocumentChunk(_PicklableGenericModel, Generic[SourceT, FileIdentifierT]):
+class DocumentChunk(BaseModel, Generic[SourceT, FileIdentifierT]):
     """A serializable batch of connector-native document references.
 
     A chunk carries only the root ``source`` plus the ``refs`` needed to fetch its

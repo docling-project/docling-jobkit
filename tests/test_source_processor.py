@@ -1,16 +1,17 @@
-import pickle
+import os
+import subprocess
+import sys
+import tempfile
 from io import BytesIO
 from typing import Generator, Iterator, List
 
-from pydantic import BaseModel
+from ray import cloudpickle
 
 from docling_core.types.io import DocumentStream
 
-from docling_jobkit.connectors.source_processor import (
-    BaseSourceProcessor,
-    DocumentChunk,
-    SourceDocumentRef,
-)
+from docling_jobkit.connectors.source_processor import BaseSourceProcessor
+from docling_jobkit.datamodel.task import Task
+from docling_jobkit.orchestrators.ray.models import SourceChunkConvertRequest
 
 # -------------------------------------------------------------------
 # Mock processor that mimics lazy streaming behavior
@@ -114,68 +115,67 @@ def test_chunk_indices_are_sequential():
         assert len(chunks) == 4
 
 
-class _FakeFileIdentifier(BaseModel):
-    """Stand-in for a connector's own identifier model (e.g. S3FileIdentifier).
-
-    Picking a BaseModel here (not just `str`) matters: pickling a chunk whose
-    refs/source are plain builtins never exercised the bug, since the failure
-    is specifically about Pydantic's dynamically-parametrized generic classes
-    -- SourceDocumentRef[_FakeFileIdentifier] and
-    DocumentChunk[List[str], _FakeFileIdentifier] -- not about the field
-    values they carry.
-    """
-
-    key: str
-    size: int
-
-
-def test_document_chunk_and_refs_survive_pickling():
+def test_source_chunk_convert_request_survives_cross_process_cloudpickle():
     """Regression test for a real production bug (Ray KeyError: 'type').
 
-    SourceDocumentRef[...] and DocumentChunk[...] are dynamically-parametrized
-    Pydantic generics, which are not picklable via plain `pickle` by default:
-    the class pickle needs to locate by module+qualname was never registered
-    as a real module attribute. In production this surfaced when Ray sent a
-    DocumentChunk from the coordinator to a converter actor (S3 fan-out):
-    cloudpickle on the send side tolerated it, but the pickle5 out-of-band
-    receive side fell back to stdlib pickle.loads and raised KeyError: 'type'
-    deep inside Ray's own deserialization -- an unrelated-looking symptom of
-    the same underlying problem. See _PicklableGenericModel in
-    source_processor.py for the fix and the full explanation.
+    DocumentChunk/SourceDocumentRef instances built directly by a connector
+    (as in iterate_document_chunks, exercised elsewhere in this file) already
+    pickle fine on their own -- that was never the actual bug. The real cause:
+    SourceChunkConvertRequest.chunk used to be annotated as
+    DocumentChunk[Any, Any]. Pydantic re-validates an incoming plain
+    DocumentChunk into a *new* DocumentChunk[Any, Any] instance when a
+    SourceChunkConvertRequest is constructed, and that dynamically
+    parametrized class -- created on the fly, never registered as a module
+    attribute -- is what Ray actually sends across the coordinator/converter
+    actor boundary during S3 (and every other connector's) fan-out.
+    cloudpickle on the send side tolerates this (it can embed a class
+    definition inline instead of requiring a module lookup to reconstruct
+    it), but Ray's pickle5 out-of-band receive side falls back to stdlib
+    pickle.loads and cannot find the class, surfacing as an unrelated-looking
+    KeyError: 'type'.
+
+    In-process round-trips don't reproduce this (cloudpickle's sender-side
+    tolerance hides it), so this spawns a real subprocess with no shared
+    memory or prior imports to catch it -- matching what actually fails in
+    production.
     """
-    ref = SourceDocumentRef[_FakeFileIdentifier](
-        id=_FakeFileIdentifier(key="docs/report.pdf", size=123),
-        source_index=0,
-        source_uri="mock://bucket/docs/report.pdf",
-        filename="report.pdf",
+    with MockSourceProcessor(["a"]) as p:
+        chunk = next(iter(p.iterate_document_chunks(chunk_size=1)))
+
+    request = SourceChunkConvertRequest(
+        task=Task(task_id="test-task"),
+        chunk=chunk,
+        expected_doc_count=1,
     )
-    chunk = DocumentChunk[List[str], _FakeFileIdentifier](
-        source=["docs/report.pdf"],
-        refs=[ref],
-        chunk_index=0,
-    )
+    data = cloudpickle.dumps(request)
 
-    # The actual failure mode: pickle.dumps() itself raised PicklingError
-    # before the fix, independent of any cross-process concern.
-    restored_ref = pickle.loads(pickle.dumps(ref))
-    restored_chunk = pickle.loads(pickle.dumps(chunk))
+    with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
+        f.write(data)
+        pkl_path = f.name
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import ray.cloudpickle as cloudpickle\n"
+                    f"with open({pkl_path!r}, 'rb') as f:\n"
+                    "    obj = cloudpickle.load(f)\n"
+                    "assert obj.task.task_id == 'test-task'\n"
+                    "assert obj.chunk.ids == ['a']\n"
+                    "assert obj.expected_doc_count == 1\n"
+                    "print('cross-process load OK')\n"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    finally:
+        os.unlink(pkl_path)
 
-    assert restored_ref == ref
-    assert restored_ref.id == _FakeFileIdentifier(key="docs/report.pdf", size=123)
-    assert restored_chunk == chunk
-    assert restored_chunk.refs[0].filename == "report.pdf"
-    assert restored_chunk.ids == [_FakeFileIdentifier(key="docs/report.pdf", size=123)]
-
-
-def test_document_chunks_from_real_iteration_survive_pickling():
-    """Same bug, via the actual production code path (iterate_document_chunks)
-    rather than constructing SourceDocumentRef/DocumentChunk directly."""
-    ids = ["a", "b", "c"]
-    with MockSourceProcessor(ids) as p:
-        chunks = list(p.iterate_document_chunks(chunk_size=2))
-        for chunk in chunks:
-            restored = pickle.loads(pickle.dumps(chunk))
-            assert restored == chunk
+    assert proc.returncode == 0, proc.stderr
+    assert "cross-process load OK" in proc.stdout
 
 
 def test_chunking_with_edge_case_sizes():
