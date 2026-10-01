@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 
 from docling.datamodel.base_models import ConversionStatus
-from docling.datamodel.extraction import DocumentExtractionResult
+from docling.datamodel.extraction import DocumentExtractionResult, PageScope
 from docling.datamodel.service.callbacks import ProcessedDocsItem
 from docling.datamodel.service.responses import (
     DoclingTaskResult,
@@ -58,11 +58,24 @@ def to_result_item(
 def _callback_document(
     result: DocumentExtractionResult, source: SourceIdentity
 ) -> ExportableDocument:
+    errors = list(result.errors)
+    for item in result.items:
+        scope = (
+            f"page {item.scope.page_no}"
+            if isinstance(item.scope, PageScope)
+            else "document"
+        )
+        errors.extend(
+            error.model_copy(
+                update={"error_message": f"{scope}: {error.error_message}"}
+            )
+            for error in item.errors
+        )
     return ExportableDocument(
         file=result.input.file,
         document_type=result.input.format,
         status=result.status,
-        errors=result.errors,
+        errors=errors,
         source_index=source.source_index,
         source_uri=source.source_uri,
     )

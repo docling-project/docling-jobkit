@@ -314,6 +314,20 @@ def test_to_result_item_bridges_items_identity_and_basename():
     assert "input" not in item.model_dump()
 
 
+def test_extraction_callbacks_keep_item_failure_reasons():
+    page = ExtractionItem(
+        scope=PageScope(page_no=3), errors=[_item_error("Model API request timed out")]
+    )
+    result = _facade_result("report.pdf", ConversionStatus.FAILURE, [page])
+    callback = extraction_results._callback_document(
+        result, SourceIdentity(0, "https://example.com/report.pdf", "report")
+    )
+    assert callback.errors[0].error_message == "page 3: Model API request timed out"
+    assert callback.errors[0].category == FailureCategory.INFERENCE_FAILURE
+    assert result.errors == []
+    assert page.errors[0].error_message == "Model API request timed out"
+
+
 def test_in_body_result_envelope_counts_and_round_trips():
     results = [
         _facade_result(
