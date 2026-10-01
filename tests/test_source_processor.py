@@ -1,11 +1,17 @@
+import os
+import subprocess
+import sys
+import tempfile
 from io import BytesIO
 from typing import Generator, Iterator, List
 
+from ray import cloudpickle
+
 from docling_core.types.io import DocumentStream
 
-from docling_jobkit.connectors.source_processor import (
-    BaseSourceProcessor,
-)
+from docling_jobkit.connectors.source_processor import BaseSourceProcessor
+from docling_jobkit.datamodel.task import Task
+from docling_jobkit.orchestrators.ray.models import SourceChunkConvertRequest
 
 # -------------------------------------------------------------------
 # Mock processor that mimics lazy streaming behavior
@@ -107,6 +113,69 @@ def test_chunk_indices_are_sequential():
 
         # Should have 4 chunks (7 docs / 2 per chunk = 3.5 -> 4 chunks)
         assert len(chunks) == 4
+
+
+def test_source_chunk_convert_request_survives_cross_process_cloudpickle():
+    """Regression test for a real production bug (Ray KeyError: 'type').
+
+    DocumentChunk/SourceDocumentRef instances built directly by a connector
+    (as in iterate_document_chunks, exercised elsewhere in this file) already
+    pickle fine on their own -- that was never the actual bug. The real cause:
+    SourceChunkConvertRequest.chunk used to be annotated as
+    DocumentChunk[Any, Any]. Pydantic re-validates an incoming plain
+    DocumentChunk into a *new* DocumentChunk[Any, Any] instance when a
+    SourceChunkConvertRequest is constructed, and that dynamically
+    parametrized class -- created on the fly, never registered as a module
+    attribute -- is what Ray actually sends across the coordinator/converter
+    actor boundary during S3 (and every other connector's) fan-out.
+    cloudpickle on the send side tolerates this (it can embed a class
+    definition inline instead of requiring a module lookup to reconstruct
+    it), but Ray's pickle5 out-of-band receive side falls back to stdlib
+    pickle.loads and cannot find the class, surfacing as an unrelated-looking
+    KeyError: 'type'.
+
+    In-process round-trips don't reproduce this (cloudpickle's sender-side
+    tolerance hides it), so this spawns a real subprocess with no shared
+    memory or prior imports to catch it -- matching what actually fails in
+    production.
+    """
+    with MockSourceProcessor(["a"]) as p:
+        chunk = next(iter(p.iterate_document_chunks(chunk_size=1)))
+
+    request = SourceChunkConvertRequest(
+        task=Task(task_id="test-task"),
+        chunk=chunk,
+        expected_doc_count=1,
+    )
+    data = cloudpickle.dumps(request)
+
+    with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
+        f.write(data)
+        pkl_path = f.name
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import ray.cloudpickle as cloudpickle\n"
+                    f"with open({pkl_path!r}, 'rb') as f:\n"
+                    "    obj = cloudpickle.load(f)\n"
+                    "assert obj.task.task_id == 'test-task'\n"
+                    "assert obj.chunk.ids == ['a']\n"
+                    "assert obj.expected_doc_count == 1\n"
+                    "print('cross-process load OK')\n"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    finally:
+        os.unlink(pkl_path)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "cross-process load OK" in proc.stdout
 
 
 def test_chunking_with_edge_case_sizes():

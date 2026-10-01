@@ -242,10 +242,7 @@ def _export_document_as_content(
         if export_html:
             document.html_content = new_doc.export_to_html(image_mode=image_mode)
         if export_txt:
-            document.text_content = new_doc.export_to_markdown(
-                strict_text=True,
-                image_mode=image_mode,
-            )
+            document.text_content = new_doc.export_to_text()
         if export_md:
             document.md_content = new_doc.export_to_markdown(
                 image_mode=image_mode,

@@ -1,3 +1,16 @@
+## [v3.8.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.8.0) - 2026-09-23
+
+### Feature
+
+* Add chart extraction preset and configuration support ([#250](https://github.com/docling-project/docling-jobkit/issues/250)) ([`2e565cd`](https://github.com/docling-project/docling-jobkit/commit/2e565cda6838bc14bc0007708419fa534e19f3d9))
+* Use default credential chain for S3 ([#246](https://github.com/docling-project/docling-jobkit/issues/246)) ([`10b9e2b`](https://github.com/docling-project/docling-jobkit/commit/10b9e2b31e657f83d8ef68d5a19a1c683eea2279))
+
+### Fix
+
+* Use plain-text serializer for text exports ([#255](https://github.com/docling-project/docling-jobkit/issues/255)) ([`f37b18a`](https://github.com/docling-project/docling-jobkit/commit/f37b18a98c5329da92d8549c9c5c0fa45ba86873))
+* **rq:** Clean up orphaned jobs from StartedJobRegistry ([#238](https://github.com/docling-project/docling-jobkit/issues/238)) ([`11f0631`](https://github.com/docling-project/docling-jobkit/commit/11f0631f455f9d054276deedead6cd4bef144e86))
+* **rq:** Keep the worker's failure reason for a task already marked FAILURE ([#252](https://github.com/docling-project/docling-jobkit/issues/252)) ([`a1f828d`](https://github.com/docling-project/docling-jobkit/commit/a1f828dfa30ddd6b609016d427d8b57ab02c7922))
+
 ## [v3.7.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.7.0) - 2026-09-17
 
 ### Feature

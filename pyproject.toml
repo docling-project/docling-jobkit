@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "docling-jobkit"
-version = "3.7.0"  # DO NOT EDIT, updated automatically
+version = "3.8.0"  # DO NOT EDIT, updated automatically
 description = "Running a distributed job processing documents with Docling."
 readme = "README.md"
 license = "MIT"
@@ -42,9 +42,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    # Local extraction checkout still reports 2.126.0. Raise this to the first
-    # published extraction-contract version before release.
-    "docling-slim[standard]>=2.126.0,<3.0.0",
+    "docling-slim[standard]>=2.129.0,<3.0.0",
     "pydantic~=2.10",
     "pydantic-settings~=2.4",
     "boto3~=1.35",
