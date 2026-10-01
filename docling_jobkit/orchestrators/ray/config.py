@@ -60,13 +60,12 @@ class RayOrchestratorConfig(BaseSettings):
     )
 
     # Redis Configuration
-    # Supports standard Redis, Redis Sentinel, and Redis Cluster via URL:
+    # Supports standard Redis and Redis Sentinel via URL:
     # - Standard: "redis://localhost:6379/"
-    # - Sentinel: "redis+sentinel://sentinel-host:26379/mymaster/0"
-    # - Cluster: "redis://cluster-node:6379/?cluster=true"
+    # - Sentinel: "redis+sentinel://[:password@]host1:26379,host2:26379/mymaster/0"
     redis_url: str = Field(
         default="redis://localhost:6379/",
-        description="Redis connection URL (supports standard, sentinel, cluster)",
+        description="Redis connection URL (supports standard and sentinel)",
     )
     redis_max_connections: int = Field(
         default=50, description="Maximum connections in Redis pool"

@@ -95,7 +95,7 @@ class RayOrchestrator(BaseOrchestrator):
     - Configurable resource limits (concurrent + optional queue limits)
     - Optional 429 rejection when queue limits exceeded
     - Ray Serve for autoscaling document processing with persistent converters
-    - Redis for state management (supports HA Redis with Sentinel/Cluster)
+    - Redis for state management (supports HA Redis with Sentinel)
     - Fault tolerance with automatic retries and recovery
 
     Architecture:

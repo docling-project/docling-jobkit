@@ -27,6 +27,7 @@ from docling_jobkit.datamodel.stored_outcome import (
 )
 from docling_jobkit.datamodel.task import Task, validate_task_json
 from docling_jobkit.datamodel.task_meta import TaskStatus
+from docling_jobkit.orchestrators._redis_url import async_pool_from_url
 from docling_jobkit.orchestrators.ray.models import (
     RedisTaskMetadata,
     TaskTerminalizationResult,
@@ -135,7 +136,7 @@ class RedisStateManager:
         """Initialize Redis state manager.
 
         Args:
-            redis_url: Redis connection URL (supports standard, sentinel, cluster)
+            redis_url: Redis connection URL (supports standard and sentinel)
             results_ttl: Time-to-live for task results in seconds
             results_prefix: Prefix for result keys
             sub_channel: Pub/sub channel name for task updates
@@ -202,7 +203,7 @@ class RedisStateManager:
         """
         if self.redis is None:
             # Create connection pool in the current event loop
-            self.pool = ConnectionPool.from_url(
+            self.pool = async_pool_from_url(
                 self.redis_url,
                 max_connections=self.max_connections,
                 socket_timeout=self.socket_timeout,
@@ -1451,13 +1452,15 @@ class RedisStateManager:
         truly dead Redis still surfaces promptly without conflating "quiet" with
         "broken".
         """
-        return Redis.from_url(
-            self.redis_url,
-            socket_timeout=None,
-            socket_connect_timeout=self.socket_connect_timeout,
-            socket_keepalive=True,
-            health_check_interval=self._pubsub_health_check_interval,
-            decode_responses=False,
+        return Redis(
+            connection_pool=async_pool_from_url(
+                self.redis_url,
+                socket_timeout=None,
+                socket_connect_timeout=self.socket_connect_timeout,
+                socket_keepalive=True,
+                health_check_interval=self._pubsub_health_check_interval,
+                decode_responses=False,
+            )
         )
 
     async def subscribe_to_updates(self):

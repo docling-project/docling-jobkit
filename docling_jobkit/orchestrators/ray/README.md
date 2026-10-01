@@ -27,7 +27,7 @@ The Ray Orchestrator implements a fair round-robin scheduling algorithm at the t
 ### 3. Fault Tolerance
 - **Automatic retries**: Configurable retry logic for failed tasks
 - **Ray Actor recovery**: Dispatcher automatically restarts on failure
-- **Redis HA support**: Compatible with Redis Sentinel and Redis Cluster
+- **Redis HA support**: Compatible with Redis Sentinel
 - **OOM protection**: Handles out-of-memory conditions gracefully
 
 ### 4. Scalability
@@ -709,7 +709,7 @@ If you manually set Ray TLS environment variables, they may conflict with auto-g
 ### Redis Connection Issues
 1. Verify Redis is running and accessible
 2. Check Redis URL format
-3. For HA setups, verify Sentinel/Cluster configuration
+3. For HA setups, verify Sentinel configuration
 4. Monitor Redis memory usage
 
 ## Comparison with Other Orchestrators
