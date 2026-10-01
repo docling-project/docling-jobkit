@@ -1,10 +1,15 @@
+import pickle
 from io import BytesIO
 from typing import Generator, Iterator, List
+
+from pydantic import BaseModel
 
 from docling_core.types.io import DocumentStream
 
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
+    DocumentChunk,
+    SourceDocumentRef,
 )
 
 # -------------------------------------------------------------------
@@ -107,6 +112,70 @@ def test_chunk_indices_are_sequential():
 
         # Should have 4 chunks (7 docs / 2 per chunk = 3.5 -> 4 chunks)
         assert len(chunks) == 4
+
+
+class _FakeFileIdentifier(BaseModel):
+    """Stand-in for a connector's own identifier model (e.g. S3FileIdentifier).
+
+    Picking a BaseModel here (not just `str`) matters: pickling a chunk whose
+    refs/source are plain builtins never exercised the bug, since the failure
+    is specifically about Pydantic's dynamically-parametrized generic classes
+    -- SourceDocumentRef[_FakeFileIdentifier] and
+    DocumentChunk[List[str], _FakeFileIdentifier] -- not about the field
+    values they carry.
+    """
+
+    key: str
+    size: int
+
+
+def test_document_chunk_and_refs_survive_pickling():
+    """Regression test for a real production bug (Ray KeyError: 'type').
+
+    SourceDocumentRef[...] and DocumentChunk[...] are dynamically-parametrized
+    Pydantic generics, which are not picklable via plain `pickle` by default:
+    the class pickle needs to locate by module+qualname was never registered
+    as a real module attribute. In production this surfaced when Ray sent a
+    DocumentChunk from the coordinator to a converter actor (S3 fan-out):
+    cloudpickle on the send side tolerated it, but the pickle5 out-of-band
+    receive side fell back to stdlib pickle.loads and raised KeyError: 'type'
+    deep inside Ray's own deserialization -- an unrelated-looking symptom of
+    the same underlying problem. See _PicklableGenericModel in
+    source_processor.py for the fix and the full explanation.
+    """
+    ref = SourceDocumentRef[_FakeFileIdentifier](
+        id=_FakeFileIdentifier(key="docs/report.pdf", size=123),
+        source_index=0,
+        source_uri="mock://bucket/docs/report.pdf",
+        filename="report.pdf",
+    )
+    chunk = DocumentChunk[List[str], _FakeFileIdentifier](
+        source=["docs/report.pdf"],
+        refs=[ref],
+        chunk_index=0,
+    )
+
+    # The actual failure mode: pickle.dumps() itself raised PicklingError
+    # before the fix, independent of any cross-process concern.
+    restored_ref = pickle.loads(pickle.dumps(ref))
+    restored_chunk = pickle.loads(pickle.dumps(chunk))
+
+    assert restored_ref == ref
+    assert restored_ref.id == _FakeFileIdentifier(key="docs/report.pdf", size=123)
+    assert restored_chunk == chunk
+    assert restored_chunk.refs[0].filename == "report.pdf"
+    assert restored_chunk.ids == [_FakeFileIdentifier(key="docs/report.pdf", size=123)]
+
+
+def test_document_chunks_from_real_iteration_survive_pickling():
+    """Same bug, via the actual production code path (iterate_document_chunks)
+    rather than constructing SourceDocumentRef/DocumentChunk directly."""
+    ids = ["a", "b", "c"]
+    with MockSourceProcessor(ids) as p:
+        chunks = list(p.iterate_document_chunks(chunk_size=2))
+        for chunk in chunks:
+            restored = pickle.loads(pickle.dumps(chunk))
+            assert restored == chunk
 
 
 def test_chunking_with_edge_case_sizes():
