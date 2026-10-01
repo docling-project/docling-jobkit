@@ -1,3 +1,9 @@
+## [v3.8.1](https://github.com/docling-project/docling-jobkit/releases/tag/v3.8.1) - 2026-10-01
+
+### Fix
+
+* Fix for connectors using static defined class instead of dynamically created ([#263](https://github.com/docling-project/docling-jobkit/issues/263)) ([`8df293a`](https://github.com/docling-project/docling-jobkit/commit/8df293a306ecdf8f543220a03079a36770d6f512))
+
 ## [v3.8.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.8.0) - 2026-09-23
 
 ### Feature
