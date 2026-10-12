@@ -19,6 +19,8 @@ import pytest
 
 pytest.importorskip("ray")
 
+from ray.serve.handle import DeploymentResponse
+
 from docling.datamodel.base_models import ConversionStatus, OutputFormat
 from docling.datamodel.service.callbacks import (
     CallbackSpec,
@@ -486,10 +488,10 @@ async def test_slice_plan_never_exceeds_ceiling_and_collects_all(
     assert manager.total_acquired == manager.total_released == total_slices
 
 
-class _HangingResponse:
-    """Awaitable stand-in for a DeploymentResponse that never resolves."""
+class _HangingResponse(DeploymentResponse):
+    """DeploymentResponse that never resolves and records cancel()."""
 
-    def __init__(self) -> None:
+    def __init__(self) -> None:  # skip the real constructor's router plumbing
         self.cancelled = False
 
     def __await__(self):

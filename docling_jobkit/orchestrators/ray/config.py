@@ -389,9 +389,23 @@ class RayOrchestratorConfig(BaseSettings):
     recycle_converter_on_abandoned_conversion: bool = Field(
         default=True,
         description=(
-            "Report a converter replica as unhealthy once a cancelled request has "
-            "left a conversion thread running in it, so Ray Serve replaces the "
-            "replica and the abandoned work stops using CPU"
+            "Report a converter replica as unhealthy while a cancelled request's "
+            "conversion thread is still running in it past "
+            "abandoned_conversion_grace_s, so Ray Serve replaces the replica and "
+            "the abandoned work stops using CPU. Only takes effect when "
+            "graceful_shutdown_timeout_s >= document_timeout, so the draining "
+            "replica can finish the request it is serving; otherwise a warning is "
+            "logged and replicas are not recycled."
+        ),
+    )
+    abandoned_conversion_grace_s: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Seconds a conversion may keep running after its request was "
+            "cancelled before the converter replica reports unhealthy. "
+            "None = document_timeout + 60 s: by then docling's own timeout has "
+            "ended any conversion that is not stuck."
         ),
     )
     redis_operation_timeout: float = Field(

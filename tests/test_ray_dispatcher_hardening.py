@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import os
 import threading
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1202,20 +1203,9 @@ def _make_converter(config: RayOrchestratorConfig) -> object:
         )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("recycle", [True, False])
-async def test_converter_reports_unhealthy_after_abandoned_conversion(
-    recycle: bool,
-) -> None:
-    config = RayOrchestratorConfig(
-        redis_url="redis://localhost:6379/",
-        recycle_converter_on_abandoned_conversion=recycle,
-    )
-    deployment = _make_converter(config)
-    await deployment.check_health()
-
+async def _abandon_conversion(deployment, release: threading.Event) -> None:
+    """Start a conversion that blocks until *release*, then cancel its request."""
     started = threading.Event()
-    release = threading.Event()
 
     def slow_conversion() -> str:
         started.set()
@@ -1223,17 +1213,88 @@ async def test_converter_reports_unhealthy_after_abandoned_conversion(
         return "done"
 
     call = asyncio.create_task(deployment._run_with_retry("doc.pdf", slow_conversion))
+    assert await asyncio.to_thread(started.wait, 5.0)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+
+async def _wait_until(predicate, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "condition not reached"
+        await asyncio.sleep(0.01)
+
+
+def _recycling_config(**overrides) -> RayOrchestratorConfig:
+    values = {
+        "redis_url": "redis://localhost:6379/",
+        "document_timeout": 300.0,
+        "graceful_shutdown_timeout_s": 600.0,
+        "abandoned_conversion_grace_s": 0.1,
+    }
+    values.update(overrides)
+    return RayOrchestratorConfig(**values)
+
+
+@pytest.mark.asyncio
+async def test_converter_reports_unhealthy_while_abandoned_conversion_runs() -> None:
+    deployment = _make_converter(_recycling_config())
+    await deployment.check_health()
+
+    release = threading.Event()
     try:
-        assert await asyncio.to_thread(started.wait, 5.0)
-        call.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await call
+        await _abandon_conversion(deployment, release)
+        assert deployment.abandoned_conversions == 1
+        await deployment.check_health()  # still within the grace period
+
+        await asyncio.sleep(0.2)
+        with pytest.raises(RuntimeError, match="after their request was cancelled"):
+            await deployment.check_health()
     finally:
         release.set()
 
-    assert deployment.abandoned_conversions == 1
-    if recycle:
-        with pytest.raises(RuntimeError, match="abandoned conversion"):
-            await deployment.check_health()
-    else:
+    # Once the abandoned thread finishes, the replica is healthy again.
+    await _wait_until(lambda: deployment.abandoned_conversions == 0)
+    await deployment.check_health()
+
+
+@pytest.mark.asyncio
+async def test_converter_ignores_abandoned_conversion_that_ends_within_grace() -> None:
+    deployment = _make_converter(_recycling_config(abandoned_conversion_grace_s=5.0))
+
+    release = threading.Event()
+    try:
+        await _abandon_conversion(deployment, release)
+    finally:
+        release.set()
+
+    await _wait_until(lambda: deployment.abandoned_conversions == 0)
+    await deployment.check_health()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"recycle_converter_on_abandoned_conversion": False},
+        # Serve would force-kill the draining replica before an unrelated
+        # request it took after the cancel could finish.
+        {"graceful_shutdown_timeout_s": None},
+        {"graceful_shutdown_timeout_s": 60.0},
+        {"document_timeout": None},
+    ],
+)
+async def test_converter_does_not_recycle_when_draining_is_unsafe(
+    overrides: dict,
+) -> None:
+    deployment = _make_converter(_recycling_config(**overrides))
+
+    release = threading.Event()
+    try:
+        await _abandon_conversion(deployment, release)
+        await asyncio.sleep(0.2)
+        assert deployment.abandoned_conversions == 1
         await deployment.check_health()
+    finally:
+        release.set()

@@ -8,8 +8,10 @@ import gc
 import logging
 import shutil
 import tempfile
+import threading
 import time
 from copy import deepcopy
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Iterator, Optional, cast
@@ -17,6 +19,7 @@ from typing import Any, Iterator, Optional, cast
 import ray
 from pydantic import BaseModel
 from ray import ObjectRef, serve
+from ray.serve.handle import DeploymentResponse
 
 from docling.datamodel.base_models import (
     ConversionStatus,
@@ -183,10 +186,46 @@ async def _await_converter_response(response: Any, timeout_s: Optional[float]) -
                 f"Converter call exceeded converter_request_timeout ({timeout_s:.0f}s)"
             ) from None
     except (asyncio.CancelledError, TimeoutError):
-        cancel = getattr(response, "cancel", None)
-        if callable(cancel):
-            cancel()
+        if isinstance(response, DeploymentResponse):
+            response.cancel()
         raise
+
+
+@dataclass(eq=False)
+class _ConversionThread:
+    """A converter call running in a worker thread (identity-hashed)."""
+
+    finished: bool = False
+    abandoned_at: Optional[float] = None
+
+
+def _abandoned_conversion_grace_s(config: RayOrchestratorConfig) -> float:
+    if config.abandoned_conversion_grace_s is not None:
+        return config.abandoned_conversion_grace_s
+    return (config.document_timeout or 0.0) + 60.0
+
+
+def _recycle_on_abandoned_conversion(config: RayOrchestratorConfig) -> bool:
+    """Whether a replica may report unhealthy over an abandoned conversion.
+
+    After the replica reports unhealthy, Serve stops it and force-kills it once
+    graceful_shutdown_timeout_s has passed. The replica keeps taking requests
+    until then, so the grace period must let any such request finish; otherwise
+    an unrelated conversion would be killed with it.
+    """
+    if not config.recycle_converter_on_abandoned_conversion:
+        return False
+    graceful = config.graceful_shutdown_timeout_s
+    document_timeout = config.document_timeout
+    if graceful is None or document_timeout is None or graceful < document_timeout:
+        _log.warning(
+            "recycle_converter_on_abandoned_conversion is disabled: it requires "
+            "graceful_shutdown_timeout_s (%s) >= document_timeout (%s)",
+            graceful,
+            document_timeout,
+        )
+        return False
+    return True
 
 
 DEFAULT_SERVE_APP_NAME = "docling_processor"
@@ -754,8 +793,12 @@ class DoclingProcessorConverterDeployment:
         self.last_task_time: Optional[datetime.datetime] = None
         self.memory_warnings = 0
         self._chunker_manager: DocumentChunkerManager | None = None
-        # Conversions whose request was cancelled while their thread kept running.
-        self.abandoned_conversions = 0
+        # Conversions whose request was cancelled while their thread kept running;
+        # each one leaves the set when its thread finishes.
+        self._abandoned_lock = threading.Lock()
+        self._abandoned: set[_ConversionThread] = set()
+        self._recycle_on_abandoned = _recycle_on_abandoned_conversion(config)
+        self._abandoned_grace_s = _abandoned_conversion_grace_s(config)
 
         # Pipeline timing histograms stay empty unless the operator also sets
         # DOCLING_DEBUG_PROFILE_PIPELINE_TIMINGS=true, which docling reads on
@@ -922,18 +965,19 @@ class DoclingProcessorConverterDeployment:
         last_exception: Optional[Exception] = None
 
         for attempt in range(max_retries + 1):
+            conversion = _ConversionThread()
             try:
-                return await asyncio.to_thread(func)
+                return await asyncio.to_thread(self._run_conversion, func, conversion)
             except asyncio.CancelledError:
                 # to_thread cannot stop the conversion: it keeps running and using
                 # CPU after the request is gone. See check_health().
-                self.abandoned_conversions += 1
-                _log.warning(
-                    "Converter replica %s: request for %s was cancelled; its "
-                    "conversion thread keeps running until it finishes",
-                    self.replica_id,
-                    task_label,
-                )
+                if self._mark_abandoned(conversion):
+                    _log.warning(
+                        "Converter replica %s: request for %s was cancelled; its "
+                        "conversion thread keeps running until it finishes",
+                        self.replica_id,
+                        task_label,
+                    )
                 raise
             except Exception as exc:  # pragma: no cover - exercised in tests via mocks
                 last_exception = exc
@@ -984,21 +1028,52 @@ class DoclingProcessorConverterDeployment:
 
         raise last_exception or RuntimeError("Converter request failed")
 
+    def _run_conversion(self, func: Any, conversion: _ConversionThread) -> Any:
+        try:
+            return func()
+        finally:
+            with self._abandoned_lock:
+                conversion.finished = True
+                self._abandoned.discard(conversion)
+
+    def _mark_abandoned(self, conversion: _ConversionThread) -> bool:
+        with self._abandoned_lock:
+            if conversion.finished:
+                return False
+            conversion.abandoned_at = time.monotonic()
+            self._abandoned.add(conversion)
+            return True
+
+    @property
+    def abandoned_conversions(self) -> int:
+        """Conversions still running although their request was cancelled."""
+        with self._abandoned_lock:
+            return len(self._abandoned)
+
     async def check_health(self) -> None:
         """Called periodically by Ray Serve; raising makes Serve replace the replica.
 
         A cancelled request leaves its conversion thread running, so this replica
         would take new work while still converting the abandoned document. Only a
-        restart of the replica process stops that thread.
+        restart of the replica process stops that thread. Threads that end within
+        the grace period, e.g. through docling's own document_timeout, do not
+        trigger a restart.
         """
-        if (
-            self.config.recycle_converter_on_abandoned_conversion
-            and self.abandoned_conversions > 0
-        ):
+        if not self._recycle_on_abandoned:
+            return
+        now = time.monotonic()
+        with self._abandoned_lock:
+            stuck = sum(
+                1
+                for conversion in self._abandoned
+                if conversion.abandoned_at is not None
+                and now - conversion.abandoned_at > self._abandoned_grace_s
+            )
+        if stuck:
             raise RuntimeError(
-                f"Converter replica {self.replica_id} has "
-                f"{self.abandoned_conversions} abandoned conversion(s); "
-                "requesting a restart"
+                f"Converter replica {self.replica_id} has {stuck} conversion(s) "
+                f"still running more than {self._abandoned_grace_s:.0f}s after "
+                "their request was cancelled; requesting a restart"
             )
 
     def _get_chunker_manager(self) -> DocumentChunkerManager:

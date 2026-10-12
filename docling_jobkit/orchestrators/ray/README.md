@@ -201,6 +201,16 @@ config = RayOrchestratorConfig(
     ray_cluster_name="my-ray-cluster",
 ```
 
+### Timeouts and abandoned conversions
+
+- `document_timeout` is the default per-document limit, used when a task's convert options do not set one. docling enforces it during the conversion.
+- `task_timeout` fails a task that runs too long and cancels it, including its in-flight converter calls.
+- `converter_request_timeout` (optional) is a hard limit per document on each converter call, as a backstop. Set it well above `document_timeout`, e.g. 2x.
+
+A cancelled converter call cannot stop its conversion thread, which keeps running in the converter replica. With `recycle_converter_on_abandoned_conversion` (default `True`), the replica reports unhealthy while such a thread is still running more than `abandoned_conversion_grace_s` (default `document_timeout` + 60 s) after the cancel. Ray Serve then replaces the replica. Threads that end within the grace period, e.g. through docling's own `document_timeout`, do not trigger a restart.
+
+The replica keeps serving requests until Serve stops it, and Serve force-kills it after `graceful_shutdown_timeout_s`. Recycling therefore only takes effect when `graceful_shutdown_timeout_s >= document_timeout`, so the replica can finish the request it is serving. Otherwise a warning is logged and replicas are not recycled.
+
 ## Usage
 
 ### Basic Usage
