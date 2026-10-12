@@ -668,3 +668,35 @@ async def test_target_write_error_details_contain_correct_target_kind(
     progress = _only_task_completed(recorded_callbacks)
     assert progress.failure.category == FailureCategory.TARGET_UNAVAILABLE
     assert progress.failure.details.get("target_kind") == PresignedUrlTarget().kind
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_cancels_task_that_exceeds_task_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    recorded_callbacks: list[dict[str, Any]],
+) -> None:
+    """A task_timeout must cancel the replica request, not only fail the task."""
+    manager = _FakeRedisManager()
+    dispatcher = _make_dispatcher(manager)
+
+    class SlowResponse:
+        def __init__(self) -> None:
+            self.cancelled = False
+
+        def result(self, *, timeout_s: Any = None, _skip_asyncio_check: bool = False):
+            raise TimeoutError("Timed out resolving to ObjectRef.")
+
+        def cancel(self) -> None:
+            self.cancelled = True
+
+    response = SlowResponse()
+    dispatcher.deployment_handle = SimpleNamespace(  # type: ignore[attr-defined]
+        process_task=SimpleNamespace(remote=lambda task: response)
+    )
+
+    await dispatcher._process_task_async(_task_with_callback(), "tenant-a")
+
+    assert response.cancelled
+    progress = _only_task_completed(recorded_callbacks)
+    assert progress.task_status == "failure"
+    assert progress.failure.category == FailureCategory.TIMEOUT

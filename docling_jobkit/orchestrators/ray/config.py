@@ -368,7 +368,31 @@ class RayOrchestratorConfig(BaseSettings):
     )
     document_timeout: Optional[float] = Field(
         default=300.0,
-        description="Maximum seconds per document (None = no limit)",
+        description=(
+            "Default seconds per document, applied when the task's convert "
+            "options do not set document_timeout (None = no limit)"
+        ),
+    )
+    converter_request_timeout: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Hard limit in seconds, per document, on a coordinator call to a "
+            "converter replica, including the wait for a free replica. A backstop "
+            "for conversions that run past document_timeout: set it well above "
+            "that (e.g. 2x). The call is cancelled when exceeded; a PDF slice is "
+            "recorded as failed, any other task fails. Multiplied by the number "
+            "of sources for multi-document tasks. Not applied to S3 fan-out "
+            "(None = no limit)."
+        ),
+    )
+    recycle_converter_on_abandoned_conversion: bool = Field(
+        default=True,
+        description=(
+            "Report a converter replica as unhealthy once a cancelled request has "
+            "left a conversion thread running in it, so Ray Serve replaces the "
+            "replica and the abandoned work stops using CPU"
+        ),
     )
     redis_operation_timeout: float = Field(
         default=30.0, description="Timeout for Redis operations in seconds"

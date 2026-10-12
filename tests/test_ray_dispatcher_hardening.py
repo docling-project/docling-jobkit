@@ -1183,3 +1183,57 @@ async def test_dispatcher_stats_preserve_existing_shape() -> None:
         "max_concurrent_tasks": dispatcher.config.max_concurrent_tasks,
         "max_queued_tasks": dispatcher.config.max_queued_tasks,
     }
+
+
+def _make_converter(config: RayOrchestratorConfig) -> object:
+    with (
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment.serve.get_replica_context",
+            return_value=_FakeReplicaContext(_FakeReplicaID()),
+        ),
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment.DoclingConverterManager"
+        ),
+    ):
+        deployment_cls = DoclingProcessorConverterDeployment.func_or_class
+        return deployment_cls(
+            converter_manager_config=MagicMock(),
+            config=config,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recycle", [True, False])
+async def test_converter_reports_unhealthy_after_abandoned_conversion(
+    recycle: bool,
+) -> None:
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/",
+        recycle_converter_on_abandoned_conversion=recycle,
+    )
+    deployment = _make_converter(config)
+    await deployment.check_health()
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_conversion() -> str:
+        started.set()
+        release.wait(timeout=10.0)
+        return "done"
+
+    call = asyncio.create_task(deployment._run_with_retry("doc.pdf", slow_conversion))
+    try:
+        assert await asyncio.to_thread(started.wait, 5.0)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+    finally:
+        release.set()
+
+    assert deployment.abandoned_conversions == 1
+    if recycle:
+        with pytest.raises(RuntimeError, match="abandoned conversion"):
+            await deployment.check_health()
+    else:
+        await deployment.check_health()
