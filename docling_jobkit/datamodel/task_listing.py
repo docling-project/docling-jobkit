@@ -22,7 +22,6 @@ from docling_jobkit.datamodel.task_meta import TaskStatus
 # matching how the orchestrators and the serving layer resolve a tenant.
 DEFAULT_TENANT_ID = "default"
 
-# A listing only reports work that has not reached a terminal state.
 ACTIVE_TASK_STATUSES = frozenset({TaskStatus.PENDING, TaskStatus.STARTED})
 
 MIN_PAGE_LIMIT = 1
