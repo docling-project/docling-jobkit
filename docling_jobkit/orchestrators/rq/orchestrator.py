@@ -212,7 +212,7 @@ class RQOrchestrator(BaseOrchestrator):
                 self._rq_job_function,
                 kwargs={"task_data": task_data},
                 job_id=task_id,
-                timeout=self.config.job_timeout,
+                job_timeout=self.config.job_timeout,
                 failure_ttl=self.config.failure_ttl,
             )
             await self.init_task_tracking(task)
