@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from docling_jobkit.datamodel.task import Task
 
 
-def task_target_kind(task: "Task") -> str:
+def task_target_kind(task: Task) -> str:
     """Return the ``kind`` of the first target, or its type name as a fallback.
 
     ``task.target`` is always ``None`` at runtime because the model validator

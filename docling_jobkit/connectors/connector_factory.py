@@ -11,7 +11,7 @@ from a config object via :meth:`BaseConnectorFactory.create_instance`.
 import logging
 from abc import ABCMeta
 from collections.abc import Mapping
-from functools import lru_cache
+from functools import cache
 from typing import (
     Annotated,
     Any,
@@ -308,7 +308,7 @@ class TargetConnectorFactory(BaseConnectorFactory[BaseTargetProcessor]):
         return self._classes[config_type].result_mode()
 
 
-@lru_cache(maxsize=None)
+@cache
 def get_source_connector_factory(
     allow_external_plugins: bool = False,
 ) -> SourceConnectorFactory:
@@ -317,7 +317,7 @@ def get_source_connector_factory(
     return factory
 
 
-@lru_cache(maxsize=None)
+@cache
 def get_target_connector_factory(
     allow_external_plugins: bool = False,
 ) -> TargetConnectorFactory:

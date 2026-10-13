@@ -25,7 +25,7 @@ maintainers = [
     {name="Peter Staar", email="taa@zurich.ibm.com"},
 ]
 classifiers = [
-    "Operating System :: OS Independent", 
+    "Operating System :: OS Independent",
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Typing :: Typed",
@@ -108,10 +108,27 @@ box = [
 
 
 [dependency-groups]
+typecheck = [
+    "ty==0.0.33",
+    "boto3-stubs[s3]~=1.35",
+    "pandas-stubs~=2.2",
+    "types-pyyaml>=6.0.12.20250915",
+    "types-psutil>=7.2.2.20260130",
+    "types-requests~=2.31",
+]
+pr-fast-checks = [
+    { include-group = "typecheck" },
+    "docling-slim>=2.129.0,<3.0.0",
+    "httpx>=0.28,<1",
+    "pydantic~=2.10",
+    "pydantic-settings~=2.4",
+    "ruff==0.16.10",
+    "typer>=0.12.5,<1",
+]
 dev = [
+    { include-group = "typecheck" },
     "coverage>=7.8.0",
-    "mypy~=1.11",
-    "pre-commit~=3.8",
+    "prek>=0.3.10",
     "pytest~=9.0.3",
     "pytest-asyncio~=1.4.0",
     "pytest-check~=2.4",
@@ -121,12 +138,9 @@ dev = [
     "redis[hiredis]>=4.2,<8.0.0",
     "msgpack~=1.1",
     "psutil>=6.0.0",
-    "boto3-stubs[s3]~=1.35",
-    "ruff>=0.9.6",
-    "types-pyyaml>=6.0.12.20250915",
+    "ruff==0.16.10",
     "aiohttp>=3.13.3",
     "numpy<2.5.0",  # temporary pinning to avoid typing incompatibility for python < 3.12
-    "types-psutil>=7.2.2.20260130",
 ]
 
 [tool.uv.sources]
@@ -168,41 +182,38 @@ target-version = "py310"
 line-length = 88
 respect-gitignore = true
 
-# extend-exclude = [
-#     "tests",
-# ]
-
 [tool.ruff.format]
 skip-magic-trailing-comma = false
 
 [tool.ruff.lint]
 select = [
-    # "B",  # flake8-bugbear
     "C",  # flake8-comprehensions
     "C9",  # mccabe
-    # "D",  # flake8-docstrings
     "E",  # pycodestyle errors (default)
     "F",  # pyflakes (default)
     "I",  # isort
     "PD", # pandas-vet
     "PIE", # pie
-    # "PTH", # pathlib
     "Q",  # flake8-quotes
-    # "RET", # return
     "RUF", # Enable all ruff-specific checks
-    # "SIM", # simplify
     "S307", # eval
-    # "T20",  # (disallow print statements) keep debugging statements out of the codebase
     "W",  # pycodestyle warnings
-    "ASYNC" # async
+    "ASYNC", # async
+    "UP",  # pyupgrade
 ]
 
 ignore = [
-    "E501",  # Line too long, handled by ruff formatter
-    "D107", # "Missing docstring in __init__",
-    "F811", # "redefinition of the same function"
-    "PL", # Pylint
+    "C408",   # Unnecessary `dict()` call (rewrite as a literal)
+    "E501",   # Line too long, handled by ruff formatter
+    "D107",   # "Missing docstring in __init__",
+    "F811",   # "redefinition of the same function"
+    "PL",     # Pylint
     "RUF012", # Mutable Class Attributes
+    "RUF059", # Unused unpacked variables
+    "UP006",  # List vs list, etc
+    "UP007",  # Option and Union
+    "UP035",  # `typing.Set` is deprecated, use `set` instead"
+    "UP045",  # `Optional[T]` vs `T | None`
 ]
 
 [tool.ruff.lint.pep8-naming]
@@ -235,34 +246,35 @@ section-order = [
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
-[tool.mypy]
-pretty = true
-# strict = true
-no_implicit_optional = true
-plugins = "pydantic.mypy"
-python_version = "3.10"
+[tool.ty.rules]
+all = "warn"
 
-[[tool.mypy.overrides]]
-module = [
-    "boto3.*",
-    "botocore.*",
-    "easyocr.*",
-    "tesserocr.*",
-    "rapidocr_onnxruntime.*",
-    "pandas.*",
-    "msgpack.*",
-    "mlx_vlm.*",
-    "googleapiclient.*",
-    "google_auth_oauthlib.*",
-    "google.*",
-    "office365.*",
-    "ray.*",
-    "codeflare_sdk.*",
-    "opensearchpy.*",
-    "confluent_kafka.*",
-    "box_sdk_gen.*",
+[tool.ty.environment]
+python-version = "3.10"
+
+[tool.ty.src]
+include = ["docling_jobkit", ".github/scripts"]
+
+[tool.ty.analysis]
+allowed-unresolved-imports = [
+    "box_sdk_gen.**",
+    "codeflare_sdk.**",
+    "confluent_kafka.**",
+    "easyocr.**",
+    "googleapiclient.**",
+    "google_auth_oauthlib.**",
+    "google.**",
+    "mlx_vlm.**",
+    "msgpack.**",
+    "office365.**",
+    "opensearchpy.**",
+    "rapidocr_onnxruntime.**",
+    "ray.**",
+    "tesserocr.**",
 ]
-ignore_missing_imports = true
+
+[tool.ty.terminal]
+output-format = "concise"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

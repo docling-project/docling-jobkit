@@ -204,7 +204,7 @@ def test_upload_object_str_is_utf8_encoded(dbvol_coords):
         "dbc-xxxxxxx.cloud.databricks.com",
         "tok",
         "/Volumes/main/default/output/output/doc.txt",
-        "héllo".encode("utf-8"),
+        "héllo".encode(),
         content_type="text/plain",
     )
 

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 class KafkaTargetProcessor(BaseDatabaseTargetProcessor[KafkaChunkTarget]):
     def __init__(self, target: KafkaChunkTarget) -> None:
         super().__init__(target)
-        self._producer: "Optional[Producer]" = None
+        self._producer: Optional[Producer] = None
         self._current_document_hash: Optional[str] = None
         self._delivery_errors: list[Any] = []
         # Broker/client errors from the error_cb (e.g. _UNKNOWN_TOPIC).

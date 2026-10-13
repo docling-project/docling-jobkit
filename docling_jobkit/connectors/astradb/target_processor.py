@@ -17,8 +17,8 @@ if TYPE_CHECKING:
 class AstraDBTargetProcessor(BaseDatabaseTargetProcessor[AstraDBChunkTarget]):
     def __init__(self, target: AstraDBChunkTarget) -> None:
         super().__init__(target)
-        self._client: Optional["DataAPIClient"] = None
-        self._collection: Optional["Collection"] = None
+        self._client: Optional[DataAPIClient] = None
+        self._collection: Optional[Collection] = None
         self._current_document_hash: Optional[str] = None
 
     @classmethod
