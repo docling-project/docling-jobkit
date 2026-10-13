@@ -12,6 +12,7 @@ import msgpack
 import redis
 import redis.asyncio as async_redis
 from pydantic import BaseModel, model_validator
+from redis.exceptions import WatchError
 from rq import Queue
 from rq.exceptions import NoSuchJobError
 from rq.job import Job, JobStatus
@@ -34,6 +35,8 @@ from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
+    CancellationConflictReason,
+    TaskCancellationConflictError,
     TaskNotFoundError,
 )
 from docling_jobkit.orchestrators.serialization import dump_model_with_secrets
@@ -86,6 +89,47 @@ class _TaskUpdate(BaseModel):
 class _RQJobGone:
     """Sentinel: the RQ job has been deleted or TTL-expired."""
 
+
+class _CancellationOutcome:
+    """Internal outcomes of the atomic cancellation transition."""
+
+    CANCELLED = "cancelled"
+    ALREADY_CANCELLED = "already_cancelled"
+    CONFLICT = "conflict"
+    NOT_FOUND = "not_found"
+
+
+def apply_durable_status_transition(
+    data: dict[str, Any],
+    *,
+    expected: TaskStatus,
+    new_status: TaskStatus,
+    timestamp: str,
+) -> Optional[dict[str, Any]]:
+    """Build the next durable metadata payload, or None if the move is illegal.
+
+    Single decision point shared by the API-side cancellation and the
+    worker-side STARTED claim, so both agree on when a transition is allowed.
+    The caller is responsible for making the read and the write atomic.
+    """
+    current = TaskStatus(data.get("task_status", TaskStatus.PENDING.value))
+    if current != expected:
+        return None
+
+    updated = dict(data)
+    updated["task_status"] = new_status.value
+    updated["last_update_at"] = timestamp
+    if new_status == TaskStatus.STARTED and not updated.get("started_at"):
+        updated["started_at"] = timestamp
+    if new_status in (TaskStatus.SUCCESS, TaskStatus.FAILURE, TaskStatus.CANCELLED):
+        if not updated.get("finished_at"):
+            updated["finished_at"] = timestamp
+    return updated
+
+
+# Durable writes use a WATCH transaction in _store_task_in_redis (not Lua) so
+# empty-list fields survive the round-trip as lists for Task validation; see
+# the method for the STARTED/terminal monotonicity rules.
 
 _HEARTBEAT_TTL = 60  # seconds before an unrefreshed key expires
 _HEARTBEAT_INTERVAL = 20  # seconds between heartbeat writes
@@ -219,16 +263,39 @@ class RQOrchestrator(BaseOrchestrator):
                 allow_external_plugins=self.config.allow_external_plugins,
             )
             task_data = dump_model_with_secrets(task, serialize_as_any=True)
-            await asyncio.to_thread(
-                self._rq_queue.enqueue,
-                self._rq_job_function,
-                kwargs={"task_data": task_data},
-                job_id=task_id,
-                job_timeout=self.config.job_timeout,
-                failure_ttl=self.config.failure_ttl,
-            )
+            # Durable arbitration must exist before the queue job is published:
+            # a fast worker may dequeue and claim immediately, and its
+            # PENDING -> STARTED claim races cancellation on this metadata.
             await self.init_task_tracking(task)
             await self._store_task_in_redis(task)
+            try:
+                await asyncio.to_thread(
+                    self._rq_queue.enqueue,
+                    self._rq_job_function,
+                    kwargs={"task_data": task_data},
+                    job_id=task_id,
+                    job_timeout=self.config.job_timeout,
+                    failure_ttl=self.config.failure_ttl,
+                )
+            except Exception:
+                # Roll back the orphan arbitration state so the task reads as
+                # unknown instead of a permanently PENDING ghost.
+                self.tasks.pop(task_id, None)
+                try:
+                    await asyncio.to_thread(
+                        self._redis_conn.delete,
+                        f"{_TASK_METADATA_PREFIX}{task_id}:metadata",
+                    )
+                except Exception as exc:
+                    _log.warning(f"Could not roll back metadata for {task_id}: {exc}")
+                if self.notifier:
+                    try:
+                        await self.notifier.remove_task(task_id)
+                    except Exception as exc:
+                        _log.warning(
+                            f"Could not roll back notifier for {task_id}: {exc}"
+                        )
+                raise
             return task
 
     async def queue_size(self) -> int:
@@ -238,6 +305,7 @@ class RQOrchestrator(BaseOrchestrator):
         task = await self.get_raw_task(task_id=task_id)
         if task.is_completed():
             return
+        original_status = task.task_status
 
         def _fetch_job_info(tid: str):
             j = Job.fetch(tid, connection=self._redis_conn)
@@ -261,9 +329,18 @@ class RQOrchestrator(BaseOrchestrator):
             JobStatus.STOPPED,
             JobStatus.DEFERRED,
         ):
-            task.set_status(TaskStatus.PENDING)
+            # The RQ job view can lag the durable claim: a worker may have
+            # already committed PENDING->STARTED while RQ still reports QUEUED.
+            # Keep a won STARTED claim instead of reopening it to PENDING.
+            if original_status != TaskStatus.STARTED:
+                task.set_status(TaskStatus.PENDING)
         elif job_status == JobStatus.STARTED:
             task.set_status(TaskStatus.STARTED)
+        elif job_status == JobStatus.CANCELED:
+            # Likewise, a CANCELED RQ job hash is cleanup for a queued job; it
+            # must not undo a durable STARTED claim that already won.
+            if original_status != TaskStatus.STARTED:
+                task.set_status(TaskStatus.CANCELLED)
         else:
             task.set_status(TaskStatus.FAILURE)
 
@@ -364,6 +441,150 @@ class RQOrchestrator(BaseOrchestrator):
             except Exception as e:
                 _log.error("An error occour getting queue position.", exc_info=e)
                 return None
+
+    async def cancel_queued_task(self, task_id: str) -> Task:
+        """Cancel a task that has not been claimed by a worker yet.
+
+        The PENDING -> CANCELLED transition is a single Redis transaction on the
+        durable metadata, so it is mutually exclusive with the worker's
+        PENDING -> STARTED claim across every API replica and every worker.
+        """
+        async with self._redis_gate.acquire(
+            self.config.redis_gate_status_poll_wait_timeout
+        ):
+            outcome, task = await self._cancel_task_in_redis_atomic(task_id)
+
+            if outcome == _CancellationOutcome.NOT_FOUND:
+                raise TaskNotFoundError(task_id)
+            if outcome == _CancellationOutcome.CONFLICT:
+                status = task.task_status if task is not None else None
+                if status is None:
+                    raise TaskCancellationConflictError(
+                        CancellationConflictReason.ALREADY_FINISHED, None
+                    )
+                raise TaskCancellationConflictError(
+                    self.cancellation_conflict_reason(status)
+                    or CancellationConflictReason.ALREADY_FINISHED,
+                    status,
+                )
+
+            if outcome == _CancellationOutcome.CANCELLED:
+                # Physical removal is cleanup only; the durable transition above
+                # is what makes the cancellation win.
+                durable = await self._get_task_from_redis(task_id)
+                await asyncio.to_thread(self._remove_queued_rq_job, task_id)
+                await self._async_redis_conn.publish(
+                    self.config.sub_channel,
+                    _TaskUpdate(
+                        task_id=task_id,
+                        task_status=TaskStatus.CANCELLED,
+                    ).model_dump_json(),
+                )
+                task = durable
+
+            if task is None:
+                task = await self.get_raw_task(task_id)
+            else:
+                # Redis is the source of truth; never hand back the stale
+                # in-memory copy that the atomic transition just superseded.
+                self.tasks[task_id] = task
+
+            if self.notifier:
+                await self.notifier.notify_task_subscribers(task_id)
+                await self.notifier.notify_queue_positions()
+
+            return task
+
+    async def _cancel_task_in_redis_atomic(
+        self, task_id: str
+    ) -> tuple[str, Optional[Task]]:
+        """Atomically move durable task metadata from PENDING to CANCELLED."""
+        metadata_key = f"{_TASK_METADATA_PREFIX}{task_id}:metadata"
+        redis = self._async_redis_conn
+
+        async with redis.pipeline(transaction=True) as pipe:
+            while True:
+                try:
+                    await pipe.watch(metadata_key)
+                    raw = await pipe.get(metadata_key)
+                    if raw is None:
+                        await pipe.unwatch()
+                        return _CancellationOutcome.NOT_FOUND, None
+
+                    try:
+                        data = json.loads(raw)
+                    except ValueError:
+                        _log.error(f"Unreadable task metadata for {task_id}")
+                        await pipe.unwatch()
+                        return _CancellationOutcome.NOT_FOUND, None
+
+                    current = TaskStatus(
+                        data.get("task_status", TaskStatus.PENDING.value)
+                    )
+                    if current == TaskStatus.CANCELLED:
+                        await pipe.unwatch()
+                        return (
+                            _CancellationOutcome.ALREADY_CANCELLED,
+                            await self._get_task_from_redis(task_id),
+                        )
+                    if current != TaskStatus.PENDING:
+                        await pipe.unwatch()
+                        return (
+                            _CancellationOutcome.CONFLICT,
+                            await self._get_task_from_redis(task_id),
+                        )
+
+                    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    payload = apply_durable_status_transition(
+                        data,
+                        expected=TaskStatus.PENDING,
+                        new_status=TaskStatus.CANCELLED,
+                        timestamp=timestamp,
+                    )
+                    if payload is None:  # pragma: no cover - guarded above
+                        await pipe.unwatch()
+                        return _CancellationOutcome.CONFLICT, None
+
+                    pipe.multi()
+                    pipe.set(
+                        metadata_key,
+                        json.dumps(payload),
+                        ex=self.config.results_ttl,
+                    )
+                    await pipe.execute()
+                    _log.info(f"Cancelled queued task {task_id}")
+                    return _CancellationOutcome.CANCELLED, None
+
+                except WatchError:
+                    # A worker claimed the task (or another replica cancelled it)
+                    # between our read and our write; re-read and re-decide.
+                    continue
+
+    def _remove_queued_rq_job(self, task_id: str) -> None:
+        """Best-effort removal of a not-yet-started job from the RQ queue."""
+        try:
+            job = Job.fetch(task_id, connection=self._redis_conn)
+        except NoSuchJobError:
+            return
+        except Exception as exc:
+            _log.debug(f"Could not fetch RQ job {task_id} for removal: {exc}")
+            return
+
+        if job.get_status() not in (
+            JobStatus.QUEUED,
+            JobStatus.SCHEDULED,
+            JobStatus.DEFERRED,
+            JobStatus.STOPPED,
+            JobStatus.CREATED,
+        ):
+            # Already dequeued by a worker: the worker's claim decides the race.
+            return
+
+        try:
+            job.cancel()
+            self._rq_queue.remove(job)
+        except Exception as exc:
+            _log.debug(f"Could not remove cancelled RQ job {task_id}: {exc}")
 
     async def task_result(
         self,
@@ -499,6 +720,19 @@ class RQOrchestrator(BaseOrchestrator):
         raise TaskNotFoundError(task_id)
 
     async def _store_task_in_redis(self, task: Task) -> None:
+        """Persist task metadata without regressing a committed STARTED claim or terminal status.
+
+        The durable read and the write happen inside one WATCH transaction, so
+        a stale cached write (refresh, status poll, pub/sub fan-out from a peer
+        that has not seen the claim/cancellation) cannot reopen a won STARTED
+        claim back to PENDING nor overwrite a terminal SUCCESS/FAILURE/CANCELLED
+        with an older status. Same-status rewrites preserve the committed
+        started_at/finished_at while allowing safe progress counters to advance;
+        forward moves (PENDING->STARTED, STARTED->SUCCESS/FAILURE,
+        PENDING->CANCELLED) ride along. Skipped writes leave the durable winner
+        untouched. Python-side JSON merge avoids Lua cjson empty-array
+        corruption (empty lists must stay lists for Task validation).
+        """
         try:
             meta: Any = task.processing_meta
             if isinstance(meta, TaskProcessingMeta):
@@ -512,14 +746,76 @@ class RQOrchestrator(BaseOrchestrator):
                     "num_failed": 0,
                 }
 
-            data = task.model_dump(mode="json", serialize_as_any=True)
-            data["task_status"] = task.task_status.value
-            data["processing_meta"] = meta
-            await self._async_redis_conn.set(
-                f"{_TASK_METADATA_PREFIX}{task.task_id}:metadata",
-                json.dumps(data),
-                ex=self.config.results_ttl,
-            )
+            metadata_key = f"{_TASK_METADATA_PREFIX}{task.task_id}:metadata"
+            redis = self._async_redis_conn
+            async with redis.pipeline(transaction=True) as pipe:
+                while True:
+                    try:
+                        await pipe.watch(metadata_key)
+                        raw = await pipe.get(metadata_key)
+                        cur_data: dict[str, Any] = {}
+                        cur: TaskStatus | None = None
+                        if raw is not None:
+                            try:
+                                cur_data = json.loads(raw)
+                            except ValueError:
+                                cur_data = {}
+                            cur_raw = cur_data.get(
+                                "task_status", TaskStatus.PENDING.value
+                            )
+                            try:
+                                cur = TaskStatus(cur_raw)
+                            except ValueError:
+                                cur = TaskStatus.PENDING
+                            incoming = task.task_status
+                            if (
+                                cur
+                                in (
+                                    TaskStatus.SUCCESS,
+                                    TaskStatus.FAILURE,
+                                    TaskStatus.CANCELLED,
+                                )
+                                and cur != incoming
+                            ):
+                                await pipe.unwatch()
+                                _log.info(
+                                    f"Preserved terminal status for {task.task_id}: "
+                                    f"not overwriting {cur.value} with {incoming.value}"
+                                )
+                                return
+                            if cur == TaskStatus.STARTED and incoming in (
+                                TaskStatus.PENDING,
+                                TaskStatus.CANCELLED,
+                            ):
+                                await pipe.unwatch()
+                                _log.info(
+                                    f"Preserved STARTED claim for {task.task_id}: "
+                                    f"not reopening with {incoming.value}"
+                                )
+                                return
+                        data = task.model_dump(mode="json", serialize_as_any=True)
+                        data["task_status"] = task.task_status.value
+                        data["processing_meta"] = meta
+                        # Preserve claim identity and idempotent timestamps;
+                        # progress counters and other fields ride along.
+                        if cur_data.get("started_at"):
+                            data["started_at"] = cur_data["started_at"]
+                        if (
+                            cur is not None
+                            and cur == task.task_status
+                            and cur_data.get("finished_at")
+                        ):
+                            data["finished_at"] = cur_data["finished_at"]
+                        pipe.multi()
+                        pipe.set(
+                            metadata_key, json.dumps(data), ex=self.config.results_ttl
+                        )
+                        await pipe.execute()
+                        return
+                    except WatchError:
+                        # A claim, cancellation, or finalizer committed first;
+                        # re-read and re-decide so the winner is preserved.
+                        continue
         except Exception as exc:
             _log.error(f"Store task {task.task_id}: {exc}")
 
