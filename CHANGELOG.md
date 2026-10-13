@@ -1,3 +1,11 @@
+## [v3.8.2](https://github.com/docling-project/docling-jobkit/releases/tag/v3.8.2) - 2026-10-13
+
+### Fix
+
+* **manager:** Honor default preset in legacy table-structure path ([#256](https://github.com/docling-project/docling-jobkit/issues/256)) ([`e955fc1`](https://github.com/docling-project/docling-jobkit/commit/e955fc1f3f0a353144350459e5f4d982c5c8c49a))
+* **rq:** Pass the job timeout as job_timeout so rq applies it ([#262](https://github.com/docling-project/docling-jobkit/issues/262)) ([`d2d30e4`](https://github.com/docling-project/docling-jobkit/commit/d2d30e44bca9930cb95feb8adfa6a3db43d77699))
+* **ray:** Enforce timeouts by cancelling abandoned conversions ([#264](https://github.com/docling-project/docling-jobkit/issues/264)) ([`02e287c`](https://github.com/docling-project/docling-jobkit/commit/02e287ca20c0fc8d991e19c698e0966d7e083d1a))
+
 ## [v3.8.1](https://github.com/docling-project/docling-jobkit/releases/tag/v3.8.1) - 2026-10-01
 
 ### Fix
