@@ -46,7 +46,7 @@ class TargetNotAllowedError(OrchestratorError):
 class BaseOrchestrator(ABC):
     def __init__(self):
         self.tasks: dict[str, Task] = {}
-        self.notifier: Optional["BaseNotifier"] = None
+        self.notifier: Optional[BaseNotifier] = None
         # Optional allowlist of target ``kind`` values this orchestrator accepts.
         # ``None`` means "allow all". Concrete orchestrators set this from config.
         self.allowed_target_kinds: Optional[set[str]] = None

@@ -21,7 +21,7 @@ class TestPresetAndCustomConfigMutualExclusivity:
         """Test VLM pipeline preset and custom config are mutually exclusive."""
         with pytest.raises(
             ValueError,
-            match="Cannot specify both.*vlm_pipeline_preset.*vlm_pipeline_custom_config",
+            match=r"Cannot specify both.*vlm_pipeline_preset.*vlm_pipeline_custom_config",
         ):
             ConvertDocumentsOptions(
                 vlm_pipeline_preset="default",
@@ -32,7 +32,7 @@ class TestPresetAndCustomConfigMutualExclusivity:
         """Test picture description preset and custom config are mutually exclusive."""
         with pytest.raises(
             ValueError,
-            match="Cannot specify both.*picture_description_preset.*picture_description_custom_config",
+            match=r"Cannot specify both.*picture_description_preset.*picture_description_custom_config",
         ):
             ConvertDocumentsOptions(
                 picture_description_preset="default",
@@ -43,7 +43,7 @@ class TestPresetAndCustomConfigMutualExclusivity:
         """Test code/formula preset and custom config are mutually exclusive."""
         with pytest.raises(
             ValueError,
-            match="Cannot specify both.*code_formula_preset.*code_formula_custom_config",
+            match=r"Cannot specify both.*code_formula_preset.*code_formula_custom_config",
         ):
             ConvertDocumentsOptions(
                 code_formula_preset="default",
@@ -56,7 +56,7 @@ class TestLegacyAndNewMutualExclusivity:
 
     def test_vlm_legacy_and_preset(self):
         """Test that legacy VLM fields and preset cannot be mixed."""
-        with pytest.raises(ValueError, match="Cannot mix legacy.*with new"):
+        with pytest.raises(ValueError, match=r"Cannot mix legacy.*with new"):
             ConvertDocumentsOptions(
                 vlm_pipeline_model_local=VlmModelLocal(
                     repo_id="test",
@@ -68,7 +68,7 @@ class TestLegacyAndNewMutualExclusivity:
 
     def test_vlm_legacy_and_custom_config(self):
         """Test that legacy VLM fields and custom config cannot be mixed."""
-        with pytest.raises(ValueError, match="Cannot mix legacy.*with new"):
+        with pytest.raises(ValueError, match=r"Cannot mix legacy.*with new"):
             ConvertDocumentsOptions(
                 vlm_pipeline_model_api=VlmModelApi(
                     url="http://test",
@@ -79,7 +79,7 @@ class TestLegacyAndNewMutualExclusivity:
 
     def test_picture_description_legacy_and_preset(self):
         """Test that legacy picture description and preset cannot be mixed."""
-        with pytest.raises(ValueError, match="Cannot mix legacy.*with new"):
+        with pytest.raises(ValueError, match=r"Cannot mix legacy.*with new"):
             ConvertDocumentsOptions(
                 picture_description_local={"repo_id": "test"},
                 picture_description_preset="default",
@@ -87,7 +87,7 @@ class TestLegacyAndNewMutualExclusivity:
 
     def test_picture_description_legacy_and_custom_config(self):
         """Test that legacy picture description and custom config cannot be mixed."""
-        with pytest.raises(ValueError, match="Cannot mix legacy.*with new"):
+        with pytest.raises(ValueError, match=r"Cannot mix legacy.*with new"):
             ConvertDocumentsOptions(
                 picture_description_api={"url": "http://test"},
                 picture_description_custom_config={"engine_type": "api_generic"},
@@ -99,7 +99,7 @@ class TestDeprecationWarnings:
 
     def test_vlm_pipeline_model_deprecation(self):
         """Test deprecation warning for vlm_pipeline_model."""
-        with pytest.warns(DeprecationWarning, match="vlm_pipeline_model.*deprecated"):
+        with pytest.warns(DeprecationWarning, match=r"vlm_pipeline_model.*deprecated"):
             ConvertDocumentsOptions(
                 vlm_pipeline_model="granite_docling",
             )
@@ -107,7 +107,7 @@ class TestDeprecationWarnings:
     def test_vlm_pipeline_model_local_deprecation(self):
         """Test deprecation warning for vlm_pipeline_model_local."""
         with pytest.warns(
-            DeprecationWarning, match="vlm_pipeline_model_local.*deprecated"
+            DeprecationWarning, match=r"vlm_pipeline_model_local.*deprecated"
         ):
             ConvertDocumentsOptions(
                 vlm_pipeline_model_local=VlmModelLocal(
@@ -120,7 +120,7 @@ class TestDeprecationWarnings:
     def test_vlm_pipeline_model_api_deprecation(self):
         """Test deprecation warning for vlm_pipeline_model_api."""
         with pytest.warns(
-            DeprecationWarning, match="vlm_pipeline_model_api.*deprecated"
+            DeprecationWarning, match=r"vlm_pipeline_model_api.*deprecated"
         ):
             ConvertDocumentsOptions(
                 vlm_pipeline_model_api=VlmModelApi(
@@ -132,7 +132,7 @@ class TestDeprecationWarnings:
     def test_picture_description_local_deprecation(self):
         """Test deprecation warning for picture_description_local."""
         with pytest.warns(
-            DeprecationWarning, match="picture_description_local.*deprecated"
+            DeprecationWarning, match=r"picture_description_local.*deprecated"
         ):
             ConvertDocumentsOptions(
                 picture_description_local={"repo_id": "test"},
@@ -141,7 +141,7 @@ class TestDeprecationWarnings:
     def test_picture_description_api_deprecation(self):
         """Test deprecation warning for picture_description_api."""
         with pytest.warns(
-            DeprecationWarning, match="picture_description_api.*deprecated"
+            DeprecationWarning, match=r"picture_description_api.*deprecated"
         ):
             ConvertDocumentsOptions(
                 picture_description_api={"url": "http://test"},

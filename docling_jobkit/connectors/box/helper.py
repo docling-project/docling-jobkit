@@ -3,11 +3,20 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
-from io import BytesIO
-from typing import TYPE_CHECKING, Any, BinaryIO, Callable, Iterator, Protocol, TypeVar
+from io import BufferedIOBase, BytesIO
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    BinaryIO,
+    Callable,
+    Iterator,
+    Protocol,
+    TypeVar,
+    cast,
+)
 
 if TYPE_CHECKING:
-    from box_sdk_gen import BoxClient, FileFull, UploadSession
+    from box_sdk_gen import BoxClient, FileFull, UploadPart, UploadSession
 
 from docling_jobkit.connectors.box.models import BoxCoords
 from docling_jobkit.connectors.errors import SourceConnectorPolicyError
@@ -258,7 +267,8 @@ def _is_box_conflict_error(exc: BaseException) -> bool:
 
 
 class _NamedBoxItem(Protocol):
-    name: str
+    @property
+    def name(self) -> str | None: ...
 
 
 _T = TypeVar("_T", bound=_NamedBoxItem)
@@ -350,8 +360,11 @@ def _upload_via_chunked_session(
     + commit loop is identical after that point.
     """
     session = create_session()
+    if session.id is None or session.part_size is None:
+        raise TargetWriteError("Box returned an incomplete upload session.")
+    session_id = session.id
     part_size = session.part_size
-    parts = []
+    parts: list[UploadPart] = []
     whole_file_hash = hashlib.sha1()
     offset = 0
 
@@ -361,20 +374,23 @@ def _upload_via_chunked_session(
             break
         content_range = f"bytes {offset}-{offset + len(chunk) - 1}/{file_size}"
         uploaded = client.chunked_uploads.upload_file_part(
-            session.id,
+            session_id,
             BytesIO(chunk),
             digest=f"sha={_sha1_b64(chunk)}",
             content_range=content_range,
         )
-        parts.append(uploaded.part)
+        if uploaded.part is not None:
+            parts.append(uploaded.part)
         whole_file_hash.update(chunk)
         offset += len(chunk)
 
     committed = client.chunked_uploads.create_file_upload_session_commit(
-        session.id,
+        session_id,
         parts,
         digest=f"sha={base64.b64encode(whole_file_hash.digest()).decode()}",
     )
+    if committed is None or not committed.entries:
+        raise TargetWriteError("Box returned no file after committing the upload.")
     return committed.entries[0]
 
 
@@ -431,7 +447,7 @@ def upload_document(
                     name=target_name,
                     parent=UploadFileAttributesParentField(id=folder_id),
                 ),
-                stream,
+                cast(BufferedIOBase, stream),
             )
         else:
             _upload_new_large_file(client, folder_id, target_name, stream, size)
@@ -451,7 +467,9 @@ def upload_document(
     try:
         if size < _CHUNKED_THRESHOLD:
             client.uploads.upload_file_version(
-                existing.id, UploadFileVersionAttributes(name=target_name), stream
+                existing.id,
+                UploadFileVersionAttributes(name=target_name),
+                cast(BufferedIOBase, stream),
             )
         else:
             _overwrite_large_file(client, existing.id, target_name, stream, size)

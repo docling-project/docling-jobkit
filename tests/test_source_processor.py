@@ -33,8 +33,7 @@ class MockSourceProcessor(BaseSourceProcessor):
     # ---- Lazy ID generator (counts how many times it's created) ----
     def _list_document_ids(self) -> Generator[str, None, None]:
         self._list_called += 1
-        for x in self._all_ids:
-            yield x
+        yield from self._all_ids
 
     def _count_documents(self) -> int:
         return len(self._all_ids)

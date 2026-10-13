@@ -423,11 +423,23 @@ class RayTaskDispatcher:
             _log.info("[TASK-START] %s: processing %s documents", task_id, task_size)
 
             response = self.deployment_handle.process_task.remote(task)
-            await asyncio.to_thread(
-                response.result,
-                timeout_s=self.config.task_timeout,
-                _skip_asyncio_check=True,
-            )
+            try:
+                await asyncio.to_thread(
+                    response.result,
+                    timeout_s=self.config.task_timeout,
+                    _skip_asyncio_check=True,
+                )
+            except TimeoutError:
+                # The task is failed below, but without a cancel the coordinator
+                # would keep converting it and holding the tenant's converter
+                # units. The coordinator cancels its converter calls in turn.
+                _log.warning(
+                    "Task %s exceeded task_timeout=%ss; cancelling it",
+                    task_id,
+                    self.config.task_timeout,
+                )
+                response.cancel()
+                raise
             _log.info(
                 "[TASK-SUCCESS] %s: replica completed; durable success is replica-owned",
                 task_id,
