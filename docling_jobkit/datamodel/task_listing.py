@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+
 """Compact, tenant-scoped listings of active tasks.
 
 Every orchestrator backend returns the same shape, ordering and paging rules

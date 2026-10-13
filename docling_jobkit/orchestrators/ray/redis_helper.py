@@ -147,9 +147,11 @@ def _queued_task_id(
     metadata, but a row that is not a valid Task is corrupt and skipped rather
     than surfacing as a listed id with valid metadata.
     """
+    if not isinstance(row, (str, bytes)):
+        return None
     try:
         task = validate_task_json(
-            row,  # type: ignore[arg-type]
+            row,
             allow_external_plugins=allow_external_plugins,
         )
     except Exception:
@@ -461,9 +463,13 @@ class RedisStateManager:
         seen: set[str] = set()
         start = 0
         while True:
-            rows = await redis.lrange(  # type: ignore[misc]
+            pending_rows = redis.lrange(
                 queue_key, start, start + LISTING_CHUNK_SIZE - 1
             )
+            if isinstance(pending_rows, list):
+                rows = pending_rows
+            else:
+                rows = await pending_rows
             if not rows:
                 break
             for row in rows:
