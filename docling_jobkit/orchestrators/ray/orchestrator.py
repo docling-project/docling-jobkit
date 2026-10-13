@@ -36,7 +36,9 @@ from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
+    CancellationConflictReason,
     OrchestratorError,
+    TaskCancellationConflictError,
     TaskNotFoundError,
 )
 from docling_jobkit.orchestrators.ray.config import (
@@ -44,6 +46,10 @@ from docling_jobkit.orchestrators.ray.config import (
     parse_memory_bytes,
 )
 from docling_jobkit.orchestrators.ray.dispatcher import RayTaskDispatcher
+from docling_jobkit.orchestrators.ray.models import (
+    TaskCancellationOutcome,
+    TaskUpdate,
+)
 from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
 from docling_jobkit.orchestrators.ray.serve_deployment import (
     DEFAULT_SERVE_APP_NAME,
@@ -845,6 +851,50 @@ class RayOrchestrator(BaseOrchestrator):
         async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
             return await self.redis_manager.get_task_outcome(task_id)
 
+    async def cancel_queued_task(self, task_id: str) -> Task:
+        """Cancel a task that has not started converting yet.
+
+        Redis is the shared arbiter here: the durable PENDING -> CANCELLED
+        transition races the replica's PENDING -> STARTED claim, so every
+        orchestrator replica observes the same outcome.
+        """
+        async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
+            await self.redis_manager.connect()
+            cancellation = await self.redis_manager.cancel_queued_task_atomic(task_id)
+
+            if cancellation.outcome == TaskCancellationOutcome.NOT_FOUND:
+                raise TaskNotFoundError(task_id)
+            if cancellation.outcome == TaskCancellationOutcome.CONFLICT:
+                if cancellation.status is None:
+                    raise TaskCancellationConflictError(
+                        CancellationConflictReason.ALREADY_FINISHED, None
+                    )
+                raise TaskCancellationConflictError(
+                    self.cancellation_conflict_reason(cancellation.status)
+                    or CancellationConflictReason.ALREADY_FINISHED,
+                    cancellation.status,
+                )
+
+            if cancellation.outcome == TaskCancellationOutcome.CANCELLED:
+                await self.redis_manager.publish_update(
+                    TaskUpdate(
+                        task_id=task_id,
+                        task_status=TaskStatus.CANCELLED,
+                    )
+                )
+
+            # Redis stays the source of truth: re-read the task so the returned
+            # object carries the durable cancelled status and finished_at.
+            task = await self._task_from_redis(task_id)
+            if task is None:
+                raise TaskNotFoundError(task_id)
+
+            if self.notifier:
+                await self.notifier.notify_task_subscribers(task_id)
+                await self.notifier.notify_queue_positions()
+
+            return task
+
     async def task_result(self, task_id: str) -> Optional[DoclingTaskResult]:
         outcome = await self.task_outcome(task_id)
         if isinstance(outcome, StoredSuccessOutcome):
@@ -886,6 +936,17 @@ class RayOrchestrator(BaseOrchestrator):
                 except TaskNotFoundError:
                     _log.warning(
                         "Dropping update for unknown task %s with no Redis metadata",
+                        task_id,
+                    )
+                    continue
+
+                if task.is_completed() and update.task_status != task.task_status:
+                    # A terminal task is a fence: a started/success/failure
+                    # update that raced a cancellation must not resurrect it.
+                    _log.debug(
+                        "Dropping %s update for already %s task %s",
+                        update.task_status.value,
+                        task.task_status.value,
                         task_id,
                     )
                     continue

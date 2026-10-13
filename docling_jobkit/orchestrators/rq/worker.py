@@ -1,4 +1,6 @@
 import base64
+import datetime
+import json
 import logging
 import shutil
 import tempfile
@@ -9,6 +11,7 @@ from typing import Any, Callable, ContextManager, Optional, Union
 
 import msgpack
 import redis as sync_redis
+from redis.exceptions import WatchError
 from rq import SimpleWorker, get_current_job
 
 from docling.datamodel.base_models import DocumentStream
@@ -36,9 +39,11 @@ from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
 from docling_jobkit.orchestrators.rq.orchestrator import (
     _HEARTBEAT_INTERVAL,
     _HEARTBEAT_TTL,
+    _TASK_METADATA_PREFIX,
     RQOrchestrator,
     RQOrchestratorConfig,
     _TaskUpdate,
+    apply_durable_status_transition,
 )
 from docling_jobkit.orchestrators.serialization import make_msgpack_safe
 from docling_jobkit.public_errors import build_public_task_error
@@ -54,6 +59,68 @@ _FailureHook = Callable[[Task, Exception, list[dict[str, str]]], None]
 
 def _null_phase_cm(_: str) -> ContextManager[Any]:
     return nullcontext()
+
+
+def claim_task_started(
+    conn: sync_redis.Redis,
+    task_id: str,
+    *,
+    metadata_ttl: int,
+) -> Optional[TaskStatus]:
+    """Atomically claim durable PENDING task metadata for conversion.
+
+    The read of the status and the STARTED write happen inside one Redis
+    transaction, which is what makes the claim mutually exclusive with a
+    concurrent queued-only cancellation: whichever transaction commits first
+    decides the task, and the loser observes the winner's status.
+
+    Returns ``TaskStatus.STARTED`` when the claim succeeded, the current status
+    when the task is no longer PENDING (the caller must skip the conversion),
+    or None when no durable metadata exists - in which case the caller must
+    also skip the conversion: running without arbitration would escape the
+    cancel-vs-start race entirely.
+    """
+    metadata_key = f"{_TASK_METADATA_PREFIX}{task_id}:metadata"
+
+    with conn.pipeline(transaction=True) as pipe:
+        while True:
+            try:
+                pipe.watch(metadata_key)
+                raw = pipe.get(metadata_key)
+                if raw is None:
+                    pipe.unwatch()
+                    return None
+                if not isinstance(raw, (str, bytes, bytearray)):
+                    _log.error(f"Unexpected task metadata type for {task_id}")
+                    pipe.unwatch()
+                    return None
+
+                try:
+                    data = json.loads(raw)
+                except ValueError:
+                    _log.error(f"Unreadable task metadata for {task_id}")
+                    pipe.unwatch()
+                    return None
+
+                timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                payload = apply_durable_status_transition(
+                    data,
+                    expected=TaskStatus.PENDING,
+                    new_status=TaskStatus.STARTED,
+                    timestamp=timestamp,
+                )
+                if payload is None:
+                    pipe.unwatch()
+                    return TaskStatus(data.get("task_status", TaskStatus.PENDING.value))
+
+                pipe.multi()
+                pipe.set(metadata_key, json.dumps(payload), ex=metadata_ttl)
+                pipe.execute()
+                return TaskStatus.STARTED
+
+            except WatchError:
+                # A cancellation (or another claim) committed first; re-read.
+                continue
 
 
 def _prepare_convert_sources(
@@ -105,7 +172,7 @@ def _run_docling_task(
     on_sources_prepared: Optional[_SourcesPreparedHook] = None,
     on_result_stored: Optional[_ResultStoredHook] = None,
     on_failure: Optional[_FailureHook] = None,
-) -> str:
+) -> Optional[str]:
     job = get_current_job()
     assert job is not None
 
@@ -119,6 +186,22 @@ def _run_docling_task(
     callback_invoker = CallbackInvoker() if task.callbacks else None
 
     try:
+        # Claim the task durably before touching a single source. A cancellation
+        # that won the race makes this a no-op and the conversion is skipped.
+        # An absent claim means no durable arbitration exists (unknown or
+        # expired task): fail closed and skip the conversion rather than
+        # running outside the cancel-vs-start arbitration.
+        claim = claim_task_started(
+            conn, task_id, metadata_ttl=orchestrator_config.results_ttl
+        )
+        if claim != TaskStatus.STARTED:
+            _log.info(
+                "Skipping task %s: durable status is %s, conversion not started",
+                task_id,
+                claim.value if claim is not None else "absent",
+            )
+            return None
+
         with phase_cm("notify.task_started"):
             conn.publish(
                 orchestrator_config.sub_channel,
@@ -325,7 +408,8 @@ def docling_task(
     conversion_manager: DoclingConverterManager,
     orchestrator_config: RQOrchestratorConfig,
     scratch_dir: Path,
-):
+) -> Optional[str]:
+    """Convert one task. Returns None when the task was cancelled before the claim."""
     _log.debug("started task")
     task = validate_task(
         task_data,

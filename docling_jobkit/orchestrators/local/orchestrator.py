@@ -21,8 +21,11 @@ from docling_jobkit.convert.manager import DoclingConverterManager
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget, validate_task
+from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
+    TaskCancellationConflictError,
+    TaskNotFoundError,
 )
 from docling_jobkit.orchestrators.local.worker import AsyncLocalWorker
 
@@ -103,7 +106,56 @@ class LocalOrchestrator(BaseOrchestrator):
         return task
 
     async def queue_size(self) -> int:
-        return self.task_queue.qsize()
+        # queue_list, not the raw asyncio queue: a cancelled task keeps its
+        # (undrainable) queue entry until a worker picks it up, and it must not
+        # keep occupying queue capacity in the meantime.
+        return len(self.queue_list)
+
+    def claim_task_started(self, task_id: str) -> bool:
+        """Claim a dequeued task for conversion, or report it as already claimed.
+
+        This is the no-await counterpart of a PENDING -> STARTED claim: every
+        ``await`` on the conversion path is preceded by this call, so the check
+        and the status write form one indivisible section of the event loop and
+        no concurrent ``cancel_queued_task`` can interleave between them.
+        Returns False when the task is unknown or no longer PENDING, in which
+        case the caller must skip the conversion.
+        """
+        task = self.tasks.get(task_id)
+        if task is None or task.task_status != TaskStatus.PENDING:
+            return False
+        task.set_status(TaskStatus.STARTED)
+        return True
+
+    async def cancel_queued_task(self, task_id: str) -> Task:
+        task = self._cancel_pending_task(task_id)
+        if self.notifier:
+            await self.notifier.notify_task_subscribers(task_id)
+            await self.notifier.notify_queue_positions()
+        return task
+
+    def _cancel_pending_task(self, task_id: str) -> Task:
+        """Terminalize a queued task without ever awaiting, so it races cleanly.
+
+        Mutating the status and dropping the queue entry in one await-free
+        section makes cancellation mutually exclusive with
+        :meth:`claim_task_started`: exactly one of the two observes PENDING.
+        """
+        task = self.tasks.get(task_id)
+        if task is None:
+            raise TaskNotFoundError(task_id)
+
+        if task.task_status == TaskStatus.CANCELLED:
+            return task
+
+        reason = self.cancellation_conflict_reason(task.task_status)
+        if reason is not None:
+            raise TaskCancellationConflictError(reason, task.task_status)
+
+        task.set_status(TaskStatus.CANCELLED)
+        if task_id in self.queue_list:
+            self.queue_list.remove(task_id)
+        return task
 
     async def get_queue_position(self, task_id: str) -> Optional[int]:
         return (

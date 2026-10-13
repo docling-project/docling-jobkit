@@ -153,7 +153,7 @@ class Task(BaseModel):
         if status == TaskStatus.STARTED and self.started_at is None:
             self.started_at = now
         if (
-            status in [TaskStatus.SUCCESS, TaskStatus.FAILURE]
+            status in [TaskStatus.SUCCESS, TaskStatus.FAILURE, TaskStatus.CANCELLED]
             and self.finished_at is None
         ):
             self.finished_at = now
@@ -162,7 +162,11 @@ class Task(BaseModel):
         self.task_status = status
 
     def is_completed(self) -> bool:
-        if self.task_status in [TaskStatus.SUCCESS, TaskStatus.FAILURE]:
+        if self.task_status in [
+            TaskStatus.SUCCESS,
+            TaskStatus.FAILURE,
+            TaskStatus.CANCELLED,
+        ]:
             return True
         return False
 

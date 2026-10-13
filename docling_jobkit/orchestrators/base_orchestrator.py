@@ -1,4 +1,5 @@
 import datetime
+import enum
 import logging
 import warnings
 from abc import ABC, abstractmethod
@@ -12,6 +13,7 @@ from docling.datamodel.service.tasks import TaskType
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult, TaskOutcome
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
+from docling_jobkit.datamodel.task_meta import TaskStatus
 
 if TYPE_CHECKING:
     from docling_jobkit.orchestrators.base_notifier import BaseNotifier
@@ -33,6 +35,37 @@ class TaskNotFoundError(OrchestratorError):
 
 class ProgressInvalid(OrchestratorError):
     pass
+
+
+class CancellationConflictReason(str, enum.Enum):
+    """Machine-readable reasons why a task can no longer be cancelled."""
+
+    # The task already claimed its STARTED transition, so conversion may run.
+    ALREADY_STARTED = "already_started"
+    # The task already reached SUCCESS or FAILURE.
+    ALREADY_FINISHED = "already_finished"
+
+
+class TaskCancellationConflictError(OrchestratorError):
+    """Raised when a queued-only cancellation lost the race against execution.
+
+    ``reason`` is a stable machine-readable value (see
+    :class:`CancellationConflictReason`) and ``task_status`` is the status that
+    made the cancellation impossible, so callers can map the conflict without
+    parsing a message.
+    """
+
+    def __init__(
+        self,
+        reason: CancellationConflictReason,
+        task_status: Optional[TaskStatus] = None,
+    ):
+        self.reason = reason
+        self.task_status = task_status
+        super().__init__(
+            f"Task cannot be cancelled ({reason.value}"
+            f"{f', current status {task_status.value}' if task_status else ''})"
+        )
 
 
 class TargetNotAllowedError(OrchestratorError):
@@ -162,6 +195,34 @@ class BaseOrchestrator(ABC):
 
     async def task_outcome(self, task_id: str) -> Optional[TaskOutcome]:
         return await self.task_result(task_id)
+
+    @staticmethod
+    def cancellation_conflict_reason(
+        status: TaskStatus,
+    ) -> Optional[CancellationConflictReason]:
+        """Map a non-cancellable task status to its machine-readable reason.
+
+        Returns None for ``PENDING`` and ``CANCELLED``, which are the only
+        states a queued-only cancellation may still resolve.
+        """
+        if status == TaskStatus.STARTED:
+            return CancellationConflictReason.ALREADY_STARTED
+        if status in (TaskStatus.SUCCESS, TaskStatus.FAILURE):
+            return CancellationConflictReason.ALREADY_FINISHED
+        return None
+
+    async def cancel_queued_task(self, task_id: str) -> Task:
+        """Cancel a task that has not started converting yet.
+
+        Returns the cancelled task. Raises ``TaskNotFoundError`` for an unknown
+        task and ``TaskCancellationConflictError`` once the task already claimed
+        STARTED or reached a terminal outcome, in which case the task is left
+        untouched. Cancelling an already cancelled task is idempotent and
+        returns that same task.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support queued-only cancellation"
+        )
 
     async def delete_task(self, task_id: str):
         _log.info(f"Deleting {task_id=}")

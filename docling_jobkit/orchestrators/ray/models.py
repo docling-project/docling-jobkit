@@ -2,6 +2,7 @@
 
 import datetime
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -90,6 +91,9 @@ class TenantTaskCounters(BaseModel):
     tasks_started_total: int = Field(default=0, description="Tasks started")
     tasks_succeeded_total: int = Field(default=0, description="Tasks succeeded")
     tasks_failed_total: int = Field(default=0, description="Tasks failed")
+    tasks_cancelled_total: int = Field(
+        default=0, description="Tasks cancelled while still queued"
+    )
 
 
 class TaskUpdate(BaseModel):
@@ -229,6 +233,29 @@ class TaskTerminalizationResult:
     status_changed: bool
     capacity_released: bool
     result_key: Optional[str] = None
+
+
+class TaskCancellationOutcome(str, Enum):
+    """Outcome of one queued-only cancellation attempt."""
+
+    CANCELLED = "cancelled"
+    ALREADY_CANCELLED = "already_cancelled"
+    CONFLICT = "conflict"
+    NOT_FOUND = "not_found"
+
+
+@dataclass(frozen=True)
+class TaskCancellationResult:
+    """Outcome of one queued-only cancellation attempt.
+
+    ``status`` is the durable status that made the cancellation impossible for
+    a conflict; it is also set for an idempotent repeat so callers can report it.
+    """
+
+    outcome: TaskCancellationOutcome
+    status: Optional[TaskStatus] = None
+    queue_entry_removed: bool = False
+    reservation_released: bool = False
 
 
 class SliceSpec(BaseModel):

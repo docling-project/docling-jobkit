@@ -662,6 +662,48 @@ If you manually set Ray TLS environment variables, they may conflict with auto-g
 - **Type**: Hash
 - **Fields**: status, tenant_id, created_at, started_at, finished_at, progress, error_message
 
+### Task Status Lifecycle
+- **pending**: queued, waiting for a replica. The only state a queued-only
+  cancellation can still resolve.
+- **started**: claimed by a replica through `mark_task_started`. Cancellation is
+  no longer possible; a concurrent cancel reports `already_started`.
+- **success** / **failure**: terminal, written by the owning replica.
+- **cancelled**: terminal. A queued-only cancellation moved the task here in one
+  Redis transaction that also released its queue entry, dispatch reservation and
+  execution lease. `finished_at` is set, no result is stored and no completion
+  callback fires.
+
+Terminal statuses are a fence: a late started, success or failure update from a
+replica, a pub/sub refresh, the dispatcher or finalization is dropped instead of
+overwriting them. A won STARTED claim is likewise monotonic: a stale PENDING
+(or CANCELLED) write via `update_task_status`, retried init via
+`set_task_metadata`, refresh, or pub/sub is dropped instead of reopening the
+claim, preserving the committed `started_at`. Same-status refresh preserves
+`started_at`/`finished_at` while allowing progress counters to advance. Every
+status writer (`mark_task_started`, `update_task_status`, `set_task_metadata`,
+`dispatch_task_atomic`, `finalize_task_*_atomic`, `cancel_queued_task_atomic`)
+shares that rule, so a started task can never go back to queued and a cancelled
+task can never come back to life.
+
+Execution-lease and converter-unit authorization additionally requires the
+authoritative committed STARTED claim: `write_task_execution_lease` grants a
+lease only when the durable status is STARTED (PENDING/CANCELLED/terminal/
+missing all fail closed with no key), and `acquire_converter_unit` returns -1
+without granting (or leaking) a permit unless both the lease exists and the
+durable status is still STARTED. A transient `mark_task_started` failure therefore
+refuses converter dispatch before invocation; the coordinator's failure
+finalization then releases the dispatch reservation crash-safely.
+
+### Tenant Task Counters
+- **Key**: `tenant:{tenant_id}:task_counters`
+- **Type**: Hash
+- **Fields**: tasks_started_total, tasks_succeeded_total, tasks_failed_total,
+  tasks_cancelled_total
+
+`tasks_cancelled_total` counts only cancellations that won before a replica
+claimed the task, so `tasks_started_total` and `tasks_cancelled_total` never
+overlap for the same task.
+
 ### Task Results
 - **Key**: `task:{task_id}:result`
 - **Type**: String (msgpack-serialized)
