@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+
 """Tests for the tenant-scoped active-task listing shared by all backends.
 
 Every backend is exercised without a live service: the Local backend runs
@@ -1166,3 +1168,38 @@ async def test_rq_loaders_differ_only_on_transport_error(monkeypatch):
     assert await orchestrator._get_task_from_redis("a1") is None
     with pytest.raises(redis.exceptions.ConnectionError):
         await orchestrator._get_listing_task_from_redis("a1")
+
+
+@pytest.mark.parametrize("failure", [False, True])
+async def test_ray_listing_handles_immediate_lrange_results(monkeypatch, failure):
+    store = _FakeRedis()
+    orchestrator = _ray_orchestrator(store)
+    ids = [f"a{index:03}" for index in range(LISTING_CHUNK_SIZE * 2 + 5)]
+    store.seed_queue("tenant-a", ids)
+    for index, task_id in enumerate(ids):
+        store.seed_task(
+            task_id,
+            tenant_id="tenant-a",
+            status=TaskStatus.PENDING.value,
+            created_at=_at(index).isoformat(),
+        )
+
+    def immediate_lrange(key, start, end):
+        if failure:
+            raise redis.exceptions.ConnectionError("immediate LRANGE failure")
+        store.touched.append(key)
+        store.lrange_calls.append((start, end))
+        return store.lists.get(key, [])[start : end + 1]
+
+    monkeypatch.setattr(store, "lrange", immediate_lrange)
+    if failure:
+        with pytest.raises(
+            redis.exceptions.ConnectionError, match="immediate LRANGE failure"
+        ):
+            await orchestrator.list_tasks(tenant_id="tenant-a")
+        return
+
+    page = await orchestrator.list_tasks(tenant_id="tenant-a", limit=1)
+    assert [item.task_id for item in page.items] == [ids[-1]]
+    assert page.has_more is True
+    assert store.lrange_calls == [(0, 99), (100, 199), (200, 299)]
