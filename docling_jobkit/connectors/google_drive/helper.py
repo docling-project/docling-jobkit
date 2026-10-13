@@ -136,8 +136,7 @@ def _yield_children(service: Resource, folder_id: str):
             )
             .execute()
         )
-        for f in resp.get("files", []):
-            yield f
+        yield from resp.get("files", [])
         page_token = resp.get("nextPageToken")
         if not page_token:
             break

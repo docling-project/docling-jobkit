@@ -1,0 +1,149 @@
+name: Run checks
+
+on:
+  workflow_call:
+    inputs:
+      push_coverage:
+        type: boolean
+        description: "If true, the coverage results are pushed to codecov.io."
+        default: true
+      run_lint:
+        type: boolean
+        description: "If true, run the full lint job in this workflow."
+        default: true
+      python_versions:
+        type: string
+        description: 'JSON array of Python versions to use for multi-version jobs, e.g. ["3.10", "3.12"].'
+        default: '["3.10", "3.11", "3.12", "3.13", "3.14"]'
+    secrets:
+      CODECOV_TOKEN:
+        required: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  UV_FROZEN: "1"
+
+jobs:
+  lint:
+    if: ${{ inputs.run_lint }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-ubuntu-ci
+        with:
+          python_version: "3.10"
+          uv_sync_args: --frozen --all-extras
+
+      - name: Set prek cache key
+        run: echo "PY=$(python -VV | sha256sum | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Cache prek environments
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/prek
+          key: prek|${{ env.PY }}|${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: |
+            prek|${{ env.PY }}|
+
+      - name: Check style
+        run: uv run --no-sync prek run --all-files --show-diff-on-failure
+
+  run-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # Skip the torch.compile warm-up, it costs ~150s on the CPU runners.
+      DOCLING_INFERENCE_COMPILE_TORCH_MODELS: "0"
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ fromJSON(inputs.python_versions) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-ubuntu-ci
+        with:
+          python_version: ${{ matrix.python-version }}
+          uv_sync_args: --frozen --all-extras
+
+      - name: Launch background worker
+        run: |
+          uv run --no-sync python docling_jobkit/orchestrators/rq/worker.py &
+          echo "Worker started in background with PID $!"
+          echo "WORKER_PID=$!" >> "$GITHUB_ENV"
+
+      - name: Testing
+        run: |
+          if [[ "${{ matrix.python-version }}" == "3.14" ]]; then
+            uv run --no-sync pytest -v --cov=docling_jobkit --cov-report=xml tests --ignore-glob='tests/test_ray*.py'
+          else
+            uv run --no-sync pytest -v --cov=docling_jobkit --cov-report=xml tests
+          fi
+
+      - name: Terminate background worker
+        if: always()
+        run: |
+          kill "${WORKER_PID}"
+          echo "Worker with PID ${WORKER_PID} terminated."
+
+      - name: Upload coverage to Codecov
+        if: inputs.push_coverage
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+
+  build-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-ubuntu-ci
+        with:
+          python_version: "3.10"
+
+      - name: Build package
+        run: uv build
+
+      - name: Check content of wheel
+        run: unzip -l dist/*.whl
+
+      - name: Install and smoke test the wheel
+        run: |
+          uv venv /tmp/venv-wheel
+          source /tmp/venv-wheel/bin/activate
+          uv pip install dist/*.whl
+          python -c "import docling_jobkit; print('Import successful')"
+          docling-jobkit-local --help
+
+  check:
+    if: ${{ always() }}
+    needs:
+      - lint
+      - run-tests
+      - build-package
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: All Green
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          ALLOWED_SKIPS: lint
+        run: >-
+          python3 .github/scripts/check_needs_results.py
+          --needs-json "$NEEDS_JSON"
+          --allowed-skips "$ALLOWED_SKIPS"
