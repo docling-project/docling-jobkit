@@ -127,10 +127,6 @@ def apply_durable_status_transition(
     return updated
 
 
-# Durable writes use a WATCH transaction in _store_task_in_redis (not Lua) so
-# empty-list fields survive the round-trip as lists for Task validation; see
-# the method for the STARTED/terminal monotonicity rules.
-
 _HEARTBEAT_TTL = 60  # seconds before an unrefreshed key expires
 _HEARTBEAT_INTERVAL = 20  # seconds between heartbeat writes
 _WATCHDOG_INTERVAL = 30.0  # seconds between watchdog scans
