@@ -32,6 +32,16 @@ from docling_jobkit.datamodel.stored_outcome import (
     StoredSuccessOutcome,
 )
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget, validate_task
+from docling_jobkit.datamodel.task_listing import (
+    ACTIVE_TASK_STATUSES,
+    LISTING_CHUNK_SIZE,
+    ActiveTaskItem,
+    ActiveTaskPage,
+    build_active_task_page,
+    iter_chunks,
+    resolve_tenant_id,
+    validate_page_window,
+)
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
 from docling_jobkit.orchestrators.base_orchestrator import (
@@ -774,6 +784,56 @@ class RayOrchestrator(BaseOrchestrator):
             total_size += size
 
         return total_size
+
+    async def list_tasks(
+        self,
+        *,
+        tenant_id: str,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> ActiveTaskPage:
+        """List a page of the tenant's in-flight tasks from shared Redis state.
+
+        Candidates come only from the requested tenant's queue and active set —
+        never an all-tenant scan — and every listed field is resolved from the
+        authoritative per-task metadata hash. A Redis failure propagates instead
+        of surfacing as a falsely empty page.
+        """
+        validate_page_window(limit, offset)
+        requested_tenant = resolve_tenant_id(tenant_id)
+
+        async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
+            await self.redis_manager.connect()
+            candidate_ids = await self.redis_manager.get_tenant_queued_task_ids(
+                requested_tenant
+            )
+            seen_ids = set(candidate_ids)
+            for task_id in await self.redis_manager.get_tenant_active_task_ids(
+                requested_tenant
+            ):
+                if task_id not in seen_ids:
+                    seen_ids.add(task_id)
+                    candidate_ids.append(task_id)
+
+            items: list[ActiveTaskItem] = []
+            for chunk in iter_chunks(candidate_ids, LISTING_CHUNK_SIZE):
+                for metadata in await self.redis_manager.get_task_metadata_models(
+                    chunk
+                ):
+                    if resolve_tenant_id(metadata.tenant_id) != requested_tenant:
+                        continue
+                    if metadata.status not in ACTIVE_TASK_STATUSES:
+                        continue
+                    items.append(
+                        ActiveTaskItem(
+                            task_id=metadata.task_id,
+                            task_type=metadata.task_type,
+                            task_status=metadata.status,
+                            created_at=metadata.created_at,
+                        )
+                    )
+
+        return build_active_task_page(items, limit=limit, offset=offset)
 
     async def get_queue_position(self, task_id: str) -> Optional[int]:
         """Get position in queue for a specific task.
