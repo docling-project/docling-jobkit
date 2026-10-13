@@ -8,8 +8,10 @@ import gc
 import logging
 import shutil
 import tempfile
+import threading
 import time
 from copy import deepcopy
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Iterator, Optional, cast
@@ -17,6 +19,7 @@ from typing import Any, Iterator, Optional, cast
 import ray
 from pydantic import BaseModel
 from ray import ObjectRef, serve
+from ray.serve.handle import DeploymentResponse
 
 from docling.datamodel.base_models import (
     ConversionStatus,
@@ -164,6 +167,66 @@ def _refresh_metrics_recorder(
 # flight on this coordinator to wait on). Only this rare case polls; coordinators
 # with in-flight children wait on child completion instead.
 _CONVERTER_UNIT_POLL_INTERVAL_S = 0.25
+
+
+async def _await_converter_response(response: Any, timeout_s: Optional[float]) -> Any:
+    """Await a converter call, cancelling it when the wait is cancelled or times out.
+
+    Ray Serve passes a parent request's cancellation on to child requests only for
+    direct-ingress deployments, so the coordinator cancels its converter calls
+    itself. Otherwise a cancelled or timed-out task keeps a converter busy.
+    """
+    try:
+        if timeout_s is None:
+            return await response
+        try:
+            return await asyncio.wait_for(response, timeout=timeout_s)
+        except asyncio.TimeoutError:
+            raise TimeoutError(
+                f"Converter call exceeded converter_request_timeout ({timeout_s:.0f}s)"
+            ) from None
+    except (asyncio.CancelledError, TimeoutError):
+        if isinstance(response, DeploymentResponse):
+            response.cancel()
+        raise
+
+
+@dataclass(eq=False)
+class _ConversionThread:
+    """A converter call running in a worker thread (identity-hashed)."""
+
+    finished: bool = False
+    abandoned_at: Optional[float] = None
+
+
+def _abandoned_conversion_grace_s(config: RayOrchestratorConfig) -> float:
+    if config.abandoned_conversion_grace_s is not None:
+        return config.abandoned_conversion_grace_s
+    return (config.document_timeout or 0.0) + 60.0
+
+
+def _recycle_on_abandoned_conversion(config: RayOrchestratorConfig) -> bool:
+    """Whether a replica may report unhealthy over an abandoned conversion.
+
+    After the replica reports unhealthy, Serve stops it and force-kills it once
+    graceful_shutdown_timeout_s has passed. The replica keeps taking requests
+    until then, so the grace period must let any such request finish; otherwise
+    an unrelated conversion would be killed with it.
+    """
+    if not config.recycle_converter_on_abandoned_conversion:
+        return False
+    graceful = config.graceful_shutdown_timeout_s
+    document_timeout = config.document_timeout
+    if graceful is None or document_timeout is None or graceful < document_timeout:
+        _log.warning(
+            "recycle_converter_on_abandoned_conversion is disabled: it requires "
+            "graceful_shutdown_timeout_s (%s) >= document_timeout (%s)",
+            graceful,
+            document_timeout,
+        )
+        return False
+    return True
+
 
 DEFAULT_SERVE_APP_NAME = "docling_processor"
 
@@ -730,6 +793,12 @@ class DoclingProcessorConverterDeployment:
         self.last_task_time: Optional[datetime.datetime] = None
         self.memory_warnings = 0
         self._chunker_manager: DocumentChunkerManager | None = None
+        # Conversions whose request was cancelled while their thread kept running;
+        # each one leaves the set when its thread finishes.
+        self._abandoned_lock = threading.Lock()
+        self._abandoned: set[_ConversionThread] = set()
+        self._recycle_on_abandoned = _recycle_on_abandoned_conversion(config)
+        self._abandoned_grace_s = _abandoned_conversion_grace_s(config)
 
         # Pipeline timing histograms stay empty unless the operator also sets
         # DOCLING_DEBUG_PROFILE_PIPELINE_TIMINGS=true, which docling reads on
@@ -896,8 +965,20 @@ class DoclingProcessorConverterDeployment:
         last_exception: Optional[Exception] = None
 
         for attempt in range(max_retries + 1):
+            conversion = _ConversionThread()
             try:
-                return await asyncio.to_thread(func)
+                return await asyncio.to_thread(self._run_conversion, func, conversion)
+            except asyncio.CancelledError:
+                # to_thread cannot stop the conversion: it keeps running and using
+                # CPU after the request is gone. See check_health().
+                if self._mark_abandoned(conversion):
+                    _log.warning(
+                        "Converter replica %s: request for %s was cancelled; its "
+                        "conversion thread keeps running until it finishes",
+                        self.replica_id,
+                        task_label,
+                    )
+                raise
             except Exception as exc:  # pragma: no cover - exercised in tests via mocks
                 last_exception = exc
                 failure = None
@@ -946,6 +1027,54 @@ class DoclingProcessorConverterDeployment:
                     )
 
         raise last_exception or RuntimeError("Converter request failed")
+
+    def _run_conversion(self, func: Any, conversion: _ConversionThread) -> Any:
+        try:
+            return func()
+        finally:
+            with self._abandoned_lock:
+                conversion.finished = True
+                self._abandoned.discard(conversion)
+
+    def _mark_abandoned(self, conversion: _ConversionThread) -> bool:
+        with self._abandoned_lock:
+            if conversion.finished:
+                return False
+            conversion.abandoned_at = time.monotonic()
+            self._abandoned.add(conversion)
+            return True
+
+    @property
+    def abandoned_conversions(self) -> int:
+        """Conversions still running although their request was cancelled."""
+        with self._abandoned_lock:
+            return len(self._abandoned)
+
+    async def check_health(self) -> None:
+        """Called periodically by Ray Serve; raising makes Serve replace the replica.
+
+        A cancelled request leaves its conversion thread running, so this replica
+        would take new work while still converting the abandoned document. Only a
+        restart of the replica process stops that thread. Threads that end within
+        the grace period, e.g. through docling's own document_timeout, do not
+        trigger a restart.
+        """
+        if not self._recycle_on_abandoned:
+            return
+        now = time.monotonic()
+        with self._abandoned_lock:
+            stuck = sum(
+                1
+                for conversion in self._abandoned
+                if conversion.abandoned_at is not None
+                and now - conversion.abandoned_at > self._abandoned_grace_s
+            )
+        if stuck:
+            raise RuntimeError(
+                f"Converter replica {self.replica_id} has {stuck} conversion(s) "
+                f"still running more than {self._abandoned_grace_s:.0f}s after "
+                "their request was cancelled; requesting a restart"
+            )
 
     def _get_chunker_manager(self) -> DocumentChunkerManager:
         chunker_manager = self._chunker_manager
@@ -1466,11 +1595,26 @@ class DoclingProcessorCoordinatorDeployment:
     async def _process_task(
         self, task: Task, workdir: Path
     ) -> DoclingTaskResult | ConverterFailureResult:
+        task = self._with_default_document_timeout(task)
         if task.task_type == TaskType.CONVERT:
             return await self._process_convert_task(task, workdir)
         if task.task_type == TaskType.CHUNK:
             return await self._process_chunk_task(task, workdir)
         raise ValueError(f"Unknown task type: {task.task_type}")
+
+    def _with_default_document_timeout(self, task: Task) -> Task:
+        """Apply config.document_timeout when the task's options do not set one."""
+        default_timeout = self.config.document_timeout
+        options = task.convert_options or ConvertDocumentsOptions()
+        if default_timeout is None or options.document_timeout is not None:
+            return task
+        return task.model_copy(
+            update={
+                "convert_options": options.model_copy(
+                    update={"document_timeout": default_timeout}
+                )
+            }
+        )
 
     async def _process_convert_task(
         self, task: Task, workdir: Path
@@ -1667,11 +1811,20 @@ class DoclingProcessorCoordinatorDeployment:
                 f"Task {task.task_id} was terminalized before converter dispatch"
             )
         try:
-            return await self.converter_handle.process_converter_request.remote(
-                request=request, tenant_id=tenant_id
+            return await _await_converter_response(
+                self.converter_handle.process_converter_request.remote(
+                    request=request, tenant_id=tenant_id
+                ),
+                self._converter_timeout_s(len(task.sources)),
             )
         finally:
             await self.redis_manager.release_converter_units(tenant_id, task.task_id, 1)
+
+    def _converter_timeout_s(self, doc_count: int) -> Optional[float]:
+        timeout = self.config.converter_request_timeout
+        if timeout is None:
+            return None
+        return timeout * max(doc_count, 1)
 
     def _iter_source_chunks_for_s3_fanout(
         self, task: Task
@@ -1929,13 +2082,16 @@ class DoclingProcessorCoordinatorDeployment:
         # The chunk carries only source + refs, so it is safe to cloudpickle as-is.
         # The converter reconstructs its own source processor from chunk.source and
         # fetches each ref via fetch_converter_source_by_ref().
-        return await self.converter_handle.process_converter_request.remote(
-            request=SourceChunkConvertRequest(
-                task=child_task,
-                chunk=chunk,
-                expected_doc_count=expected_doc_count,
+        return await _await_converter_response(
+            self.converter_handle.process_converter_request.remote(
+                request=SourceChunkConvertRequest(
+                    task=child_task,
+                    chunk=chunk,
+                    expected_doc_count=expected_doc_count,
+                ),
+                tenant_id=tenant_id,
             ),
-            tenant_id=tenant_id,
+            None,
         )
 
     def _should_materialize_pdf(self, task: Task) -> bool:
@@ -2029,8 +2185,11 @@ class DoclingProcessorCoordinatorDeployment:
             # On success the converter returns an ObjectRef pointing to the
             # ExportableDocument in the plasma store — the coordinator never
             # holds the document object itself while waiting for other slices.
-            return await self.converter_handle.process_converter_request.remote(
-                request=request, tenant_id=tenant_id
+            return await _await_converter_response(
+                self.converter_handle.process_converter_request.remote(
+                    request=request, tenant_id=tenant_id
+                ),
+                self._converter_timeout_s(1),
             )
         except Exception as exc:
             _log.warning(

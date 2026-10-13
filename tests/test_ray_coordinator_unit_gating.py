@@ -19,6 +19,8 @@ import pytest
 
 pytest.importorskip("ray")
 
+from ray.serve.handle import DeploymentResponse
+
 from docling.datamodel.base_models import ConversionStatus, OutputFormat
 from docling.datamodel.service.callbacks import (
     CallbackSpec,
@@ -484,3 +486,114 @@ async def test_slice_plan_never_exceeds_ceiling_and_collects_all(
     assert manager.max_in_flight == ceiling
     assert manager.in_flight == 0
     assert manager.total_acquired == manager.total_released == total_slices
+
+
+class _HangingResponse(DeploymentResponse):
+    """DeploymentResponse that never resolves and records cancel()."""
+
+    def __init__(self) -> None:  # skip the real constructor's router plumbing
+        self.cancelled = False
+
+    def __await__(self):
+        return asyncio.Event().wait().__await__()
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+@pytest.mark.asyncio
+async def test_converter_call_is_cancelled_after_converter_request_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response = _HangingResponse()
+    manager = _FakeUnitManager(ceiling=2)
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/",
+        scratch_dir=tmp_path,
+        converter_request_timeout=0.1,
+    )
+    deployment = _make_coordinator(
+        config,
+        SimpleNamespace(
+            process_converter_request=SimpleNamespace(remote=lambda **_: response)
+        ),
+        manager,
+        monkeypatch,
+    )
+    task = Task(
+        task_id="t-deadline",
+        sources=[FileSource(filename="x.pdf", base64_string="")],
+        target=InBodyTarget(),
+    )
+
+    with pytest.raises(TimeoutError, match="converter_request_timeout"):
+        await deployment._run_single_converter_call(task, request=object())
+
+    assert response.cancelled
+    assert manager.in_flight == 0
+    assert manager.total_acquired == manager.total_released == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_coordinator_cancels_its_converter_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response = _HangingResponse()
+    manager = _FakeUnitManager(ceiling=2)
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/", scratch_dir=tmp_path
+    )
+    deployment = _make_coordinator(
+        config,
+        SimpleNamespace(
+            process_converter_request=SimpleNamespace(remote=lambda **_: response)
+        ),
+        manager,
+        monkeypatch,
+    )
+    task = Task(
+        task_id="t-cancel",
+        sources=[FileSource(filename="x.pdf", base64_string="")],
+        target=InBodyTarget(),
+    )
+
+    call = asyncio.create_task(
+        deployment._run_single_converter_call(task, request=object())
+    )
+    await _wait_for(lambda: manager.in_flight == 1)
+    await asyncio.sleep(0.05)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    assert response.cancelled
+    assert manager.in_flight == 0
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [(None, 300.0), (42.0, 42.0)],
+)
+def test_config_document_timeout_is_the_default_for_tasks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    requested: float | None,
+    expected: float,
+) -> None:
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/", scratch_dir=tmp_path
+    )
+    deployment = _make_coordinator(
+        config, SimpleNamespace(), _FakeUnitManager(ceiling=1), monkeypatch
+    )
+    task = Task(
+        task_id="t-default-timeout",
+        sources=[FileSource(filename="x.pdf", base64_string="")],
+        target=InBodyTarget(),
+        convert_options=ConvertDocumentsOptions(document_timeout=requested),
+    )
+
+    updated = deployment._with_default_document_timeout(task)
+
+    assert updated.convert_options is not None
+    assert updated.convert_options.document_timeout == expected
