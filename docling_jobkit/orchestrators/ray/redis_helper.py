@@ -104,6 +104,36 @@ return 0
 """
 
 
+class InvalidQueuedTaskError(Exception):
+    """A queued task payload no longer validates against the ``Task`` model.
+
+    Raised by ``peek_task`` so the dispatcher can drop the payload instead of
+    retrying it forever and blocking every task queued behind it (e.g. a task
+    enqueued by a newer API version with an input format unknown here).
+    """
+
+    def __init__(self, tenant_id: str, payload: bytes | str, cause: Exception) -> None:
+        self.tenant_id = tenant_id
+        self.payload = payload
+        self.cause = cause
+        # Best effort: the payload is still JSON, only the model rejected it.
+        self.task_id: Optional[str] = None
+        self.task_size = 1
+        try:
+            raw = json.loads(payload)
+            if isinstance(raw, dict):
+                if isinstance(raw.get("task_id"), str):
+                    self.task_id = raw["task_id"]
+                if isinstance(raw.get("sources"), list) and raw["sources"]:
+                    self.task_size = len(raw["sources"])
+        except (TypeError, ValueError):
+            pass
+        super().__init__(
+            f"Queued task {self.task_id or '<unknown>'} for tenant {tenant_id} "
+            f"is invalid: {cause}"
+        )
+
+
 class RedisStateManager:
     """Manages Redis state for Ray orchestrator.
 
@@ -306,6 +336,9 @@ class RedisStateManager:
 
         Returns:
             Next task or None if queue is empty
+
+        Raises:
+            InvalidQueuedTaskError: If the queued payload fails validation.
         """
         if not self.redis:
             await self.connect()
@@ -315,12 +348,52 @@ class RedisStateManager:
         task_json = await redis.lindex(queue_key, 0)  # type: ignore[misc]
 
         if task_json:
-            return validate_task_json(
-                task_json,
-                allow_external_plugins=self.allow_external_plugins,
-            )
+            try:
+                return validate_task_json(
+                    task_json,
+                    allow_external_plugins=self.allow_external_plugins,
+                )
+            except ValidationError as exc:
+                raise InvalidQueuedTaskError(tenant_id, task_json, exc) from exc
 
         return None
+
+    async def remove_queued_task_payload(
+        self, tenant_id: str, payload: bytes | str
+    ) -> bool:
+        """Remove ``payload`` from the front of the tenant queue.
+
+        Only pops when the head is still exactly ``payload``, so a concurrent
+        dispatch or enqueue never removes a different task.
+
+        Returns:
+            True if the payload was removed, False if the head changed.
+        """
+        if not self.redis:
+            await self.connect()
+
+        queue_key = f"tenant:{tenant_id}:tasks"
+        limits_key = f"tenant:{tenant_id}:limits"
+        expected = payload.encode("utf-8") if isinstance(payload, str) else payload
+        redis = self._ensure_redis()
+
+        async with redis.pipeline(transaction=True) as pipe:
+            while True:
+                try:
+                    await pipe.watch(queue_key)
+                    head = await pipe.lindex(queue_key, 0)  # type: ignore[misc]
+                    if isinstance(head, str):
+                        head = head.encode("utf-8")
+                    if head != expected:
+                        await pipe.unwatch()
+                        return False
+                    pipe.multi()
+                    pipe.lpop(queue_key)
+                    pipe.hincrby(limits_key, "queued_tasks", -1)
+                    await pipe.execute()
+                    return True
+                except WatchError:
+                    continue
 
     async def get_all_tenants_with_tasks(self) -> list[str]:
         """Get list of all tenants with pending tasks.
