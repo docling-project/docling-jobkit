@@ -99,6 +99,14 @@ class RayOrchestratorConfig(BaseSettings):
         default=3600 * 4,
         description="Time-to-live for task results in seconds (4 hours)",
     )
+    task_metadata_ttl: Optional[int] = Field(
+        default=3600 * 24 * 7,
+        description=(
+            "Time-to-live in seconds for a finished task's metadata hash "
+            "(task:<id>), set when the task reaches a terminal state. Never "
+            "shorter than results_ttl. None or 0 keeps finished tasks forever."
+        ),
+    )
     result_removal_delay: int = Field(
         default=300,
         description="Seconds until result key expires after fetch (single-use mode)",

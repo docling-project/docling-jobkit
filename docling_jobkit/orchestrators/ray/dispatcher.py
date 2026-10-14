@@ -77,6 +77,7 @@ class RayTaskDispatcher:
         self.redis_manager = RedisStateManager(
             redis_url=config.redis_url,
             results_ttl=config.results_ttl,
+            task_metadata_ttl=config.task_metadata_ttl,
             results_prefix=config.results_prefix,
             sub_channel=config.sub_channel,
             max_connections=config.redis_max_connections,
@@ -102,6 +103,8 @@ class RayTaskDispatcher:
         self._active_tenant_order: deque[str] = deque()
         self._last_reconcile: float = 0.0
         self._reconcile_interval: float = 30.0
+        self._last_registry_reconcile: float = 0.0
+        self._registry_reconcile_interval: float = 3600.0
 
         _log.setLevel(self.config.log_level.upper())
         _log.info("RayTaskDispatcher initialized")
@@ -176,8 +179,15 @@ class RayTaskDispatcher:
             self._active_tenant_order.append(tenant_id)
         self._wake_event.set()
 
+    async def _reconcile_tenant_registry(self) -> None:
+        """Re-add tenants missing from the registry (e.g. enqueued by an older version)."""
+        try:
+            await self.redis_manager.reconcile_tenant_registry()
+        except Exception as exc:
+            _log.warning("Tenant registry reconcile failed: %s", exc)
+
     async def _resync_active_tenants(self) -> None:
-        """Rebuild the in-memory ordered tenant ring from Redis (one SCAN)."""
+        """Rebuild the in-memory ordered tenant ring from the tenant registry."""
         tenants = await self.redis_manager.get_all_tenants_with_tasks()
         for t in tenants:
             if t not in self._active_tenant_ids:
@@ -198,6 +208,7 @@ class RayTaskDispatcher:
         self._active_tenant_ids.clear()
         self._active_tenant_order.clear()
         self._last_reconcile = 0.0
+        self._last_registry_reconcile = 0.0
         self._dispatch_loop_task = asyncio.create_task(self._run_dispatch_loop())
         _log.info("Started Ray dispatcher background loop")
 
@@ -234,6 +245,12 @@ class RayTaskDispatcher:
                     if self.config.enable_heartbeat:
                         await self.redis_manager.update_dispatcher_heartbeat()
                     self._last_reconcile = now
+                    if (
+                        now - self._last_registry_reconcile
+                        >= self._registry_reconcile_interval
+                    ):
+                        await self._reconcile_tenant_registry()
+                        self._last_registry_reconcile = now
                     # Consume any capacity freed by reconciliation without waiting
                     # for the next wakeup event.
                     await self._dispatch_round()
