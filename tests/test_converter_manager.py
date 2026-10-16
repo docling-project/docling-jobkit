@@ -2,6 +2,15 @@
 
 import pytest
 
+from docling.datamodel.chart_extraction_options import ChartExtractionVlmEngineOptions
+from docling.datamodel.picture_classification_options import (
+    DocumentPictureClassifierOptions,
+)
+from docling.datamodel.pipeline_options import (
+    CodeFormulaVlmOptions,
+    PictureDescriptionVlmEngineOptions,
+)
+
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
@@ -37,6 +46,46 @@ class TestPresetRegistryBuilding:
         assert "smoldocling" in manager.vlm_preset_registry
         # Other presets should not be in registry
         # (We can't test for specific presets without knowing all Docling presets)
+
+    def test_default_vlm_preset_is_reachable_by_its_own_id(self):
+        """The configured default must also be selectable by name.
+
+        Every other registry excludes the alias "default" from its loop, so that the
+        alias entry survives. The VLM loop excluded default_vlm_preset instead, which
+        dropped a real Docling preset id -- and with the stock config that id is
+        "granite_docling", so the shipped default was the one preset a request could
+        not name.
+        """
+        config = DoclingConverterManagerConfig(
+            default_vlm_preset="granite_docling",
+        )
+        manager = DoclingConverterManager(config)
+
+        assert "granite_docling" in manager.vlm_preset_registry
+        # ...and the alias still resolves to it rather than being overwritten.
+        assert manager.vlm_preset_registry["default"]["preset_id"] == "granite_docling"
+
+        by_id = manager._parse_vlm_options(
+            ConvertDocumentsOptions(vlm_pipeline_preset="granite_docling")
+        )
+        by_alias = manager._parse_vlm_options(
+            ConvertDocumentsOptions(vlm_pipeline_preset="default")
+        )
+        assert by_id == by_alias
+
+    def test_an_explicit_vlm_allowlist_still_restricts(self):
+        """Registering the default by name must not widen an explicit allowlist."""
+        config = DoclingConverterManagerConfig(
+            default_vlm_preset="granite_docling",
+            allowed_vlm_presets=["smoldocling"],
+        )
+        manager = DoclingConverterManager(config)
+
+        assert sorted(manager.vlm_preset_registry) == ["default", "smoldocling"]
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._parse_vlm_options(
+                ConvertDocumentsOptions(vlm_pipeline_preset="qwen")
+            )
 
     def test_custom_presets_added(self):
         """Test that custom presets are added to the registry."""
@@ -74,6 +123,19 @@ class TestPresetRegistryBuilding:
         manager = DoclingConverterManager(config)
 
         assert "default" in manager.code_formula_preset_registry
+
+    def test_chart_extraction_registry(self):
+        """Test chart extraction preset registry."""
+        config = DoclingConverterManagerConfig(
+            default_chart_extraction_preset="granite_vision_v4",
+        )
+        manager = DoclingConverterManager(config)
+
+        assert "default" in manager.chart_extraction_preset_registry
+        assert (
+            manager.chart_extraction_preset_registry["default"]["preset_id"]
+            == "granite_vision_v4"
+        )
 
 
 class TestPresetValidation:
@@ -127,6 +189,20 @@ class TestPresetValidation:
         with pytest.raises(ValueError, match="not allowed"):
             manager._validate_preset(
                 "nonexistent", manager.code_formula_preset_registry, "Code/formula"
+            )
+
+    def test_invalid_chart_extraction_preset_rejected(self):
+        """Test that invalid chart extraction preset raises error."""
+        config = DoclingConverterManagerConfig(
+            allowed_chart_extraction_presets=["granite_vision_v4"],
+        )
+        manager = DoclingConverterManager(config)
+
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._validate_preset(
+                "nonexistent",
+                manager.chart_extraction_preset_registry,
+                "Chart extraction",
             )
 
 
@@ -183,6 +259,7 @@ class TestCustomConfigValidation:
                 "allow_custom_picture_classification_config",
             ),
             ("ocr", "allow_custom_ocr_config"),
+            ("chart_extraction", "allow_custom_chart_extraction_config"),
         ],
     )
     def test_stage_custom_config_not_allowed(self, config_type, config_field):
@@ -203,6 +280,7 @@ class TestCustomConfigValidation:
                 "allow_custom_picture_classification_config",
             ),
             ("ocr", "allow_custom_ocr_config"),
+            ("chart_extraction", "allow_custom_chart_extraction_config"),
         ],
     )
     def test_stage_custom_config_allowed(self, config_type, config_field):
@@ -290,6 +368,46 @@ class TestOptionsParsingPreset:
 
         options = manager._parse_picture_description_options(request)
         assert options is not None
+
+    def test_parse_code_formula_options_with_preset(self):
+        """Test parsing code/formula options from preset."""
+        config = DoclingConverterManagerConfig(
+            default_code_formula_preset="codeformulav2",
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(
+            code_formula_preset="default",
+        )
+
+        options = manager._parse_code_formula_options(request)
+        assert options is not None
+
+    @pytest.mark.parametrize(
+        "request_field, parser_name",
+        [
+            ("vlm_pipeline_preset", "_parse_vlm_options"),
+            ("picture_description_preset", "_parse_picture_description_options"),
+            ("code_formula_preset", "_parse_code_formula_options"),
+            ("chart_extraction_preset", "_parse_chart_extraction_options"),
+            ("table_structure_preset", "_parse_table_structure_options"),
+            ("layout_preset", "_parse_layout_options"),
+            ("ocr_preset", "_parse_ocr_options"),
+        ],
+    )
+    def test_default_alias_resolves_with_stock_config(self, request_field, parser_name):
+        """Every default_*_preset must name a real Docling preset.
+
+        The registries map the alias "default" onto the configured
+        default_<stage>_preset, so a stock config has to be able to resolve
+        "default" for every stage. Picture classification is left out because
+        its docling branch deliberately returns None until the factory exists.
+        """
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        request = ConvertDocumentsOptions(**{request_field: "default"})
+
+        assert getattr(manager, parser_name)(request) is not None
 
 
 def _raw_engine_options() -> dict:
@@ -610,3 +728,317 @@ class TestGetVlmOptionsFromPreset:
         )
         assert options is not None
         assert options == custom_options
+
+
+class TestBuiltInPresetsAllowedByDefault:
+    """`allowed_*_presets=None` is documented as "None means all are allowed".
+
+    The VLM, OCR, chunking and table-structure registries honour that: with no
+    allow-list they enumerate every built-in preset. Picture-description,
+    code/formula and picture-classification instead only ever registered the
+    ``default`` alias, so every real Docling preset id was rejected with
+    "Allowed presets: default" -- the opposite of the documented contract.
+    """
+
+    @pytest.mark.parametrize(
+        "registry_name, expected_ids",
+        [
+            (
+                "picture_description_preset_registry",
+                PictureDescriptionVlmEngineOptions.list_preset_ids(),
+            ),
+            (
+                "code_formula_preset_registry",
+                CodeFormulaVlmOptions.list_preset_ids(),
+            ),
+            (
+                "picture_classification_preset_registry",
+                DocumentPictureClassifierOptions.list_preset_ids(),
+            ),
+            (
+                "chart_extraction_preset_registry",
+                ChartExtractionVlmEngineOptions.list_preset_ids(),
+            ),
+        ],
+    )
+    def test_all_built_in_presets_registered_without_allow_list(
+        self, registry_name, expected_ids
+    ):
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        registry = getattr(manager, registry_name)
+
+        assert set(registry) == {"default", *expected_ids}
+
+    @pytest.mark.parametrize(
+        "config_field, registry_name, allowed",
+        [
+            (
+                "allowed_picture_description_presets",
+                "picture_description_preset_registry",
+                ["smolvlm"],
+            ),
+            (
+                "allowed_code_formula_presets",
+                "code_formula_preset_registry",
+                ["granite_docling"],
+            ),
+            (
+                "allowed_picture_classification_presets",
+                "picture_classification_preset_registry",
+                ["document_figure_classifier_v2"],
+            ),
+            (
+                "allowed_chart_extraction_presets",
+                "chart_extraction_preset_registry",
+                ["granite_vision_v4"],
+            ),
+        ],
+    )
+    def test_allow_list_still_restricts(self, config_field, registry_name, allowed):
+        """An explicit allow-list must keep excluding everything else."""
+        config = DoclingConverterManagerConfig(**{config_field: allowed})
+        manager = DoclingConverterManager(config)
+
+        assert set(getattr(manager, registry_name)) == {"default", *allowed}
+
+    def test_layout_registry_is_kind_based_and_unchanged(self):
+        """Layout presets are factory *kinds*, not stage preset ids.
+
+        `_parse_layout_options` resolves a docling-source layout preset with
+        `layout_factory.create_options(kind=preset_id)`, so enumerating
+        `LayoutObjectDetectionOptions.list_preset_ids()` here would register ids
+        the factory cannot build. Layout is deliberately left alone.
+        """
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        assert set(manager.layout_preset_registry) == {"default"}
+
+
+class TestChartExtraction:
+    """Full-coverage tests for the chart extraction stage."""
+
+    def test_parse_chart_extraction_options_with_preset(self):
+        """Parsing chart extraction options from a named preset returns options."""
+        config = DoclingConverterManagerConfig(
+            default_chart_extraction_preset="granite_vision_v4",
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(chart_extraction_preset="default")
+
+        options = manager._parse_chart_extraction_options(request)
+        assert options is not None
+        assert isinstance(options, ChartExtractionVlmEngineOptions)
+
+    def test_parse_chart_extraction_options_without_preset_returns_none(self):
+        """When no preset or custom config is given, returns None."""
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        request = ConvertDocumentsOptions()
+
+        options = manager._parse_chart_extraction_options(request)
+        assert options is None
+
+    def test_chart_extraction_custom_preset_by_name(self):
+        """A custom chart extraction preset registered by name is validated."""
+        config = DoclingConverterManagerConfig(
+            custom_chart_extraction_presets={
+                "my_chart_preset": {
+                    "engine_options": {
+                        "engine_type": "api",
+                        "url": "http://localhost:8000/v1/chat/completions",
+                        "params": {"model": "granite-vision"},
+                    },
+                    "model_spec": {
+                        "name": "granite-vision",
+                        "default_repo_id": "ibm-granite/granite-vision-4.1-4b",
+                        "prompt": "<chart2csv>",
+                        "response_format": "plaintext",
+                    },
+                    "chart2csv": True,
+                }
+            },
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(chart_extraction_preset="my_chart_preset")
+        options = manager._parse_chart_extraction_options(request)
+
+        assert isinstance(options, ChartExtractionVlmEngineOptions)
+
+    def test_chart_extraction_custom_preset_as_default(self):
+        """When default_chart_extraction_preset is a custom preset, 'default' resolves to custom API options."""
+        config = DoclingConverterManagerConfig(
+            default_chart_extraction_preset="my_kserve_preset",
+            allowed_chart_extraction_presets=["my_kserve_preset"],
+            allowed_chart_extraction_engines=["api"],
+            custom_chart_extraction_presets={
+                "my_kserve_preset": {
+                    "engine_options": {
+                        "engine_type": "api",
+                        "url": "http://vlm-inference:8080/v1/chat/completions",
+                        "params": {"model": "granite-vision-4-1-4b"},
+                    },
+                    "model_spec": {
+                        "name": "granite-vision-4-1-4b",
+                        "default_repo_id": "ibm-granite/granite-vision-4.1-4b",
+                        "prompt": "<chart2csv>",
+                        "response_format": "plaintext",
+                    },
+                }
+            },
+        )
+        manager = DoclingConverterManager(config)
+
+        # 1. Request with do_chart_extraction=True without setting chart_extraction_preset explicitly
+        request = ConvertDocumentsOptions(do_chart_extraction=True)
+        options = manager._parse_chart_extraction_options(request)
+
+        assert isinstance(options, ChartExtractionVlmEngineOptions)
+        assert options.engine_options.engine_type.value == "api"
+
+        # 2. Standard PDF pipeline options wiring
+        pdf_format_opts = manager.get_pdf_pipeline_opts(request)
+        pipeline_opts = pdf_format_opts.pipeline_options
+        assert pipeline_opts.do_chart_extraction is True
+        assert (
+            pipeline_opts.chart_extraction_options.engine_options.engine_type.value
+            == "api"
+        )
+
+    def test_chart_extraction_custom_config_not_allowed(self):
+        """Custom chart extraction config is rejected when not allowed."""
+        config = DoclingConverterManagerConfig(
+            allow_custom_chart_extraction_config=False,
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(
+            chart_extraction_custom_config={
+                "engine_options": {
+                    "engine_type": "api",
+                    "url": "http://localhost:8000/v1/chat/completions",
+                    "params": {"model": "granite-vision"},
+                },
+                "model_spec": {
+                    "name": "granite-vision",
+                    "default_repo_id": "ibm-granite/granite-vision-4.1-4b",
+                    "prompt": "<chart2csv>",
+                    "response_format": "plaintext",
+                },
+            }
+        )
+
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._parse_chart_extraction_options(request)
+
+    def test_chart_extraction_custom_config_allowed(self):
+        """Custom chart extraction config is accepted when allowed."""
+        config = DoclingConverterManagerConfig(
+            allow_custom_chart_extraction_config=True,
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(
+            chart_extraction_custom_config={
+                "engine_options": {
+                    "engine_type": "api",
+                    "url": "http://localhost:8000/v1/chat/completions",
+                    "params": {"model": "granite-vision"},
+                },
+                "model_spec": {
+                    "name": "granite-vision",
+                    "default_repo_id": "ibm-granite/granite-vision-4.1-4b",
+                    "prompt": "<chart2csv>",
+                    "response_format": "plaintext",
+                },
+            }
+        )
+
+        options = manager._parse_chart_extraction_options(request)
+        assert isinstance(options, ChartExtractionVlmEngineOptions)
+
+    def test_chart_extraction_engine_not_allowed(self):
+        """Engine allowlist is enforced for chart extraction custom config."""
+        config = DoclingConverterManagerConfig(
+            allow_custom_chart_extraction_config=True,
+            allowed_chart_extraction_engines=["mlx"],
+        )
+        manager = DoclingConverterManager(config)
+
+        request = ConvertDocumentsOptions(
+            chart_extraction_custom_config={
+                "engine_options": {
+                    "engine_type": "transformers",
+                },
+                "model_spec": {
+                    "name": "granite-vision",
+                    "default_repo_id": "ibm-granite/granite-vision-4.1-4b",
+                    "prompt": "<chart2csv>",
+                    "response_format": "plaintext",
+                },
+            }
+        )
+
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._parse_chart_extraction_options(request)
+
+    def test_chart_extraction_wired_into_standard_pipeline(self):
+        """Chart extraction options are forwarded to PdfPipelineOptions."""
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        request = ConvertDocumentsOptions(
+            do_chart_extraction=True,
+            chart_extraction_preset="default",
+        )
+        pdf_format_option = manager.get_pdf_pipeline_opts(request)
+        pipeline_opts = pdf_format_option.pipeline_options
+
+        assert pipeline_opts.do_chart_extraction is True
+        assert isinstance(
+            pipeline_opts.chart_extraction_options, ChartExtractionVlmEngineOptions
+        )
+
+
+class TestConvertDocumentsSetupFailureTagging:
+    """convert_documents() tags data-independent setup failures by type.
+
+    Any failure in the eager setup span (option resolution through
+    initialize_pipeline) must surface as PipelineInitializationError so lifecycle
+    owners classify it as request-wide, never as a per-document failure. The
+    subsequent convert_all() is lazy, so nothing document-specific runs here.
+    """
+
+    def test_pre_init_setup_failure_is_tagged(self, monkeypatch):
+        from docling_jobkit.public_errors import PipelineInitializationError
+
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+        # A pre-init step (option resolution) blowing up -- e.g. an unavailable
+        # OCR engine -- must be tagged, not leak as a bare exception.
+        monkeypatch.setattr(
+            manager,
+            "get_pdf_pipeline_opts",
+            lambda options: (_ for _ in ()).throw(RuntimeError("OCR engine missing")),
+        )
+        with pytest.raises(PipelineInitializationError):
+            list(
+                manager.convert_documents(sources=[], options=ConvertDocumentsOptions())
+            )
+
+    def test_pipeline_init_failure_is_tagged(self, monkeypatch):
+        from docling_jobkit.public_errors import PipelineInitializationError
+
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        class _BadConverter:
+            def initialize_pipeline(self, *a, **k):
+                raise FileNotFoundError("Model 'x' not found in artifacts_path.")
+
+        monkeypatch.setattr(manager, "parse_chunking_options", lambda options: None)
+        monkeypatch.setattr(manager, "get_pdf_pipeline_opts", lambda options: object())
+        monkeypatch.setattr(manager, "get_converter", lambda opts: _BadConverter())
+        with pytest.raises(PipelineInitializationError):
+            list(
+                manager.convert_documents(sources=[], options=ConvertDocumentsOptions())
+            )

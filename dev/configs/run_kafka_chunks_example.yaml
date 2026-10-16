@@ -1,0 +1,50 @@
+# Test locally against dev/docker-compose.kafka.yaml:
+# docker compose -f dev/docker-compose.kafka.yaml up -d
+# Kafka UI view at http://localhost:8080
+
+options:
+  do_ocr: false
+
+sources:
+  - kind: local_path
+    path: ./input_documents/
+    recursive: true
+
+target:
+  kind: kafka_chunks
+  bootstrap_servers:
+    - localhost:29092  # host-reachable listener from docker-compose.kafka.yaml
+  topic: docling.chunks
+  # All chunks of a document land in one partition, ordered (ordering needs
+  # acks: all, which enables the idempotent producer).
+  # Do NOT enable log compaction on the topic with this key mode: the broker
+  # would keep only the last chunk of each document.
+  key_mode: doc_id
+  # auth:
+  #   kind: sasl
+  #   mechanism: PLAIN
+  #   username: your-username
+  #   password: "your-password"
+  #   # Optional: base64-encoded CA certificate for self-signed/internal CAs
+  #   # To encode locally: cat your_ca.crt | base64 | tr -d '\n'
+  #   # ca_cert: aAAAaaa...
+
+  # Defaults to SASL_SSL when 'auth' is set, PLAINTEXT otherwise. Set it
+  # explicitly for SCRAM over a trusted network (SASL_PLAINTEXT) or mTLS (SSL).
+  # security_protocol: SASL_SSL
+  # verify_certs: true
+  # Producer queue bounds (optional, these are the defaults). They cap
+  # librdkafka's *native* client-side buffers, whose own defaults are 1 GiB /
+  # 100 000 messages per worker.
+  # queue_max_kbytes: 65536
+  # queue_max_messages: 10000
+  # compression_type: lz4
+  # acks: all
+  # Field mappings (optional, these are the defaults)
+  text_field: "text"
+  metadata_field: "metadata"
+  doc_id_field: "doc_id"
+  chunk_index_field: "chunk_index"
+  chunk_id_field: "chunk_id"
+  page_field: "page_numbers"
+  headings_field: "headings"

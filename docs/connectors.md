@@ -187,6 +187,32 @@ disallowed target kind fails fast at `enqueue` with `TargetNotAllowedError`.
 deployment can, for example, forbid `local_path` targets that only make sense on
 a single machine.
 
+## Optional dependencies
+
+A connector whose SDK is an optional extra registers itself only when that SDK
+imports (`_register_if_available` in `connectors/plugins/defaults.py`); otherwise
+it is skipped with an INFO log and its `kind` is simply unknown. The database and
+streaming targets are all in this group:
+
+| `kind` | extra | notes |
+|---|---|---|
+| `opensearch_doc`, `opensearch_chunks` | `opensearch` | one indexed document per document / per chunk |
+| `astradb_chunks` | `astradb` | |
+| `kafka_chunks` | `kafka` | one Kafka message per chunk |
+
+(The cloud-storage connectors — `azure`, `gdrive`, `gcloudstorage`, `sharepoint`
+— work the same way.)
+
+**Install the extra on every process that enqueues *and* every process that
+dequeues.** `Task` targets validate through a discriminated union built from the
+*locally registered* connectors, so a worker without the extra pops the task off
+the queue and then fails to validate it (Ray's `dequeue_task` in
+`orchestrators/ray/redis_helper.py` does `lpop` before `validate_task_json`).
+Watch for this when the API pod and the worker image differ: `confluent-kafka`
+is a compiled wheel with manylinux, macOS and Windows builds but **no musllinux
+build**, so an Alpine-based worker cannot install what a Debian-based API pod
+can.
+
 ## Memory note
 
 Documents are fetched one at a time as the converter pulls them (see
@@ -195,3 +221,14 @@ are uploaded (see `export_documents_to_target`). Keep your source connector's
 `fetch_converter_source_by_ref` streaming a single document per call rather than
 materializing whole batches, so per-worker memory stays flat regardless of batch
 size.
+
+A target's own client can break that contract with buffers Python never sees.
+The Kafka producer is the case in point: `produce()` memcpy's each message into
+librdkafka's internal queues inside the worker process and returns before the
+broker has seen anything, so the queue is *native* memory — invisible to
+`tracemalloc` — stacked on top of the models and the `DoclingDocument`, and an
+overrun surfaces as an OOMKill with no Python traceback. librdkafka's own
+defaults allow 1 GiB / 100 000 messages; `kafka_chunks` therefore ships bounded
+defaults (`queue_max_kbytes: 65536`, `queue_max_messages: 10000`) and flushes at
+the end of every document. If your connector wraps a client that buffers, bound
+it explicitly and expose the bound as a config field.

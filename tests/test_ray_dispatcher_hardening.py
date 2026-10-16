@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import os
 import threading
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -411,6 +412,9 @@ class _TerminalizationPipeline:
     def srem(self, key: str, value: str) -> None:
         self.ops.append(("srem", key, value))
 
+    def expire(self, key: str, ttl: int) -> None:
+        self.ops.append(("expire", key, ttl))
+
     def hincrby(self, key: str, field: str, amount: int) -> None:
         self.ops.append(("hincrby", key, field, amount))
 
@@ -443,6 +447,8 @@ class _TerminalizationPipeline:
                 results.append(removed)
             elif op[0] == "delete":
                 deleted_keys.append(op[1])
+                results.append(1)
+            elif op[0] == "expire":
                 results.append(1)
             elif op[0] == "srem":
                 removed = 1 if op[2] in active_members else 0
@@ -1110,47 +1116,6 @@ async def test_reconcile_started_task_without_lease_within_grace_is_unresolved()
 
 
 @pytest.mark.asyncio
-async def test_resync_tenant_limits_rebuilds_counters_from_canonical_structures() -> (
-    None
-):
-    manager = RedisStateManager(redis_url="redis://localhost:6379/")
-    manager.redis = AsyncMock()
-    manager.get_tenant_active_task_ids = AsyncMock(return_value=["task-1", "task-2"])
-    manager.get_task_metadata_model = AsyncMock(
-        side_effect=[
-            RedisTaskMetadata(
-                task_id="task-1",
-                tenant_id="tenant-a",
-                status=TaskStatus.STARTED,
-                task_type=TaskType.CONVERT,
-                task_size=2,
-                created_at=datetime.datetime.now(datetime.timezone.utc),
-                last_update_at=datetime.datetime.now(datetime.timezone.utc),
-            ),
-            None,
-        ]
-    )
-    manager.get_tenant_limits = AsyncMock(
-        return_value=TenantLimits(max_concurrent_tasks=5)
-    )
-    manager.get_tenant_queue_size = AsyncMock(return_value=3)
-    manager.get_task_execution_lease = AsyncMock(
-        side_effect=[
-            {"replica_id": "r1", "converter_units": "2"},
-            None,
-        ]
-    )
-
-    limits = await manager.resync_tenant_limits("tenant-a")
-
-    assert limits.active_tasks == 2
-    assert limits.queued_tasks == 3
-    assert limits.active_documents == 3
-    assert limits.converter_units == 2
-    manager.redis.hset.assert_awaited_once()
-
-
-@pytest.mark.asyncio
 async def test_refresh_runtime_and_get_health_do_not_race_loop_startup() -> None:
     dispatcher = _make_dispatcher()
     dispatcher.redis_manager.connect = AsyncMock()
@@ -1224,3 +1189,117 @@ async def test_dispatcher_stats_preserve_existing_shape() -> None:
         "max_concurrent_tasks": dispatcher.config.max_concurrent_tasks,
         "max_queued_tasks": dispatcher.config.max_queued_tasks,
     }
+
+
+def _make_converter(config: RayOrchestratorConfig) -> object:
+    with (
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment.serve.get_replica_context",
+            return_value=_FakeReplicaContext(_FakeReplicaID()),
+        ),
+        patch(
+            "docling_jobkit.orchestrators.ray.serve_deployment.DoclingConverterManager"
+        ),
+    ):
+        deployment_cls = DoclingProcessorConverterDeployment.func_or_class
+        return deployment_cls(
+            converter_manager_config=MagicMock(),
+            config=config,
+        )
+
+
+async def _abandon_conversion(deployment, release: threading.Event) -> None:
+    """Start a conversion that blocks until *release*, then cancel its request."""
+    started = threading.Event()
+
+    def slow_conversion() -> str:
+        started.set()
+        release.wait(timeout=10.0)
+        return "done"
+
+    call = asyncio.create_task(deployment._run_with_retry("doc.pdf", slow_conversion))
+    assert await asyncio.to_thread(started.wait, 5.0)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+
+async def _wait_until(predicate, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "condition not reached"
+        await asyncio.sleep(0.01)
+
+
+def _recycling_config(**overrides) -> RayOrchestratorConfig:
+    values = {
+        "redis_url": "redis://localhost:6379/",
+        "document_timeout": 300.0,
+        "graceful_shutdown_timeout_s": 600.0,
+        "abandoned_conversion_grace_s": 0.1,
+    }
+    values.update(overrides)
+    return RayOrchestratorConfig(**values)
+
+
+@pytest.mark.asyncio
+async def test_converter_reports_unhealthy_while_abandoned_conversion_runs() -> None:
+    deployment = _make_converter(_recycling_config())
+    await deployment.check_health()
+
+    release = threading.Event()
+    try:
+        await _abandon_conversion(deployment, release)
+        assert deployment.abandoned_conversions == 1
+        await deployment.check_health()  # still within the grace period
+
+        await asyncio.sleep(0.2)
+        with pytest.raises(RuntimeError, match="after their request was cancelled"):
+            await deployment.check_health()
+    finally:
+        release.set()
+
+    # Once the abandoned thread finishes, the replica is healthy again.
+    await _wait_until(lambda: deployment.abandoned_conversions == 0)
+    await deployment.check_health()
+
+
+@pytest.mark.asyncio
+async def test_converter_ignores_abandoned_conversion_that_ends_within_grace() -> None:
+    deployment = _make_converter(_recycling_config(abandoned_conversion_grace_s=5.0))
+
+    release = threading.Event()
+    try:
+        await _abandon_conversion(deployment, release)
+    finally:
+        release.set()
+
+    await _wait_until(lambda: deployment.abandoned_conversions == 0)
+    await deployment.check_health()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"recycle_converter_on_abandoned_conversion": False},
+        # Serve would force-kill the draining replica before an unrelated
+        # request it took after the cancel could finish.
+        {"graceful_shutdown_timeout_s": None},
+        {"graceful_shutdown_timeout_s": 60.0},
+        {"document_timeout": None},
+    ],
+)
+async def test_converter_does_not_recycle_when_draining_is_unsafe(
+    overrides: dict,
+) -> None:
+    deployment = _make_converter(_recycling_config(**overrides))
+
+    release = threading.Event()
+    try:
+        await _abandon_conversion(deployment, release)
+        await asyncio.sleep(0.2)
+        assert deployment.abandoned_conversions == 1
+        await deployment.check_health()
+    finally:
+        release.set()

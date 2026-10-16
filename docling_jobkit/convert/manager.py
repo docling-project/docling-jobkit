@@ -11,12 +11,19 @@ from typing import Any, Callable, Literal, Optional, Type, TypedDict, Union
 
 from pydantic import BaseModel, Field
 
-from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
+from docling.backend.docling_parse_backend import (
+    DoclingParseDocumentBackend,
+    ThreadedDoclingParseDocumentBackend,
+)
 from docling.backend.pdf_backend import PdfDocumentBackend
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import DocumentStream, InputFormat
+from docling.datamodel.chart_extraction_options import ChartExtractionVlmEngineOptions
 from docling.datamodel.document import ConversionResult
+from docling.datamodel.picture_classification_options import (
+    DocumentPictureClassifierOptions,
+)
 from docling.datamodel.pipeline_options import (
     CodeFormulaVlmOptions,
     OcrOptions,
@@ -71,6 +78,8 @@ from docling.models.factories import (
 from docling.models.inference_engines.vlm.base import VlmEngineType
 from docling.pipeline.vlm_pipeline import VlmPipeline
 
+from docling_jobkit.public_errors import PipelineInitializationError
+
 _log = logging.getLogger(__name__)
 
 # Chunking presets defined in jobkit
@@ -124,6 +133,13 @@ class CodeFormulaCustomPresetInfo(TypedDict):
     options: CodeFormulaVlmOptions
 
 
+class ChartExtractionCustomPresetInfo(TypedDict):
+    """Info for a custom chart extraction preset."""
+
+    source: Literal["custom"]
+    options: ChartExtractionVlmEngineOptions
+
+
 class ChunkingCustomPresetInfo(TypedDict):
     """Info for a custom chunking preset."""
 
@@ -137,6 +153,7 @@ PictureDescriptionPresetInfo = Union[
     DoclingPresetInfo, PictureDescriptionCustomPresetInfo
 ]
 CodeFormulaPresetInfo = Union[DoclingPresetInfo, CodeFormulaCustomPresetInfo]
+ChartExtractionPresetInfo = Union[DoclingPresetInfo, ChartExtractionCustomPresetInfo]
 
 
 class LayoutCustomPresetInfo(TypedDict):
@@ -183,6 +200,7 @@ AnyPresetInfo = Union[
     VlmPresetInfo,
     PictureDescriptionPresetInfo,
     CodeFormulaPresetInfo,
+    ChartExtractionPresetInfo,
     ChunkingPresetInfo,
     LayoutPresetInfo,
     PictureClassificationPresetInfo,
@@ -255,7 +273,7 @@ class DoclingConverterManagerConfig(BaseModel):
 
     # Code/Formula Control
     default_code_formula_preset: str = Field(
-        default="default",
+        default="granite_docling",
         description='Default code/formula preset to use when user specifies "default".',
     )
     allowed_code_formula_presets: Optional[list[str]] = Field(
@@ -273,6 +291,28 @@ class DoclingConverterManagerConfig(BaseModel):
     allow_custom_code_formula_config: bool = Field(
         default=False,
         description="Whether users can specify custom code/formula configurations.",
+    )
+
+    # Chart Extraction Control
+    default_chart_extraction_preset: str = Field(
+        default="granite_vision_v4",
+        description='Default chart extraction preset to use when user specifies "default".',
+    )
+    allowed_chart_extraction_presets: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed chart extraction preset IDs. None means all are allowed.",
+    )
+    custom_chart_extraction_presets: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Custom chart extraction presets. Maps preset ID to ChartExtractionVlmEngineOptions.",
+    )
+    allowed_chart_extraction_engines: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed chart extraction engine types. None means all are allowed.",
+    )
+    allow_custom_chart_extraction_config: bool = Field(
+        default=False,
+        description="Whether users can specify custom chart extraction configurations.",
     )
 
     # === NEW: Kind Selection Control ===
@@ -572,16 +612,24 @@ class DoclingConverterManager:
         self.vlm_preset_registry: dict[str, VlmPresetInfo] = {}
 
         # ALWAYS add "default" preset (stable, guaranteed)
-        self.vlm_preset_registry["default"] = {
-            "source": "docling",
-            "preset_id": self.config.default_vlm_preset,
-        }
+        if self.config.default_vlm_preset in self.config.custom_vlm_presets:
+            self.vlm_preset_registry["default"] = {
+                "source": "custom",
+                "options": self.config.custom_vlm_presets[
+                    self.config.default_vlm_preset
+                ],
+            }
+        else:
+            self.vlm_preset_registry["default"] = {
+                "source": "docling",
+                "preset_id": self.config.default_vlm_preset,
+            }
 
         # Add Docling built-in presets (if allowed)
         if self.config.allowed_vlm_presets is None:
             # Allow all Docling presets
             for preset_id in VlmConvertOptions.list_preset_ids():
-                if preset_id != self.config.default_vlm_preset:
+                if preset_id != "default":
                     self.vlm_preset_registry[preset_id] = {
                         "source": "docling",
                         "preset_id": preset_id,
@@ -589,7 +637,7 @@ class DoclingConverterManager:
         else:
             # Only allow specified presets
             for preset_id in self.config.allowed_vlm_presets:
-                if preset_id != self.config.default_vlm_preset:
+                if preset_id != "default":
                     self.vlm_preset_registry[preset_id] = {
                         "source": "docling",
                         "preset_id": preset_id,
@@ -607,19 +655,35 @@ class DoclingConverterManager:
             str, PictureDescriptionPresetInfo
         ] = {}
 
-        self.picture_description_preset_registry["default"] = {
-            "source": "docling",
-            "preset_id": self.config.default_picture_description_preset,
-        }
+        if (
+            self.config.default_picture_description_preset
+            in self.config.custom_picture_description_presets
+        ):
+            self.picture_description_preset_registry["default"] = {
+                "source": "custom",
+                "options": self.config.custom_picture_description_presets[
+                    self.config.default_picture_description_preset
+                ],
+            }
+        else:
+            self.picture_description_preset_registry["default"] = {
+                "source": "docling",
+                "preset_id": self.config.default_picture_description_preset,
+            }
 
-        # Add allowed presets if specified
-        if self.config.allowed_picture_description_presets is not None:
-            for preset_id in self.config.allowed_picture_description_presets:
-                if preset_id != "default":
-                    self.picture_description_preset_registry[preset_id] = {
-                        "source": "docling",
-                        "preset_id": preset_id,
-                    }
+        # Add Docling built-in presets (if allowed)
+        if self.config.allowed_picture_description_presets is None:
+            # Allow all Docling presets
+            preset_ids = PictureDescriptionVlmEngineOptions.list_preset_ids()
+        else:
+            # Only allow specified presets
+            preset_ids = self.config.allowed_picture_description_presets
+        for preset_id in preset_ids:
+            if preset_id != "default":
+                self.picture_description_preset_registry[preset_id] = {
+                    "source": "docling",
+                    "preset_id": preset_id,
+                }
 
         # Add custom presets
         for (
@@ -634,19 +698,35 @@ class DoclingConverterManager:
         # Code/Formula Registry
         self.code_formula_preset_registry: dict[str, CodeFormulaPresetInfo] = {}
 
-        self.code_formula_preset_registry["default"] = {
-            "source": "docling",
-            "preset_id": self.config.default_code_formula_preset,
-        }
+        if (
+            self.config.default_code_formula_preset
+            in self.config.custom_code_formula_presets
+        ):
+            self.code_formula_preset_registry["default"] = {
+                "source": "custom",
+                "options": self.config.custom_code_formula_presets[
+                    self.config.default_code_formula_preset
+                ],
+            }
+        else:
+            self.code_formula_preset_registry["default"] = {
+                "source": "docling",
+                "preset_id": self.config.default_code_formula_preset,
+            }
 
-        # Add allowed presets if specified
-        if self.config.allowed_code_formula_presets is not None:
-            for preset_id in self.config.allowed_code_formula_presets:
-                if preset_id != "default":
-                    self.code_formula_preset_registry[preset_id] = {
-                        "source": "docling",
-                        "preset_id": preset_id,
-                    }
+        # Add Docling built-in presets (if allowed)
+        if self.config.allowed_code_formula_presets is None:
+            # Allow all Docling presets
+            preset_ids = CodeFormulaVlmOptions.list_preset_ids()
+        else:
+            # Only allow specified presets
+            preset_ids = self.config.allowed_code_formula_presets
+        for preset_id in preset_ids:
+            if preset_id != "default":
+                self.code_formula_preset_registry[preset_id] = {
+                    "source": "docling",
+                    "preset_id": preset_id,
+                }
 
         # Add custom presets
         for (
@@ -654,6 +734,48 @@ class DoclingConverterManager:
             preset_options,
         ) in self.config.custom_code_formula_presets.items():
             self.code_formula_preset_registry[preset_id] = {
+                "source": "custom",
+                "options": preset_options,
+            }
+
+        # Chart Extraction Registry
+        self.chart_extraction_preset_registry: dict[str, ChartExtractionPresetInfo] = {}
+
+        if (
+            self.config.default_chart_extraction_preset
+            in self.config.custom_chart_extraction_presets
+        ):
+            self.chart_extraction_preset_registry["default"] = {
+                "source": "custom",
+                "options": self.config.custom_chart_extraction_presets[
+                    self.config.default_chart_extraction_preset
+                ],
+            }
+        else:
+            self.chart_extraction_preset_registry["default"] = {
+                "source": "docling",
+                "preset_id": self.config.default_chart_extraction_preset,
+            }
+
+        # Add Docling built-in presets (if allowed)
+        if self.config.allowed_chart_extraction_presets is None:
+            # Allow all Docling presets
+            preset_ids = ChartExtractionVlmEngineOptions.list_preset_ids()
+        else:
+            preset_ids = self.config.allowed_chart_extraction_presets
+        for preset_id in preset_ids:
+            if preset_id != "default":
+                self.chart_extraction_preset_registry[preset_id] = {
+                    "source": "docling",
+                    "preset_id": preset_id,
+                }
+
+        # Add custom presets
+        for (
+            preset_id,
+            preset_options,
+        ) in self.config.custom_chart_extraction_presets.items():
+            self.chart_extraction_preset_registry[preset_id] = {
                 "source": "custom",
                 "options": preset_options,
             }
@@ -692,14 +814,19 @@ class DoclingConverterManager:
             "preset_id": self.config.default_picture_classification_preset,
         }
 
-        # Add allowed presets if specified
-        if self.config.allowed_picture_classification_presets is not None:
-            for preset_id in self.config.allowed_picture_classification_presets:
-                if preset_id != "default":
-                    self.picture_classification_preset_registry[preset_id] = {
-                        "source": "docling",
-                        "preset_id": preset_id,
-                    }
+        # Add Docling built-in presets (if allowed)
+        if self.config.allowed_picture_classification_presets is None:
+            # Allow all Docling presets
+            preset_ids = DocumentPictureClassifierOptions.list_preset_ids()
+        else:
+            # Only allow specified presets
+            preset_ids = self.config.allowed_picture_classification_presets
+        for preset_id in preset_ids:
+            if preset_id != "default":
+                self.picture_classification_preset_registry[preset_id] = {
+                    "source": "docling",
+                    "preset_id": preset_id,
+                }
 
         # Add custom presets
         for (
@@ -924,6 +1051,14 @@ class DoclingConverterManager:
                 "Custom OCR configuration is not allowed. "
                 "Please use a preset or contact your administrator."
             )
+        elif (
+            config_type == "chart_extraction"
+            and not self.config.allow_custom_chart_extraction_config
+        ):
+            raise ValueError(
+                "Custom chart extraction configuration is not allowed. "
+                "Please use a preset or contact your administrator."
+            )
 
     def _validate_engine_allowed(
         self, engine_type: str, allowed_engines: Optional[list[str]]
@@ -1118,16 +1253,6 @@ class DoclingConverterManager:
         self, request: ConvertDocumentsOptions
     ) -> Optional[Any]:
         """Parse picture description options from preset OR custom config."""
-        if request.picture_description_preset:
-            return self._get_options_from_preset(
-                request.picture_description_preset,
-                self.picture_description_preset_registry,
-                "Picture description",
-                self.config.allowed_picture_description_engines,
-                PictureDescriptionVlmEngineOptions.from_preset,
-                PictureDescriptionVlmEngineOptions,
-            )
-
         if request.picture_description_custom_config:
             self._validate_custom_config_allowed("picture_description")
 
@@ -1168,22 +1293,33 @@ class DoclingConverterManager:
                 f"Invalid picture_description_custom_config type: {type(request.picture_description_custom_config)}"
             )
 
+        # Only use the engine-based path when no legacy field is set; if
+        # picture_description_local / picture_description_api is provided the
+        # caller intends the legacy branch, so let _apply_*_pipeline_options
+        # handle it there instead.
+        legacy_set = (
+            request.picture_description_local is not None
+            or request.picture_description_api is not None
+        )
+        if not legacy_set and (
+            request.picture_description_preset or request.do_picture_description
+        ):
+            preset_id = request.picture_description_preset or "default"
+            return self._get_options_from_preset(
+                preset_id,
+                self.picture_description_preset_registry,
+                "Picture description",
+                self.config.allowed_picture_description_engines,
+                PictureDescriptionVlmEngineOptions.from_preset,
+                PictureDescriptionVlmEngineOptions,
+            )
+
         return None
 
     def _parse_code_formula_options(
         self, request: ConvertDocumentsOptions
     ) -> Optional[Any]:
         """Parse code/formula options from preset OR custom config."""
-        if request.code_formula_preset:
-            return self._get_options_from_preset(
-                request.code_formula_preset,
-                self.code_formula_preset_registry,
-                "Code/formula",
-                self.config.allowed_code_formula_engines,
-                CodeFormulaVlmOptions.from_preset,
-                CodeFormulaVlmOptions,
-            )
-
         if request.code_formula_custom_config:
             self._validate_custom_config_allowed("code_formula")
 
@@ -1221,6 +1357,78 @@ class DoclingConverterManager:
 
             raise ValueError(
                 f"Invalid code_formula_custom_config type: {type(request.code_formula_custom_config)}"
+            )
+
+        if (
+            request.code_formula_preset
+            or request.do_code_enrichment
+            or request.do_formula_enrichment
+        ):
+            preset_id = request.code_formula_preset or "default"
+            return self._get_options_from_preset(
+                preset_id,
+                self.code_formula_preset_registry,
+                "Code/formula",
+                self.config.allowed_code_formula_engines,
+                CodeFormulaVlmOptions.from_preset,
+                CodeFormulaVlmOptions,
+            )
+
+        return None
+
+    def _parse_chart_extraction_options(
+        self, request: ConvertDocumentsOptions
+    ) -> Optional[ChartExtractionVlmEngineOptions]:
+        """Parse chart extraction options from preset OR custom config."""
+        if request.chart_extraction_custom_config:
+            self._validate_custom_config_allowed("chart_extraction")
+
+            # If it's already a ChartExtractionVlmEngineOptions object, validate and return
+            if isinstance(
+                request.chart_extraction_custom_config,
+                ChartExtractionVlmEngineOptions,
+            ):
+                if self.config.allowed_chart_extraction_engines is not None:
+                    engine_type = request.chart_extraction_custom_config.engine_options.engine_type
+                    self._validate_engine_allowed(
+                        engine_type, self.config.allowed_chart_extraction_engines
+                    )
+                return request.chart_extraction_custom_config
+
+            # If it's a dict, convert it to ChartExtractionVlmEngineOptions
+            if isinstance(request.chart_extraction_custom_config, dict):
+                config_dict = request.chart_extraction_custom_config.copy()
+
+                if self.config.allowed_chart_extraction_engines is not None:
+                    engine_options_dict = config_dict.get("engine_options", {})
+                    engine_type = engine_options_dict.get("engine_type", "")
+                    self._validate_engine_allowed(
+                        engine_type, self.config.allowed_chart_extraction_engines
+                    )
+
+                # Instantiate the correct engine options class
+                if "engine_options" in config_dict and isinstance(
+                    config_dict["engine_options"], dict
+                ):
+                    config_dict["engine_options"] = self._instantiate_engine_options(
+                        config_dict["engine_options"]
+                    )
+
+                return ChartExtractionVlmEngineOptions.model_validate(config_dict)
+
+            raise ValueError(
+                f"Invalid chart_extraction_custom_config type: {type(request.chart_extraction_custom_config)}"
+            )
+
+        if request.chart_extraction_preset or request.do_chart_extraction:
+            preset_id = request.chart_extraction_preset or "default"
+            return self._get_options_from_preset(
+                preset_id,
+                self.chart_extraction_preset_registry,
+                "Chart extraction",
+                self.config.allowed_chart_extraction_engines,
+                ChartExtractionVlmEngineOptions.from_preset,
+                ChartExtractionVlmEngineOptions,
             )
 
         return None
@@ -1341,13 +1549,36 @@ class DoclingConverterManager:
             return table_options
 
         # Option 3: Legacy fields (backward compatibility)
-        # Use default kind with legacy fields (table_mode, table_cell_matching)
-        # Only pass legacy parameters if they're not at defaults to avoid passing
-        # unsupported parameters to kinds that don't support them
-        kind = self.config.default_table_structure_kind
+        # Resolve the base kind + options from the configured default preset
+        # so a non-default default_table_structure_preset is honored, then
+        # apply only non-default legacy fields as sparse overrides. Explicit
+        # presets (Option 2) are unaffected and still ignore legacy fields.
+        preset_id = self.config.default_table_structure_preset
+        preset_info = self.table_structure_preset_registry.get(preset_id)
+        if not preset_info:
+            raise ValueError(f"Unknown table structure preset: {preset_id}")
+        if preset_info["source"] != "custom":
+            raise ValueError(f"Preset '{preset_id}' has invalid source")
 
-        # Build kwargs only with non-default legacy parameters
-        kwargs: dict[str, Any] = {}
+        config_dict = preset_info["options"].copy()
+        kind = config_dict.get("kind")
+        if not kind:
+            raise ValueError(f"Preset '{preset_id}' must include a 'kind' field")
+
+        self._validate_kind_allowed(
+            kind,
+            self.config.allowed_table_structure_kinds,
+            self.config.default_table_structure_kind,
+            "table_structure",
+        )
+        self._validate_kind_available(
+            kind, self.available_table_structure_kinds, "table_structure"
+        )
+
+        # Build kwargs from the preset base, overriding only with non-default
+        # legacy parameters to avoid passing unsupported parameters to kinds
+        # that don't support them
+        kwargs: dict[str, Any] = {k: v for k, v in config_dict.items() if k != "kind"}
         default_table_options = TableStructureOptions()
 
         if request.table_mode != default_table_options.mode:
@@ -1675,6 +1906,11 @@ class DoclingConverterManager:
         if new_code_formula_options is not None:
             pipeline_options.code_formula_options = new_code_formula_options
 
+        # === NEW ENGINE-BASED APPROACH for Chart Extraction ===
+        new_chart_extraction_options = self._parse_chart_extraction_options(request)
+        if new_chart_extraction_options is not None:
+            pipeline_options.chart_extraction_options = new_chart_extraction_options
+
         # `do_pdf_heading_hierarchy` is the request-level switch, while the nested
         # options carry only the fine-tuning, so the pipeline's own `enabled` flag
         # is derived from the switch here.
@@ -1711,6 +1947,8 @@ class DoclingConverterManager:
         pdf_backend = normalize_pdf_backend(request.pdf_backend)
         if pdf_backend == PdfBackend.DOCLING_PARSE:
             backend: type[PdfDocumentBackend] = DoclingParseDocumentBackend
+        elif pdf_backend == PdfBackend.THREADED_DOCLING_PARSE:
+            backend = ThreadedDoclingParseDocumentBackend
         elif pdf_backend == PdfBackend.PYPDFIUM2:
             backend = PyPdfiumDocumentBackend
         else:
@@ -1866,8 +2104,11 @@ class DoclingConverterManager:
 
         elif request.pipeline == ProcessingPipeline.VLM:
             pipeline_options = self._parse_vlm_pdf_opts(request, artifacts_path)
+            backend = self._parse_backend(request)
             pdf_format_option = PdfFormatOption(
-                pipeline_cls=VlmPipeline, pipeline_options=pipeline_options
+                pipeline_cls=VlmPipeline,
+                pipeline_options=pipeline_options,
+                backend=backend,
             )
         else:
             raise NotImplementedError(
@@ -1882,11 +2123,20 @@ class DoclingConverterManager:
         options: ConvertDocumentsOptions,
         headers: Optional[dict[str, Any]] = None,
     ) -> Iterable[ConversionResult]:
-        self.parse_chunking_options(options)
-        pdf_format_option = self.get_pdf_pipeline_opts(options)
-        converter = self.get_converter(pdf_format_option)
-        with self._cache_lock:
-            converter.initialize_pipeline(format=InputFormat.PDF)
+        # Everything up to and including initialize_pipeline() is converter
+        # *setup*: it depends only on the request options and artifacts_path, not
+        # on any document (convert_all() below is lazy -- document data is only
+        # touched when the caller iterates the result). A failure here is
+        # therefore request-wide, not per-document. Tag it by type so lifecycle
+        # owners classify it structurally instead of sniffing the error text.
+        try:
+            self.parse_chunking_options(options)
+            pdf_format_option = self.get_pdf_pipeline_opts(options)
+            converter = self.get_converter(pdf_format_option)
+            with self._cache_lock:
+                converter.initialize_pipeline(format=InputFormat.PDF)
+        except Exception as exc:
+            raise PipelineInitializationError(str(exc)) from exc
 
         results: Iterator[ConversionResult] = converter.convert_all(
             sources,

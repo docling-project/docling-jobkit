@@ -1,3 +1,78 @@
+## [v3.8.2](https://github.com/docling-project/docling-jobkit/releases/tag/v3.8.2) - 2026-10-13
+
+### Fix
+
+* **manager:** Honor default preset in legacy table-structure path ([#256](https://github.com/docling-project/docling-jobkit/issues/256)) ([`e955fc1`](https://github.com/docling-project/docling-jobkit/commit/e955fc1f3f0a353144350459e5f4d982c5c8c49a))
+* **rq:** Pass the job timeout as job_timeout so rq applies it ([#262](https://github.com/docling-project/docling-jobkit/issues/262)) ([`d2d30e4`](https://github.com/docling-project/docling-jobkit/commit/d2d30e44bca9930cb95feb8adfa6a3db43d77699))
+* **ray:** Enforce timeouts by cancelling abandoned conversions ([#264](https://github.com/docling-project/docling-jobkit/issues/264)) ([`02e287c`](https://github.com/docling-project/docling-jobkit/commit/02e287ca20c0fc8d991e19c698e0966d7e083d1a))
+
+## [v3.8.1](https://github.com/docling-project/docling-jobkit/releases/tag/v3.8.1) - 2026-10-01
+
+### Fix
+
+* Fix for connectors using static defined class instead of dynamically created ([#263](https://github.com/docling-project/docling-jobkit/issues/263)) ([`8df293a`](https://github.com/docling-project/docling-jobkit/commit/8df293a306ecdf8f543220a03079a36770d6f512))
+
+## [v3.8.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.8.0) - 2026-09-23
+
+### Feature
+
+* Add chart extraction preset and configuration support ([#250](https://github.com/docling-project/docling-jobkit/issues/250)) ([`2e565cd`](https://github.com/docling-project/docling-jobkit/commit/2e565cda6838bc14bc0007708419fa534e19f3d9))
+* Use default credential chain for S3 ([#246](https://github.com/docling-project/docling-jobkit/issues/246)) ([`10b9e2b`](https://github.com/docling-project/docling-jobkit/commit/10b9e2b31e657f83d8ef68d5a19a1c683eea2279))
+
+### Fix
+
+* Use plain-text serializer for text exports ([#255](https://github.com/docling-project/docling-jobkit/issues/255)) ([`f37b18a`](https://github.com/docling-project/docling-jobkit/commit/f37b18a98c5329da92d8549c9c5c0fa45ba86873))
+* **rq:** Clean up orphaned jobs from StartedJobRegistry ([#238](https://github.com/docling-project/docling-jobkit/issues/238)) ([`11f0631`](https://github.com/docling-project/docling-jobkit/commit/11f0631f455f9d054276deedead6cd4bef144e86))
+* **rq:** Keep the worker's failure reason for a task already marked FAILURE ([#252](https://github.com/docling-project/docling-jobkit/issues/252)) ([`a1f828d`](https://github.com/docling-project/docling-jobkit/commit/a1f828dfa30ddd6b609016d427d8b57ab02c7922))
+
+## [v3.7.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.7.0) - 2026-09-17
+
+### Feature
+
+* **ray:** Application metrics ([#242](https://github.com/docling-project/docling-jobkit/issues/242)) ([`ad67ba6`](https://github.com/docling-project/docling-jobkit/commit/ad67ba687db3a644867aa3c9da69429ab80db5ec))
+* Box connector ([#243](https://github.com/docling-project/docling-jobkit/issues/243)) ([`e800d71`](https://github.com/docling-project/docling-jobkit/commit/e800d71aed9cc8184e44c39f84e7902fedcde386))
+
+## [v3.6.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.6.0) - 2026-09-15
+
+### Feature
+
+* Databricks volumes ([#247](https://github.com/docling-project/docling-jobkit/issues/247)) ([`8068311`](https://github.com/docling-project/docling-jobkit/commit/8068311d38fa1c92e909c432c17bbd115e3d8852))
+* Adds region support for s3 connector ([#248](https://github.com/docling-project/docling-jobkit/issues/248)) ([`028c8e0`](https://github.com/docling-project/docling-jobkit/commit/028c8e02071c74ca0bbc6266eaea88e44e7d81a0))
+
+### Fix
+
+* **manager:** Point default_code_formula_preset at a real Docling preset (#230) ([#233](https://github.com/docling-project/docling-jobkit/issues/233)) ([`5ce0ede`](https://github.com/docling-project/docling-jobkit/commit/5ce0ede2b37ad5eafc5178de61404c372ba49c67))
+* Honor md_compact_tables when exporting markdown ([#239](https://github.com/docling-project/docling-jobkit/issues/239)) ([`4054edb`](https://github.com/docling-project/docling-jobkit/commit/4054edbc8d84cb1798c3c6e9d4d7f2acb40acd40))
+
+## [v3.5.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.5.0) - 2026-09-01
+
+### Feature
+
+* **ray:** Add terminal task completion callbacks ([#221](https://github.com/docling-project/docling-jobkit/issues/221)) ([`c7cb97d`](https://github.com/docling-project/docling-jobkit/commit/c7cb97df83e8f12733206aabc8b31750cb124429))
+* Add Azure Blob presigned artifact storage ([#204](https://github.com/docling-project/docling-jobkit/issues/204)) ([`2f89084`](https://github.com/docling-project/docling-jobkit/commit/2f890847c00ea8d88c3383b1238c2f29fbe449f0))
+
+### Fix
+
+* **ray:** Prevent tenant limit counter races ([#240](https://github.com/docling-project/docling-jobkit/issues/240)) ([`b75b78d`](https://github.com/docling-project/docling-jobkit/commit/b75b78d71fe8e4836c4818a87415348f1d643ed6))
+* **results_processor:** Key artifacts by basename, not by source path (#229) ([#234](https://github.com/docling-project/docling-jobkit/issues/234)) ([`0060845`](https://github.com/docling-project/docling-jobkit/commit/006084530b2c9a114f8d92f6265fdb69641453af))
+* **manager:** Register the configured default VLM preset under its own id ([#235](https://github.com/docling-project/docling-jobkit/issues/235)) ([`0571dbc`](https://github.com/docling-project/docling-jobkit/commit/0571dbc4c835f5e305a2c66b4cb17d7c31087552))
+* **local_path:** Enforce max_file_size before reading the file ([#232](https://github.com/docling-project/docling-jobkit/issues/232)) ([`cc0f91b`](https://github.com/docling-project/docling-jobkit/commit/cc0f91b348ca827c99a29b08e51bed17680b7cd5))
+* **manager:** Register the built-in presets that no allow-list is meant to exclude (#230) ([#236](https://github.com/docling-project/docling-jobkit/issues/236)) ([`8bade50`](https://github.com/docling-project/docling-jobkit/commit/8bade503803377a41a20afff25d27777cd9651a4))
+
+## [v3.4.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.4.0) - 2026-08-20
+
+### Feature
+
+* **rq:** Make the RQ job timeout configurable ([#227](https://github.com/docling-project/docling-jobkit/issues/227)) ([`0cda962`](https://github.com/docling-project/docling-jobkit/commit/0cda962c2b09ee549f6d6f7d0a9894c75dc2f8ee))
+* Kafka chunk target ([#222](https://github.com/docling-project/docling-jobkit/issues/222)) ([`958a8c7`](https://github.com/docling-project/docling-jobkit/commit/958a8c76e439de210c6a12d559d6d93c48648539))
+
+### Fix
+
+* Map threaded docling-parse backend for Standard and VLM pipelines ([#228](https://github.com/docling-project/docling-jobkit/issues/228)) ([`2584d44`](https://github.com/docling-project/docling-jobkit/commit/2584d44504299b001d1848c2821538c369533672))
+* Make nvidia default provider in models.py. ([#223](https://github.com/docling-project/docling-jobkit/issues/223)) ([`5b9a8b5`](https://github.com/docling-project/docling-jobkit/commit/5b9a8b5581913ce4eb922f874ffc8dd3dc13d0dd))
+* Serialization of custom options ([#220](https://github.com/docling-project/docling-jobkit/issues/220)) ([`36e4dca`](https://github.com/docling-project/docling-jobkit/commit/36e4dcae2efb6c548af5b826d2c820ba9ffb47a8))
+* Reported expected doc count in callbacks ([#218](https://github.com/docling-project/docling-jobkit/issues/218)) ([`aa21f2f`](https://github.com/docling-project/docling-jobkit/commit/aa21f2f73f26e99f6635e44699addd860f316cd2))
+
 ## [v3.3.1](https://github.com/docling-project/docling-jobkit/releases/tag/v3.3.1) - 2026-08-06
 
 ### Fix

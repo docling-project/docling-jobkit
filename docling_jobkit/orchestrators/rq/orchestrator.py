@@ -25,7 +25,7 @@ from docling.datamodel.service.requests import FileSourceRequest
 from docling.datamodel.service.targets import InBodyTarget
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
 
-from docling_jobkit.config.target_config import S3PresignedConfig
+from docling_jobkit.config.target_config import PresignedConfig
 from docling_jobkit.connectors.connector_factory import get_source_connector_factory
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
@@ -46,6 +46,7 @@ class RQOrchestratorConfig(BaseModel):
     queue_name: str = "convert"
     results_ttl: int = 3_600 * 4
     failure_ttl: int = 3_600 * 4
+    job_timeout: int = 3_600 * 4  # RQ death penalty per job; -1 disables it
     results_prefix: str = "docling:results"
     heartbeat_key_prefix: str = "docling:job:alive"
     sub_channel: str = "docling:updates"
@@ -61,7 +62,7 @@ class RQOrchestratorConfig(BaseModel):
     zombie_reaper_max_age: float = 3600.0
     result_removal_delay: int = 300  # seconds until result key expires after fetch
     debug_error_details: bool = False
-    s3_presigned_config: S3PresignedConfig | None = None
+    presigned_config: PresignedConfig | None = None
     allowed_target_kinds: Optional[set[str]] = None
     allow_external_plugins: bool = False
 
@@ -109,7 +110,7 @@ class RQOrchestrator(BaseOrchestrator):
         rq_queue = Queue(
             config.queue_name,
             connection=conn,
-            default_timeout=14400,
+            default_timeout=config.job_timeout,
             result_ttl=config.results_ttl,
             failure_ttl=config.failure_ttl,
         )
@@ -211,7 +212,7 @@ class RQOrchestrator(BaseOrchestrator):
                 self._rq_job_function,
                 kwargs={"task_data": task_data},
                 job_id=task_id,
-                timeout=14400,
+                job_timeout=self.config.job_timeout,
                 failure_ttl=self.config.failure_ttl,
             )
             await self.init_task_tracking(task)
@@ -548,9 +549,22 @@ class RQOrchestrator(BaseOrchestrator):
                     try:
                         task = await self.get_raw_task(task_id=data.task_id)
                         if task.is_completed():
-                            _log.debug(
-                                "Task already completed. No update will be done."
-                            )
+                            # A status poll may have rebuilt this task from the
+                            # RQ job before this update arrived; that rebuild
+                            # carries no error_message. Keep the worker's
+                            # reason instead of dropping it.
+                            if (
+                                data.task_status == TaskStatus.FAILURE
+                                and task.task_status == TaskStatus.FAILURE
+                                and task.error_message is None
+                                and data.error_message is not None
+                            ):
+                                task.error_message = data.error_message
+                                await self._on_task_status_changed(task)
+                            else:
+                                _log.debug(
+                                    "Task already completed. No update will be done."
+                                )
                             continue
 
                         # Update the status
@@ -709,13 +723,17 @@ class RQOrchestrator(BaseOrchestrator):
                                         connection=self._redis_conn,
                                     )
                                     job.set_status(JobStatus.FAILED)
+                                    registry.remove_executions(job)
+                                except NoSuchJobError:
+                                    _log.debug(
+                                        f"RQ job {tid} no longer exists, "
+                                        f"skipping started-registry cleanup"
+                                    )
                                 except Exception:
                                     _log.debug(
-                                        f"Could not set RQ job {tid} "
-                                        f"status to FAILED (may already "
-                                        f"be gone)"
+                                        f"Could not clean up RQ state for "
+                                        f"task {tid} (may already be gone)"
                                     )
-                                registry.remove(tid)
 
                             await asyncio.to_thread(_mark_rq_failed, task_id)
                             _log.info(

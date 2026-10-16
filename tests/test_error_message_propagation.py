@@ -189,3 +189,66 @@ class TestListenForUpdatesErrorPropagation:
 
         assert task.task_status == TaskStatus.FAILURE
         assert task.error_message == "GPU OOM"
+
+    @pytest.mark.asyncio
+    async def test_late_failure_reason_fills_rebuilt_failure(self):
+        # A status poll rebuilt the task from the RQ job: FAILURE, no reason.
+        orch, task = _make_orchestrator_with_task()
+        task.set_status(TaskStatus.FAILURE)
+        finished_at = task.finished_at
+
+        messages = [
+            _make_pubsub_message(
+                task.task_id,
+                TaskStatus.FAILURE,
+                error_message="Invalid base64 in source",
+            )
+        ]
+        orch._async_redis_conn.pubsub.return_value = _make_pubsub(messages)
+
+        await orch._listen_for_updates()
+
+        assert task.task_status == TaskStatus.FAILURE
+        assert task.error_message == "Invalid base64 in source"
+        assert task.finished_at == finished_at
+        orch._store_task_in_redis.assert_awaited_once_with(task)
+
+    @pytest.mark.asyncio
+    async def test_late_failure_reason_does_not_overwrite_existing(self):
+        orch, task = _make_orchestrator_with_task()
+        task.set_status(TaskStatus.FAILURE)
+        task.error_message = "first reason"
+
+        messages = [
+            _make_pubsub_message(
+                task.task_id,
+                TaskStatus.FAILURE,
+                error_message="second reason",
+            )
+        ]
+        orch._async_redis_conn.pubsub.return_value = _make_pubsub(messages)
+
+        await orch._listen_for_updates()
+
+        assert task.error_message == "first reason"
+        orch._store_task_in_redis.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_late_failure_reason_ignored_for_success(self):
+        orch, task = _make_orchestrator_with_task()
+        task.set_status(TaskStatus.SUCCESS)
+
+        messages = [
+            _make_pubsub_message(
+                task.task_id,
+                TaskStatus.FAILURE,
+                error_message="stale failure",
+            )
+        ]
+        orch._async_redis_conn.pubsub.return_value = _make_pubsub(messages)
+
+        await orch._listen_for_updates()
+
+        assert task.task_status == TaskStatus.SUCCESS
+        assert task.error_message is None
+        orch._store_task_in_redis.assert_not_awaited()

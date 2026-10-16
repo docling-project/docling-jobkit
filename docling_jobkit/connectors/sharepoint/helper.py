@@ -78,7 +78,7 @@ def _on_retry_failure(attempt: int, exc: Exception) -> None:
     )
 
 
-def _execute_with_retry(client_object: "DriveItem") -> None:
+def _execute_with_retry(client_object: DriveItem) -> None:
     """Run pending queries on client_object with bounded retry + logging."""
     client_object.execute_query_retry(
         max_retry=_UPLOAD_MAX_RETRY,
@@ -149,7 +149,7 @@ def _to_file_meta(item: Any) -> dict[str, Any]:
     }
 
 
-def _iter_children(folder: "DriveItem") -> Iterator[Any]:
+def _iter_children(folder: DriveItem) -> Iterator[Any]:
     """Yield the children of *folder* one server page at a time.
 
     ``get_files(recursive=True)`` and ``get_all()`` both drain every page inside a
@@ -294,7 +294,7 @@ def get_or_create_folder(drive: Drive, folder_path: str | None) -> DriveItem:
     return folder_handle(drive, folder_path)
 
 
-def _create_folder(parent: "DriveItem", child: "DriveItem", part: str) -> "DriveItem":
+def _create_folder(parent: DriveItem, child: DriveItem, part: str) -> DriveItem:
     """Create the *part* segment under *parent*, tolerating a concurrent creator.
 
     Every worker exporting into the same destination races to create the same folder
@@ -347,7 +347,7 @@ def _drain_into(fh: BinaryIO, head: bytes, rest: BinaryIO | None) -> None:
 
 
 def upload_file(
-    folder: "DriveItem", local_path: str | os.PathLike, target_name: str
+    folder: DriveItem, local_path: str | os.PathLike, target_name: str
 ) -> None:
     """Upload the local file at local_path into the already-resolved *folder*."""
     size = os.path.getsize(local_path)
@@ -380,7 +380,7 @@ def upload_file(
 
 
 def upload_object(
-    folder: "DriveItem", obj: str | bytes | BinaryIO, target_name: str
+    folder: DriveItem, obj: str | bytes | BinaryIO, target_name: str
 ) -> None:
     """Upload an in-memory object into the already-resolved *folder*."""
     if isinstance(obj, (bytes, bytearray)):

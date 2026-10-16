@@ -158,18 +158,22 @@ uv run python docling_jobkit/orchestrators/rq/worker.py
 
 We use the following tools to enforce code style:
 
-- ruff, to sort imports and format code
+- [Ruff](https://docs.astral.sh/ruff/), as linter and code formatter
+- [ty](https://docs.astral.sh/ty/), as static type checker
 
-We run a series of checks on the code base on every commit, using `pre-commit`. To install the hooks, run:
+A set of styling checks is defined and managed through [prek](https://pypi.org/project/prek/), a fast runner for pre-commit-compatible hook configs.
+To ensure that those checks run automatically before a commit is finalized, install `prek` on your local repository:
 
 ```bash
-pre-commit install
+uv run prek install
 ```
 
 To run the checks on-demand, run:
 
-```shell
-pre-commit run --all-files
+```bash
+uv run prek run --all-files
 ```
 
-Note: Formatting checks like `ruff` will "fail" if they modify files. This is because `pre-commit` doesn't like to see files modified by their Hooks. In these cases, `git add` the modified files and `git commit` again.
+Note: Checks like `Ruff` will "fail" if they modify files. This is because hook runners don't like to see files modified by their hooks. In these cases, `git add` the modified files and `git commit` again.
+
+On pull requests, a fast lint, format and typing check (`Run PR Fast Checks`) runs on the changed files right away, also for PRs from forks. The full CI (`Run CI`) may need a maintainer approval before it runs.

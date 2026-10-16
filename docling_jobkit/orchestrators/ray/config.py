@@ -8,7 +8,7 @@ from typing import Any, Optional
 from pydantic import AliasChoices, Field, PositiveFloat, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from docling_jobkit.config.target_config import S3PresignedConfig
+from docling_jobkit.config.target_config import PresignedConfig
 
 _log = logging.getLogger(__name__)
 
@@ -98,6 +98,14 @@ class RayOrchestratorConfig(BaseSettings):
     results_ttl: int = Field(
         default=3600 * 4,
         description="Time-to-live for task results in seconds (4 hours)",
+    )
+    task_metadata_ttl: Optional[int] = Field(
+        default=3600 * 24 * 7,
+        description=(
+            "Time-to-live in seconds for a finished task's metadata hash "
+            "(task:<id>), set when the task reaches a terminal state. Never "
+            "shorter than results_ttl. None or 0 keeps finished tasks forever."
+        ),
     )
     result_removal_delay: int = Field(
         default=300,
@@ -368,7 +376,45 @@ class RayOrchestratorConfig(BaseSettings):
     )
     document_timeout: Optional[float] = Field(
         default=300.0,
-        description="Maximum seconds per document (None = no limit)",
+        description=(
+            "Default seconds per document, applied when the task's convert "
+            "options do not set document_timeout (None = no limit)"
+        ),
+    )
+    converter_request_timeout: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Hard limit in seconds, per document, on a coordinator call to a "
+            "converter replica, including the wait for a free replica. A backstop "
+            "for conversions that run past document_timeout: set it well above "
+            "that (e.g. 2x). The call is cancelled when exceeded; a PDF slice is "
+            "recorded as failed, any other task fails. Multiplied by the number "
+            "of sources for multi-document tasks. Not applied to S3 fan-out "
+            "(None = no limit)."
+        ),
+    )
+    recycle_converter_on_abandoned_conversion: bool = Field(
+        default=True,
+        description=(
+            "Report a converter replica as unhealthy while a cancelled request's "
+            "conversion thread is still running in it past "
+            "abandoned_conversion_grace_s, so Ray Serve replaces the replica and "
+            "the abandoned work stops using CPU. Only takes effect when "
+            "graceful_shutdown_timeout_s >= document_timeout, so the draining "
+            "replica can finish the request it is serving; otherwise a warning is "
+            "logged and replicas are not recycled."
+        ),
+    )
+    abandoned_conversion_grace_s: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Seconds a conversion may keep running after its request was "
+            "cancelled before the converter replica reports unhealthy. "
+            "None = document_timeout + 60 s: by then docling's own timeout has "
+            "ended any conversion that is not stuck."
+        ),
     )
     redis_operation_timeout: float = Field(
         default=30.0, description="Timeout for Redis operations in seconds"
@@ -430,7 +476,15 @@ class RayOrchestratorConfig(BaseSettings):
         default=False,
         description="Return raw infrastructure exception detail in public task/document errors",
     )
-    s3_presigned_config: S3PresignedConfig | None = Field(
+    generate_metrics: bool = Field(
+        default=False,
+        description="Enable Prometheus metrics emission from converter replicas",
+    )
+    metrics_port: int = Field(
+        default=8090,
+        description="Port on which converter replicas expose Prometheus metrics",
+    )
+    presigned_config: PresignedConfig | None = Field(
         default=None,
         description="Optional server-managed presigned URL target configuration.",
     )

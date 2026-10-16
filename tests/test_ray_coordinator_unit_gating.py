@@ -19,12 +19,24 @@ import pytest
 
 pytest.importorskip("ray")
 
+from ray.serve.handle import DeploymentResponse
+
 from docling.datamodel.base_models import ConversionStatus, OutputFormat
-from docling.datamodel.service.callbacks import ProcessedDocsItem
+from docling.datamodel.service.callbacks import (
+    CallbackSpec,
+    ProcessedDocsItem,
+    ProgressKind,
+    ProgressUpdateProcessed,
+)
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.requests import (
     FileSourceRequest as FileSource,
     S3SourceRequest as S3Coordinates,
+)
+from docling.datamodel.service.responses import (
+    FailureCategory,
+    FailurePhase,
+    PublicFailureInfo,
 )
 from docling.datamodel.service.targets import InBodyTarget, S3Target
 
@@ -32,11 +44,15 @@ from docling_jobkit.connectors.source_processor import DocumentChunk, SourceDocu
 from docling_jobkit.datamodel.result import DoclingTaskResult, RemoteTargetResult
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
-from docling_jobkit.orchestrators.ray.models import ConverterTaskResult
+from docling_jobkit.orchestrators.ray.models import (
+    ConverterFailureResult,
+    ConverterTaskResult,
+)
 from docling_jobkit.orchestrators.ray.serve_deployment import (
     DoclingProcessorCoordinatorDeployment,
     _build_slice_plan,
 )
+from docling_jobkit.public_errors import PipelineInitializationError
 
 
 class _FakeUnitManager:
@@ -207,7 +223,7 @@ async def test_s3_fanout_never_exceeds_ceiling_and_processes_all(
     gate = asyncio.Event()
 
     class GatedConverter:
-        async def remote(self, request: object) -> ConverterTaskResult:
+        async def remote(self, request: object, **_: object) -> ConverterTaskResult:
             await gate.wait()  # hold children so concurrency can build to the cap
             return _ok_result(request.chunk.refs[0].filename)
 
@@ -240,14 +256,14 @@ async def test_s3_fanout_never_exceeds_ceiling_and_processes_all(
 
 
 @pytest.mark.asyncio
-async def test_s3_fanout_releases_unit_on_child_failure(
+async def test_s3_fanout_keeps_unclassified_child_failure_document_scoped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     refs = _s3_refs(4)
     _patch_source_processor(monkeypatch, refs)
 
     class FlakyConverter:
-        async def remote(self, request: object) -> ConverterTaskResult:
+        async def remote(self, request: object, **_: object) -> ConverterTaskResult:
             if request.chunk.chunk_index == 1:
                 raise RuntimeError("boom")
             return _ok_result(request.chunk.refs[0].filename)
@@ -262,14 +278,122 @@ async def test_s3_fanout_releases_unit_on_child_failure(
         manager,
         monkeypatch,
     )
+    callback_invoker = MagicMock()
+    monkeypatch.setattr(
+        "docling_jobkit.orchestrators.ray.serve_deployment.CallbackInvoker",
+        lambda: callback_invoker,
+    )
+    task = _s3_task("t-fail")
+    task.callbacks = [CallbackSpec(url="https://example.invalid/hook")]
+
+    result = await deployment._process_s3_fanout_task(task, time.monotonic())
+
+    assert result.num_failed == 1
+    assert result.num_succeeded == 3
+    summary = callback_invoker.invoke_callbacks_async.call_args_list[-1].kwargs[
+        "progress"
+    ]
+    assert isinstance(summary, ProgressUpdateProcessed)
+    assert summary.kind == ProgressKind.UPDATE_PROCESSED
+    assert summary.num_processed == 4
+    assert summary.num_failed == 1
+    assert manager.in_flight == 0
+    assert manager.total_acquired == manager.total_released == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("failing_chunk", "expected_processed"), [(0, 0), (1, 1)])
+async def test_s3_fanout_propagates_missing_model_failure_after_update_processed(
+    failing_chunk: int,
+    expected_processed: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refs = _s3_refs(4)
+    _patch_source_processor(monkeypatch, refs)
+
+    class MissingModelConverter:
+        async def remote(self, request: object, **_: object) -> ConverterTaskResult:
+            if request.chunk.chunk_index == failing_chunk:
+                # The worker's convert_documents() tags pipeline/model setup
+                # failures with this type; classification is by type, not text.
+                raise PipelineInitializationError(
+                    "Model 'example/model' not found in artifacts_path."
+                )
+            return _ok_result(request.chunk.refs[0].filename)
+
+    manager = _FakeUnitManager(ceiling=1)
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/", scratch_dir=tmp_path
+    )
+    deployment = _make_coordinator(
+        config,
+        SimpleNamespace(process_converter_request=MissingModelConverter()),
+        manager,
+        monkeypatch,
+    )
+    callback_invoker = MagicMock()
+    monkeypatch.setattr(
+        "docling_jobkit.orchestrators.ray.serve_deployment.CallbackInvoker",
+        lambda: callback_invoker,
+    )
+    task = _s3_task("t-missing-model")
+    task.callbacks = [CallbackSpec(url="https://example.invalid/hook")]
+
+    with pytest.raises(PipelineInitializationError):
+        await deployment._process_s3_fanout_task(task, time.monotonic())
+
+    summary = callback_invoker.invoke_callbacks_async.call_args_list[-1].kwargs[
+        "progress"
+    ]
+    assert isinstance(summary, ProgressUpdateProcessed)
+    assert summary.kind == ProgressKind.UPDATE_PROCESSED
+    assert summary.num_processed == expected_processed
+    assert summary.num_succeeded == expected_processed
+    assert summary.num_failed == 0
+    assert manager.in_flight == 0
+    assert manager.total_acquired == manager.total_released == expected_processed + 1
+
+
+@pytest.mark.asyncio
+async def test_s3_fanout_keeps_source_failure_document_scoped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    refs = _s3_refs(4)
+    _patch_source_processor(monkeypatch, refs)
+
+    class MissingSourceConverter:
+        async def remote(
+            self, request: object, **_: object
+        ) -> ConverterTaskResult | ConverterFailureResult:
+            if request.chunk.chunk_index == 1:
+                return ConverterFailureResult(
+                    failure=PublicFailureInfo(
+                        category=FailureCategory.SOURCE_UNAVAILABLE,
+                        message="Source document could not be reached.",
+                        retryable=True,
+                        phase=FailurePhase.SOURCE_ENUMERATION,
+                    )
+                )
+            return _ok_result(request.chunk.refs[0].filename)
+
+    manager = _FakeUnitManager(ceiling=3)
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/", scratch_dir=tmp_path
+    )
+    deployment = _make_coordinator(
+        config,
+        SimpleNamespace(process_converter_request=MissingSourceConverter()),
+        manager,
+        monkeypatch,
+    )
 
     result = await deployment._process_s3_fanout_task(
-        _s3_task("t-fail"), time.monotonic()
+        _s3_task("t-source-fail"), time.monotonic()
     )
 
     assert result.num_failed == 1
     assert result.num_succeeded == 3
-    # The failed child's unit is released too — acquired == released, nothing leaked.
     assert manager.in_flight == 0
     assert manager.total_acquired == manager.total_released == 4
 
@@ -283,7 +407,7 @@ async def test_s3_fanout_terminalization_raises_and_releases_all(
     gate = asyncio.Event()
 
     class GatedConverter:
-        async def remote(self, request: object) -> ConverterTaskResult:
+        async def remote(self, request: object, **_: object) -> ConverterTaskResult:
             await gate.wait()
             return _ok_result(request.chunk.refs[0].filename)
 
@@ -321,7 +445,7 @@ async def test_slice_plan_never_exceeds_ceiling_and_collects_all(
     gate = asyncio.Event()
 
     class GatedConverter:
-        async def remote(self, request: object) -> str:
+        async def remote(self, request: object, **_: object) -> str:
             await gate.wait()
             return f"objref-{request.slice_index}"  # stand-in ObjectRef
 
@@ -362,3 +486,114 @@ async def test_slice_plan_never_exceeds_ceiling_and_collects_all(
     assert manager.max_in_flight == ceiling
     assert manager.in_flight == 0
     assert manager.total_acquired == manager.total_released == total_slices
+
+
+class _HangingResponse(DeploymentResponse):
+    """DeploymentResponse that never resolves and records cancel()."""
+
+    def __init__(self) -> None:  # skip the real constructor's router plumbing
+        self.cancelled = False
+
+    def __await__(self):
+        return asyncio.Event().wait().__await__()
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+@pytest.mark.asyncio
+async def test_converter_call_is_cancelled_after_converter_request_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response = _HangingResponse()
+    manager = _FakeUnitManager(ceiling=2)
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/",
+        scratch_dir=tmp_path,
+        converter_request_timeout=0.1,
+    )
+    deployment = _make_coordinator(
+        config,
+        SimpleNamespace(
+            process_converter_request=SimpleNamespace(remote=lambda **_: response)
+        ),
+        manager,
+        monkeypatch,
+    )
+    task = Task(
+        task_id="t-deadline",
+        sources=[FileSource(filename="x.pdf", base64_string="")],
+        target=InBodyTarget(),
+    )
+
+    with pytest.raises(TimeoutError, match="converter_request_timeout"):
+        await deployment._run_single_converter_call(task, request=object())
+
+    assert response.cancelled
+    assert manager.in_flight == 0
+    assert manager.total_acquired == manager.total_released == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_coordinator_cancels_its_converter_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response = _HangingResponse()
+    manager = _FakeUnitManager(ceiling=2)
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/", scratch_dir=tmp_path
+    )
+    deployment = _make_coordinator(
+        config,
+        SimpleNamespace(
+            process_converter_request=SimpleNamespace(remote=lambda **_: response)
+        ),
+        manager,
+        monkeypatch,
+    )
+    task = Task(
+        task_id="t-cancel",
+        sources=[FileSource(filename="x.pdf", base64_string="")],
+        target=InBodyTarget(),
+    )
+
+    call = asyncio.create_task(
+        deployment._run_single_converter_call(task, request=object())
+    )
+    await _wait_for(lambda: manager.in_flight == 1)
+    await asyncio.sleep(0.05)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    assert response.cancelled
+    assert manager.in_flight == 0
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [(None, 300.0), (42.0, 42.0)],
+)
+def test_config_document_timeout_is_the_default_for_tasks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    requested: float | None,
+    expected: float,
+) -> None:
+    config = RayOrchestratorConfig(
+        redis_url="redis://localhost:6379/", scratch_dir=tmp_path
+    )
+    deployment = _make_coordinator(
+        config, SimpleNamespace(), _FakeUnitManager(ceiling=1), monkeypatch
+    )
+    task = Task(
+        task_id="t-default-timeout",
+        sources=[FileSource(filename="x.pdf", base64_string="")],
+        target=InBodyTarget(),
+        convert_options=ConvertDocumentsOptions(document_timeout=requested),
+    )
+
+    updated = deployment._with_default_document_timeout(task)
+
+    assert updated.convert_options is not None
+    assert updated.convert_options.document_timeout == expected

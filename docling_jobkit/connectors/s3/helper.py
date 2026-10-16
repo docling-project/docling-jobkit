@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 from urllib.parse import urlunsplit
 
 from boto3.session import Session
@@ -26,6 +26,12 @@ from docling.datamodel.service.sources import S3Coordinates
 from docling_jobkit.connectors.artifact_paths import hash_path_component
 
 logging.basicConfig(level=logging.INFO)
+
+
+class _S3CredentialKwargs(TypedDict, total=False):
+    aws_access_key_id: str
+    aws_secret_access_key: str
+
 
 _S3_AUTH_ERROR_CODES = {
     "AccessDenied",
@@ -63,6 +69,18 @@ def is_s3_unavailable_error(exc: BaseException) -> bool:
 
 
 def get_s3_connection(coords: S3Coordinates):
+    access_key = coords.access_key
+    secret_key = coords.secret_key
+    if (access_key is None) != (secret_key is None):
+        raise ValueError("access_key and secret_key must be provided together")
+
+    credential_kwargs: _S3CredentialKwargs = {}
+    if access_key is not None and secret_key is not None:
+        credential_kwargs = {
+            "aws_access_key_id": access_key,
+            "aws_secret_access_key": secret_key,
+        }
+
     session = Session()
 
     config = Config(
@@ -79,18 +97,18 @@ def get_s3_connection(coords: S3Coordinates):
         "s3",
         endpoint_url=endpoint,
         verify=coords.verify_ssl,
-        aws_access_key_id=coords.access_key,
-        aws_secret_access_key=coords.secret_key,
+        region_name=coords.region,
         config=config,
+        **credential_kwargs,
     )
 
     resource: S3ServiceResource = session.resource(
         "s3",
         endpoint_url=endpoint,
         verify=coords.verify_ssl,
-        aws_access_key_id=coords.access_key,
-        aws_secret_access_key=coords.secret_key,
+        region_name=coords.region,
         config=config,
+        **credential_kwargs,
     )
 
     return client, resource
@@ -206,7 +224,7 @@ def check_target_has_source_converted(
     )
 
     target_count = count_s3_objects(target_paginator, coords.bucket, converted_prefix)
-    logging.debug("Target contains json objects: {}".format(target_count))
+    logging.debug(f"Target contains json objects: {target_count}")
     if target_count != 0:
         logging.debug("Target contains objects, checking content...")
 
@@ -224,15 +242,15 @@ def check_target_has_source_converted(
         filtered_source_keys = []
         logging.debug("List of source keys:")
         for key in source_objects_list:
-            logging.debug("Object key: {}".format(key))
+            logging.debug(f"Object key: {key}")
             # This covers the case when source docs have "folder" hierarchy in the key
             # we don't preserve key part between prefix and "file", this part of key is not added as prefix for target
             clean_key = str(Path(key).stem)
             if clean_key not in target_short_key_list:
                 filtered_source_keys.append(key)
 
-        logging.debug("Total keys: {}".format(len(source_objects_list)))
-        logging.debug("Filtered keys to process: {}".format(len(filtered_source_keys)))
+        logging.debug(f"Total keys: {len(source_objects_list)}")
+        logging.debug(f"Filtered keys to process: {len(filtered_source_keys)}")
     else:
         filtered_source_keys = source_objects_list
 

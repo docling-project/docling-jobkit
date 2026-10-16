@@ -240,6 +240,7 @@ def _materialize_document_exports(
     export_dclx: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
+    md_compact_tables: bool,
     bundle_resources: bool,
 ) -> list[_ExportedArtifactFile]:
     """Write the requested export formats to ``output_dir`` and return their files.
@@ -295,10 +296,8 @@ def _materialize_document_exports(
     if export_txt:
         fname = output_dir / f"{doc_filename}.txt"
         _log.info(f"writing TXT output to {fname}")
-        exportable_document.document.save_as_markdown(
-            filename=fname,
-            strict_text=True,
-            image_mode=ImageRefMode.PLACEHOLDER,
+        fname.write_text(
+            exportable_document.document.export_to_text(), encoding="utf-8"
         )
         generated.append(
             _ExportedArtifactFile(
@@ -317,6 +316,7 @@ def _materialize_document_exports(
             artifacts_dir=artifacts_dir,
             image_mode=image_export_mode,
             page_break_placeholder=md_page_break_placeholder or None,
+            compact_tables=md_compact_tables,
         )
         generated.append(
             _ExportedArtifactFile(
@@ -412,6 +412,7 @@ def _upload_exportable_document(
     export_dclx: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
+    md_compact_tables: bool,
     target_filename_fn: Callable[[str], str],
     bundle_resources: bool = True,
 ) -> list[_ExportedArtifactFile]:
@@ -434,6 +435,7 @@ def _upload_exportable_document(
         export_dclx=export_dclx,
         image_export_mode=image_export_mode,
         md_page_break_placeholder=md_page_break_placeholder,
+        md_compact_tables=md_compact_tables,
         bundle_resources=bundle_resources,
     )
     _upload_materialized_artifacts(
@@ -490,6 +492,7 @@ def export_documents_to_target(
     export_dclx: bool,
     image_export_mode: ImageRefMode,
     md_page_break_placeholder: str,
+    md_compact_tables: bool = False,
     target_filename_fn: Callable[[ExportableDocument, str], str],
     bundle_resources: bool = True,
     on_document_uploaded: Callable[[ExportableDocument], None] | None = None,
@@ -531,6 +534,7 @@ def export_documents_to_target(
                 export_dclx=export_dclx,
                 image_export_mode=image_export_mode,
                 md_page_break_placeholder=md_page_break_placeholder,
+                md_compact_tables=md_compact_tables,
                 target_filename_fn=_document_target_filename,
                 bundle_resources=bundle_resources,
             )

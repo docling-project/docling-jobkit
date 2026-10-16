@@ -9,13 +9,18 @@ from typing import Any, Optional
 
 import ray
 
+from docling.datamodel.service.callbacks import CallbackSpec
 from docling.datamodel.service.responses import FailurePhase
 
 from docling_jobkit.datamodel.task import Task
 from docling_jobkit.datamodel.task_meta import TaskStatus
+from docling_jobkit.orchestrators.completion_callbacks import (
+    emit_task_completed_callback,
+)
 from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
 from docling_jobkit.orchestrators.ray.failure_classification import (
     classify_ray_public_task_failure,
+    task_target_kind,
 )
 from docling_jobkit.orchestrators.ray.logging_utils import (
     configure_ray_actor_logging,
@@ -24,7 +29,10 @@ from docling_jobkit.orchestrators.ray.models import (
     RedisTaskMetadata,
     TaskUpdate,
 )
-from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
+from docling_jobkit.orchestrators.ray.redis_helper import (
+    InvalidQueuedTaskError,
+    RedisStateManager,
+)
 from docling_jobkit.public_errors import (
     classify_public_task_failure,
     is_client_actionable_failure,
@@ -69,6 +77,7 @@ class RayTaskDispatcher:
         self.redis_manager = RedisStateManager(
             redis_url=config.redis_url,
             results_ttl=config.results_ttl,
+            task_metadata_ttl=config.task_metadata_ttl,
             results_prefix=config.results_prefix,
             sub_channel=config.sub_channel,
             max_connections=config.redis_max_connections,
@@ -94,6 +103,8 @@ class RayTaskDispatcher:
         self._active_tenant_order: deque[str] = deque()
         self._last_reconcile: float = 0.0
         self._reconcile_interval: float = 30.0
+        self._last_registry_reconcile: float = 0.0
+        self._registry_reconcile_interval: float = 3600.0
 
         _log.setLevel(self.config.log_level.upper())
         _log.info("RayTaskDispatcher initialized")
@@ -168,8 +179,15 @@ class RayTaskDispatcher:
             self._active_tenant_order.append(tenant_id)
         self._wake_event.set()
 
+    async def _reconcile_tenant_registry(self) -> None:
+        """Re-add tenants missing from the registry (e.g. enqueued by an older version)."""
+        try:
+            await self.redis_manager.reconcile_tenant_registry()
+        except Exception as exc:
+            _log.warning("Tenant registry reconcile failed: %s", exc)
+
     async def _resync_active_tenants(self) -> None:
-        """Rebuild the in-memory ordered tenant ring from Redis (one SCAN)."""
+        """Rebuild the in-memory ordered tenant ring from the tenant registry."""
         tenants = await self.redis_manager.get_all_tenants_with_tasks()
         for t in tenants:
             if t not in self._active_tenant_ids:
@@ -190,6 +208,7 @@ class RayTaskDispatcher:
         self._active_tenant_ids.clear()
         self._active_tenant_order.clear()
         self._last_reconcile = 0.0
+        self._last_registry_reconcile = 0.0
         self._dispatch_loop_task = asyncio.create_task(self._run_dispatch_loop())
         _log.info("Started Ray dispatcher background loop")
 
@@ -226,6 +245,12 @@ class RayTaskDispatcher:
                     if self.config.enable_heartbeat:
                         await self.redis_manager.update_dispatcher_heartbeat()
                     self._last_reconcile = now
+                    if (
+                        now - self._last_registry_reconcile
+                        >= self._registry_reconcile_interval
+                    ):
+                        await self._reconcile_tenant_registry()
+                        self._last_registry_reconcile = now
                     # Consume any capacity freed by reconciliation without waiting
                     # for the next wakeup event.
                     await self._dispatch_round()
@@ -364,7 +389,14 @@ class RayTaskDispatcher:
         Returns:
             True if a task was dispatched, False otherwise.
         """
-        task = await self.redis_manager.peek_task(tenant_id)
+        while True:
+            try:
+                task = await self.redis_manager.peek_task(tenant_id)
+                break
+            except InvalidQueuedTaskError as exc:
+                # Drop the poisoned head so the tasks behind it keep flowing.
+                await self._reject_invalid_queued_task(exc)
+
         if task is None:
             _log.debug("[DISPATCH] Tenant %s: no tasks in queue", tenant_id)
             self._active_tenant_ids.discard(tenant_id)
@@ -404,6 +436,58 @@ class RayTaskDispatcher:
         )
         return True
 
+    async def _reject_invalid_queued_task(self, exc: InvalidQueuedTaskError) -> None:
+        """Remove a queued payload that fails validation and mark it failed.
+
+        Completion callbacks are not emitted: they live on the unparsable task.
+        """
+        tenant_id = exc.tenant_id
+        task_id = exc.task_id
+        _log.error(
+            "[DISPATCH] Tenant %s: dropping invalid queued task %s: %s",
+            tenant_id,
+            task_id or "<unknown>",
+            exc.cause,
+        )
+
+        removed = await self.redis_manager.remove_queued_task_payload(
+            tenant_id, exc.payload
+        )
+        if not removed or task_id is None:
+            return
+
+        failure = classify_public_task_failure(
+            exc,
+            task_id=task_id,
+            phase=FailurePhase.ORCHESTRATION,
+            details={"task_size": str(exc.task_size)},
+        )
+        terminalization = await self.redis_manager.finalize_task_failure_atomic(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            task_size=exc.task_size,
+            error_message=failure.message,
+            failure=failure,
+        )
+        if (
+            terminalization.status_changed
+            and terminalization.final_status == TaskStatus.FAILURE
+        ):
+            await self.redis_manager.publish_update(
+                TaskUpdate(
+                    task_id=task_id,
+                    task_status=TaskStatus.FAILURE,
+                    error_message=failure.message,
+                    failure=failure,
+                )
+            )
+            await self.redis_manager.update_tenant_stats(
+                tenant_id,
+                delta_total_tasks=1,
+                delta_total_documents=exc.task_size,
+                delta_failed_documents=exc.task_size,
+            )
+
     async def _process_task_async(self, task: Task, tenant_id: str) -> None:
         """Process a dispatched task while keeping status durable in Redis.
 
@@ -418,11 +502,23 @@ class RayTaskDispatcher:
             _log.info("[TASK-START] %s: processing %s documents", task_id, task_size)
 
             response = self.deployment_handle.process_task.remote(task)
-            await asyncio.to_thread(
-                response.result,
-                timeout_s=self.config.task_timeout,
-                _skip_asyncio_check=True,
-            )
+            try:
+                await asyncio.to_thread(
+                    response.result,
+                    timeout_s=self.config.task_timeout,
+                    _skip_asyncio_check=True,
+                )
+            except TimeoutError:
+                # The task is failed below, but without a cancel the coordinator
+                # would keep converting it and holding the tenant's converter
+                # units. The coordinator cancels its converter calls in turn.
+                _log.warning(
+                    "Task %s exceeded task_timeout=%ss; cancelling it",
+                    task_id,
+                    self.config.task_timeout,
+                )
+                response.cancel()
+                raise
             _log.info(
                 "[TASK-SUCCESS] %s: replica completed; durable success is replica-owned",
                 task_id,
@@ -438,9 +534,7 @@ class RayTaskDispatcher:
                 phase=FailurePhase.ORCHESTRATION,
                 details={
                     "task_size": str(task_size),
-                    "target_kind": getattr(
-                        task.target, "kind", type(task.target).__name__
-                    ),
+                    "target_kind": task_target_kind(task),
                 },
             )
             error_message = failure.message
@@ -462,6 +556,10 @@ class RayTaskDispatcher:
                 terminalization.status_changed
                 and terminalization.final_status == TaskStatus.FAILURE
             ):
+                # Covers failures the replica could not terminalize itself (task
+                # timeout, replica/actor death). The durable gate provides
+                # at-most-once scheduling across competing lifecycle owners.
+                emit_task_completed_callback(task, "failure", failure)
                 await self.redis_manager.publish_update(
                     TaskUpdate(
                         task_id=task_id,
@@ -513,10 +611,14 @@ class RayTaskDispatcher:
                     # No processing state + non-STARTED metadata: already terminal or
                     # was never properly dispatched. No action needed.
                     continue
+                # The dispatch hash is gone, so the persisted callback specs went
+                # with it: this task can only be terminalized durably, not
+                # announced to its client.
                 await self._fail_reconciled_task(
                     tenant_id=tenant_id,
                     task_id=task_id,
                     metadata=metadata,
+                    callbacks=[],
                     error_message="Task orphaned: processing state missing during reconciliation",
                 )
                 continue
@@ -558,6 +660,9 @@ class RayTaskDispatcher:
                     tenant_id=tenant_id,
                     task_id=task_id,
                     metadata=metadata,
+                    callbacks=self.redis_manager.decode_dispatch_callbacks(
+                        dispatch_hash
+                    ),
                     error_message=(
                         "Task orphaned: replica execution lease stale during reconciliation"
                     ),
@@ -570,9 +675,14 @@ class RayTaskDispatcher:
         tenant_id: str,
         task_id: str,
         metadata: RedisTaskMetadata,
+        callbacks: list[CallbackSpec],
         error_message: str,
     ) -> None:
-        """Fail a reconciled task and release any capacity it still consumes."""
+        """Fail a reconciled task and release any capacity it still consumes.
+
+        ``callbacks`` are the specs persisted at dispatch time; they are empty
+        when the task had none or when the dispatch hash is already gone.
+        """
         task_size = metadata.task_size if metadata.task_size > 0 else 1
         if task_size == 1 and metadata.task_size <= 0:
             _log.warning(
@@ -599,6 +709,9 @@ class RayTaskDispatcher:
             terminalization.status_changed
             and terminalization.final_status == TaskStatus.FAILURE
         ):
+            reconciled_task = metadata.to_task()
+            reconciled_task.callbacks = callbacks
+            emit_task_completed_callback(reconciled_task, "failure", failure)
             await self.redis_manager.publish_update(
                 TaskUpdate(
                     task_id=task_id,

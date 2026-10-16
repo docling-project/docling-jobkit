@@ -132,8 +132,7 @@ def _paginate_documents(
     current = first_set
 
     while True:
-        for doc in current.get("documents", []):
-            yield doc
+        yield from current.get("documents", [])
 
         token = (current.get("pageInfo") or {}).get("token")
         if not token:
@@ -241,8 +240,7 @@ def list_repository_documents(
         },
     )
 
-    for doc in _paginate_documents(graphql_url, auth_header, data.get("documents", {})):
-        yield doc
+    yield from _paginate_documents(graphql_url, auth_header, data.get("documents", {}))
 
 
 def list_folder_documents(
@@ -296,8 +294,7 @@ def list_folder_documents(
 
     contained = data.get("folder", {}).get("containedDocuments", {})
 
-    for doc in _paginate_documents(graphql_url, auth_header, contained):
-        yield doc
+    yield from _paginate_documents(graphql_url, auth_header, contained)
 
 
 def list_docs_by_id(
@@ -353,8 +350,7 @@ def list_docs_by_id(
         },
     )
 
-    for doc in _paginate_documents(graphql_url, auth_header, data.get("documents", {})):
-        yield doc
+    yield from _paginate_documents(graphql_url, auth_header, data.get("documents", {}))
 
 
 def download_document(

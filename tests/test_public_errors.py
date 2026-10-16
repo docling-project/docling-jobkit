@@ -213,6 +213,32 @@ def test_classify_ray_failure_preserves_connector_authentication_error():
     assert failure.message == str(auth_error)
 
 
+def test_is_request_wide_capability_failure_classifies_by_type_not_text():
+    ray = pytest.importorskip("ray")
+    from docling_jobkit.orchestrators.ray.failure_classification import (
+        is_request_wide_capability_failure,
+    )
+    from docling_jobkit.public_errors import PipelineInitializationError
+
+    setup_error = PipelineInitializationError(
+        "Model 'example/model' not found in artifacts_path."
+    )
+    # Recognized raw and through Ray's exception envelope.
+    assert is_request_wide_capability_failure(setup_error) is True
+    wrapped = ray.exceptions.RayTaskError("worker.convert", "traceback", setup_error)
+    assert is_request_wide_capability_failure(wrapped) is True
+
+    # Regression: the same message on a bare exception must NOT be treated as
+    # request-wide. Classification is by phase/type, never by error text.
+    assert (
+        is_request_wide_capability_failure(
+            FileNotFoundError("Model 'example/model' not found in artifacts_path.")
+        )
+        is False
+    )
+    assert is_request_wide_capability_failure(RuntimeError("boom")) is False
+
+
 def test_render_public_error_list_avoids_python_repr():
     errors = [
         ErrorItem(
@@ -387,3 +413,63 @@ def test_classify_target_write_error_preserves_phase():
     assert failure.category == FailureCategory.TARGET_UNAVAILABLE
     assert failure.phase == FailurePhase.ORCHESTRATION
     assert failure.message == "Result could not be written to the requested target."
+
+
+# ---------------------------------------------------------------------------
+# task_target_kind helper
+# ---------------------------------------------------------------------------
+
+
+def test_task_target_kind_with_targets_form():
+    """task.targets[0].kind is returned when the multi-target form is used."""
+    pytest.importorskip("ray")
+    from docling.datamodel.service.requests import FileSourceRequest as FileSource
+    from docling.datamodel.service.targets import InBodyTarget
+
+    from docling_jobkit.orchestrators.ray.failure_classification import task_target_kind
+
+    # The model validator normalises target → targets, so task.target is always None
+    # at runtime.  task_target_kind must read task.targets[0] instead.
+    task = Task(
+        task_id="t-kind",
+        sources=[FileSource(base64_string="ZHVtbXk=", filename="doc.pdf")],
+        target=InBodyTarget(),
+    )
+    assert task.target is None  # validator cleared the singular field
+    assert task_target_kind(task) == InBodyTarget().kind
+
+
+def test_task_target_kind_with_singular_target_form():
+    """Behaviour is the same whether the caller originally used target= or targets=."""
+    pytest.importorskip("ray")
+    from docling.datamodel.service.requests import FileSourceRequest as FileSource
+    from docling.datamodel.service.targets import PresignedUrlTarget
+
+    from docling_jobkit.orchestrators.ray.failure_classification import task_target_kind
+
+    task = Task(
+        task_id="t-kind2",
+        sources=[FileSource(base64_string="ZHVtbXk=", filename="doc.pdf")],
+        targets=[PresignedUrlTarget()],
+    )
+    assert task_target_kind(task) == PresignedUrlTarget().kind
+
+
+def test_task_target_kind_no_targets():
+    """Falls back gracefully when targets is unexpectedly empty."""
+    pytest.importorskip("ray")
+    from docling.datamodel.service.requests import FileSourceRequest as FileSource
+
+    from docling_jobkit.orchestrators.ray.failure_classification import task_target_kind
+
+    task = Task(
+        task_id="t-kind3",
+        sources=[FileSource(base64_string="ZHVtbXk=", filename="doc.pdf")],
+    )
+    # Default target (InBodyTarget) is injected by the validator; kind is present.
+    # The exact string is InBodyTarget().kind — assert it is not the "NoneType"
+    # fallback that the old getattr(task.target, ...) lookup produced.
+    from docling.datamodel.service.targets import InBodyTarget
+
+    assert task_target_kind(task) == InBodyTarget().kind
+    assert task_target_kind(task) != "NoneType"

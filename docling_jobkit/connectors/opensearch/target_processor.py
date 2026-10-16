@@ -26,7 +26,7 @@ _OpenSearchTarget = Union[OpenSearchDocTarget, OpenSearchChunkTarget]
 class OpenSearchTargetProcessor(BaseDatabaseTargetProcessor[_OpenSearchTarget]):
     def __init__(self, target: _OpenSearchTarget) -> None:
         super().__init__(target)
-        self._client: "Optional[OpenSearch]" = None
+        self._client: Optional[OpenSearch] = None
         self._current_document_hash: Optional[str] = None
 
     @classmethod

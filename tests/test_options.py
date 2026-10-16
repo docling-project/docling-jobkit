@@ -1,8 +1,11 @@
 import sys
+from pathlib import Path
 
 import pytest
 
-from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
+from docling.backend.docling_parse_backend import (
+    ThreadedDoclingParseDocumentBackend,
+)
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import InputFormat
@@ -67,7 +70,7 @@ def test_options_validator():
     pipeline_opts = m.get_pdf_pipeline_opts(opts)
     assert pipeline_opts.pipeline_options is not None
     assert isinstance(pipeline_opts.pipeline_options, PdfPipelineOptions)
-    assert pipeline_opts.backend == DoclingParseDocumentBackend
+    assert pipeline_opts.backend == ThreadedDoclingParseDocumentBackend
     assert pipeline_opts.pipeline_options.generate_picture_images is True
     assert pipeline_opts.pipeline_options.generate_page_images is False
 
@@ -102,7 +105,7 @@ def test_options_validator():
         opts = ConvertDocumentsOptions(pdf_backend=pdf_backend)
         pipeline_opts = m.get_pdf_pipeline_opts(opts)
         assert pipeline_opts.pipeline_options is not None
-        assert pipeline_opts.backend == DoclingParseDocumentBackend
+        assert pipeline_opts.backend == ThreadedDoclingParseDocumentBackend
 
     opts = ConvertDocumentsOptions(
         pipeline=ProcessingPipeline.VLM,
@@ -121,6 +124,47 @@ def test_options_validator():
             pipeline_opts.pipeline_options.vlm_options
             == vlm_model_specs.GRANITEDOCLING_TRANSFORMERS
         )
+
+
+def test_backend_mapping_standard_and_vlm():
+    """Request pdf_backend must map to the right class and be set explicitly
+    for both Standard and VLM pipelines (no reliance on PdfFormatOption's default)."""
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+
+    cases = [
+        (None, ThreadedDoclingParseDocumentBackend),  # omitted -> service-model default
+        (
+            PdfBackend.DOCLING_PARSE,
+            ThreadedDoclingParseDocumentBackend,
+        ),  # deprecated, normalizes to THREADED
+        (PdfBackend.THREADED_DOCLING_PARSE, ThreadedDoclingParseDocumentBackend),
+        (PdfBackend.PYPDFIUM2, PyPdfiumDocumentBackend),
+    ]
+
+    for pipeline in (ProcessingPipeline.STANDARD, ProcessingPipeline.VLM):
+        for requested, expected in cases:
+            kwargs = {"pipeline": pipeline}
+            if requested is not None:
+                kwargs["pdf_backend"] = requested
+            opts = ConvertDocumentsOptions(**kwargs)
+            pipeline_opts = m.get_pdf_pipeline_opts(opts)
+            assert pipeline_opts.backend == expected, (pipeline, requested)
+
+
+def test_threaded_request_reaches_conversion():
+    """A threaded-backend request must run a real conversion end to end,
+    not fail in option mapping (regression guard for the J1 compatibility work)."""
+    from docling.datamodel.base_models import ConversionStatus
+
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+    doc = Path(__file__).parent / "2206.01062v1-pg4.pdf"
+    opts = ConvertDocumentsOptions(pdf_backend=PdfBackend.THREADED_DOCLING_PARSE)
+
+    results = list(m.convert_documents([doc], opts))
+
+    assert len(results) == 1
+    assert results[0].status == ConversionStatus.SUCCESS
+    assert results[0].document is not None
 
 
 def test_options_cache_key():

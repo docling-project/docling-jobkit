@@ -1,3 +1,4 @@
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ from docling_jobkit.connectors.local_path.source_processor import (
 from docling_jobkit.connectors.local_path.target_processor import (
     LocalPathTargetProcessor,
 )
+from docling_jobkit.convert.materialization import SourceLimitExceededError
 
 # -------------------------------------------------------------------
 # Pytest fixtures
@@ -163,6 +165,45 @@ def test_local_path_nonexistent_file():
     with pytest.raises(FileNotFoundError):
         with LocalPathSourceProcessor(source) as _:
             pass
+
+
+def test_local_path_fetch_by_ref_rejects_oversized_file(temp_test_dir):
+    """A ref above max_file_size is refused before the file is read."""
+    source = LocalPathSource(
+        kind="local_path",
+        path=temp_test_dir / "file1.pdf",
+    )
+
+    with LocalPathSourceProcessor(source) as processor:
+        identifier = next(iter(processor._list_document_ids()))
+        ref = processor._make_document_ref(identifier, 0)
+
+        with pytest.raises(SourceLimitExceededError, match="max_file_size=5"):
+            processor.fetch_converter_source_by_ref(ref, max_file_size=5)
+
+        # The same ref is still served when it fits within the limit.
+        doc = processor.fetch_converter_source_by_ref(
+            ref, max_file_size=identifier.size
+        )
+        assert isinstance(doc, DocumentStream)
+        assert doc.stream.read() == b"%PDF-1.4 test content 1"
+
+
+def test_local_path_iterate_documents_honors_max_file_size(temp_test_dir):
+    """iterate_documents() applies the limit the same way the remote sources do."""
+    source = LocalPathSource(
+        kind="local_path",
+        path=temp_test_dir,
+        pattern="file1.pdf",
+        recursive=False,
+    )
+
+    with LocalPathSourceProcessor(source) as processor:
+        with pytest.raises(SourceLimitExceededError, match="max_file_size=5"):
+            list(processor.iterate_documents(max_file_size=5))
+
+        docs = list(processor.iterate_documents(max_file_size=sys.maxsize))
+        assert len(docs) == 1
 
 
 # -------------------------------------------------------------------

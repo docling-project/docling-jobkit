@@ -128,6 +128,7 @@ class RayOrchestrator(BaseOrchestrator):
         self.redis_manager = RedisStateManager(
             redis_url=config.redis_url,
             results_ttl=config.results_ttl,
+            task_metadata_ttl=config.task_metadata_ttl,
             results_prefix=config.results_prefix,
             sub_channel=config.sub_channel,
             max_connections=config.redis_max_connections,
@@ -288,6 +289,8 @@ class RayOrchestrator(BaseOrchestrator):
             "namespace": config.ray_namespace,
             "runtime_env": config.ray_runtime_env,
         }
+        if config.generate_metrics:
+            init_kwargs["_metrics_export_port"] = config.metrics_port
 
         if config.ray_object_store_memory:
             try:
