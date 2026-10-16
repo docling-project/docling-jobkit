@@ -6,6 +6,7 @@ import inspect
 import json
 import logging
 import math
+from collections.abc import Sequence
 from typing import Optional
 
 import msgpack
@@ -26,6 +27,7 @@ from docling_jobkit.datamodel.stored_outcome import (
     stored_task_outcome_adapter,
 )
 from docling_jobkit.datamodel.task import Task, validate_task_json
+from docling_jobkit.datamodel.task_listing import LISTING_CHUNK_SIZE, resolve_tenant_id
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.ray.models import (
     RedisTaskMetadata,
@@ -132,6 +134,31 @@ class InvalidQueuedTaskError(Exception):
             f"Queued task {self.task_id or '<unknown>'} for tenant {tenant_id} "
             f"is invalid: {cause}"
         )
+
+
+def _queued_task_id(
+    row: object, *, allow_external_plugins: bool = False
+) -> Optional[str]:
+    """Read the task id out of one queued task payload.
+
+    The queue stores full Task JSON, so the row is validated as a Task using
+    the existing external-plugin policy before its id is used: tenant, status
+    and timestamps are still resolved from the authoritative ``task:{id}``
+    metadata, but a row that is not a valid Task is corrupt and skipped rather
+    than surfacing as a listed id with valid metadata.
+    """
+    if not isinstance(row, (str, bytes)):
+        return None
+    try:
+        task = validate_task_json(
+            row,
+            allow_external_plugins=allow_external_plugins,
+        )
+    except Exception:
+        return None
+    if task.task_id:
+        return task.task_id
+    return None
 
 
 class RedisStateManager:
@@ -420,6 +447,44 @@ class RedisStateManager:
 
         return tenants
 
+    async def get_tenant_queued_task_ids(self, tenant_id: str) -> list[str]:
+        """Return the queued task ids of one tenant, read in bounded chunks.
+
+        Only this tenant's queue key is read, so a listing never scans across
+        tenants, and the chunked LRANGE keeps a deep queue from turning into one
+        unbounded read.
+        """
+        if not self.redis:
+            await self.connect()
+
+        queue_key = f"tenant:{tenant_id}:tasks"
+        redis = self._ensure_redis()
+        task_ids: list[str] = []
+        seen: set[str] = set()
+        start = 0
+        while True:
+            pending_rows = redis.lrange(
+                queue_key, start, start + LISTING_CHUNK_SIZE - 1
+            )
+            if isinstance(pending_rows, list):
+                rows = pending_rows
+            else:
+                rows = await pending_rows
+            if not rows:
+                break
+            for row in rows:
+                task_id = _queued_task_id(
+                    row, allow_external_plugins=self.allow_external_plugins
+                )
+                if task_id is not None and task_id not in seen:
+                    seen.add(task_id)
+                    task_ids.append(task_id)
+            if len(rows) < LISTING_CHUNK_SIZE:
+                break
+            start += len(rows)
+
+        return task_ids
+
     async def get_tenant_queue_size(self, tenant_id: str) -> int:
         """Get number of tasks in tenant's queue.
 
@@ -578,6 +643,44 @@ class RedisStateManager:
         if not metadata:
             return None
         return RedisTaskMetadata.from_redis_mapping(metadata)
+
+    async def get_task_metadata_models(
+        self, task_ids: Sequence[str]
+    ) -> list[RedisTaskMetadata]:
+        """Get typed metadata for several tasks in one pipelined round trip.
+
+        Tasks whose metadata is absent (expired or never written) or corrupt
+        are omitted from the result rather than failing the whole read.
+        """
+        if not self.redis:
+            await self.connect()
+        if not task_ids:
+            return []
+
+        redis = self._ensure_redis()
+        async with redis.pipeline(transaction=False) as pipe:
+            for task_id in task_ids:
+                pipe.hgetall(f"task:{task_id}")
+            rows = await pipe.execute()
+
+        models: list[RedisTaskMetadata] = []
+        for task_id, row in zip(task_ids, rows):
+            if not row:
+                continue
+            try:
+                decoded = {k.decode("utf-8"): v.decode("utf-8") for k, v in row.items()}
+                # A missing or empty tenant in durable metadata belongs to the
+                # default tenant, matching the serving layer and the other
+                # backends; only other missing/corrupt fields omit the entry.
+                if not decoded.get("tenant_id"):
+                    decoded["tenant_id"] = resolve_tenant_id(decoded.get("tenant_id"))
+                model = RedisTaskMetadata.from_redis_mapping(decoded)
+            except Exception as exc:
+                _log.warning("Skipping corrupt metadata for task %s: %s", task_id, exc)
+                continue
+            if model is not None:
+                models.append(model)
+        return models
 
     # Task Results Operations
 

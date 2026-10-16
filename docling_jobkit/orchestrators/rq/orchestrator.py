@@ -30,6 +30,17 @@ from docling_jobkit.connectors.connector_factory import get_source_connector_fac
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget, validate_task
+from docling_jobkit.datamodel.task_listing import (
+    ACTIVE_TASK_STATUSES,
+    LISTING_CHUNK_SIZE,
+    ActiveTaskItem,
+    ActiveTaskPage,
+    build_active_task_page,
+    iter_chunks,
+    resolve_tenant_id,
+    tenant_of,
+    validate_page_window,
+)
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
 from docling_jobkit.orchestrators.base_orchestrator import (
@@ -94,6 +105,65 @@ _WATCHDOG_GRACE_PERIOD = (
 )
 _RQ_JOB_GONE = _RQJobGone()
 _TASK_METADATA_PREFIX = "docling:tasks:"
+
+# RQ job states that still represent in-flight work, mapped onto the task
+# status a listing reports. Deferred jobs wait to run and are still pending;
+# every other non-active state (created, finished, failed, stopped, canceled)
+# is terminal for listing purposes and omitted.
+_RQ_ACTIVE_JOB_STATUSES = {
+    JobStatus.QUEUED: TaskStatus.PENDING,
+    JobStatus.SCHEDULED: TaskStatus.PENDING,
+    JobStatus.DEFERRED: TaskStatus.PENDING,
+    JobStatus.STARTED: TaskStatus.STARTED,
+}
+
+
+def _decode_stored_task(data: dict[str, Any], *, allow_external_plugins: bool) -> Task:
+    """Decode stored RQ metadata JSON into a Task.
+
+    Pure shared decoder for both the legacy loader and the listing loader:
+    applies processing-meta defaults, the legacy target fallback, and plugin
+    validation. Callers own I/O and their exception boundaries.
+    """
+    meta = data.get("processing_meta") or {}
+    meta.setdefault("num_docs", 0)
+    meta.setdefault("num_processed", 0)
+    meta.setdefault("num_succeeded", 0)
+    meta.setdefault("num_partially_succeeded", 0)
+    meta.setdefault("num_failed", 0)
+
+    task_kwargs: dict[str, Any] = {
+        "task_id": data["task_id"],
+        "task_type": data["task_type"],
+        "task_status": TaskStatus(data["task_status"]),
+        "processing_meta": meta,
+        "error_message": data.get("error_message"),
+    }
+    for field_name in (
+        "created_at",
+        "started_at",
+        "finished_at",
+        "last_update_at",
+        "target",
+        "targets",
+        "sources",
+        "convert_options",
+        "chunking_options",
+        "chunking_export_options",
+        "callbacks",
+        "metadata",
+    ):
+        if data.get(field_name) is not None:
+            task_kwargs[field_name] = data[field_name]
+    # Backwards compat: tasks stored before the multi-target migration
+    # have neither 'target' nor 'targets'. Default to InBodyTarget so
+    # the validator does not reject legacy Redis entries.
+    if "target" not in task_kwargs and "targets" not in task_kwargs:
+        task_kwargs["targets"] = [InBodyTarget().model_dump()]
+    return validate_task(
+        task_kwargs,
+        allow_external_plugins=allow_external_plugins,
+    )
 
 
 class RQOrchestrator(BaseOrchestrator):
@@ -221,6 +291,117 @@ class RQOrchestrator(BaseOrchestrator):
 
     async def queue_size(self) -> int:
         return self._rq_queue.count
+
+    async def list_tasks(
+        self,
+        *,
+        tenant_id: str,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> ActiveTaskPage:
+        """List a page of the tenant's in-flight tasks from shared RQ state.
+
+        Both candidate sources (the queue and the started-job registry) live in
+        Redis, so a job another replica enqueued or a worker started is listed
+        even when this process has never seen it in ``self.tasks``.
+        """
+        validate_page_window(limit, offset)
+        requested_tenant = resolve_tenant_id(tenant_id)
+
+        async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
+            candidate_ids = await self._collect_active_task_ids()
+            statuses = await asyncio.to_thread(
+                self._resolve_active_job_statuses, candidate_ids
+            )
+            items: list[ActiveTaskItem] = []
+            for chunk in iter_chunks(candidate_ids):
+                resolved = await asyncio.gather(
+                    *(
+                        self._active_listing_item(
+                            task_id, statuses[task_id], requested_tenant
+                        )
+                        for task_id in chunk
+                        if task_id in statuses
+                    )
+                )
+                items.extend(item for item in resolved if item is not None)
+
+        return build_active_task_page(items, limit=limit, offset=offset)
+
+    async def _collect_active_task_ids(self) -> list[str]:
+        """Union the queued and started job ids, each source read in chunks.
+
+        Both sources are exhausted — in bounded reads — because a page is
+        ordered across every active task, not just the first chunk of either.
+        """
+        task_ids: list[str] = []
+        seen: set[str] = set()
+
+        def _extend(chunk: list[str]) -> int:
+            for task_id in chunk:
+                if task_id not in seen:
+                    seen.add(task_id)
+                    task_ids.append(task_id)
+            return len(chunk)
+
+        offset = 0
+        while True:
+            chunk = await asyncio.to_thread(
+                self._rq_queue.get_job_ids, offset, LISTING_CHUNK_SIZE
+            )
+            if _extend(chunk) < LISTING_CHUNK_SIZE:
+                break
+            offset += len(chunk)
+
+        registry = StartedJobRegistry(queue=self._rq_queue, connection=self._redis_conn)
+        start = 0
+        while True:
+            end = start + LISTING_CHUNK_SIZE - 1
+            chunk = await asyncio.to_thread(registry.get_job_ids, start, end)
+            if _extend(chunk) < LISTING_CHUNK_SIZE:
+                break
+            start = end + 1
+
+        return task_ids
+
+    def _resolve_active_job_statuses(
+        self, task_ids: list[str]
+    ) -> dict[str, TaskStatus]:
+        """Resolve each candidate job's current status, dropping non-active ones.
+
+        A deleted or TTL-expired job is stale state and is omitted; a genuine
+        Redis failure propagates instead of surfacing as a falsely empty page.
+        """
+        statuses: dict[str, TaskStatus] = {}
+        for task_id in task_ids:
+            try:
+                job_status = Job.fetch(
+                    task_id, connection=self._redis_conn
+                ).get_status()
+            except NoSuchJobError:
+                continue
+            status = _RQ_ACTIVE_JOB_STATUSES.get(job_status)
+            if status is not None:
+                statuses[task_id] = status
+        return statuses
+
+    async def _active_listing_item(
+        self, task_id: str, status: TaskStatus, tenant_id: str
+    ) -> Optional[ActiveTaskItem]:
+        """Build one listing entry from the stored metadata, or None to omit it."""
+        task = await self._get_listing_task_from_redis(task_id)
+        if task is None:
+            return None
+        if task.task_status not in ACTIVE_TASK_STATUSES:
+            return None
+        if tenant_of(task.metadata) != tenant_id:
+            return None
+        return ActiveTaskItem(
+            task_id=task.task_id,
+            task_type=task.task_type,
+            task_status=status,
+            created_at=task.created_at,
+        )
 
     async def _refresh_task_from_rq(self, task_id: str) -> None:
         task = await self.get_raw_task(task_id=task_id)
@@ -382,47 +563,36 @@ class RQOrchestrator(BaseOrchestrator):
                 return None
 
             data: dict[str, Any] = json.loads(task_data)
-            meta = data.get("processing_meta") or {}
-            meta.setdefault("num_docs", 0)
-            meta.setdefault("num_processed", 0)
-            meta.setdefault("num_succeeded", 0)
-            meta.setdefault("num_partially_succeeded", 0)
-            meta.setdefault("num_failed", 0)
-
-            task_kwargs: dict[str, Any] = {
-                "task_id": data["task_id"],
-                "task_type": data["task_type"],
-                "task_status": TaskStatus(data["task_status"]),
-                "processing_meta": meta,
-                "error_message": data.get("error_message"),
-            }
-            for field_name in (
-                "created_at",
-                "started_at",
-                "finished_at",
-                "last_update_at",
-                "target",
-                "targets",
-                "sources",
-                "convert_options",
-                "chunking_options",
-                "chunking_export_options",
-                "callbacks",
-                "metadata",
-            ):
-                if data.get(field_name) is not None:
-                    task_kwargs[field_name] = data[field_name]
-            # Backwards compat: tasks stored before the multi-target migration
-            # have neither 'target' nor 'targets'. Default to InBodyTarget so
-            # the validator does not reject legacy Redis entries.
-            if "target" not in task_kwargs and "targets" not in task_kwargs:
-                task_kwargs["targets"] = [InBodyTarget().model_dump()]
-            return validate_task(
-                task_kwargs,
+            return _decode_stored_task(
+                data,
                 allow_external_plugins=self.config.allow_external_plugins,
             )
         except Exception as exc:
             _log.error(f"Redis get task {task_id}: {exc}")
+            return None
+
+    async def _get_listing_task_from_redis(self, task_id: str) -> Task | None:
+        """Strict metadata read for active-task listing.
+
+        Transport/backend failures propagate instead of surfacing as a falsely
+        empty page; only absent/expired rows (None) and corrupt rows (bad JSON
+        or failed validation) are omitted. Lifecycle loaders keep their
+        existing catch-all behavior and are untouched here.
+        """
+        task_data = await self._async_redis_conn.get(
+            f"{_TASK_METADATA_PREFIX}{task_id}:metadata"
+        )
+        if not task_data:
+            return None
+
+        try:
+            data: dict[str, Any] = json.loads(task_data)
+            return _decode_stored_task(
+                data,
+                allow_external_plugins=self.config.allow_external_plugins,
+            )
+        except Exception as exc:
+            _log.warning(f"Skipping corrupt listing metadata for task {task_id}: {exc}")
             return None
 
     async def _get_task_from_rq_direct(self, task_id: str) -> Task | _RQJobGone | None:

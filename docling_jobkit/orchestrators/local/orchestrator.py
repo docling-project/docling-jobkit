@@ -21,6 +21,15 @@ from docling_jobkit.convert.manager import DoclingConverterManager
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget, validate_task
+from docling_jobkit.datamodel.task_listing import (
+    ACTIVE_TASK_STATUSES,
+    ActiveTaskItem,
+    ActiveTaskPage,
+    build_active_task_page,
+    resolve_tenant_id,
+    tenant_of,
+    validate_page_window,
+)
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
 )
@@ -104,6 +113,35 @@ class LocalOrchestrator(BaseOrchestrator):
 
     async def queue_size(self) -> int:
         return self.task_queue.qsize()
+
+    async def list_tasks(
+        self,
+        *,
+        tenant_id: str,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> ActiveTaskPage:
+        """List a page of the tenant's in-flight tasks.
+
+        This backend keeps its task bookkeeping in the serving process, so the
+        page reflects this process's snapshot: a peer process that enqueued the
+        same tenant's work is not visible here.
+        """
+        validate_page_window(limit, offset)
+        requested_tenant = resolve_tenant_id(tenant_id)
+
+        items = [
+            ActiveTaskItem(
+                task_id=task.task_id,
+                task_type=task.task_type,
+                task_status=task.task_status,
+                created_at=task.created_at,
+            )
+            for task in list(self.tasks.values())
+            if task.task_status in ACTIVE_TASK_STATUSES
+            and tenant_of(task.metadata) == requested_tenant
+        ]
+        return build_active_task_page(items, limit=limit, offset=offset)
 
     async def get_queue_position(self, task_id: str) -> Optional[int]:
         return (

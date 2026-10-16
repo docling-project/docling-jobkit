@@ -12,6 +12,7 @@ from docling.datamodel.service.tasks import TaskType
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult, TaskOutcome
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget
+from docling_jobkit.datamodel.task_listing import ActiveTaskPage
 
 if TYPE_CHECKING:
     from docling_jobkit.orchestrators.base_notifier import BaseNotifier
@@ -118,6 +119,24 @@ class BaseOrchestrator(ABC):
     @abstractmethod
     async def queue_size(self) -> int:
         pass
+
+    async def list_tasks(
+        self,
+        *,
+        tenant_id: str,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> ActiveTaskPage:
+        """Return one page of the tenant's pending/started tasks.
+
+        Deliberately not abstract: adding an abstract method would break every
+        out-of-tree ``BaseOrchestrator`` subclass, so a backend that does not
+        support listing fails loudly here instead of reporting an empty page.
+        Every built-in backend implements it.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support listing active tasks"
+        )
 
     @abstractmethod
     async def get_queue_position(self, task_id: str) -> Optional[int]:
