@@ -32,6 +32,7 @@ from docling_jobkit.orchestrators.ray.models import (
     TaskTerminalizationResult,
     TaskUpdate,
     TenantLimits,
+    TenantSnapshot,
     TenantStats,
     TenantTaskCounters,
 )
@@ -104,6 +105,20 @@ return 0
 """
 
 
+# Set of every tenant that ever enqueued a task. Tenant discovery reads it
+# instead of SCANning the keyspace, whose size grows with the number of task
+# hashes rather than with the number of tenants.
+TENANT_REGISTRY_KEY = "tenants:known"
+# Marker set once the registry has been backfilled from the existing keys.
+TENANT_REGISTRY_BACKFILLED_KEY = "tenants:known:backfilled"
+# Keys per SCAN round trip when (re)building the registry.
+_REGISTRY_SCAN_COUNT = 1000
+# Tenant suffixes that identify a tenant when rebuilding the registry.
+_REGISTRY_KEY_SUFFIXES = ("tasks", "active_tasks", "task_counters")
+# Tenants per pipeline when reading per-tenant values in bulk.
+_SNAPSHOT_CHUNK_SIZE = 200
+
+
 class InvalidQueuedTaskError(Exception):
     """A queued task payload no longer validates against the ``Task`` model.
 
@@ -149,6 +164,7 @@ class RedisStateManager:
         self,
         redis_url: str,
         results_ttl: int = 3600 * 4,
+        task_metadata_ttl: Optional[int] = 3600 * 24 * 7,
         results_prefix: str = "docling:ray:results",
         sub_channel: str = "docling:ray:updates",
         max_connections: int = 50,
@@ -167,6 +183,8 @@ class RedisStateManager:
         Args:
             redis_url: Redis connection URL (supports standard, sentinel, cluster)
             results_ttl: Time-to-live for task results in seconds
+            task_metadata_ttl: Time-to-live for a finished task's metadata hash
+                in seconds, never shorter than results_ttl (None or 0 = keep)
             results_prefix: Prefix for result keys
             sub_channel: Pub/sub channel name for task updates
             max_connections: Maximum Redis connections in pool
@@ -181,6 +199,7 @@ class RedisStateManager:
         """
         self.redis_url = redis_url
         self.results_ttl = results_ttl
+        self.task_metadata_ttl = task_metadata_ttl
         self.results_prefix = results_prefix
         self.sub_channel = sub_channel
         self.log_level = log_level
@@ -204,6 +223,7 @@ class RedisStateManager:
         # Connection pool and client will be created in connect()
         self.pool: Optional[ConnectionPool] = None
         self.redis: Optional[Redis] = None
+        self._tenant_registry_ready = False
 
         # Dedicated pub/sub client, created lazily in subscribe_to_updates().
         # Kept separate from the command pool so the long-lived, mostly-idle
@@ -287,12 +307,14 @@ class RedisStateManager:
         task_counters_key = f"tenant:{tenant_id}:task_counters"
         task_json = json.dumps(dump_model_with_secrets(task, serialize_as_any=True))
 
-        # Push the task and bump the monotonic enqueued counter atomically so the
-        # counter can never drift from the queue contents.
+        # Push the task, bump the monotonic enqueued counter and register the
+        # tenant atomically so the counter can never drift from the queue
+        # contents and tenant discovery never misses a queued task.
         redis = self._ensure_redis()
         async with redis.pipeline(transaction=True) as pipe:
             pipe.rpush(queue_key, task_json)
             pipe.hincrby(task_counters_key, "tasks_enqueued_total", 1)
+            pipe.sadd(TENANT_REGISTRY_KEY, tenant_id)
             await pipe.execute()
 
         # Update tenant limits
@@ -401,24 +423,77 @@ class RedisStateManager:
         Returns:
             List of tenant IDs
         """
+        tenants = await self.get_known_tenants()
+        sizes = await self._per_tenant_values(tenants, "llen", "tasks")
+        return [t for t, size in zip(tenants, sizes) if size > 0]
+
+    # Tenant Registry Operations
+
+    async def get_known_tenants(self) -> list[str]:
+        """Get every tenant that ever enqueued a task, from the tenant registry.
+
+        Backfills the registry from the existing keys the first time it is used
+        on a Redis instance that predates it.
+
+        Returns:
+            Sorted list of tenant IDs
+        """
         if not self.redis:
             await self.connect()
 
-        # Scan for all tenant task queue keys
-        tenants = []
+        await self._ensure_tenant_registry()
         redis = self._ensure_redis()
-        async for key in redis.scan_iter(match="tenant:*:tasks"):  # type: ignore[union-attr]
-            key_str = key.decode("utf-8")
-            # Extract tenant_id from "tenant:{tenant_id}:tasks"
-            parts = key_str.split(":")
-            if len(parts) == 3:
-                tenant_id = parts[1]
-                # Check if queue has tasks
-                queue_len = await redis.llen(key)  # type: ignore[misc]
-                if queue_len > 0:
-                    tenants.append(tenant_id)
+        members = await redis.smembers(TENANT_REGISTRY_KEY)  # type: ignore[misc]
+        return sorted(m.decode("utf-8") for m in members)
 
-        return tenants
+    async def reconcile_tenant_registry(self) -> int:
+        """Add every tenant found in the keyspace to the tenant registry.
+
+        This walks the whole keyspace with SCAN, so it only runs once to backfill
+        the registry and periodically from the dispatcher as a safety net for
+        tenants registered by an older version without the registry.
+
+        Returns:
+            Number of tenants found
+        """
+        if not self.redis:
+            await self.connect()
+
+        redis = self._ensure_redis()
+        tenants: set[str] = set()
+        async for key in redis.scan_iter(  # type: ignore[union-attr]
+            match="tenant:*", count=_REGISTRY_SCAN_COUNT
+        ):
+            parts = key.decode("utf-8").split(":")
+            if len(parts) == 3 and parts[2] in _REGISTRY_KEY_SUFFIXES:
+                tenants.add(parts[1])
+        if tenants:
+            await redis.sadd(TENANT_REGISTRY_KEY, *tenants)  # type: ignore[misc]
+        _log.debug(f"Reconciled tenant registry with {len(tenants)} tenants")
+        return len(tenants)
+
+    async def _ensure_tenant_registry(self) -> None:
+        if self._tenant_registry_ready:
+            return
+        redis = self._ensure_redis()
+        if not await redis.exists(TENANT_REGISTRY_BACKFILLED_KEY):
+            count = await self.reconcile_tenant_registry()
+            timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            await redis.set(TENANT_REGISTRY_BACKFILLED_KEY, timestamp)
+            _log.info(f"Backfilled tenant registry with {count} tenants")
+        self._tenant_registry_ready = True
+
+    async def _per_tenant_values(
+        self, tenants: list[str], command: str, suffix: str
+    ) -> list[int]:
+        """Run one single-key command per tenant in a pipeline (one round trip)."""
+        if not tenants:
+            return []
+        redis = self._ensure_redis()
+        async with redis.pipeline(transaction=False) as pipe:
+            for tenant_id in tenants:
+                getattr(pipe, command)(f"tenant:{tenant_id}:{suffix}")
+            return [int(v) for v in await pipe.execute()]
 
     async def get_tenant_queue_size(self, tenant_id: str) -> int:
         """Get number of tasks in tenant's queue.
@@ -667,7 +742,9 @@ class RedisStateManager:
         limits_key = f"tenant:{tenant_id}:limits"
         redis = self._ensure_redis()
         limits_data = await redis.hgetall(limits_key)  # type: ignore[misc]
+        return self._parse_tenant_limits(limits_data)
 
+    def _parse_tenant_limits(self, limits_data: dict) -> TenantLimits:
         if not limits_data:
             # Return defaults
             return TenantLimits(
@@ -811,10 +888,10 @@ class RedisStateManager:
             await self.connect()
 
         stats_key = f"tenant:{tenant_id}:stats"
+        redis = self._ensure_redis()
 
         # Use HINCRBY for atomic increments
         if delta_total_tasks != 0:
-            redis = self._ensure_redis()
             await redis.hincrby(stats_key, "total_tasks", delta_total_tasks)  # type: ignore[misc]
         if delta_total_documents != 0:
             await redis.hincrby(  # type: ignore[misc]
@@ -844,7 +921,10 @@ class RedisStateManager:
         stats_key = f"tenant:{tenant_id}:stats"
         redis = self._ensure_redis()
         stats_data = await redis.hgetall(stats_key)  # type: ignore[misc]
+        return self._parse_tenant_stats(stats_data)
 
+    @staticmethod
+    def _parse_tenant_stats(stats_data: dict) -> TenantStats:
         if not stats_data:
             return TenantStats()
 
@@ -872,7 +952,10 @@ class RedisStateManager:
         task_counters_key = f"tenant:{tenant_id}:task_counters"
         redis = self._ensure_redis()
         task_counters_data = await redis.hgetall(task_counters_key)  # type: ignore[misc]
+        return self._parse_tenant_task_counters(task_counters_data)
 
+    @staticmethod
+    def _parse_tenant_task_counters(task_counters_data: dict) -> TenantTaskCounters:
         if not task_counters_data:
             return TenantTaskCounters()
 
@@ -882,6 +965,49 @@ class RedisStateManager:
             k.decode("utf-8"): v.decode("utf-8") for k, v in task_counters_data.items()
         }
         return TenantTaskCounters.model_validate(decoded)
+
+    async def get_tenant_snapshots(self, tenants: list[str]) -> list[TenantSnapshot]:
+        """Read counters, stats, queue size, active count and limits of many tenants.
+
+        All reads go through non-transactional pipelines, one round trip per
+        chunk of tenants, instead of five round trips per tenant.
+
+        Args:
+            tenants: Tenant identifiers
+
+        Returns:
+            One snapshot per tenant, in the same order
+        """
+        if not self.redis:
+            await self.connect()
+
+        redis = self._ensure_redis()
+        snapshots: list[TenantSnapshot] = []
+        for start in range(0, len(tenants), _SNAPSHOT_CHUNK_SIZE):
+            chunk = tenants[start : start + _SNAPSHOT_CHUNK_SIZE]
+            async with redis.pipeline(transaction=False) as pipe:
+                for tenant_id in chunk:
+                    pipe.hgetall(f"tenant:{tenant_id}:task_counters")
+                    pipe.hgetall(f"tenant:{tenant_id}:stats")
+                    pipe.llen(f"tenant:{tenant_id}:tasks")
+                    pipe.scard(f"tenant:{tenant_id}:active_tasks")
+                    pipe.hgetall(f"tenant:{tenant_id}:limits")
+                values = await pipe.execute()
+            for i, tenant_id in enumerate(chunk):
+                counters, stats, queue_size, active_count, limits = values[
+                    i * 5 : i * 5 + 5
+                ]
+                snapshots.append(
+                    TenantSnapshot(
+                        tenant_id=tenant_id,
+                        counters=self._parse_tenant_task_counters(counters),
+                        stats=self._parse_tenant_stats(stats),
+                        queue_size=int(queue_size),
+                        active_count=int(active_count),
+                        limits=self._parse_tenant_limits(limits),
+                    )
+                )
+        return snapshots
 
     # Atomic Task Dispatch Operations
 
@@ -1131,6 +1257,11 @@ class RedisStateManager:
                     if held_units > 0:
                         pipe.hincrby(limits_key, "converter_units", -held_units)
                     pipe.delete(dispatch_key, execution_key)
+                    # Finished task hashes would otherwise pile up forever.
+                    if self.task_metadata_ttl:
+                        pipe.expire(
+                            task_key, max(self.task_metadata_ttl, self.results_ttl)
+                        )
 
                     if was_active:
                         pipe.srem(active_key, task_id)
@@ -1203,18 +1334,9 @@ class RedisStateManager:
         Returns:
             List of tenant IDs
         """
-        tenants = []
-        redis = self._ensure_redis()
-        async for key in redis.scan_iter(match="tenant:*:active_tasks"):  # type: ignore[union-attr]
-            key_str = key.decode("utf-8")
-            parts = key_str.split(":")
-            if len(parts) == 3:
-                tenant_id = parts[1]
-                # Check if set is non-empty
-                count = await redis.scard(key)  # type: ignore[misc]
-                if count > 0:
-                    tenants.append(tenant_id)
-        return tenants
+        tenants = await self.get_known_tenants()
+        counts = await self._per_tenant_values(tenants, "scard", "active_tasks")
+        return [t for t, count in zip(tenants, counts) if count > 0]
 
     async def get_all_tenants_with_any_tasks(self) -> list[str]:
         """Get list of all tenants with pending OR active tasks.
@@ -1225,17 +1347,10 @@ class RedisStateManager:
         Returns:
             List of unique tenant IDs with any tasks (queued or active)
         """
-        tenants_set = set()
-
-        # Get tenants with queued tasks (waiting to be dispatched)
-        queued_tenants = await self.get_all_tenants_with_tasks()
-        tenants_set.update(queued_tenants)
-
-        # Get tenants with active tasks (currently being processed)
-        active_tenants = await self.get_all_tenants_with_active_tasks()
-        tenants_set.update(active_tenants)
-
-        return list(tenants_set)
+        tenants = await self.get_known_tenants()
+        sizes = await self._per_tenant_values(tenants, "llen", "tasks")
+        counts = await self._per_tenant_values(tenants, "scard", "active_tasks")
+        return [t for t, size, count in zip(tenants, sizes, counts) if size or count]
 
     async def get_all_tenants_with_task_counters(self) -> list[str]:
         """Get list of all tenants that have lifecycle counters.
@@ -1249,14 +1364,9 @@ class RedisStateManager:
         Returns:
             List of tenant IDs that have a counters hash
         """
-        tenants = []
-        redis = self._ensure_redis()
-        async for key in redis.scan_iter(match="tenant:*:task_counters"):  # type: ignore[union-attr]
-            key_str = key.decode("utf-8")
-            parts = key_str.split(":")
-            if len(parts) == 3:
-                tenants.append(parts[1])
-        return tenants
+        tenants = await self.get_known_tenants()
+        exists = await self._per_tenant_values(tenants, "exists", "task_counters")
+        return [t for t, found in zip(tenants, exists) if found]
 
     async def _get_task_size_for_resync(self, task_id: str) -> int:
         metadata = await self.get_task_metadata_model(task_id)
