@@ -177,6 +177,9 @@ class RedisTaskMetadata(BaseModel):
     retry_count: int = Field(
         default=0, description="Recorded retry counter for recovery bookkeeping"
     )
+    target_document_version: Optional[str] = Field(
+        default=None, description="DoclingDocument version requested by the client"
+    )
 
     @classmethod
     def _parse_optional_datetime(
@@ -223,6 +226,7 @@ class RedisTaskMetadata(BaseModel):
             started_at=cls._parse_optional_datetime(redis_mapping.get("started_at")),
             finished_at=cls._parse_optional_datetime(redis_mapping.get("finished_at")),
             retry_count=int(redis_mapping.get("retry_count", "0")),
+            target_document_version=redis_mapping.get("target_document_version"),
         )
 
     def to_task(self) -> Task:
@@ -232,6 +236,7 @@ class RedisTaskMetadata(BaseModel):
             task_status=self.status,
             sources=[],
             metadata={"tenant_id": self.tenant_id},
+            target_document_version=self.target_document_version,
             error_message=self.error_message,
             failure=self.failure,
             created_at=self.created_at,
