@@ -616,6 +616,7 @@ class RedisStateManager:
         task_type: TaskType,
         task_size: int,
         status: TaskStatus = TaskStatus.PENDING,
+        target_document_version: Optional[str] = None,
     ) -> None:
         """Initialize task metadata.
 
@@ -625,6 +626,7 @@ class RedisStateManager:
             task_type: Type of task
             task_size: Number of documents associated with the task
             status: Initial task status
+            target_document_version: DoclingDocument version requested by the client
         """
         if not self.redis:
             await self.connect()
@@ -641,6 +643,8 @@ class RedisStateManager:
             "created_at": timestamp,
             "last_update_at": timestamp,
         }
+        if target_document_version:
+            metadata["target_document_version"] = target_document_version
 
         redis = self._ensure_redis()
         await redis.hset(task_key, mapping=metadata)  # type: ignore[misc]

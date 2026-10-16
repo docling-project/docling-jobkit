@@ -164,6 +164,7 @@ def _run_docling_task(
                     if idx < len(task.sources)
                     else str(conv_res.input.file)
                 ),
+                target_document_version=task.target_document_version,
             )
             for idx, conv_res in enumerate(conv_results)
         )

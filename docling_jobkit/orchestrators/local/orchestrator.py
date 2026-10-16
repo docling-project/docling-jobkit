@@ -70,6 +70,7 @@ class LocalOrchestrator(BaseOrchestrator):
         callbacks: list[CallbackSpec] | None = None,
         metadata: dict[str, Any] | None = None,
         targets: list[TaskTarget] | None = None,
+        target_document_version: str | None = None,
     ) -> Task:
         if options is not None and convert_options is None:
             convert_options = options
@@ -93,6 +94,7 @@ class LocalOrchestrator(BaseOrchestrator):
                 "chunking_export_options": chunking_export_options,
                 "targets": resolved_targets,
                 "callbacks": callbacks or [],
+                "target_document_version": target_document_version,
             },
             allow_external_plugins=self.cm.config.allow_external_plugins,
         )

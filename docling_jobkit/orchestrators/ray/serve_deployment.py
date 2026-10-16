@@ -260,12 +260,14 @@ def _to_exportable_documents(
                 if idx < len(task.sources)
                 else str(conv_res.input.file)
             ),
+            target_document_version=task.target_document_version,
         )
         for idx, conv_res in enumerate(conv_results)
     ]
 
 
 def _to_exportable_documents_from_chunk(
+    task: Task,
     chunk: DocumentChunk[Any, Any],
     conv_results: list[ConversionResult],
 ) -> list[ExportableDocument]:
@@ -279,6 +281,7 @@ def _to_exportable_documents_from_chunk(
                 source_uri=(
                     ref.source_uri if ref is not None else str(conv_res.input.file)
                 ),
+                target_document_version=task.target_document_version,
             )
         )
     return exportable
@@ -742,6 +745,7 @@ def _finalize_slice_results(
     # heap, and it runs inside the slice_finalization_semaphore guard.
     slice_results: list[ExportableDocument] = ray.get(slice_refs)
     merged_document = _assemble_slice_results(slice_results)
+    merged_document.target_document_version = task.target_document_version
 
     task_result = process_exportable_results(
         task=task,
@@ -913,7 +917,7 @@ class DoclingProcessorConverterDeployment:
                     metrics_recorder.emit_failure_metrics(tenant_id=tenant_id)
                 return conv_results
             exportable = _to_exportable_documents_from_chunk(
-                request.chunk, conv_results
+                request.task, request.chunk, conv_results
             )
             metrics_recorder = self._get_metrics()
             if metrics_recorder is not None:
