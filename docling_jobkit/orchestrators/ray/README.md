@@ -662,6 +662,36 @@ If you manually set Ray TLS environment variables, they may conflict with auto-g
 - **Type**: Hash
 - **Fields**: status, tenant_id, created_at, started_at, finished_at, progress, error_message
 
+### Task Status Lifecycle
+- **pending**: queued, waiting for a replica. The only state a queued-only
+  cancellation can still resolve.
+- **started**: claimed by a replica through `mark_task_started`. Cancellation is
+  no longer possible; a concurrent cancel reports `already_started`.
+- **success** / **failure**: terminal.
+- **cancelled**: terminal. A queued-only cancellation moved the task here in one
+  Redis transaction that also released its queue entry, dispatch reservation and
+  execution lease. `finished_at` is set, no result is stored and no completion
+  callback fires.
+
+The durable Redis status cannot regress from **started** to **pending** or
+**cancelled**, and terminal statuses cannot change to another status. Same-status
+refreshes preserve committed start and finish timestamps while allowing progress
+updates. These guarantees apply to the persisted state, not local pub/sub caches.
+
+Converter dispatch requires both a durable **started** claim and an execution
+lease. If either is missing, no converter unit is granted and conversion does not
+start. Failure finalization releases the dispatch reservation.
+
+### Tenant Task Counters
+- **Key**: `tenant:{tenant_id}:task_counters`
+- **Type**: Hash
+- **Fields**: tasks_started_total, tasks_succeeded_total, tasks_failed_total,
+  tasks_cancelled_total
+
+`tasks_cancelled_total` counts only cancellations that won before a replica
+claimed the task, so `tasks_started_total` and `tasks_cancelled_total` never
+overlap for the same task.
+
 ### Task Results
 - **Key**: `task:{task_id}:result`
 - **Type**: String (msgpack-serialized)

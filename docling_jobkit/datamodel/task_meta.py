@@ -8,6 +8,7 @@ class TaskStatus(str, enum.Enum):
     PENDING = "pending"
     STARTED = "started"
     FAILURE = "failure"
+    CANCELLED = "cancelled"
 
 
 __all__ = ["TaskProcessingMeta", "TaskStatus", "TaskType"]
