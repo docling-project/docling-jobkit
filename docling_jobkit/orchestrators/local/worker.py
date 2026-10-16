@@ -20,6 +20,7 @@ from docling_jobkit.datamodel.exportable_document import (
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.callback_invoker import CallbackInvoker
+from docling_jobkit.orchestrators.result_status import task_status_from_result
 from docling_jobkit.public_errors import build_public_task_error
 
 if TYPE_CHECKING:
@@ -132,7 +133,7 @@ class AsyncLocalWorker:
                 self.orchestrator._task_results[task_id] = task_result
                 task.sources = []
 
-                task.set_status(TaskStatus.SUCCESS)
+                task.set_status(task_status_from_result(task_result))
                 _log.info(
                     f"Worker {self.worker_id} completed job {task_id} "
                     f"in {task_result.processing_time:.2f} seconds"

@@ -36,6 +36,7 @@ from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
     TaskNotFoundError,
 )
+from docling_jobkit.orchestrators.result_status import task_status_from_result
 from docling_jobkit.orchestrators.serialization import dump_model_with_secrets
 
 _log = logging.getLogger(__name__)
@@ -237,9 +238,16 @@ class RQOrchestrator(BaseOrchestrator):
 
         if job_status == JobStatus.FINISHED:
             if rq_result is not None and rq_result.type == rq_result.Type.SUCCESSFUL:
-                task.set_status(TaskStatus.SUCCESS)
                 task_result_key = str(rq_result.return_value)
                 self._task_result_keys[task_id] = task_result_key
+                packed = await self._async_redis_conn.get(task_result_key)
+                if packed is None:
+                    task.set_status(TaskStatus.SUCCESS)
+                else:
+                    result = DoclingTaskResult.model_validate(
+                        msgpack.unpackb(packed, raw=False, strict_map_key=False)
+                    )
+                    task.set_status(task_status_from_result(result))
             else:
                 task.set_status(TaskStatus.FAILURE)
 
@@ -576,10 +584,7 @@ class RQOrchestrator(BaseOrchestrator):
                         ):
                             task.error_message = data.error_message
                         # Update the results lookup
-                        if (
-                            data.task_status == TaskStatus.SUCCESS
-                            and data.result_key is not None
-                        ):
+                        if data.result_key is not None:
                             self._task_result_keys[data.task_id] = data.result_key
 
                         await self._on_task_status_changed(task)
