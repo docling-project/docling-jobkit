@@ -4,9 +4,13 @@ import warnings
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Optional
 
+from docling.datamodel.extraction import ExtractionTarget
 from docling.datamodel.service.callbacks import CallbackSpec, ProgressCallbackRequest
 from docling.datamodel.service.chunking import BaseChunkerOptions
-from docling.datamodel.service.options import ConvertDocumentsOptions
+from docling.datamodel.service.options import (
+    ConvertDocumentsOptions,
+    ExtractDocumentsOptions,
+)
 from docling.datamodel.service.tasks import TaskType
 
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
@@ -112,6 +116,8 @@ class BaseOrchestrator(ABC):
         callbacks: list[CallbackSpec] | None = None,
         metadata: dict[str, Any] | None = None,
         targets: list[TaskTarget] | None = None,
+        extract_options: ExtractDocumentsOptions | None = None,
+        extract_target: ExtractionTarget | None = None,
     ) -> Task:
         pass
 

@@ -39,7 +39,9 @@ class AzureBlobPresignedTargetProcessor(AzureBlobTargetProcessor):
         self._config = azure_presigned_config
         self._task = task
         self._account_key = azure_presigned_config.get_account_key()
-        self._uploaded_artifacts: dict[int, list[tuple[ArtifactType, str, str]]] = {}
+        self._uploaded_artifacts: dict[
+            SourceIdentity, list[tuple[ArtifactType, str, str]]
+        ] = {}
 
     def upload_artifact_file(
         self,
@@ -68,7 +70,7 @@ class AzureBlobPresignedTargetProcessor(AzureBlobTargetProcessor):
             content_type=mime_type,
             metadata=self._build_object_metadata(),
         )
-        self._uploaded_artifacts.setdefault(source.source_index, []).append(
+        self._uploaded_artifacts.setdefault(source, []).append(
             (artifact_type, mime_type, blob_name)
         )
 
@@ -93,7 +95,7 @@ class AzureBlobPresignedTargetProcessor(AzureBlobTargetProcessor):
                 url_expires_at=expires_at,
             )
             for artifact_type, mime_type, blob_name in self._uploaded_artifacts.get(
-                source.source_index, []
+                source, []
             )
         ]
         return DocumentArtifactItem(
