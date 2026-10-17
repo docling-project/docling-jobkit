@@ -183,6 +183,31 @@ async def test_convert_warmup():
     assert len(converter.initialized_pipelines) > 0
 
 
+@pytest.mark.asyncio
+async def test_convert_warmup_uses_default_pipeline(monkeypatch):
+    cm = DoclingConverterManager(
+        config=DoclingConverterManagerConfig(
+            default_pipeline=ProcessingPipeline.VLM,
+            allowed_pipelines=[ProcessingPipeline.VLM],
+        )
+    )
+    orchestrator = LocalOrchestrator(
+        config=LocalOrchestratorConfig(shared_models=True), converter_manager=cm
+    )
+    vlm_converter = cm.get_converter(
+        cm.get_pdf_pipeline_opts(
+            ConvertDocumentsOptions(pipeline=ProcessingPipeline.VLM)
+        )
+    )
+    # Record the warm-up instead of loading the VLM weights.
+    warmed: list[InputFormat] = []
+    monkeypatch.setattr(vlm_converter, "initialize_pipeline", warmed.append)
+
+    await orchestrator.warm_up_caches()
+
+    assert warmed == [InputFormat.PDF]
+
+
 @dataclass
 class TestOption:
     options: ConvertDocumentsOptions
