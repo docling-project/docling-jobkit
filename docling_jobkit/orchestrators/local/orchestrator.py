@@ -27,6 +27,9 @@ from docling_jobkit.orchestrators.base_orchestrator import (
     TaskCancellationConflictError,
     TaskNotFoundError,
 )
+from docling_jobkit.orchestrators.completion_callbacks import (
+    emit_task_completed_callback,
+)
 from docling_jobkit.orchestrators.local.worker import AsyncLocalWorker
 
 _log = logging.getLogger(__name__)
@@ -130,25 +133,26 @@ class LocalOrchestrator(BaseOrchestrator):
         return True
 
     async def cancel_queued_task(self, task_id: str) -> Task:
-        task = self._cancel_pending_task(task_id)
+        task, cancelled_now = self._cancel_pending_task(task_id)
+        if cancelled_now:
+            emit_task_completed_callback(task, "cancelled")
         if self.notifier:
             await self.notifier.notify_task_subscribers(task_id)
             await self.notifier.notify_queue_positions()
         return task
 
-    def _cancel_pending_task(self, task_id: str) -> Task:
-        """Terminalize a queued task without ever awaiting, so it races cleanly.
+    def _cancel_pending_task(self, task_id: str) -> tuple[Task, bool]:
+        """Cancel a queued task in one await-free step.
 
-        Mutating the status and dropping the queue entry in one await-free
-        section makes cancellation mutually exclusive with
-        :meth:`claim_task_started`: exactly one of the two observes PENDING.
+        The status write and queue-entry removal must stay indivisible so a
+        concurrent pending-claim cannot interleave.
         """
         task = self.tasks.get(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
 
         if task.task_status == TaskStatus.CANCELLED:
-            return task
+            return task, False
 
         reason = self.cancellation_conflict_reason(task.task_status)
         if reason is not None:
@@ -157,7 +161,7 @@ class LocalOrchestrator(BaseOrchestrator):
         task.set_status(TaskStatus.CANCELLED)
         if task_id in self.queue_list:
             self.queue_list.remove(task_id)
-        return task
+        return task, True
 
     async def get_queue_position(self, task_id: str) -> Optional[int]:
         return (
