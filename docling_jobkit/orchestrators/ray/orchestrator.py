@@ -41,6 +41,9 @@ from docling_jobkit.orchestrators.base_orchestrator import (
     TaskCancellationConflictError,
     TaskNotFoundError,
 )
+from docling_jobkit.orchestrators.completion_callbacks import (
+    emit_task_completed_callback,
+)
 from docling_jobkit.orchestrators.ray.config import (
     RayOrchestratorConfig,
     parse_memory_bytes,
@@ -889,11 +892,27 @@ class RayOrchestrator(BaseOrchestrator):
             if task is None:
                 raise TaskNotFoundError(task_id)
 
-            if self.notifier:
-                await self.notifier.notify_task_subscribers(task_id)
-                await self.notifier.notify_queue_positions()
+        # Schedule the callback before the fallible notifications, outside the
+        # gate so a slow sender cannot stall arbitration.
+        if cancellation.outcome == TaskCancellationOutcome.CANCELLED:
+            self._emit_cancelled_callback(task, cancellation.callbacks)
 
-            return task
+        if self.notifier:
+            await self.notifier.notify_task_subscribers(task_id)
+            await self.notifier.notify_queue_positions()
+
+        return task
+
+    @staticmethod
+    def _emit_cancelled_callback(
+        task: Task, callbacks: tuple[CallbackSpec, ...]
+    ) -> None:
+        """Emit the callback without exposing credential-bearing specs."""
+        if not callbacks:
+            return
+        emit_task_completed_callback(
+            task.model_copy(update={"callbacks": list(callbacks)}), "cancelled"
+        )
 
     async def task_result(self, task_id: str) -> Optional[DoclingTaskResult]:
         outcome = await self.task_outcome(task_id)

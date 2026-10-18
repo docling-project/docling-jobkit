@@ -39,6 +39,9 @@ from docling_jobkit.orchestrators.base_orchestrator import (
     TaskCancellationConflictError,
     TaskNotFoundError,
 )
+from docling_jobkit.orchestrators.completion_callbacks import (
+    emit_task_completed_callback,
+)
 from docling_jobkit.orchestrators.serialization import dump_model_with_secrets
 
 _log = logging.getLogger(__name__)
@@ -473,11 +476,16 @@ class RQOrchestrator(BaseOrchestrator):
                 # in-memory copy that the atomic transition just superseded.
                 self.tasks[task_id] = task
 
-            if self.notifier:
-                await self.notifier.notify_task_subscribers(task_id)
-                await self.notifier.notify_queue_positions()
+        # Schedule the callback before the fallible notifications, outside the
+        # gate so a slow sender cannot stall arbitration.
+        if outcome == _CancellationOutcome.CANCELLED:
+            emit_task_completed_callback(task, "cancelled")
 
-            return task
+        if self.notifier:
+            await self.notifier.notify_task_subscribers(task_id)
+            await self.notifier.notify_queue_positions()
+
+        return task
 
     async def _cancel_task_in_redis_atomic(
         self, task_id: str
