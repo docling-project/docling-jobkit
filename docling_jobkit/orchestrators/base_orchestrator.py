@@ -112,6 +112,7 @@ class BaseOrchestrator(ABC):
         callbacks: list[CallbackSpec] | None = None,
         metadata: dict[str, Any] | None = None,
         targets: list[TaskTarget] | None = None,
+        target_document_version: str | None = None,
     ) -> Task:
         pass
 

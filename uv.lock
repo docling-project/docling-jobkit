@@ -1530,6 +1530,7 @@ version = "3.8.2"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
+    { name = "docling-core" },
     { name = "docling-slim", extra = ["standard"] },
     { name = "httpx" },
     { name = "pandas" },
@@ -1638,6 +1639,7 @@ requires-dist = [
     { name = "boxsdk", extras = ["jwt"], marker = "extra == 'box'", specifier = ">=10" },
     { name = "codeflare-sdk", marker = "python_full_version >= '3.11' and extra == 'ray'", specifier = ">=0.37.0" },
     { name = "confluent-kafka", marker = "extra == 'kafka'", specifier = ">=2.5.0,<3" },
+    { name = "docling-core", specifier = ">=2.92.0,<3.0.0" },
     { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", specifier = ">=2.94.0,<3.0.0" },
     { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", specifier = ">=2.95.0,<3.0.0" },
     { name = "docling-slim", extras = ["standard"], specifier = ">=2.129.0,<3.0.0" },

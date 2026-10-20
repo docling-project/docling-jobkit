@@ -10,6 +10,7 @@ from pydantic import (
     ConfigDict,
     Field,
     SerializeAsAny,
+    StringConstraints,
     ValidationInfo,
     model_validator,
 )
@@ -108,6 +109,12 @@ class Task(BaseModel):
     # scratch_dir: Optional[Path] = None
     processing_meta: Optional[TaskProcessingMeta] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # DoclingDocument schema version the client can read. JSON files written to
+    # targets are down-projected to it; in-body JSON is projected by the API layer
+    # (project_document_dict) because results pass through Redis. None = native.
+    target_document_version: Optional[
+        Annotated[str, StringConstraints(pattern=r"^\d{1,9}\.\d{1,9}\.\d{1,9}$")]
+    ] = None
     error_message: Optional[str] = None
     failure: Optional[PublicFailureInfo] = None
     created_at: datetime.datetime = Field(
