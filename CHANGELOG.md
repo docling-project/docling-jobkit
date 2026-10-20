@@ -1,3 +1,14 @@
+## [v3.9.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.9.0) - 2026-10-20
+
+### Feature
+
+* Down-project produced DoclingDocument to client-requested version ([#224](https://github.com/docling-project/docling-jobkit/issues/224)) ([`fefffce`](https://github.com/docling-project/docling-jobkit/commit/fefffcee93ad19c714e02d26d6e0f8257dacdaa1))
+
+### Fix
+
+* **ray:** Make tenant discovery and metrics reads independent of keyspace size ([#271](https://github.com/docling-project/docling-jobkit/issues/271)) ([`92d96bc`](https://github.com/docling-project/docling-jobkit/commit/92d96bcddcb363798a4f92f526f3e43562635f4a))
+* **ray:** Drop invalid queued tasks instead of blocking the tenant queue ([#270](https://github.com/docling-project/docling-jobkit/issues/270)) ([`13972ca`](https://github.com/docling-project/docling-jobkit/commit/13972caa839939cd8fd9f9baa73c94f2619cb8a4))
+
 ## [v3.8.2](https://github.com/docling-project/docling-jobkit/releases/tag/v3.8.2) - 2026-10-13
 
 ### Fix
