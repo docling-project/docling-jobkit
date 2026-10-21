@@ -35,16 +35,14 @@ _SP_CREDS = {"tenant": "tenant-guid", "client_id": "client-id"}
 
 @pytest.fixture
 def graph_error() -> Callable[[int], Exception]:
-    """Build a ClientRequestException carrying *status*, bypassing its __init__."""
+    """Build a ClientRequestException carrying *status*."""
     from office365.runtime.client_request_exception import ClientRequestException
     from requests import Response
 
     def _make(status: int) -> ClientRequestException:
-        exc = ClientRequestException.__new__(ClientRequestException)
         response = Response()
         response.status_code = status
-        exc.response = response
-        return exc
+        return ClientRequestException(response=response)
 
     return _make
 
