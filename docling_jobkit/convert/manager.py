@@ -18,6 +18,7 @@ from docling.backend.docling_parse_backend import (
 from docling.backend.pdf_backend import PdfDocumentBackend
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
+from docling.datamodel.backend_options import EpubBackendOptions
 from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.chart_extraction_options import ChartExtractionVlmEngineOptions
 from docling.datamodel.document import ConversionResult
@@ -56,6 +57,7 @@ from docling.datamodel.vlm_engine_options import (
 )
 from docling.document_converter import (
     DocumentConverter,
+    EpubFormatOption,
     ExcelFormatOption,
     FormatOption,
     HTMLFormatOption,
@@ -574,7 +576,7 @@ class DoclingConverterManager:
             # Propagate picture description/classification/chart-extraction
             # options to SimplePipeline-based office formats too. Without this,
             # do_picture_description and friends are silently ignored for
-            # DOCX/PPTX/XLSX/HTML/ODT/ODS/ODP, even though SimplePipeline runs
+            # DOCX/PPTX/XLSX/HTML/ODT/ODS/ODP/EPUB, even though SimplePipeline runs
             # the same enrichment stage as the PDF pipeline.
             office_pipeline_options = pdf_format_option.pipeline_options
             format_options[InputFormat.DOCX] = WordFormatOption(
@@ -597,6 +599,17 @@ class DoclingConverterManager:
             )
             format_options[InputFormat.ODP] = OdpFormatOption(
                 pipeline_options=office_pipeline_options
+            )
+            # The EPUB backend reads the images packed in the archive only
+            # with fetch_images and enable_local_fetch, confined to the
+            # directory it extracts the archive into.
+            include_images = office_pipeline_options.generate_picture_images
+            format_options[InputFormat.EPUB] = EpubFormatOption(
+                pipeline_options=office_pipeline_options,
+                backend_options=EpubBackendOptions(
+                    fetch_images=include_images,
+                    enable_local_fetch=include_images,
+                ),
             )
 
             return DocumentConverter(format_options=format_options)
