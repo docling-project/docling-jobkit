@@ -447,7 +447,7 @@ def test_picture_description_options_propagate_to_office_formats():
 
 def _write_epub(path: Path, img_src: str) -> Path:
     png = base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk"
         "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
     )
     with zipfile.ZipFile(path, "w") as archive:
