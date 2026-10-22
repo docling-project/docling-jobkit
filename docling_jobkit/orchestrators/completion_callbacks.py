@@ -14,7 +14,7 @@ _log = logging.getLogger(__name__)
 
 def emit_task_completed_callback(
     task: Task,
-    task_status: Literal["success", "failure"],
+    task_status: Literal["success", "failure", "cancelled"],
     failure: PublicFailureInfo | None = None,
 ) -> None:
     """Schedule the terminal task event after durable terminalization."""
