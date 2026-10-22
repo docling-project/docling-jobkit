@@ -26,6 +26,7 @@ from docling.datamodel.picture_classification_options import (
 )
 from docling.datamodel.pipeline_options import (
     CodeFormulaVlmOptions,
+    NativePdfPipelineOptions,
     OcrOptions,
     PdfBackend,
     PdfPipelineOptions,
@@ -60,6 +61,7 @@ from docling.document_converter import (
     FormatOption,
     HTMLFormatOption,
     ImageFormatOption,
+    NativePdfFormatOption,
     OdpFormatOption,
     OdsFormatOption,
     OdtFormatOption,
@@ -76,6 +78,7 @@ from docling.models.factories import (
 # Note: PictureClassificationFactory will be imported when available in docling
 # from docling.backend.picture_classification_factory import PictureClassificationFactory
 from docling.models.inference_engines.vlm.base import VlmEngineType
+from docling.pipeline.native_pdf_pipeline import NativePdfPipeline
 from docling.pipeline.vlm_pipeline import VlmPipeline
 
 from docling_jobkit.public_errors import PipelineInitializationError
@@ -556,10 +559,17 @@ class DoclingConverterManager:
         @lru_cache(maxsize=cache_size)
         def _get_converter_from_hash(options_hash: bytes) -> DocumentConverter:
             pdf_format_option = self._options_map[options_hash]
-            image_format_option: FormatOption = pdf_format_option
-            if isinstance(pdf_format_option.pipeline_cls, type) and issubclass(
-                pdf_format_option.pipeline_cls, VlmPipeline
+            pipeline_cls = pdf_format_option.pipeline_cls
+            if isinstance(pipeline_cls, type) and issubclass(
+                pipeline_cls, NativePdfPipeline
             ):
+                return DocumentConverter(
+                    allowed_formats=[InputFormat.PDF],
+                    format_options={InputFormat.PDF: pdf_format_option},
+                )
+
+            image_format_option: FormatOption = pdf_format_option
+            if isinstance(pipeline_cls, type) and issubclass(pipeline_cls, VlmPipeline):
                 image_format_option = ImageFormatOption(
                     pipeline_cls=pdf_format_option.pipeline_cls,
                     pipeline_options=pdf_format_option.pipeline_options,
@@ -2066,6 +2076,24 @@ class DoclingConverterManager:
         self,
         request: ConvertDocumentsOptions,
     ) -> PdfFormatOption:
+        if request.pipeline == ProcessingPipeline.NATIVE:
+            if self._parse_backend(request) is not ThreadedDoclingParseDocumentBackend:
+                raise ValueError(
+                    "The native pipeline requires a threaded docling-parse PDF backend"
+                )
+            native_options = NativePdfPipelineOptions(
+                document_timeout=request.document_timeout,
+                allow_external_plugins=self.config.allow_external_plugins,
+                enable_remote_services=self.config.enable_remote_services,
+                generate_picture_images=request.include_images,
+                generate_page_images=request.include_page_images,
+            )
+            if request.images_scale and (
+                request.include_images or request.include_page_images
+            ):
+                native_options.images_scale = request.images_scale
+            return NativePdfFormatOption(pipeline_options=native_options)
+
         artifacts_path: Optional[Path] = None
         if self.config.artifacts_path is not None:
             expanded_path = self.config.artifacts_path.expanduser()
