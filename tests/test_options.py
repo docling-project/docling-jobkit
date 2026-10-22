@@ -1,4 +1,6 @@
+import base64
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,7 @@ from docling.datamodel.pipeline_options import (
     VlmPipelineOptions,
 )
 from docling.document_converter import (
+    EpubFormatOption,
     ExcelFormatOption,
     HTMLFormatOption,
     OdpFormatOption,
@@ -430,6 +433,7 @@ def test_picture_description_options_propagate_to_office_formats():
         InputFormat.ODT: OdtFormatOption,
         InputFormat.ODS: OdsFormatOption,
         InputFormat.ODP: OdpFormatOption,
+        InputFormat.EPUB: EpubFormatOption,
     }
     for input_format, option_cls in office_format_to_option_cls.items():
         format_option = converter.format_to_options[input_format]
@@ -439,3 +443,73 @@ def test_picture_description_options_propagate_to_office_formats():
             format_option.pipeline_options.picture_description_options
             == pdf_picture_opts
         )
+
+
+def _write_epub(path: Path, img_src: str) -> Path:
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk"
+        "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
+        )
+        archive.writestr(
+            "META-INF/container.xml",
+            '<?xml version="1.0"?>'
+            '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            '<rootfiles><rootfile full-path="OEBPS/content.opf" '
+            'media-type="application/oebps-package+xml"/></rootfiles></container>',
+        )
+        archive.writestr(
+            "OEBPS/content.opf",
+            '<?xml version="1.0"?>'
+            '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">'
+            '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+            '<dc:identifier id="id">sample</dc:identifier><dc:title>Sample</dc:title>'
+            "<dc:language>en</dc:language></metadata><manifest>"
+            '<item id="c1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/>'
+            '<item id="dot" href="images/dot.png" media-type="image/png"/>'
+            '</manifest><spine><itemref idref="c1"/></spine></package>',
+        )
+        archive.writestr(
+            "OEBPS/text/ch1.xhtml",
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>One</title></head>'
+            "<body><h1>One</h1><p>Text.</p>"
+            f"<img src={img_src} alt='dot'/>"
+            "</body></html>",
+        )
+        archive.writestr("OEBPS/images/dot.png", png)
+    return path
+
+
+@pytest.mark.parametrize("img_src", ['"../images/dot.png"', "'../images/dot.png'"])
+@pytest.mark.parametrize("include_images", [True, False])
+def test_epub_pictures_follow_include_images(tmp_path, include_images, img_src):
+    """An EPUB picture carries its image exactly when include_images is set."""
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+    opts = ConvertDocumentsOptions(include_images=include_images)
+    converter = m.get_converter(m.get_pdf_pipeline_opts(opts))
+
+    doc = converter.convert(_write_epub(tmp_path / "sample.epub", img_src)).document
+
+    assert len(doc.pictures) == 1
+    assert (doc.pictures[0].image is not None) is include_images
+    epub_option = converter.format_to_options[InputFormat.EPUB]
+    assert epub_option.backend_options.enable_remote_fetch is False
+
+
+def test_epub_picture_outside_the_archive_keeps_the_document(tmp_path):
+    """An image path escaping the extracted archive leaves an empty picture."""
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+    opts = ConvertDocumentsOptions(include_images=True)
+    converter = m.get_converter(m.get_pdf_pipeline_opts(opts))
+    epub = _write_epub(tmp_path / "sample.epub", '"../../../../outside.png"')
+
+    with pytest.warns(UserWarning, match="Could not process an image"):
+        doc = converter.convert(epub).document
+
+    assert "Text." in doc.export_to_markdown()
+    assert len(doc.pictures) == 1
+    assert doc.pictures[0].image is None

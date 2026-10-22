@@ -1667,7 +1667,7 @@ requires-dist = [
     { name = "docling-core", specifier = ">=2.92.0,<3.0.0" },
     { name = "docling-slim", extras = ["models-onnxruntime"], marker = "extra == 'onnxruntime'", specifier = ">=2.94.0,<3.0.0" },
     { name = "docling-slim", extras = ["models-vlm-inline"], marker = "extra == 'vlm'", specifier = ">=2.95.0,<3.0.0" },
-    { name = "docling-slim", extras = ["standard"], specifier = ">=2.129.0,<3.0.0" },
+    { name = "docling-slim", extras = ["standard"], specifier = ">=2.135.0,<3.0.0" },
     { name = "google-api-python-client", marker = "extra == 'gdrive'", specifier = ">=2.183.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'gdrive'", specifier = ">=1.2.2" },
     { name = "google-cloud-storage", marker = "extra == 'gcloudstorage'", specifier = ">=2.10.0" },
@@ -1713,7 +1713,7 @@ dev = [
 ]
 pr-fast-checks = [
     { name = "boto3-stubs", extras = ["s3"], specifier = "~=1.35" },
-    { name = "docling-slim", specifier = ">=2.129.0,<3.0.0" },
+    { name = "docling-slim", specifier = ">=2.135.0,<3.0.0" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "pandas-stubs", specifier = "~=2.2" },
     { name = "pydantic", specifier = "~=2.10" },
