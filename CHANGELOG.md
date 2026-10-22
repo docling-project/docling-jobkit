@@ -1,3 +1,11 @@
+## [v3.9.1](https://github.com/docling-project/docling-jobkit/releases/tag/v3.9.1) - 2026-10-22
+
+### Fix
+
+* **manager:** Apply request options to EPUB conversions ([#276](https://github.com/docling-project/docling-jobkit/issues/276)) ([`d7d44ed`](https://github.com/docling-project/docling-jobkit/commit/d7d44ed8f721647810f984263fe425c440572916))
+* Reconnect the RQ worker heartbeat after a failed write ([#279](https://github.com/docling-project/docling-jobkit/issues/279)) ([`f409197`](https://github.com/docling-project/docling-jobkit/commit/f409197915b8b7d3681274f5ddd05a34320acda8))
+* Revalidate idle Redis connections in RQ pools ([#278](https://github.com/docling-project/docling-jobkit/issues/278)) ([`1e667b3`](https://github.com/docling-project/docling-jobkit/commit/1e667b3fb699b4477196098c5fdb207761590048))
+
 ## [v3.9.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.9.0) - 2026-10-20
 
 ### Feature
