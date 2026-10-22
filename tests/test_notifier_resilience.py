@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,15 +20,13 @@ def _make_pubsub_message(task_id: str, status: TaskStatus) -> dict:
     return {"type": "message", "data": update.model_dump_json()}
 
 
-async def _fake_listen(messages):
-    for msg in messages:
-        yield msg
-
-
 def _make_pubsub(messages):
     pubsub = MagicMock()
     pubsub.subscribe = AsyncMock()
-    pubsub.listen.return_value = _fake_listen(messages)
+    pubsub.aclose = AsyncMock()
+    # The listener runs until cancelled: end the feed with a cancellation so
+    # the test's await returns once the messages are consumed.
+    pubsub.get_message = AsyncMock(side_effect=[*messages, asyncio.CancelledError()])
     return pubsub
 
 
@@ -42,6 +41,8 @@ def _make_orchestrator_with_task():
     orch._task_result_keys = {}
     orch._async_redis_conn = MagicMock()
     orch._store_task_in_redis = AsyncMock()
+    # The subscription runs on its own client; point it at the mocked one.
+    orch._build_pubsub_redis = lambda: orch._async_redis_conn
 
     task = Task(
         task_id="test-task-1",
