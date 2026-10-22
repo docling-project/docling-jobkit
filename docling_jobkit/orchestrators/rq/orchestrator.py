@@ -97,6 +97,10 @@ _RQ_JOB_GONE = _RQJobGone()
 _TASK_METADATA_PREFIX = "docling:tasks:"
 
 
+def _encode_document_stream(source: "DocumentStream") -> str:
+    return base64.b64encode(source.stream.read()).decode()
+
+
 class RQOrchestrator(BaseOrchestrator):
     @staticmethod
     def make_rq_queue(config: RQOrchestratorConfig) -> tuple[redis.Redis, Queue]:
@@ -188,7 +192,9 @@ class RQOrchestrator(BaseOrchestrator):
             rq_sources: list[TaskSource] = []
             for source in sources:
                 if isinstance(source, DocumentStream):
-                    encoded_doc = base64.b64encode(source.stream.read()).decode()
+                    encoded_doc = await asyncio.to_thread(
+                        _encode_document_stream, source
+                    )
                     rq_sources.append(
                         FileSourceRequest(
                             filename=source.name, base64_string=encoded_doc
@@ -213,7 +219,8 @@ class RQOrchestrator(BaseOrchestrator):
                 allow_external_plugins=self.config.allow_external_plugins,
             )
             task_data = dump_model_with_secrets(task, serialize_as_any=True)
-            self._rq_queue.enqueue(
+            await asyncio.to_thread(
+                self._rq_queue.enqueue,
                 self._rq_job_function,
                 kwargs={"task_data": task_data},
                 job_id=task_id,
