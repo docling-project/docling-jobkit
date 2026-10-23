@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Type, TypedDict, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from docling.backend.docling_parse_backend import (
     DoclingParseDocumentBackend,
@@ -211,6 +211,13 @@ AnyPresetInfo = Union[
 ]
 
 
+# Pipelines that DoclingConverterManager.get_pdf_pipeline_opts can dispatch.
+SUPPORTED_PIPELINES: tuple[ProcessingPipeline, ...] = (
+    ProcessingPipeline.STANDARD,
+    ProcessingPipeline.VLM,
+)
+
+
 class DoclingConverterManagerConfig(BaseModel):
     artifacts_path: Optional[Path] = None
     options_cache_size: int = 2
@@ -219,6 +226,19 @@ class DoclingConverterManagerConfig(BaseModel):
 
     max_num_pages: int = sys.maxsize
     max_file_size: int = sys.maxsize
+
+    # Pipeline Control
+    default_pipeline: ProcessingPipeline = Field(
+        default=ProcessingPipeline.STANDARD,
+        description="Pipeline to use when a request does not specify one.",
+    )
+    allowed_pipelines: Optional[list[ProcessingPipeline]] = Field(
+        default=None,
+        description=(
+            "List of pipelines a request may use. None means all supported "
+            "pipelines are allowed. Must include default_pipeline."
+        ),
+    )
 
     # Threading pipeline
     queue_max_size: Optional[int] = None
@@ -461,6 +481,28 @@ class DoclingConverterManagerConfig(BaseModel):
         default=False,
         description="Whether users can specify custom OCR configurations.",
     )
+
+    @model_validator(mode="after")
+    def validate_pipelines(self) -> "DoclingConverterManagerConfig":
+        configured = [self.default_pipeline, *(self.allowed_pipelines or [])]
+        unsupported = sorted(
+            {p.value for p in configured if p not in SUPPORTED_PIPELINES}
+        )
+        if unsupported:
+            raise ValueError(
+                f"Pipelines {unsupported} are not supported. "
+                f"Supported pipelines: {[p.value for p in SUPPORTED_PIPELINES]}."
+            )
+        # Requests that omit the pipeline get the default, so it must be allowed.
+        if (
+            self.allowed_pipelines is not None
+            and self.default_pipeline not in self.allowed_pipelines
+        ):
+            raise ValueError(
+                f"default_pipeline '{self.default_pipeline.value}' is not in "
+                f"allowed_pipelines {[p.value for p in self.allowed_pipelines]}."
+            )
+        return self
 
 
 # Custom serializer for PdfFormatOption
@@ -1000,6 +1042,21 @@ class DoclingConverterManager:
                 f"Allowed kinds: {', '.join([default_kind, *allowed_kinds])}. "
                 f"Contact your administrator to enable this kind."
             )
+
+    def _resolve_pipeline(self, request: ConvertDocumentsOptions) -> ProcessingPipeline:
+        """Return the request's pipeline, or the default, if it is allowed."""
+        pipeline = (
+            request.pipeline
+            if request.pipeline is not None
+            else self.config.default_pipeline
+        )
+        allowed = self.config.allowed_pipelines or list(SUPPORTED_PIPELINES)
+        if pipeline not in allowed:
+            raise ValueError(
+                f"Pipeline '{pipeline.value}' is not allowed. "
+                f"Allowed pipelines: {', '.join(p.value for p in allowed)}"
+            )
+        return pipeline
 
     def _validate_preset(
         self,
@@ -2106,8 +2163,9 @@ class DoclingConverterManager:
                 "The system will download the model weights at runtime."
             )
 
+        pipeline = self._resolve_pipeline(request)
         pipeline_options: Union[PdfPipelineOptions, VlmPipelineOptions]
-        if request.pipeline == ProcessingPipeline.STANDARD:
+        if pipeline == ProcessingPipeline.STANDARD:
             pipeline_options = self._parse_standard_pdf_opts(request, artifacts_path)
             backend = self._parse_backend(request)
             pdf_format_option = PdfFormatOption(
@@ -2115,7 +2173,7 @@ class DoclingConverterManager:
                 backend=backend,
             )
 
-        elif request.pipeline == ProcessingPipeline.VLM:
+        elif pipeline == ProcessingPipeline.VLM:
             pipeline_options = self._parse_vlm_pdf_opts(request, artifacts_path)
             backend = self._parse_backend(request)
             pdf_format_option = PdfFormatOption(
@@ -2124,9 +2182,7 @@ class DoclingConverterManager:
                 backend=backend,
             )
         else:
-            raise NotImplementedError(
-                f"The pipeline {request.pipeline} is not implemented."
-            )
+            raise NotImplementedError(f"The pipeline {pipeline} is not implemented.")
 
         return pdf_format_option
 
