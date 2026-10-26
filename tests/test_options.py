@@ -10,6 +10,7 @@ from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import (
+    NativePdfPipelineOptions,
     PdfBackend,
     PdfPipelineOptions,
     ProcessingPipeline,
@@ -18,12 +19,14 @@ from docling.datamodel.pipeline_options import (
 from docling.document_converter import (
     ExcelFormatOption,
     HTMLFormatOption,
+    NativePdfFormatOption,
     OdpFormatOption,
     OdsFormatOption,
     OdtFormatOption,
     PowerpointFormatOption,
     WordFormatOption,
 )
+from docling.pipeline.native_pdf_pipeline import NativePdfPipeline
 from docling.pipeline.vlm_pipeline import VlmPipeline
 from docling_core.types.doc import ImageRefMode, PictureClassificationLabel
 
@@ -400,6 +403,75 @@ def test_image_pipeline_uses_vlm_pipeline_when_requested():
     img_opt = converter.format_to_options[InputFormat.IMAGE]
     assert img_opt.pipeline_cls == VlmPipeline
     assert isinstance(img_opt.pipeline_options, VlmPipelineOptions)
+
+
+def test_native_pdf_pipeline_options():
+    manager = DoclingConverterManager(
+        DoclingConverterManagerConfig(
+            allow_external_plugins=True,
+            enable_remote_services=True,
+        )
+    )
+    request = ConvertDocumentsOptions(
+        pipeline=ProcessingPipeline.NATIVE,
+        document_timeout=30,
+        include_images=True,
+        include_page_images=True,
+        images_scale=3.0,
+    )
+
+    format_option = manager.get_pdf_pipeline_opts(request)
+
+    assert isinstance(format_option, NativePdfFormatOption)
+    assert format_option.pipeline_cls is NativePdfPipeline
+    assert format_option.backend is ThreadedDoclingParseDocumentBackend
+    options = format_option.pipeline_options
+    assert isinstance(options, NativePdfPipelineOptions)
+    assert options.document_timeout == 30
+    assert options.allow_external_plugins is True
+    assert options.enable_remote_services is True
+    assert options.generate_picture_images is True
+    assert options.generate_page_images is True
+    assert options.images_scale == 3.0
+
+
+def test_native_pdf_pipeline_rejects_incompatible_backend():
+    manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+    with pytest.raises(ValueError, match="requires a threaded docling-parse"):
+        manager.get_pdf_pipeline_opts(
+            ConvertDocumentsOptions(
+                pipeline=ProcessingPipeline.NATIVE, pdf_backend=PdfBackend.PYPDFIUM2
+            )
+        )
+
+
+def test_native_pdf_pipeline_does_not_set_image_scale_without_images():
+    manager = DoclingConverterManager(DoclingConverterManagerConfig())
+    request = ConvertDocumentsOptions(
+        pipeline=ProcessingPipeline.NATIVE,
+        include_images=False,
+        include_page_images=False,
+        images_scale=3.0,
+    )
+
+    options = manager.get_pdf_pipeline_opts(request).pipeline_options
+
+    assert options.generate_picture_images is False
+    assert options.generate_page_images is False
+    assert options.images_scale == NativePdfPipelineOptions().images_scale
+
+
+def test_native_pdf_converter_accepts_only_pdf():
+    manager = DoclingConverterManager(DoclingConverterManagerConfig())
+    format_option = manager.get_pdf_pipeline_opts(
+        ConvertDocumentsOptions(pipeline=ProcessingPipeline.NATIVE)
+    )
+
+    converter = manager.get_converter(format_option)
+
+    assert set(converter.format_to_options) == {InputFormat.PDF}
+    assert converter.format_to_options[InputFormat.PDF] is format_option
 
 
 def test_picture_description_options_propagate_to_office_formats():
