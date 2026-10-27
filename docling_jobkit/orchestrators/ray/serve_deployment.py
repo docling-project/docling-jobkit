@@ -68,6 +68,7 @@ from docling_jobkit.convert.results import (
     process_exportable_results,
 )
 from docling_jobkit.convert.source_expansion import expand_task_sources
+from docling_jobkit.datamodel.convert import normalize_page_range
 from docling_jobkit.datamodel.exportable_document import (
     ExportableDocument,
     source_to_public_uri,
@@ -610,6 +611,7 @@ def _build_slice_plan(
     requested_page_range: tuple[int, int],
     max_page_slice_size: int,
 ) -> SlicePlan:
+    requested_page_range = normalize_page_range(requested_page_range)
     start_page, end_page = requested_page_range
     if start_page > total_pages:
         raise ValueError(
