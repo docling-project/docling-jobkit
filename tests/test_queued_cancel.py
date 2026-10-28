@@ -96,8 +96,18 @@ def _purge_redis(conn, token: str, task_ids: list[str]) -> None:
         keys.add(f"task:{task_id}:dispatch".encode())
         keys.add(f"task:{task_id}:execution".encode())
         keys.add(f"docling:tasks:{task_id}:metadata".encode())
+        # The RQ orchestrator uses the task id as the job id, and a cancelled
+        # job's hash is not always TTL'd, so remove it explicitly.
+        keys.add(f"rq:job:{task_id}".encode())
     if keys:
         conn.delete(*keys)
+
+    # RQ keeps a global registry of queue names; drop this test's entry and the
+    # registry itself once it is the last one left.
+    queues_key = b"rq:queues"
+    conn.srem(queues_key, f"rq:queue:cancel72-{token}")
+    if conn.scard(queues_key) == 0:
+        conn.delete(queues_key)
 
 
 class _RecordingNotifier:
@@ -455,6 +465,64 @@ class TestRqQueuedCancellation:
         converter.convert_documents.assert_called_once()
         with pytest.raises(TaskCancellationConflictError):
             await orch.cancel_queued_task(task.task_id)
+
+    @pytest.mark.asyncio
+    async def test_late_enqueue_after_cancel_never_runs_conversion(
+        self, orchestrator, sync_conn, tmp_path
+    ):
+        from docling_jobkit.orchestrators.rq.orchestrator import RQOrchestrator
+        from docling_jobkit.orchestrators.rq.worker import (
+            _run_docling_task,
+            claim_task_started,
+        )
+
+        orch, created = orchestrator
+        peer = RQOrchestrator(config=orch.config)
+        enqueue_started = threading.Event()
+        release_enqueue = threading.Event()
+        enqueue = orch._rq_queue.enqueue
+        converter = MagicMock()
+        converter.config.max_file_size = None
+        job = MagicMock(connection=sync_conn)
+
+        def blocking_enqueue(*args, **kwargs):
+            enqueue_started.set()
+            if not release_enqueue.wait(timeout=10):
+                raise AssertionError("the enqueue thread was never released")
+            return enqueue(*args, **kwargs)
+
+        try:
+            with patch.object(orch._rq_queue, "enqueue", side_effect=blocking_enqueue):
+                enqueuing = asyncio.create_task(self._enqueue(orch, created))
+                assert await asyncio.to_thread(enqueue_started.wait, 10)
+                created.extend(orch.tasks)
+                (task_id,) = tuple(orch.tasks)
+
+                cancelled = await peer.cancel_queued_task(task_id)
+                assert cancelled.task_status is TaskStatus.CANCELLED
+                release_enqueue.set()
+                task = await enqueuing
+
+            assert task.task_id == task_id
+            durable = await self._durable_task(orch, task_id)
+            assert durable is not None
+            assert durable.task_status is TaskStatus.CANCELLED
+            assert (
+                claim_task_started(sync_conn, task_id, metadata_ttl=600)
+                is TaskStatus.CANCELLED
+            )
+            with patch(
+                "docling_jobkit.orchestrators.rq.worker.get_current_job",
+                return_value=job,
+            ):
+                assert _run_docling_task(task, converter, orch.config, tmp_path) is None
+            converter.convert_documents.assert_not_called()
+
+            again = await peer.cancel_queued_task(task_id)
+            assert again.task_status is TaskStatus.CANCELLED
+        finally:
+            release_enqueue.set()
+            await peer.close()
 
     @pytest.mark.asyncio
     async def test_review_stale_pending_cannot_reopen_claim(self, orchestrator):
