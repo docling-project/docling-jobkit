@@ -26,6 +26,7 @@ from docling_jobkit.datamodel.chunking import (
     ChunkingExportOptions,
     ChunkingOptionType,
 )
+from docling_jobkit.datamodel.convert import normalize_page_range
 from docling_jobkit.datamodel.task_meta import TaskStatus
 
 
@@ -153,6 +154,17 @@ class Task(BaseModel):
             # Neither target nor targets was provided — apply the same default
             # that existed before the multi-target refactor: a single InBodyTarget.
             self.targets = [InBodyTarget()]
+        return self
+
+    @model_validator(mode="after")
+    def normalize_convert_options(self):
+        """Clamp convert_options page_range to safe integer limits."""
+        if self.convert_options is not None and self.convert_options.page_range:
+            safe_range = normalize_page_range(self.convert_options.page_range)
+            if safe_range != self.convert_options.page_range:
+                self.convert_options = self.convert_options.model_copy(
+                    update={"page_range": safe_range}
+                )
         return self
 
     def set_status(self, status: TaskStatus):

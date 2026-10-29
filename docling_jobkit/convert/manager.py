@@ -80,6 +80,7 @@ from docling.models.factories import (
 from docling.models.inference_engines.vlm.base import VlmEngineType
 from docling.pipeline.vlm_pipeline import VlmPipeline
 
+from docling_jobkit.datamodel.convert import normalize_page_range
 from docling_jobkit.public_errors import PipelineInitializationError
 
 _log = logging.getLogger(__name__)
@@ -2154,7 +2155,7 @@ class DoclingConverterManager:
         results: Iterator[ConversionResult] = converter.convert_all(
             sources,
             headers=headers,
-            page_range=options.page_range,
+            page_range=normalize_page_range(options.page_range),
             max_file_size=self.config.max_file_size,
             max_num_pages=self.config.max_num_pages,
             raises_on_error=options.abort_on_error,
