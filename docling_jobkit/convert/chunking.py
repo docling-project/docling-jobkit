@@ -576,7 +576,14 @@ def process_chunkable_results(
                 _log.error("Failed to upload zip to target URL", exc_info=exc)
                 raise TargetWriteError("Failed to upload to target URL") from exc
         else:
-            task_result = ZipArchiveResult(content=file_path.read_bytes())
+            # Name the download after the source when the task has a single
+            # document; multi-document tasks keep the generic name downstream.
+            zip_filename = None
+            if len(docs) == 1:
+                zip_filename = f"{Path(docs[0].source).stem}.zip"
+            task_result = ZipArchiveResult(
+                content=file_path.read_bytes(), filename=zip_filename
+            )
 
     return DoclingTaskResult(
         result=task_result,

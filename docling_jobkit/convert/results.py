@@ -1125,7 +1125,14 @@ def _process_exportable_results_internal(
                 target_processor.upload_archive(file_path)
             task_result = RemoteTargetResult()
         else:
-            task_result = ZipArchiveResult(content=file_path.read_bytes())
+            # Name the download after the source when the task has a single
+            # document; multi-document tasks keep the generic name downstream.
+            zip_filename = None
+            if len(finalized_documents) == 1:
+                zip_filename = f"{finalized_documents[0].file.stem}.zip"
+            task_result = ZipArchiveResult(
+                content=file_path.read_bytes(), filename=zip_filename
+            )
 
     processing_time = time.monotonic() - start_time
     _log.info(
