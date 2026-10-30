@@ -726,16 +726,9 @@ class RQOrchestrator(BaseOrchestrator):
     async def _store_task_in_redis(self, task: Task) -> None:
         """Persist task metadata without regressing a committed STARTED claim or terminal status.
 
-        The durable read and the write happen inside one WATCH transaction, so
-        a stale cached write (refresh, status poll, pub/sub fan-out from a peer
-        that has not seen the claim/cancellation) cannot reopen a won STARTED
-        claim back to PENDING nor overwrite a terminal SUCCESS/FAILURE/CANCELLED
-        with an older status. Same-status rewrites preserve the committed
-        started_at/finished_at while allowing safe progress counters to advance;
-        forward moves (PENDING->STARTED, STARTED->SUCCESS/FAILURE,
-        PENDING->CANCELLED) ride along. Skipped writes leave the durable winner
-        untouched. Python-side JSON merge avoids Lua cjson empty-array
-        corruption (empty lists must stay lists for Task validation).
+        A WATCH transaction protects durable claims and terminal states against
+        stale writes and preserves committed timestamps on same-status updates.
+        Python-side JSON merge avoids Lua cjson empty-array corruption.
         """
         try:
             meta: Any = task.processing_meta

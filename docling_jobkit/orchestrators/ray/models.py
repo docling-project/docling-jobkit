@@ -271,7 +271,7 @@ class TaskCancellationOutcome(str, Enum):
 
 @dataclass(frozen=True)
 class TaskCancellationResult:
-    """Outcome of one queued-only cancellation attempt.
+    """Details of one queued-only cancellation attempt.
 
     ``status`` is the observed durable status of a conflict or repeat.
     ``callbacks`` carries the winner's specs, captured before the transition

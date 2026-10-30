@@ -169,7 +169,6 @@ class TestCancellationContract:
             BaseOrchestrator.cancellation_conflict_reason(TaskStatus.CANCELLED) is None
         )
 
-    def test_conflict_error_exposes_reason_and_status(self):
         error = TaskCancellationConflictError(
             CancellationConflictReason.ALREADY_STARTED, TaskStatus.STARTED
         )
@@ -432,7 +431,7 @@ class TestRqQueuedCancellation:
         return await orchestrator._get_task_from_redis(task_id)
 
     @pytest.mark.asyncio
-    async def test_review_worker_before_enqueue_metadata_cannot_be_cancelled(
+    async def test_worker_before_enqueue_metadata_cannot_be_cancelled(
         self, orchestrator, sync_conn, tmp_path
     ):
         from docling_jobkit.datamodel.task import validate_task
@@ -525,7 +524,7 @@ class TestRqQueuedCancellation:
             await peer.close()
 
     @pytest.mark.asyncio
-    async def test_review_stale_pending_cannot_reopen_claim(self, orchestrator):
+    async def test_stale_pending_cannot_reopen_claim(self, orchestrator):
         from docling_jobkit.orchestrators.rq.orchestrator import RQOrchestrator
         from docling_jobkit.orchestrators.rq.worker import claim_task_started
 
@@ -548,7 +547,7 @@ class TestRqQueuedCancellation:
             await peer.close()
 
     @pytest.mark.asyncio
-    async def test_review_stale_peer_update_preserves_cancelled(self, orchestrator):
+    async def test_stale_peer_update_preserves_cancelled(self, orchestrator):
         from docling_jobkit.orchestrators.rq.orchestrator import RQOrchestrator
         from docling_jobkit.orchestrators.rq.worker import claim_task_started
 
@@ -986,19 +985,19 @@ def _ray_state_manager_cls():
 
 class TestRayQueuedCancellation:
     @pytest.mark.asyncio
-    async def test_review_real_converter_gate_and_normal_progress(self, manager, token):
+    async def test_real_converter_gate_and_normal_progress(self, manager, token):
         tenant_id = f"cancel72-{token}"
         (task,) = await self._enqueue(manager, tenant_id)
         assert await manager.dispatch_task_atomic(tenant_id, task.task_id, 0)
         assert not await manager.write_task_execution_lease(
-            task.task_id, tenant_id, "review-replica"
+            task.task_id, tenant_id, "worker-replica"
         )
         assert await manager.acquire_converter_unit(tenant_id, task.task_id, 2) == -1
         assert (await manager.get_tenant_limits(tenant_id)).converter_units == 0
 
         assert await manager.mark_task_started(task.task_id, tenant_id)
         assert await manager.write_task_execution_lease(
-            task.task_id, tenant_id, "review-replica"
+            task.task_id, tenant_id, "worker-replica"
         )
         assert await manager.acquire_converter_unit(tenant_id, task.task_id, 2) == 1
         assert (await manager.get_tenant_limits(tenant_id)).converter_units == 1
@@ -1010,12 +1009,12 @@ class TestRayQueuedCancellation:
         assert (await manager.get_tenant_limits(tenant_id)).converter_units == 0
         assert await manager.get_tenant_active_task_count(tenant_id) == 0
         assert not await manager.write_task_execution_lease(
-            task.task_id, tenant_id, "review-replica"
+            task.task_id, tenant_id, "worker-replica"
         )
         assert await manager.acquire_converter_unit(tenant_id, task.task_id, 2) == -1
 
     @pytest.mark.asyncio
-    async def test_review_failed_start_claim_cannot_convert_then_cancel(
+    async def test_failed_start_claim_cannot_convert_then_cancel(
         self, manager, token, tmp_path
     ):
         from docling_jobkit.orchestrators.ray.models import TaskCancellationOutcome
@@ -1029,7 +1028,7 @@ class TestRayQueuedCancellation:
         cls = DoclingProcessorCoordinatorDeployment.func_or_class
         coordinator = cls.__new__(cls)
         coordinator.redis_manager = manager
-        coordinator.replica_id = "review-replica"
+        coordinator.replica_id = "worker-replica"
         coordinator.scratch_dir = tmp_path
         coordinator.tasks_processed = 0
         coordinator.documents_processed = 0
@@ -1063,16 +1062,22 @@ class TestRayQueuedCancellation:
                 # Refusing dispatch is a valid fail-closed outcome; an exception
                 # after converter invocation is not.
                 coordinator.converter_handle.process_converter_request.remote.assert_not_awaited()
-        assert not cancellations or all(
-            c.outcome == TaskCancellationOutcome.CONFLICT for c in cancellations
-        )
+        converter_call = coordinator.converter_handle.process_converter_request.remote
+        if converter_call.await_count == 0:
+            converter_call.assert_not_awaited()
+            assert cancellations == []
+        else:
+            assert len(cancellations) == converter_call.await_count
+            assert all(
+                c.outcome == TaskCancellationOutcome.CONFLICT for c in cancellations
+            )
         assert await manager.get_tenant_active_task_count(tenant_id) == 0
         assert (await manager.get_tenant_limits(tenant_id)).converter_units == 0
         assert await manager.get_task_execution_lease(task.task_id) is None
         assert await manager.get_task_dispatch_hash(task.task_id) == {}
 
     @pytest.mark.asyncio
-    async def test_review_stale_pending_cannot_reopen_ray_claim(self, manager, token):
+    async def test_stale_pending_cannot_reopen_ray_claim(self, manager, token):
         from docling_jobkit.orchestrators.ray.models import TaskCancellationOutcome
 
         tenant_id = f"cancel72-{token}"
@@ -1083,7 +1088,7 @@ class TestRayQueuedCancellation:
         assert cancellation.outcome == TaskCancellationOutcome.CONFLICT
 
     @pytest.mark.asyncio
-    async def test_review_late_status_writer_preserves_cancelled(self, manager, token):
+    async def test_late_status_writer_preserves_cancelled(self, manager, token):
         (task,) = await self._enqueue(manager, f"cancel72-{token}")
         await manager.cancel_queued_task_atomic(task.task_id)
         await manager.update_task_status(task.task_id, TaskStatus.STARTED)

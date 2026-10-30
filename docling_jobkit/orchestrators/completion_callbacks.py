@@ -1,4 +1,4 @@
-"""Terminal task callbacks shared by Ray lifecycle owners."""
+"""Terminal task callbacks shared by Local, RQ and Ray lifecycle owners."""
 
 import logging
 from typing import Literal

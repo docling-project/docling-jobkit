@@ -670,8 +670,8 @@ If you manually set Ray TLS environment variables, they may conflict with auto-g
 - **success** / **failure**: terminal.
 - **cancelled**: terminal. A queued-only cancellation moved the task here in one
   Redis transaction that also released its queue entry, dispatch reservation and
-  execution lease. `finished_at` is set, no result is stored and no completion
-  callback fires.
+  execution lease. `finished_at` is set, no result is stored, and the winning
+  cancellation emits a best-effort completion callback.
 
 The durable Redis status cannot regress from **started** to **pending** or
 **cancelled**, and terminal statuses cannot change to another status. Same-status
