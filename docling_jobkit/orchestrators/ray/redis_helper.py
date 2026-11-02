@@ -29,6 +29,8 @@ from docling_jobkit.datamodel.task import Task, validate_task_json
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.ray.models import (
     RedisTaskMetadata,
+    TaskCancellationOutcome,
+    TaskCancellationResult,
     TaskTerminalizationResult,
     TaskUpdate,
     TenantLimits,
@@ -43,6 +45,32 @@ from docling_jobkit.orchestrators.serialization import (
 
 _log = logging.getLogger(__name__)
 
+# Durable statuses a task can never leave. Every status writer treats them as a
+# fence so a late started/success/failure update cannot resurrect a task that
+# was already terminalized - in particular a cancelled queued task.
+_TERMINAL_STATUSES = frozenset(
+    {
+        TaskStatus.SUCCESS,
+        TaskStatus.FAILURE,
+        TaskStatus.CANCELLED,
+    }
+)
+
+
+def _decode_queued_payload_callbacks(payload: str) -> list[CallbackSpec]:
+    """Read callback specs from a tenant queue payload.
+
+    A missing or unparseable payload yields none: notification is best-effort
+    and must never block cancellation.
+    """
+    try:
+        raw = json.loads(payload).get("callbacks") or []
+        return [CallbackSpec.model_validate(entry) for entry in raw]
+    except (AttributeError, TypeError, ValueError, ValidationError) as exc:
+        _log.warning("Could not decode queued task callbacks: %s", exc)
+        return []
+
+
 _UPDATE_TASK_EXECUTION_HEARTBEAT_LUA = """
 if redis.call('EXISTS', KEYS[1]) == 1 then
     redis.call('HSET', KEYS[1], 'heartbeat_at', ARGV[1])
@@ -51,14 +79,14 @@ end
 return 0
 """
 
-# Reserve one in-flight converter unit for a task, bounded by the tenant ceiling
-# ARGV[1] (max_concurrent_tasks). Units are tracked on both the tenant limits
-# hash (KEYS[1]) and the task execution hash (KEYS[2]) so that
-# terminalization/reconcile can release a parent's units crash-safely.
-# Returns 1 if granted, 0 if the tenant is at its ceiling, or -1 if the task no
-# longer has an execution lease (terminalized/reconciled).
+# Track units on both tenant and execution hashes for crash-safe release.
+# Require a durable STARTED claim and execution lease before granting a unit.
 _ACQUIRE_CONVERTER_UNIT_LUA = """
 if redis.call('EXISTS', KEYS[2]) == 0 then
+    return -1
+end
+local task_key = string.gsub(KEYS[2], ':execution$', '')
+if redis.call('HGET', task_key, 'status') ~= 'started' then
     return -1
 end
 local current = tonumber(redis.call('HGET', KEYS[1], 'converter_units') or '0')
@@ -87,21 +115,25 @@ redis.call('HINCRBY', KEYS[2], 'converter_units', -rel)
 return rel
 """
 
-# Atomically mark a task STARTED and bump the per-tenant started counter, but
-# only on a genuine transition INTO started (i.e. not when the task is already
-# started or already terminal). This guarantees tasks_started_total increments
-# exactly once per task even if process_task is retried, and never counts a task
-# that reconciliation already terminalized.
-# KEYS[1] = task:{id}, KEYS[2] = tenant:{id}:task_counters
-# ARGV[1] = "started", ARGV[2] = ISO timestamp
+# Atomically count the STARTED transition once and preserve terminal states.
 _MARK_TASK_STARTED_LUA = """
 local cur = redis.call('HGET', KEYS[1], 'status')
-if cur ~= 'started' and cur ~= 'success' and cur ~= 'failure' then
+if cur ~= 'started' and cur ~= 'success' and cur ~= 'failure' and cur ~= 'cancelled' then
     redis.call('HSET', KEYS[1], 'status', ARGV[1], 'last_update_at', ARGV[2], 'started_at', ARGV[2])
     redis.call('HINCRBY', KEYS[2], 'tasks_started_total', 1)
     return 1
 end
 return 0
+"""
+
+# Grant leases only for durable STARTED claims so failed claims cannot
+# authorize converter dispatch.
+_WRITE_TASK_EXECUTION_LEASE_LUA = """
+if redis.call('HGET', KEYS[1], 'status') ~= 'started' then
+    return 0
+end
+redis.call('HSET', KEYS[2], 'replica_id', ARGV[1], 'tenant_id', ARGV[2], 'claimed_at', ARGV[3], 'heartbeat_at', ARGV[4])
+return 1
 """
 
 
@@ -523,6 +555,10 @@ class RedisStateManager:
     ) -> None:
         """Update task status and metadata.
 
+        Reject STARTED regressions and changes to terminal states. Allow
+        same-status refreshes and forward transitions while preserving
+        committed start and finish timestamps.
+
         Args:
             task_id: Task identifier
             status: New task status
@@ -550,11 +586,60 @@ class RedisStateManager:
 
         if status == TaskStatus.STARTED:
             updates["started_at"] = timestamp
-        if status in (TaskStatus.SUCCESS, TaskStatus.FAILURE):
+        if status in _TERMINAL_STATUSES:
             updates["finished_at"] = timestamp
 
         redis = self._ensure_redis()
-        await redis.hset(task_key, mapping=updates)  # type: ignore[misc]
+        async with redis.pipeline(transaction=True) as pipe:
+            while True:
+                try:
+                    await pipe.watch(task_key)
+                    status_raw = await redis.hget(task_key, "status")  # type: ignore[misc]
+                    current = (
+                        TaskStatus(status_raw.decode("utf-8")) if status_raw else None
+                    )
+                    if (
+                        current in _TERMINAL_STATUSES
+                        and current is not None
+                        and current != status
+                    ):
+                        await pipe.unwatch()
+                        _log.debug(
+                            f"Preserved terminal status for {task_id}: "
+                            f"not overwriting {current.value} with {status.value}"
+                        )
+                        return
+                    if current == TaskStatus.STARTED and status in (
+                        TaskStatus.PENDING,
+                        TaskStatus.CANCELLED,
+                    ):
+                        await pipe.unwatch()
+                        _log.debug(
+                            f"Preserved STARTED claim for {task_id}: "
+                            f"not reopening with {status.value}"
+                        )
+                        return
+                    # Preserve claim identity on idempotent refresh: a second
+                    # STARTED write must not bump started_at, and a repeated
+                    # terminal write must not bump finished_at. Forward
+                    # progress (last_update_at/progress/error fields) still
+                    # advances on allowed writes.
+                    if current == TaskStatus.STARTED and status == TaskStatus.STARTED:
+                        updates.pop("started_at", None)
+                    if (
+                        current is not None
+                        and current in _TERMINAL_STATUSES
+                        and current == status
+                    ):
+                        updates.pop("finished_at", None)
+                    pipe.multi()
+                    pipe.hset(task_key, mapping=updates)  # type: ignore[misc]
+                    await pipe.execute()
+                    break
+                except WatchError:
+                    # A claim, cancellation, or finalizer committed first;
+                    # re-read and re-decide so the winner is preserved.
+                    continue
 
         _log.debug(f"Updated task {task_id} status to {status}")
 
@@ -565,7 +650,7 @@ class RedisStateManager:
         Uses a Lua script so the status write and the counter increment are atomic
         and the increment only happens on a genuine transition into STARTED
         (idempotent under Ray retries, and a no-op if the task was already
-        terminalized by reconciliation).
+        terminalized by reconciliation or cancelled while still queued).
 
         Returns:
             True if the task transitioned into STARTED (counter bumped), False if
@@ -620,6 +705,11 @@ class RedisStateManager:
     ) -> None:
         """Initialize task metadata.
 
+        Init is idempotent and never reopens a won claim: when the task hash
+        already carries a status (PENDING/STARTED/terminal from a prior init,
+        claim, or cancellation), the existing durable state is left untouched
+        so a retried init cannot regress STARTED back to PENDING.
+
         Args:
             task_id: Task identifier
             tenant_id: Tenant identifier
@@ -647,7 +737,24 @@ class RedisStateManager:
             metadata["target_document_version"] = target_document_version
 
         redis = self._ensure_redis()
-        await redis.hset(task_key, mapping=metadata)  # type: ignore[misc]
+        async with redis.pipeline(transaction=True) as pipe:
+            while True:
+                try:
+                    await pipe.watch(task_key)
+                    existing = await redis.hget(task_key, "status")  # type: ignore[misc]
+                    if existing is not None:
+                        await pipe.unwatch()
+                        _log.debug(
+                            f"Preserved existing status for {task_id} on init "
+                            f"(not overwriting with {status.value})"
+                        )
+                        return
+                    pipe.multi()
+                    pipe.hset(task_key, mapping=metadata)  # type: ignore[misc]
+                    await pipe.execute()
+                    break
+                except WatchError:
+                    continue
 
     async def get_task_metadata_model(
         self, task_id: str
@@ -1021,6 +1128,11 @@ class RedisStateManager:
         """Atomically dispatch a task: pop from queue, add to active set, update limits.
 
         Uses Redis transaction (MULTI/EXEC) for atomicity to prevent race conditions.
+        The task's durable status is watched as well, so a queued-only
+        cancellation that commits first aborts the dispatch instead of handing a
+        cancelled task to a replica. A cancelled entry that is already at the
+        front is dropped here (returning False) so it cannot block the tasks
+        queued behind it.
 
         Args:
             tenant_id: Tenant identifier
@@ -1035,6 +1147,7 @@ class RedisStateManager:
         limits_key = f"tenant:{tenant_id}:limits"
         task_counters_key = f"tenant:{tenant_id}:task_counters"
         dispatch_key = f"task:{task_id}:dispatch"
+        task_key = f"task:{task_id}"
 
         redis = self._ensure_redis()
 
@@ -1042,7 +1155,7 @@ class RedisStateManager:
         async with redis.pipeline(transaction=True) as pipe:
             try:
                 # Watch keys for changes
-                await pipe.watch(queue_key, active_key, limits_key)
+                await pipe.watch(queue_key, active_key, limits_key, task_key)
 
                 # Check if task is still at front of queue
                 front_task_json = await redis.lindex(queue_key, 0)  # type: ignore[misc]
@@ -1059,6 +1172,23 @@ class RedisStateManager:
                     await pipe.unwatch()
                     _log.debug(
                         f"[REDIS-ATOMIC] Race condition: task {task_id} not at front"
+                    )
+                    return False
+
+                status_raw = await redis.hget(task_key, "status")  # type: ignore[misc]
+                front_status = (
+                    TaskStatus(status_raw.decode("utf-8")) if status_raw else None
+                )
+                if front_status == TaskStatus.CANCELLED:
+                    # Cancelled while queued: drop the stale payload so the queue
+                    # keeps moving, and leave the durable terminal state alone.
+                    pipe.multi()
+                    pipe.lpop(queue_key)
+                    pipe.hincrby(limits_key, "queued_tasks", -1)
+                    await pipe.execute()
+                    _log.info(
+                        f"[REDIS-ATOMIC] Dropped cancelled task {task_id} "
+                        f"from tenant {tenant_id} queue"
                     )
                     return False
 
@@ -1217,15 +1347,11 @@ class RedisStateManager:
                     if (
                         result_key is not None
                         and result_data is not None
-                        and current_status
-                        not in (TaskStatus.SUCCESS, TaskStatus.FAILURE)
+                        and current_status not in _TERMINAL_STATUSES
                     ):
                         pipe.setex(result_key, self.results_ttl, result_data)
 
-                    if current_status not in (
-                        TaskStatus.SUCCESS,
-                        TaskStatus.FAILURE,
-                    ):
+                    if current_status not in _TERMINAL_STATUSES:
                         timestamp = datetime.datetime.now(
                             datetime.timezone.utc
                         ).isoformat()
@@ -1275,10 +1401,7 @@ class RedisStateManager:
 
                     await pipe.execute()
 
-                    status_changed = current_status not in (
-                        TaskStatus.SUCCESS,
-                        TaskStatus.FAILURE,
-                    )
+                    status_changed = current_status not in _TERMINAL_STATUSES
                     final_status = (
                         terminal_status
                         if status_changed or current_status is None
@@ -1297,6 +1420,167 @@ class RedisStateManager:
                     )
                 except WatchError:
                     continue
+
+    async def cancel_queued_task_atomic(self, task_id: str) -> TaskCancellationResult:
+        """Atomically terminalize a queued task as CANCELLED.
+
+        This is the queued-only cancellation primitive and it competes with the
+        worker's PENDING -> STARTED claim (mark_task_started) on the very same
+        durable status field, so exactly one of them wins:
+
+        * cancellation wins: the task becomes CANCELLED, its queue entry and any
+          dispatcher reservation are released in the same transaction, and the
+          execution lease is deleted so a replica can no longer acquire a
+          converter unit for it;
+        * the claim wins: the status is no longer PENDING and the caller gets a
+          conflict, leaving the task untouched.
+
+        Args:
+            task_id: Task identifier
+
+        Returns:
+            A TaskCancellationResult describing the outcome.
+        """
+        if not self.redis:
+            await self.connect()
+
+        redis = self._ensure_redis()
+        task_key = f"task:{task_id}"
+
+        tenant_raw = await redis.hget(task_key, "tenant_id")  # type: ignore[misc]
+        if tenant_raw is None:
+            return TaskCancellationResult(outcome=TaskCancellationOutcome.NOT_FOUND)
+        tenant_id = tenant_raw.decode("utf-8")
+
+        queue_key = f"tenant:{tenant_id}:tasks"
+        active_key = f"tenant:{tenant_id}:active_tasks"
+        limits_key = f"tenant:{tenant_id}:limits"
+        task_counters_key = f"tenant:{tenant_id}:task_counters"
+        dispatch_key = f"task:{task_id}:dispatch"
+        execution_key = f"task:{task_id}:execution"
+
+        async with redis.pipeline(transaction=True) as pipe:
+            while True:
+                try:
+                    await pipe.watch(task_key, queue_key, active_key, limits_key)
+
+                    status_raw = await redis.hget(task_key, "status")  # type: ignore[misc]
+                    if status_raw is None:
+                        await pipe.unwatch()
+                        return TaskCancellationResult(
+                            outcome=TaskCancellationOutcome.NOT_FOUND
+                        )
+                    current_status = TaskStatus(status_raw.decode("utf-8"))
+
+                    if current_status == TaskStatus.CANCELLED:
+                        await pipe.unwatch()
+                        return TaskCancellationResult(
+                            outcome=TaskCancellationOutcome.ALREADY_CANCELLED,
+                            status=current_status,
+                        )
+                    if current_status != TaskStatus.PENDING:
+                        await pipe.unwatch()
+                        return TaskCancellationResult(
+                            outcome=TaskCancellationOutcome.CONFLICT,
+                            status=current_status,
+                        )
+
+                    payload = await self._find_queued_task_payload(tenant_id, task_id)
+                    callbacks = await self._capture_queued_cancellation_callbacks(
+                        task_id=task_id, queued_payload=payload
+                    )
+                    was_active = bool(
+                        await redis.sismember(active_key, task_id)  # type: ignore[misc]
+                    )
+                    task_size_raw = await redis.hget(task_key, "task_size")  # type: ignore[misc]
+                    task_size = (
+                        int(task_size_raw.decode("utf-8")) if task_size_raw else 0
+                    )
+                    held_units_raw = await redis.hget(  # type: ignore[misc]
+                        execution_key, "converter_units"
+                    )
+                    held_units = (
+                        int(held_units_raw.decode("utf-8")) if held_units_raw else 0
+                    )
+
+                    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+                    pipe.multi()
+                    pipe.hset(
+                        task_key,
+                        mapping={
+                            "status": TaskStatus.CANCELLED.value,
+                            "finished_at": timestamp,
+                            "last_update_at": timestamp,
+                        },
+                    )
+                    if payload is not None:
+                        pipe.lrem(queue_key, 1, payload)
+                        pipe.hincrby(limits_key, "queued_tasks", -1)
+                    if was_active:
+                        pipe.srem(active_key, task_id)
+                        pipe.hincrby(limits_key, "active_tasks", -1)
+                        if self.max_documents is not None:
+                            pipe.hincrby(
+                                limits_key, "active_documents", -max(task_size, 1)
+                            )
+                    if held_units > 0:
+                        pipe.hincrby(limits_key, "converter_units", -held_units)
+                    pipe.delete(dispatch_key, execution_key)
+                    pipe.hincrby(task_counters_key, "tasks_cancelled_total", 1)
+                    await pipe.execute()
+
+                    _log.info(
+                        "Cancelled queued task %s for tenant %s "
+                        "(queue_entry_removed=%s, reservation_released=%s)",
+                        task_id,
+                        tenant_id,
+                        payload is not None,
+                        was_active,
+                    )
+                    return TaskCancellationResult(
+                        outcome=TaskCancellationOutcome.CANCELLED,
+                        status=TaskStatus.CANCELLED,
+                        queue_entry_removed=payload is not None,
+                        reservation_released=was_active,
+                        callbacks=tuple(callbacks),
+                    )
+                except WatchError:
+                    # A dispatch, a claim, or another cancellation committed in
+                    # between; re-read the durable state and decide again.
+                    continue
+
+    async def _capture_queued_cancellation_callbacks(
+        self, *, task_id: str, queued_payload: Optional[str]
+    ) -> list[CallbackSpec]:
+        """Capture the task's specs from the queue payload or the dispatch hash.
+
+        Both sources are read under the caller's pending-only WATCH, so the
+        capture belongs to the task this cancellation removes.
+        """
+        if queued_payload is not None:
+            return _decode_queued_payload_callbacks(queued_payload)
+        dispatch_hash = await self.get_task_dispatch_hash(task_id)
+        return self.decode_dispatch_callbacks(dispatch_hash)
+
+    async def _find_queued_task_payload(
+        self, tenant_id: str, task_id: str
+    ) -> Optional[str]:
+        """Return the exact queued payload of a task, or None if it is not queued.
+
+        The payload is immutable, so the value found here stays valid for the
+        LREM that the cancellation transaction issues under the same WATCH.
+        """
+        queue_key = f"tenant:{tenant_id}:tasks"
+        redis = self._ensure_redis()
+        for raw_entry in await redis.lrange(queue_key, 0, -1):  # type: ignore[misc]
+            try:
+                entry = raw_entry.decode("utf-8")
+                if json.loads(entry).get("task_id") == task_id:
+                    return entry
+            except (UnicodeDecodeError, ValueError, AttributeError):
+                continue
+        return None
 
     async def get_tenant_active_task_count(self, tenant_id: str) -> int:
         """Get number of active tasks for tenant from Redis set.
@@ -1479,26 +1763,40 @@ class RedisStateManager:
 
     async def write_task_execution_lease(
         self, task_id: str, tenant_id: str, replica_id: str
-    ) -> None:
+    ) -> bool:
         """Write the replica-owned execution lease for a task.
 
         Called by the replica when it begins executing a task. The lease proves
         a live replica owns this work. It is refreshed by
         update_task_execution_heartbeat() and deleted by finalize_task_*_atomic().
         No TTL — the key is cleaned up explicitly at terminalization.
+
+        Returns False without writing unless the durable task status is already
+        STARTED (authoritative committed claim). The lease is what authorizes
+        converter units, so a PENDING task (including a transient
+        mark_task_started failure with no durable claim) or a cancelled/terminal
+        task must never get one; its conversion is therefore skipped by the
+        replica via the missing-lease (-1) converter-unit path.
         """
+        if not self.redis:
+            await self.connect()
+
+        task_key = f"task:{task_id}"
         execution_key = f"task:{task_id}:execution"
         redis = self._ensure_redis()
         now_timestamp = str(datetime.datetime.now(datetime.timezone.utc).timestamp())
-        await redis.hset(  # type: ignore[misc]
-            execution_key,
-            mapping={
-                "replica_id": replica_id,
-                "tenant_id": tenant_id,
-                "claimed_at": now_timestamp,
-                "heartbeat_at": now_timestamp,
-            },
+
+        granted = await redis.register_script(_WRITE_TASK_EXECUTION_LEASE_LUA)(
+            keys=[task_key, execution_key],
+            args=[replica_id, tenant_id, now_timestamp, now_timestamp],
         )
+        if not granted:
+            _log.info(
+                "Not writing execution lease for unclaimed task %s "
+                "(durable status is not STARTED)",
+                task_id,
+            )
+        return bool(granted)
 
     async def update_task_execution_heartbeat(self, task_id: str) -> bool:
         """Refresh the execution lease heartbeat timestamp.
@@ -1529,7 +1827,10 @@ class RedisStateManager:
         tracked on the task's execution lease so terminalization/reconcile can
         release them crash-safely. Returns 1 if granted, 0 if the tenant is at
         its ceiling, or -1 if the task no longer has an execution lease
-        (terminalized/reconciled) — the caller should stop launching children.
+        (terminalized/reconciled) or its durable status is not STARTED
+        (unclaimed PENDING/CANCELLED/terminal, including a transient claim
+        failure with no committed arbitration) — the caller should stop
+        launching children. No permit is granted (or leaked) on the -1 path.
         """
         if not self.redis:
             await self.connect()

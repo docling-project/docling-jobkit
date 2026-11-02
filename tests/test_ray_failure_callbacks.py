@@ -517,6 +517,10 @@ class _CapturingRedis:
     async def lindex(self, key: str, index: int) -> str:
         return self.queued_task_json
 
+    async def hget(self, key: str, field: str) -> bytes | None:
+        assert field == "status"
+        return b"pending"
+
     def pipeline(self, transaction: bool = True) -> _CapturingPipeline:
         assert transaction is True
         return _CapturingPipeline(self.captured)

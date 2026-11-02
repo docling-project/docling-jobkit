@@ -488,6 +488,23 @@ class RayTaskDispatcher:
                 delta_failed_documents=exc.task_size,
             )
 
+    async def _was_cancelled_while_queued(self, task_id: str) -> bool:
+        """Check Redis, the authority for cancellation across dispatchers.
+
+        On read failure, launch rather than discard valid work; the replica lease
+        guard still prevents conversion of a cancelled task.
+        """
+        try:
+            metadata = await self.redis_manager.get_task_metadata_model(task_id)
+        except Exception as exc:
+            _log.warning(
+                "[TASK-SKIP] %s: cancellation check failed, launching anyway: %s",
+                task_id,
+                exc,
+            )
+            return False
+        return metadata is not None and metadata.status == TaskStatus.CANCELLED
+
     async def _process_task_async(self, task: Task, tenant_id: str) -> None:
         """Process a dispatched task while keeping status durable in Redis.
 
@@ -499,6 +516,16 @@ class RayTaskDispatcher:
         task_size = len(task.sources)
 
         try:
+            if await self._was_cancelled_while_queued(task_id):
+                _log.info(
+                    "[TASK-SKIP] %s: cancelled while queued; replica never invoked",
+                    task_id,
+                )
+                # The cancellation released the reservation; wake the loop so the
+                # capacity it freed goes to the tasks still waiting.
+                self._wake_event.set()
+                return
+
             _log.info("[TASK-START] %s: processing %s documents", task_id, task_size)
 
             response = self.deployment_handle.process_task.remote(task)

@@ -2,11 +2,12 @@
 
 import datetime
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from docling.datamodel.service.callbacks import ProcessedDocsItem
+from docling.datamodel.service.callbacks import CallbackSpec, ProcessedDocsItem
 from docling.datamodel.service.options import ConvertDocumentsOptions
 from docling.datamodel.service.responses import PublicFailureInfo
 from docling.datamodel.service.tasks import TaskProcessingMeta, TaskType
@@ -90,6 +91,9 @@ class TenantTaskCounters(BaseModel):
     tasks_started_total: int = Field(default=0, description="Tasks started")
     tasks_succeeded_total: int = Field(default=0, description="Tasks succeeded")
     tasks_failed_total: int = Field(default=0, description="Tasks failed")
+    tasks_cancelled_total: int = Field(
+        default=0, description="Tasks cancelled while still queued"
+    )
 
 
 class TenantSnapshot(BaseModel):
@@ -254,6 +258,31 @@ class TaskTerminalizationResult:
     status_changed: bool
     capacity_released: bool
     result_key: Optional[str] = None
+
+
+class TaskCancellationOutcome(str, Enum):
+    """Outcome of one queued-only cancellation attempt."""
+
+    CANCELLED = "cancelled"
+    ALREADY_CANCELLED = "already_cancelled"
+    CONFLICT = "conflict"
+    NOT_FOUND = "not_found"
+
+
+@dataclass(frozen=True)
+class TaskCancellationResult:
+    """Details of one queued-only cancellation attempt.
+
+    ``status`` is the observed durable status of a conflict or repeat.
+    ``callbacks`` carries the winner's specs, captured before the transition
+    removes their queue payload / dispatch hash.
+    """
+
+    outcome: TaskCancellationOutcome
+    status: Optional[TaskStatus] = None
+    queue_entry_removed: bool = False
+    reservation_released: bool = False
+    callbacks: tuple[CallbackSpec, ...] = ()
 
 
 class SliceSpec(BaseModel):

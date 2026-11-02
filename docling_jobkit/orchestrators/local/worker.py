@@ -50,15 +50,30 @@ class AsyncLocalWorker:
             self.orchestrator.worker_cms.append(cm)
         while True:
             task_id: str = await self.orchestrator.task_queue.get()
-            self.orchestrator.queue_list.remove(task_id)
+            # A cancelled task may still carry its (now meaningless) queue entry;
+            # removing it again is a no-op in that case.
+            if task_id in self.orchestrator.queue_list:
+                self.orchestrator.queue_list.remove(task_id)
 
             if task_id not in self.orchestrator.tasks:
+                self.orchestrator.task_queue.task_done()
                 raise RuntimeError(f"Task {task_id} not found.")
             task = self.orchestrator.tasks[task_id]
+
+            # Claim the task before any conversion work. A cancellation that won
+            # the race already terminalized the task, so the conversion is
+            # skipped entirely and the cancelled state is left untouched.
+            if not self.orchestrator.claim_task_started(task_id):
+                _log.info(
+                    f"Worker {self.worker_id} skipping task {task_id}: "
+                    f"status is {task.task_status.value}"
+                )
+                self.orchestrator.task_queue.task_done()
+                continue
+
             workdir = self.scratch_dir / task_id
 
             try:
-                task.set_status(TaskStatus.STARTED)
                 _log.info(f"Worker {self.worker_id} processing task {task_id}")
 
                 if self.orchestrator.notifier:
