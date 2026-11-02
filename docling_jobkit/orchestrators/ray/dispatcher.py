@@ -489,18 +489,10 @@ class RayTaskDispatcher:
             )
 
     async def _was_cancelled_while_queued(self, task_id: str) -> bool:
-        """Check the durable status after the dispatch reservation was taken.
+        """Check Redis, the authority for cancellation across dispatchers.
 
-        Redis arbitrates cancellation across every dispatcher, so this read is
-        authoritative even when another replica served the cancel request. A
-        cancellation that won already released the active-set reservation, the
-        dispatch hash and the execution lease in its own transaction, so a skip
-        here only has to leave that cleanup alone and keep the queue moving.
-
-        A failed read is treated as "not cancelled" and logged: launching stays
-        safe because the replica-side lease guard still refuses to convert a
-        cancelled task, while failing the task on a transient Redis error would
-        discard work that is still valid.
+        On read failure, launch rather than discard valid work; the replica lease
+        guard still prevents conversion of a cancelled task.
         """
         try:
             metadata = await self.redis_manager.get_task_metadata_model(task_id)

@@ -111,9 +111,7 @@ class LocalOrchestrator(BaseOrchestrator):
         return task
 
     async def queue_size(self) -> int:
-        # queue_list, not the raw asyncio queue: a cancelled task keeps its
-        # (undrainable) queue entry until a worker picks it up, and it must not
-        # keep occupying queue capacity in the meantime.
+        # Cancelled IDs remain in task_queue until a worker picks them up.
         return len(self.queue_list)
 
     def claim_task_started(self, task_id: str) -> bool:

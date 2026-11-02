@@ -223,12 +223,7 @@ def _local_orchestrator(num_workers: int = 1):
 
 
 class _FakeConversion:
-    """Patch target recording which tasks actually reached conversion.
-
-    ``entered``/``release`` let a test pin one conversion open while it cancels
-    a later task, which is the interleaving that matters: a worker that is busy
-    converting must not be able to claim the cancelled task.
-    """
+    """Record conversions and optionally pause them between events."""
 
     def __init__(
         self,
@@ -441,9 +436,7 @@ class TestRqQueuedCancellation:
         enqueue = orch._rq_queue.enqueue
         converter = MagicMock()
         converter.config.max_file_size = None
-        converter.convert_documents.side_effect = RuntimeError(
-            "review conversion entered"
-        )
+        converter.convert_documents.side_effect = RuntimeError("conversion entered")
         job = MagicMock(connection=sync_conn)
 
         def dequeue_before_metadata(*args, **kwargs):
@@ -453,7 +446,7 @@ class TestRqQueuedCancellation:
                 "docling_jobkit.orchestrators.rq.worker.get_current_job",
                 return_value=job,
             ):
-                with pytest.raises(RuntimeError, match="review conversion entered"):
+                with pytest.raises(RuntimeError, match="conversion entered"):
                     _run_docling_task(worker_task, converter, orch.config, tmp_path)
             return queued
 

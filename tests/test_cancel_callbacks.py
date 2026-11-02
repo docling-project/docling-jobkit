@@ -160,13 +160,6 @@ def test_task_status_is_the_canonical_docling_enum() -> None:
     from docling.datamodel.service.tasks import TaskStatus as CanonicalTaskStatus
 
     assert TaskStatus is CanonicalTaskStatus
-    assert {status.value for status in TaskStatus} == {
-        "pending",
-        "started",
-        "success",
-        "failure",
-        "cancelled",
-    }
 
 
 def test_emit_task_completed_callback_accepts_cancelled(

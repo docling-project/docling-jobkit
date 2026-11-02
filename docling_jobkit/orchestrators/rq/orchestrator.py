@@ -109,11 +109,9 @@ def apply_durable_status_transition(
     new_status: TaskStatus,
     timestamp: str,
 ) -> Optional[dict[str, Any]]:
-    """Build the next durable metadata payload, or None if the move is illegal.
+    """Build metadata for an allowed status transition, or return None.
 
-    Single decision point shared by the API-side cancellation and the
-    worker-side STARTED claim, so both agree on when a transition is allowed.
-    The caller is responsible for making the read and the write atomic.
+    The caller must make the read and write atomic.
     """
     current = TaskStatus(data.get("task_status", TaskStatus.PENDING.value))
     if current != expected:
