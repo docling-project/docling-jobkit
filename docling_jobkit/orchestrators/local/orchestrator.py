@@ -45,6 +45,7 @@ class LocalOrchestratorConfig(BaseModel):
     result_removal_delay: int = 300  # seconds until result is deleted after fetch
     presigned_config: PresignedConfig | None = None
     allowed_target_kinds: Optional[set[str]] = None
+    enable_task_listing: bool = False
 
 
 class LocalOrchestrator(BaseOrchestrator):
@@ -129,6 +130,11 @@ class LocalOrchestrator(BaseOrchestrator):
         page reflects this process's snapshot: a peer process that enqueued the
         same tenant's work is not visible here.
         """
+        if not self.config.enable_task_listing:
+            raise NotImplementedError(
+                "Active task listing is disabled for the Local backend; "
+                "enable it with LocalOrchestratorConfig(enable_task_listing=True)"
+            )
         validate_page_window(limit, offset)
         requested_tenant = resolve_tenant_id(tenant_id)
 

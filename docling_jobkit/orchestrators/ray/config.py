@@ -488,6 +488,13 @@ class RayOrchestratorConfig(BaseSettings):
         default=None,
         description="Optional server-managed presigned URL target configuration.",
     )
+    enable_task_listing: bool = Field(
+        default=False,
+        description=(
+            "Expose the tenant-scoped active-task listing. Disabled by default: "
+            "a direct list_tasks call raises NotImplementedError."
+        ),
+    )
 
     def _validate_worker_request_concurrency(self) -> None:
         if (

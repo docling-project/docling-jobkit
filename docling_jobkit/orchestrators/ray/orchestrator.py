@@ -151,6 +151,7 @@ class RayOrchestrator(BaseOrchestrator):
             dispatcher_interval=config.dispatcher_interval,
             log_level=config.log_level,
             allow_external_plugins=self.cm.config.allow_external_plugins,
+            enable_task_listing=config.enable_task_listing,
         )
 
         # Pub/sub listener task
@@ -765,6 +766,7 @@ class RayOrchestrator(BaseOrchestrator):
                 task_size=len(sources),
                 status=TaskStatus.PENDING,
                 target_document_version=task.target_document_version,
+                created_at=task.created_at,
             )
             await self.redis_manager.enqueue_task(tenant_id, task)
             await self.init_task_tracking(task)
@@ -799,44 +801,74 @@ class RayOrchestrator(BaseOrchestrator):
     ) -> ActiveTaskPage:
         """List a page of the tenant's in-flight tasks from shared Redis state.
 
-        Candidates come only from the requested tenant's queue and active set —
-        never an all-tenant scan — and every listed field is resolved from the
-        authoritative per-task metadata hash. A Redis failure propagates instead
-        of surfacing as a falsely empty page.
+        With the listing enabled the page comes from the tenant's index: one
+        ordered window read plus a page-sized batch of the compact fields of
+        the existing task hashes. A cold index is built once from the tenant's
+        queue and active set; until the build succeeded the original scan path
+        answers the request, so a task that predates the index is never omitted
+        and a failed build never advertises a partial index.
         """
+        if not self.config.enable_task_listing:
+            raise NotImplementedError(
+                "Active task listing is disabled for the Ray backend; "
+                "enable it with RayOrchestratorConfig(enable_task_listing=True)"
+            )
         validate_page_window(limit, offset)
         requested_tenant = resolve_tenant_id(tenant_id)
 
         async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
             await self.redis_manager.connect()
-            candidate_ids = await self.redis_manager.get_tenant_queued_task_ids(
-                requested_tenant
-            )
-            seen_ids = set(candidate_ids)
-            for task_id in await self.redis_manager.get_tenant_active_task_ids(
-                requested_tenant
-            ):
-                if task_id not in seen_ids:
-                    seen_ids.add(task_id)
-                    candidate_ids.append(task_id)
+            if await self.redis_manager.is_task_index_ready(requested_tenant):
+                return await self._list_tasks_from_index(
+                    requested_tenant, limit, offset
+                )
+            if await self.redis_manager.build_task_index(requested_tenant):
+                return await self._list_tasks_from_index(
+                    requested_tenant, limit, offset
+                )
+            return await self._list_tasks_by_scan(requested_tenant, limit, offset)
 
-            items: list[ActiveTaskItem] = []
-            for chunk in iter_chunks(candidate_ids, LISTING_CHUNK_SIZE):
-                for metadata in await self.redis_manager.get_task_metadata_models(
-                    chunk
-                ):
-                    if resolve_tenant_id(metadata.tenant_id) != requested_tenant:
-                        continue
-                    if metadata.status not in ACTIVE_TASK_STATUSES:
-                        continue
-                    items.append(
-                        ActiveTaskItem(
-                            task_id=metadata.task_id,
-                            task_type=metadata.task_type,
-                            task_status=metadata.status,
-                            created_at=metadata.created_at,
-                        )
+    async def _list_tasks_from_index(
+        self, tenant_id: str, limit: int, offset: int
+    ) -> ActiveTaskPage:
+        """Serve one page from the tenant's index."""
+        window = await self.redis_manager.read_task_listing_page(
+            tenant_id, limit=limit, offset=offset
+        )
+        return ActiveTaskPage(items=window[:limit], has_more=len(window) > limit)
+
+    async def _list_tasks_by_scan(
+        self, tenant_id: str, limit: int, offset: int
+    ) -> ActiveTaskPage:
+        """List a page from the tenant's queue and active set.
+
+        This is the original, correct enumeration: it validates every queued
+        payload and resolves every candidate from the authoritative task
+        metadata. It is the fallback for a cold or failed index, never the
+        steady state.
+        """
+        candidate_ids = await self.redis_manager.get_tenant_queued_task_ids(tenant_id)
+        seen_ids = set(candidate_ids)
+        for task_id in await self.redis_manager.get_tenant_active_task_ids(tenant_id):
+            if task_id not in seen_ids:
+                seen_ids.add(task_id)
+                candidate_ids.append(task_id)
+
+        items: list[ActiveTaskItem] = []
+        for chunk in iter_chunks(candidate_ids, LISTING_CHUNK_SIZE):
+            for metadata in await self.redis_manager.get_task_metadata_models(chunk):
+                if resolve_tenant_id(metadata.tenant_id) != tenant_id:
+                    continue
+                if metadata.status not in ACTIVE_TASK_STATUSES:
+                    continue
+                items.append(
+                    ActiveTaskItem(
+                        task_id=metadata.task_id,
+                        task_type=metadata.task_type,
+                        task_status=metadata.status,
+                        created_at=metadata.created_at,
                     )
+                )
 
         return build_active_task_page(items, limit=limit, offset=offset)
 
@@ -1118,4 +1150,21 @@ class RayOrchestrator(BaseOrchestrator):
         await self.redis_manager.expire_result(
             result_key, self.config.result_removal_delay
         )
+        metadata = await self.redis_manager.get_task_metadata_model(task_id)
+        if metadata is not None:
+            if self.redis_manager.enable_task_listing:
+                await self.redis_manager.remove_task_index_entry(
+                    task_id, metadata.tenant_id
+                )
+            else:
+                # A disabled fetch cannot surgically update the index, so any
+                # previously trusted tenant index must be rebuilt later.
+                await self.redis_manager.invalidate_task_index(metadata.tenant_id)
+        await super().delete_task(task_id)
+
+    async def delete_task(self, task_id: str):
+        if not self.redis_manager.enable_task_listing:
+            metadata = await self.redis_manager.get_task_metadata_model(task_id)
+            if metadata is not None:
+                await self.redis_manager.invalidate_task_index(metadata.tenant_id)
         await super().delete_task(task_id)
