@@ -25,6 +25,54 @@ def test_ray_config_round_trips_azure_presigned_config():
     _assert_config_round_trip(RayOrchestratorConfig)
 
 
+@pytest.mark.parametrize(
+    "config_type",
+    [LocalOrchestratorConfig, RQOrchestratorConfig],
+)
+def test_orchestrator_config_keeps_task_listing_off_by_default(config_type):
+    config = config_type()
+
+    assert config.enable_task_listing is False
+
+    restored = config_type.model_validate(config.model_dump(mode="json"))
+    assert restored.enable_task_listing is False
+
+
+@pytest.mark.parametrize(
+    "config_type",
+    [LocalOrchestratorConfig, RQOrchestratorConfig],
+)
+def test_orchestrator_config_round_trips_the_task_listing_flag(config_type):
+    config = config_type(enable_task_listing=True)
+
+    restored = config_type.model_validate(config.model_dump(mode="json"))
+
+    assert restored.enable_task_listing is True
+
+
+def test_ray_config_keeps_task_listing_off_by_default():
+    pytest.importorskip("ray")
+    from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
+
+    config = RayOrchestratorConfig()
+
+    assert config.enable_task_listing is False
+
+    restored = RayOrchestratorConfig.model_validate(config.model_dump(mode="json"))
+    assert restored.enable_task_listing is False
+
+
+def test_ray_config_round_trips_the_task_listing_flag():
+    pytest.importorskip("ray")
+    from docling_jobkit.orchestrators.ray.config import RayOrchestratorConfig
+
+    config = RayOrchestratorConfig(enable_task_listing=True)
+
+    restored = RayOrchestratorConfig.model_validate(config.model_dump(mode="json"))
+
+    assert restored.enable_task_listing is True
+
+
 def _assert_config_round_trip(config_type):
     presigned_config = AzurePresignedConfig(
         azure_coords=AzureBlobCoordinates(
