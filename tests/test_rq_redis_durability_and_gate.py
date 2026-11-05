@@ -1,7 +1,9 @@
 import asyncio
 import datetime
 import json
+import logging
 import time
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -51,6 +53,62 @@ def _make_task(
     return task
 
 
+class _FakePipeline:
+    """Stand-in for the async Redis pipeline used by the metadata guard."""
+
+    def __init__(self, redis_client: "_FakeAsyncRedis") -> None:
+        self._redis = redis_client
+        self.watched: list[str] = []
+        self.commands: list[tuple[str, str]] = []
+        self.multi_called = False
+
+    async def __aenter__(self) -> "_FakePipeline":
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        return None
+
+    async def watch(self, key: str) -> None:
+        self.watched.append(key)
+
+    async def get(self, key: str) -> bytes | None:
+        value = self._redis.stored.get(key)
+        return None if value is None else value.encode()
+
+    def multi(self) -> None:
+        self.multi_called = True
+
+    def set(self, key: str, value: str) -> None:
+        self.commands.append((key, value))
+
+    async def execute(self) -> list[bool]:
+        for key, value in self.commands:
+            self._redis.stored[key] = value
+        self._redis.pipeline_executions += 1
+        return [True] * len(self.commands)
+
+
+class _FakeAsyncRedis:
+    """In-memory stand-in for the async Redis client."""
+
+    def __init__(self) -> None:
+        self.stored: dict[str, str] = {}
+        self.set_calls: list[dict[str, Any]] = []
+        self.pipeline_executions = 0
+
+    async def set(self, key: str, value: str, ex: int | None = None) -> bool:
+        self.set_calls.append({"key": key, "value": value, "ex": ex})
+        self.stored[key] = value
+        return True
+
+    async def get(self, key: str) -> bytes | None:
+        value = self.stored.get(key)
+        return None if value is None else value.encode()
+
+    def pipeline(self, *args: Any, **kwargs: Any) -> _FakePipeline:
+        return _FakePipeline(self)
+
+
 def _make_orchestrator(
     config: RQOrchestratorConfig | None = None,
 ) -> RQOrchestrator:
@@ -62,7 +120,7 @@ def _make_orchestrator(
     orch.tasks = {}
     orch.notifier = None
     orch._task_result_keys = {}
-    orch._async_redis_conn = AsyncMock()
+    orch._async_redis_conn = _FakeAsyncRedis()
     orch._redis_conn = MagicMock()
     orch._rq_queue = MagicMock()
     orch._redis_gate = RedisCallerGate(config.redis_gate_concurrency or 1)
@@ -253,8 +311,52 @@ class TestRQDurableStatus:
 
         await orch._store_task_in_redis(task)
 
-        orch._async_redis_conn.set.assert_awaited_once()
-        assert orch._async_redis_conn.set.await_args.kwargs["ex"] == 14400
+        assert len(orch._async_redis_conn.set_calls) == 1
+        assert orch._async_redis_conn.set_calls[0]["ex"] == 14400
+
+    @pytest.mark.asyncio
+    async def test_store_active_task_has_no_expiry(self):
+        orch = _make_orchestrator()
+        task = _make_task("active-task", TaskStatus.PENDING)
+
+        await orch._store_task_in_redis(task)
+
+        assert orch._async_redis_conn.set_calls == []
+        assert orch._async_redis_conn.pipeline_executions == 1
+        stored = orch._async_redis_conn.stored["docling:tasks:active-task:metadata"]
+        assert json.loads(stored)["task_status"] == "pending"
+
+    @pytest.mark.asyncio
+    async def test_store_active_task_keeps_terminal_metadata(self):
+        orch = _make_orchestrator()
+        key = "docling:tasks:terminal-task:metadata"
+        orch._async_redis_conn.stored[key] = json.dumps(
+            {"task_id": "terminal-task", "task_status": "success"}
+        )
+
+        await orch._store_task_in_redis(_make_task("terminal-task", TaskStatus.PENDING))
+
+        assert (
+            json.loads(orch._async_redis_conn.stored[key])["task_status"] == "success"
+        )
+        assert orch._async_redis_conn.pipeline_executions == 0
+
+    @pytest.mark.asyncio
+    async def test_store_active_task_skips_malformed_metadata(self, caplog):
+        orch = _make_orchestrator()
+        key = "docling:tasks:broken-task:metadata"
+        orch._async_redis_conn.stored[key] = "not-json"
+
+        with caplog.at_level(
+            logging.ERROR, logger="docling_jobkit.orchestrators.rq.orchestrator"
+        ):
+            await orch._store_task_in_redis(
+                _make_task("broken-task", TaskStatus.PENDING)
+            )
+
+        assert orch._async_redis_conn.stored[key] == "not-json"
+        assert orch._async_redis_conn.pipeline_executions == 0
+        assert "malformed" in caplog.text
 
     @pytest.mark.asyncio
     async def test_store_and_retrieve_error_message(self):

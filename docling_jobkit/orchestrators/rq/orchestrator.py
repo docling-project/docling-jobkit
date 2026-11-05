@@ -95,10 +95,44 @@ _WATCHDOG_GRACE_PERIOD = (
 )
 _RQ_JOB_GONE = _RQJobGone()
 _TASK_METADATA_PREFIX = "docling:tasks:"
+_TERMINAL_TASK_STATUSES = (TaskStatus.SUCCESS, TaskStatus.FAILURE)
+_METADATA_GUARD_MAX_ATTEMPTS = 3
 
 
 def _encode_document_stream(source: "DocumentStream") -> str:
     return base64.b64encode(source.stream.read()).decode()
+
+
+def _read_stored_task_status(
+    payload: bytes | str | None,
+) -> tuple[bool, TaskStatus | None]:
+    """Read the status of stored task metadata without deserializing the task.
+
+    Returns a ``(present, status)`` pair. ``present`` is False when no
+    metadata is stored for the task. ``status`` is None when metadata is
+    stored but its status cannot be read, for example when the payload is
+    malformed.
+    """
+    if payload is None:
+        return False, None
+    if isinstance(payload, (bytes, bytearray)):
+        try:
+            payload = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return True, None
+    try:
+        data = json.loads(payload)
+    except (TypeError, ValueError):
+        return True, None
+    if not isinstance(data, dict):
+        return True, None
+    raw_status = data.get("task_status")
+    if not isinstance(raw_status, str):
+        return True, None
+    try:
+        return True, TaskStatus(raw_status)
+    except ValueError:
+        return True, None
 
 
 class RQOrchestrator(BaseOrchestrator):
@@ -515,13 +549,56 @@ class RQOrchestrator(BaseOrchestrator):
             data = task.model_dump(mode="json", serialize_as_any=True)
             data["task_status"] = task.task_status.value
             data["processing_meta"] = meta
-            await self._async_redis_conn.set(
-                f"{_TASK_METADATA_PREFIX}{task.task_id}:metadata",
-                json.dumps(data),
-                ex=self.config.results_ttl,
-            )
+            key = f"{_TASK_METADATA_PREFIX}{task.task_id}:metadata"
+            payload = json.dumps(data)
+            if task.task_status in _TERMINAL_TASK_STATUSES:
+                await self._async_redis_conn.set(
+                    key,
+                    payload,
+                    ex=self.config.results_ttl,
+                )
+                return
+            await self._store_active_task_metadata(key, payload, task.task_id)
         except Exception as exc:
             _log.error(f"Store task {task.task_id}: {exc}")
+
+    async def _store_active_task_metadata(
+        self, key: str, payload: str, task_id: str
+    ) -> None:
+        """Store active task metadata without expiry.
+
+        Active metadata must stay available while the task is queued or
+        running, so it is written without a TTL. That write also clears the
+        TTL of an earlier write. A stored terminal result is never replaced by
+        an active write, because an active write lives forever and would
+        resurrect an already finished task.
+        """
+        for attempt in range(1, _METADATA_GUARD_MAX_ATTEMPTS + 1):
+            try:
+                async with self._async_redis_conn.pipeline() as pipe:
+                    await pipe.watch(key)
+                    stored = await pipe.get(key)
+                    present, stored_status = _read_stored_task_status(stored)
+                    if present and stored_status is None:
+                        raise ValueError("stored task metadata is malformed")
+                    if stored_status in _TERMINAL_TASK_STATUSES:
+                        _log.debug(
+                            f"Store task {task_id}: terminal metadata kept, "
+                            f"active write skipped"
+                        )
+                        return
+                    pipe.multi()
+                    pipe.set(key, payload)
+                    await pipe.execute()
+                return
+            except redis.exceptions.WatchError:
+                _log.debug(
+                    f"Store task {task_id}: metadata contention, "
+                    f"attempt {attempt} of {_METADATA_GUARD_MAX_ATTEMPTS}"
+                )
+        raise RuntimeError(
+            f"metadata contention exceeded {_METADATA_GUARD_MAX_ATTEMPTS} attempts"
+        )
 
     async def _reap_zombie_tasks(self) -> None:
         while True:
