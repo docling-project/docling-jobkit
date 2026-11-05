@@ -1,9 +1,4 @@
-"""RQ task metadata retention (real Redis).
-
-These tests drive the production metadata writer against a real Redis server.
-They own only UUID-named metadata and result keys, and delete exactly those
-keys afterwards.
-"""
+"""Real-Redis retention tests with exact cleanup of UUID-named keys."""
 
 import asyncio
 import json
@@ -277,9 +272,7 @@ async def test_pending_task_stays_queryable_after_retention_boundary(
         assert await redis_client.exists(metadata_key) == 1
         assert await redis_client.ttl(metadata_key) == -1
 
-        # The replica has no in-memory task state, so the queued status comes
-        # from the real Redis metadata. Only the native RQ job status is
-        # simulated here.
+        # Read metadata from Redis on an empty replica; mock only the RQ job.
         queued_job = MagicMock()
         queued_job.kwargs = {"task_data": {"metadata": {}}}
         queued_job.get_status.return_value = JobStatus.QUEUED

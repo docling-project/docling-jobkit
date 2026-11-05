@@ -106,12 +106,9 @@ def _encode_document_stream(source: "DocumentStream") -> str:
 def _read_stored_task_status(
     payload: bytes | str | None,
 ) -> tuple[bool, TaskStatus | None]:
-    """Read the status of stored task metadata without deserializing the task.
+    """Return ``(present, status)`` without deserializing the task.
 
-    Returns a ``(present, status)`` pair. ``present`` is False when no
-    metadata is stored for the task. ``status`` is None when metadata is
-    stored but its status cannot be read, for example when the payload is
-    malformed.
+    An unreadable record is present but has no readable status.
     """
     if payload is None:
         return False, None
@@ -565,14 +562,7 @@ class RQOrchestrator(BaseOrchestrator):
     async def _store_active_task_metadata(
         self, key: str, payload: str, task_id: str
     ) -> None:
-        """Store active task metadata without expiry.
-
-        Active metadata must stay available while the task is queued or
-        running, so it is written without a TTL. That write also clears the
-        TTL of an earlier write. A stored terminal result is never replaced by
-        an active write, because an active write lives forever and would
-        resurrect an already finished task.
-        """
+        """Write without expiry unless a terminal record is still present."""
         for attempt in range(1, _METADATA_GUARD_MAX_ATTEMPTS + 1):
             try:
                 async with self._async_redis_conn.pipeline() as pipe:
