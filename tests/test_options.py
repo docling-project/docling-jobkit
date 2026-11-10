@@ -12,11 +12,13 @@ from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import (
+    AsrPipelineOptions,
     PdfBackend,
     PdfPipelineOptions,
     ProcessingPipeline,
     VlmPipelineOptions,
 )
+from docling.datamodel.pipeline_options_asr_model import ApiAsrOptions
 from docling.document_converter import (
     EpubFormatOption,
     ExcelFormatOption,
@@ -513,3 +515,53 @@ def test_epub_picture_outside_the_archive_keeps_the_document(tmp_path):
     assert "Text." in doc.export_to_markdown()
     assert len(doc.pictures) == 1
     assert doc.pictures[0].image is None
+
+
+def _audio_video_pipeline_options(m: DoclingConverterManager):
+    with pytest.warns(DeprecationWarning):
+        pipeline_opts = m.get_pdf_pipeline_opts(ConvertDocumentsOptions())
+    converter = m.get_converter(pipeline_opts)
+    return {
+        input_format: converter.format_to_options[input_format].pipeline_options
+        for input_format in (InputFormat.AUDIO, InputFormat.VIDEO)
+    }
+
+
+def test_asr_options_reach_audio_and_video():
+    """A configured remote ASR server must be used for AUDIO and VIDEO inputs,
+    instead of docling's default in-process Whisper model.
+    """
+    m = DoclingConverterManager(
+        config=DoclingConverterManagerConfig(
+            enable_remote_services=True,
+            asr_options={
+                "url": "http://localhost:8000/v1/audio/transcriptions",
+                "model": "whisper-large-v3-turbo",
+                "headers": {"Authorization": "Bearer test"},
+                "language": "en",
+            },
+        )
+    )
+    for input_format, options in _audio_video_pipeline_options(m).items():
+        assert isinstance(options.asr_options, ApiAsrOptions), input_format
+        assert (
+            str(options.asr_options.url)
+            == "http://localhost:8000/v1/audio/transcriptions"
+        )
+        assert options.asr_options.model == "whisper-large-v3-turbo"
+        assert options.asr_options.language == "en"
+        assert options.enable_remote_services
+
+
+def test_asr_options_unset_keeps_docling_default():
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+    default = AsrPipelineOptions().asr_options
+    for input_format, options in _audio_video_pipeline_options(m).items():
+        assert options.asr_options == default, input_format
+
+
+def test_asr_options_require_remote_services():
+    with pytest.raises(ValueError, match="enable_remote_services"):
+        DoclingConverterManagerConfig(
+            asr_options={"url": "http://localhost:8000/v1/audio/transcriptions"}
+        )
