@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Type, TypedDict, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from docling.backend.docling_parse_backend import (
     DoclingParseDocumentBackend,
@@ -26,6 +26,7 @@ from docling.datamodel.picture_classification_options import (
     DocumentPictureClassifierOptions,
 )
 from docling.datamodel.pipeline_options import (
+    AsrPipelineOptions,
     CodeFormulaVlmOptions,
     OcrOptions,
     PdfBackend,
@@ -36,10 +37,12 @@ from docling.datamodel.pipeline_options import (
     ProcessingPipeline,
     TableFormerMode,
     TableStructureOptions,
+    VideoPipelineOptions,
     VlmConvertOptions,
     VlmPipelineOptions,
     normalize_pdf_backend,
 )
+from docling.datamodel.pipeline_options_asr_model import ApiAsrOptions
 from docling.datamodel.pipeline_options_vlm_model import ApiVlmOptions, InlineVlmOptions
 from docling.datamodel.service.chunking import (
     ChunkingOptionType,
@@ -56,6 +59,7 @@ from docling.datamodel.vlm_engine_options import (
     VllmVlmEngineOptions,
 )
 from docling.document_converter import (
+    AudioFormatOption,
     DocumentConverter,
     EpubFormatOption,
     ExcelFormatOption,
@@ -67,6 +71,7 @@ from docling.document_converter import (
     OdtFormatOption,
     PdfFormatOption,
     PowerpointFormatOption,
+    VideoFormatOption,
     WordFormatOption,
 )
 from docling.models.factories import (
@@ -227,6 +232,16 @@ class DoclingConverterManagerConfig(BaseModel):
     layout_batch_size: Optional[int] = None
     table_batch_size: Optional[int] = None
     batch_polling_interval_seconds: Optional[float] = None
+
+    # ASR for audio and video inputs
+    asr_options: Optional[ApiAsrOptions] = Field(
+        default=None,
+        description=(
+            "Remote OpenAI-compatible transcription server (/audio/transcriptions) "
+            "used for audio and video inputs. Requires enable_remote_services. "
+            "None keeps Docling's default in-process ASR model."
+        ),
+    )
 
     # === NEW: Preset and Engine Control ===
 
@@ -463,6 +478,14 @@ class DoclingConverterManagerConfig(BaseModel):
         description="Whether users can specify custom OCR configurations.",
     )
 
+    @model_validator(mode="after")
+    def _asr_options_need_remote_services(self) -> "DoclingConverterManagerConfig":
+        if self.asr_options is not None and not self.enable_remote_services:
+            raise ValueError(
+                "asr_options sends audio to a remote server and requires enable_remote_services"
+            )
+        return self
+
 
 # Custom serializer for PdfFormatOption
 # (model_dump_json does not work with some classes)
@@ -612,6 +635,24 @@ class DoclingConverterManager:
                     enable_local_fetch=include_images,
                 ),
             )
+
+            # Without an explicit option, audio and video use docling's
+            # default in-process ASR model, whatever the server is configured with.
+            if self.config.asr_options is not None:
+                format_options[InputFormat.AUDIO] = AudioFormatOption(
+                    pipeline_options=AsrPipelineOptions(
+                        artifacts_path=self.config.artifacts_path,
+                        enable_remote_services=self.config.enable_remote_services,
+                        asr_options=self.config.asr_options,
+                    )
+                )
+                format_options[InputFormat.VIDEO] = VideoFormatOption(
+                    pipeline_options=VideoPipelineOptions(
+                        artifacts_path=self.config.artifacts_path,
+                        enable_remote_services=self.config.enable_remote_services,
+                        asr_options=self.config.asr_options,
+                    )
+                )
 
             return DocumentConverter(format_options=format_options)
 
