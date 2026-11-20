@@ -47,6 +47,7 @@ from docling_core.types.doc.document import DoclingDocument, ImageRefMode
 from docling_jobkit.convert.results import (
     _build_document_completed_item,
     _export_document_as_content,
+    single_document_zip_filename,
 )
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import (
@@ -576,13 +577,9 @@ def process_chunkable_results(
                 _log.error("Failed to upload zip to target URL", exc_info=exc)
                 raise TargetWriteError("Failed to upload to target URL") from exc
         else:
-            # Name the download after the source when the task has a single
-            # document; multi-document tasks keep the generic name downstream.
-            zip_filename = None
-            if len(docs) == 1:
-                zip_filename = f"{Path(docs[0].source).stem}.zip"
             task_result = ZipArchiveResult(
-                content=file_path.read_bytes(), filename=zip_filename
+                content=file_path.read_bytes(),
+                filename=single_document_zip_filename([doc.source for doc in docs]),
             )
 
     return DoclingTaskResult(

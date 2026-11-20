@@ -1,6 +1,8 @@
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
+
 from docling.datamodel.base_models import ConversionStatus, OutputFormat
 from docling.datamodel.service.chunking import HybridChunkerOptions
 from docling.datamodel.service.options import ConvertDocumentsOptions
@@ -13,7 +15,10 @@ from docling_jobkit.convert.chunking import (
     DocumentChunkerManager,
     process_chunkable_results,
 )
-from docling_jobkit.convert.results import process_exportable_results
+from docling_jobkit.convert.results import (
+    process_exportable_results,
+    single_document_zip_filename,
+)
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.task import Task
 
@@ -84,5 +89,44 @@ def test_chunk_zip_named_after_single_document(tmp_path: Path):
 
 
 def test_chunk_zip_unnamed_for_multiple_documents(tmp_path: Path):
+    result = _chunk_zip(tmp_path, [_converted("a.pdf"), _converted("b.pdf")])
+    assert result.filename is None
+
+
+def test_chunk_zip_unnamed_when_one_of_two_documents_fails(tmp_path: Path):
     result = _chunk_zip(tmp_path, [_converted("a.pdf"), _failed("b.pdf")])
     assert result.filename is None
+
+
+def test_chunk_zip_named_after_single_failed_document(tmp_path: Path):
+    result = _chunk_zip(tmp_path, [_failed("report.pdf")])
+    assert result.filename == "report.zip"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("report.pdf", "report.zip"),
+        ("report.tar.gz", "report.tar.zip"),
+        ("README", "README.zip"),
+        ("dir/sub/report.pdf", "report.zip"),
+        ("C:\\Users\\me\\report.pdf", "report.zip"),
+        (Path("dir/report.pdf"), "report.zip"),
+        ("rapport-été.pdf", "rapport-été.zip"),
+        ('a"b.pdf', "a_b.zip"),
+        ("rep\r\nort.pdf", "rep__ort.zip"),
+        ("a:b*c?d<e>f|g.pdf", "a_b_c_d_e_f_g.zip"),
+        (".pdf", "pdf.zip"),
+        ("..pdf", None),
+        ("", None),
+        (".", None),
+        ("dir/", None),
+    ],
+)
+def test_single_document_zip_filename(source: str | Path, expected: str | None):
+    assert single_document_zip_filename([source]) == expected
+
+
+def test_single_document_zip_filename_requires_exactly_one_source():
+    assert single_document_zip_filename([]) is None
+    assert single_document_zip_filename(["a.pdf", "b.pdf"]) is None
