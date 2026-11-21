@@ -32,6 +32,7 @@ def test_text_content_uses_plain_text_serializer():
         image_mode=ImageRefMode.PLACEHOLDER,
         md_page_break_placeholder="",
         md_compact_tables=False,
+        artifacts_dir=Path("artifacts"),
     )
 
     assert response.text_content == "Section heading\n\nBody text"
