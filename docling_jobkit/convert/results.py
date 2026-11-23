@@ -98,7 +98,12 @@ def single_document_zip_filename(
         return None
     # Keep only the last path component, whatever the separator style.
     name = str(sources[0]).replace("\\", "/").rsplit("/", 1)[-1]
-    stem = PurePath(name).stem if name else ""
+    # Drop the last extension by hand, treating leading dots as part of the
+    # name: PurePath.stem disagrees across Python versions on names like "..pdf".
+    core = name.lstrip(".")
+    stem, dot, _ = core.rpartition(".")
+    if not dot:
+        stem = core
     stem = _UNSAFE_FILENAME_CHARS.sub("_", stem).strip(" .")
     if not stem:
         return None
