@@ -1,3 +1,17 @@
+## [v3.10.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.10.0) - 2026-11-23
+
+### Feature
+
+* Name single-document zip results after the source ([#283](https://github.com/docling-project/docling-jobkit/issues/283)) ([`dd1b295`](https://github.com/docling-project/docling-jobkit/commit/dd1b295d39bf9c1fc45f8e395409da9eb6b522a7))
+* **service:** Let the server choose the default pipeline ([#272](https://github.com/docling-project/docling-jobkit/issues/272)) ([`4e3d337`](https://github.com/docling-project/docling-jobkit/commit/4e3d3375a1fb477f0504566200173336497523a3))
+
+### Fix
+
+* **manager:** Keep the inline images of HTML inputs ([#290](https://github.com/docling-project/docling-jobkit/issues/290)) ([`a67355c`](https://github.com/docling-project/docling-jobkit/commit/a67355c58d9f3c89ecde86832a09995459a3f0ff))
+* Keep in-body referenced images inside the task work directory ([#289](https://github.com/docling-project/docling-jobkit/issues/289)) ([`9dbea9e`](https://github.com/docling-project/docling-jobkit/commit/9dbea9e22dd9a71f6b5ccbe7f89bfb64c0d5d8fc))
+* Normalize and clamp page_range options to safe integer bounds ([#282](https://github.com/docling-project/docling-jobkit/issues/282)) ([`f547ec6`](https://github.com/docling-project/docling-jobkit/commit/f547ec663403833f64347f5870f845e3ae9164df))
+* Keep RQ enqueue from blocking the API event loop ([#280](https://github.com/docling-project/docling-jobkit/issues/280)) ([`5c70c16`](https://github.com/docling-project/docling-jobkit/commit/5c70c165b112989754bd3041eb73b254d74ca080))
+
 ## [v3.9.1](https://github.com/docling-project/docling-jobkit/releases/tag/v3.9.1) - 2026-10-22
 
 ### Fix
