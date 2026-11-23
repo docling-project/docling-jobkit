@@ -18,7 +18,7 @@ from docling.backend.docling_parse_backend import (
 from docling.backend.pdf_backend import PdfDocumentBackend
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
-from docling.datamodel.backend_options import EpubBackendOptions
+from docling.datamodel.backend_options import EpubBackendOptions, HTMLBackendOptions
 from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.chart_extraction_options import ChartExtractionVlmEngineOptions
 from docling.datamodel.document import ConversionResult
@@ -622,6 +622,7 @@ class DoclingConverterManager:
             # DOCX/PPTX/XLSX/HTML/ODT/ODS/ODP/EPUB, even though SimplePipeline runs
             # the same enrichment stage as the PDF pipeline.
             office_pipeline_options = pdf_format_option.pipeline_options
+            include_images = office_pipeline_options.generate_picture_images
             format_options[InputFormat.DOCX] = WordFormatOption(
                 pipeline_options=office_pipeline_options
             )
@@ -631,8 +632,10 @@ class DoclingConverterManager:
             format_options[InputFormat.XLSX] = ExcelFormatOption(
                 pipeline_options=office_pipeline_options
             )
+            # Remote and local fetching are off, so only inline data: images are read.
             format_options[InputFormat.HTML] = HTMLFormatOption(
-                pipeline_options=office_pipeline_options
+                pipeline_options=office_pipeline_options,
+                backend_options=HTMLBackendOptions(fetch_images=include_images),
             )
             format_options[InputFormat.ODT] = OdtFormatOption(
                 pipeline_options=office_pipeline_options
@@ -646,7 +649,6 @@ class DoclingConverterManager:
             # The EPUB backend reads the images packed in the archive only
             # with fetch_images and enable_local_fetch, confined to the
             # directory it extracts the archive into.
-            include_images = office_pipeline_options.generate_picture_images
             format_options[InputFormat.EPUB] = EpubFormatOption(
                 pipeline_options=office_pipeline_options,
                 backend_options=EpubBackendOptions(

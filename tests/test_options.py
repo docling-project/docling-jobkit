@@ -1,6 +1,7 @@
 import base64
 import sys
 import zipfile
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,7 @@ from docling.backend.docling_parse_backend import (
 )
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
-from docling.datamodel.base_models import InputFormat
+from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.pipeline_options import (
     PdfBackend,
     PdfPipelineOptions,
@@ -445,11 +446,13 @@ def test_picture_description_options_propagate_to_office_formats():
         )
 
 
+_DOT_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk"
+    "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+
+
 def _write_epub(path: Path, img_src: str) -> Path:
-    png = base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk"
-        "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-    )
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(
             "mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED
@@ -480,7 +483,7 @@ def _write_epub(path: Path, img_src: str) -> Path:
             f"<img src={img_src} alt='dot'/>"
             "</body></html>",
         )
-        archive.writestr("OEBPS/images/dot.png", png)
+        archive.writestr("OEBPS/images/dot.png", _DOT_PNG)
     return path
 
 
@@ -498,6 +501,27 @@ def test_epub_pictures_follow_include_images(tmp_path, include_images, img_src):
     assert (doc.pictures[0].image is not None) is include_images
     epub_option = converter.format_to_options[InputFormat.EPUB]
     assert epub_option.backend_options.enable_remote_fetch is False
+
+
+@pytest.mark.parametrize("include_images", [True, False])
+def test_html_data_uri_pictures_follow_include_images(include_images):
+    """HTML data: images are kept exactly when include_images is set."""
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+    opts = ConvertDocumentsOptions(include_images=include_images)
+    converter = m.get_converter(m.get_pdf_pipeline_opts(opts))
+    uri = "data:image/png;base64," + base64.b64encode(_DOT_PNG).decode()
+
+    html = f"<p>Text.</p><img src='{uri}' alt='dot'>"
+
+    doc = converter.convert(
+        DocumentStream(name="sample.html", stream=BytesIO(html.encode()))
+    ).document
+
+    assert len(doc.pictures) == 1
+    assert (doc.pictures[0].image is not None) is include_images
+    html_option = converter.format_to_options[InputFormat.HTML]
+    assert html_option.backend_options.enable_local_fetch is False
+    assert html_option.backend_options.enable_remote_fetch is False
 
 
 def test_epub_picture_outside_the_archive_keeps_the_document(tmp_path):
