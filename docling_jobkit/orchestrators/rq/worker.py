@@ -50,6 +50,7 @@ _SourcePreparedHook = Callable[[int, Any, dict[str, str], Optional[bytes]], None
 _SourcesPreparedHook = Callable[[list[dict[str, str]], int, bool], None]
 _ResultStoredHook = Callable[[str, int], None]
 _FailureHook = Callable[[Task, Exception, list[dict[str, str]]], None]
+_ConversionCompleteHook = Callable[[int], None]
 
 
 def _null_phase_cm(_: str) -> ContextManager[Any]:
@@ -105,6 +106,7 @@ def _run_docling_task(
     on_sources_prepared: Optional[_SourcesPreparedHook] = None,
     on_result_stored: Optional[_ResultStoredHook] = None,
     on_failure: Optional[_FailureHook] = None,
+    on_conversion_complete: Optional[_ConversionCompleteHook] = None,
 ) -> str:
     job = get_current_job()
     assert job is not None
@@ -153,6 +155,15 @@ def _run_docling_task(
                 sources=convert_sources,
                 options=task.convert_options,
                 headers=headers,
+            )
+
+        if on_conversion_complete:
+            on_conversion_complete(
+                sum(
+                    len(conv_res.document.pages)
+                    for conv_res in conv_results
+                    if conv_res.document is not None
+                )
             )
 
         exportable_documents = (
