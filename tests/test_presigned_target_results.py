@@ -2,7 +2,7 @@ import base64
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, get_args
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,11 +10,13 @@ from pydantic import BaseModel
 
 from docling.datamodel.base_models import ConversionStatus, OutputFormat
 from docling.datamodel.service.callbacks import CallbackSpec, ProgressKind
+from docling.datamodel.service.chunking import HybridChunkerOptions
 from docling.datamodel.service.requests import (
     AnyHttpSourceRequest as HttpSource,
     FileSourceRequest as FileSource,
     S3SourceRequest as S3Coordinates,
 )
+from docling.datamodel.service.responses import ArtifactRef
 from docling.datamodel.service.sources import AzureBlobCoordinates
 from docling.datamodel.service.targets import (
     AzureBlobTarget,
@@ -1019,3 +1021,68 @@ def test_process_exportable_results_tracks_partial_success_counts(
     assert task_result.num_succeeded == 1
     assert task_result.num_partially_succeeded == 1
     assert task_result.num_failed == 0
+
+
+class _FakeChunk(BaseModel):
+    text: str
+    chunk_index: int
+
+
+class _FakeChunkerManager:
+    def chunk_document(self, *, document, filename, options):
+        del document, filename, options
+        yield _FakeChunk(text="first chunk", chunk_index=0)
+        yield _FakeChunk(text="second chunk", chunk_index=1)
+
+
+@pytest.mark.skipif(
+    "chunks" not in get_args(ArtifactRef.model_fields["artifact_type"].annotation),
+    reason="installed docling ArtifactRef does not accept the 'chunks' artifact type",
+)
+@pytest.mark.parametrize(
+    "to_formats",
+    [
+        [OutputFormat.CHUNKS],
+        [OutputFormat.JSON, OutputFormat.CHUNKS],
+    ],
+)
+def test_presigned_target_returns_chunks_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    to_formats: list[OutputFormat],
+):
+    fake_client = _FakeS3Client()
+    monkeypatch.setattr(
+        "docling_jobkit.connectors.s3.target_processor.get_s3_connection",
+        lambda _coords: (fake_client, object()),
+    )
+    task = _make_task()
+    task.convert_options = ConvertDocumentsOptions(to_formats=to_formats)
+
+    task_result = process_exportable_results(
+        task=task,
+        exportable_documents=[_make_exportable_document()],
+        work_dir=tmp_path,
+        presigned_config=_make_s3_presigned_config(),
+        chunker_manager=_FakeChunkerManager(),  # type: ignore[arg-type]
+        chunking_options=HybridChunkerOptions(),
+    )
+
+    assert isinstance(task_result.result, PresignedArtifactResult)
+    assert task_result.num_succeeded == 1
+    assert task_result.num_failed == 0
+
+    document = task_result.result.documents[0]
+    chunk_artifacts = [a for a in document.artifacts if a.artifact_type == "chunks"]
+    assert len(chunk_artifacts) == 1
+    assert chunk_artifacts[0].mime_type == "application/jsonl"
+    assert str(chunk_artifacts[0].uri).endswith("paper.chunks.jsonl?expires=600")
+
+    chunk_upload = next(
+        u for u in fake_client.uploads if str(u["key"]).endswith("paper.chunks.jsonl")
+    )
+    lines = bytes(chunk_upload["content"]).decode("utf-8").splitlines()  # type: ignore[arg-type]
+    assert [line for line in lines if line] == [
+        '{"text": "first chunk", "chunk_index": 0}',
+        '{"text": "second chunk", "chunk_index": 1}',
+    ]
