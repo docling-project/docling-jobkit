@@ -225,6 +225,7 @@ def _export_document_as_content(
     image_mode: ImageRefMode,
     md_page_break_placeholder: str,
     md_compact_tables: bool,
+    artifacts_dir: Path,
 ) -> ExportDocumentResponse:
     document = ExportDocumentResponse(filename=exportable_document.file.name)
 
@@ -233,7 +234,7 @@ def _export_document_as_content(
         and exportable_document.document is not None
     ):
         new_doc = exportable_document.document._make_copy_with_refmode(
-            Path(), image_mode, page_no=None
+            artifacts_dir, image_mode, page_no=None, reference_path=artifacts_dir
         )
 
         # Create the different formats
@@ -1057,6 +1058,7 @@ def _process_exportable_results_internal(
             image_mode=conversion_options.image_export_mode,
             md_page_break_placeholder=conversion_options.md_page_break_placeholder,
             md_compact_tables=conversion_options.md_compact_tables,
+            artifacts_dir=work_dir / "artifacts",
         )
         if chunks_in_formats:
             _log.debug(
