@@ -12,6 +12,7 @@ import msgpack
 import redis
 import redis.asyncio as async_redis
 from pydantic import BaseModel, model_validator
+from redis.exceptions import WatchError
 from rq import Queue
 from rq.exceptions import NoSuchJobError
 from rq.job import Job, JobStatus
@@ -30,11 +31,40 @@ from docling_jobkit.connectors.connector_factory import get_source_connector_fac
 from docling_jobkit.datamodel.chunking import ChunkingExportOptions
 from docling_jobkit.datamodel.result import DoclingTaskResult
 from docling_jobkit.datamodel.task import Task, TaskSource, TaskTarget, validate_task
+from docling_jobkit.datamodel.task_listing import (
+    ACTIVE_TASK_STATUSES,
+    COMPACT_TASK_FIELDS,
+    LISTING_CHUNK_SIZE,
+    ActiveTaskItem,
+    ActiveTaskPage,
+    CompactTask,
+    build_active_task_page,
+    iter_chunks,
+    resolve_tenant_id,
+    tenant_of,
+    validate_page_window,
+)
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators._redis_gate import RedisCallerGate
 from docling_jobkit.orchestrators.base_orchestrator import (
     BaseOrchestrator,
     TaskNotFoundError,
+)
+from docling_jobkit.orchestrators.redis_task_index import (
+    acquire_build_lock,
+    decode_optional_text,
+    generation_key,
+    index_namespace,
+    index_score,
+    invalidate_index,
+    is_index_ready,
+    mark_index_ready,
+    queue_invalidate_ready_if_present,
+    ready_generation,
+    ready_key,
+    release_build_lock,
+    task_record_key,
+    tenant_index_key,
 )
 from docling_jobkit.orchestrators.serialization import dump_model_with_secrets
 
@@ -66,6 +96,7 @@ class RQOrchestratorConfig(BaseModel):
     presigned_config: PresignedConfig | None = None
     allowed_target_kinds: Optional[set[str]] = None
     allow_external_plugins: bool = False
+    enable_task_listing: bool = False
 
     @model_validator(mode="after")
     def resolve_redis_gate_concurrency(self) -> "RQOrchestratorConfig":
@@ -95,6 +126,87 @@ _WATCHDOG_GRACE_PERIOD = (
 )
 _RQ_JOB_GONE = _RQJobGone()
 _TASK_METADATA_PREFIX = "docling:tasks:"
+
+# Name of the backend that owns the listing index; it keeps the index of this
+# backend apart from the index of any other backend.
+_INDEX_BACKEND = "rq"
+
+# A contended projection or repair transaction is retried at most this often.
+# After that the cold build reports itself unavailable so the caller falls back
+# to the scan, and a stale repair leaves the row for the next query.
+_INDEX_CONTENTION_ATTEMPTS = 3
+
+# RQ job states that still represent in-flight work, mapped onto the task
+# status a listing reports. Deferred jobs wait to run and are still pending;
+# every other non-active state (created, finished, failed, stopped, canceled)
+# is terminal for listing purposes and omitted.
+_RQ_ACTIVE_JOB_STATUSES = {
+    JobStatus.QUEUED: TaskStatus.PENDING,
+    JobStatus.SCHEDULED: TaskStatus.PENDING,
+    JobStatus.DEFERRED: TaskStatus.PENDING,
+    JobStatus.STARTED: TaskStatus.STARTED,
+}
+
+# Native RQ states a listing accepts. Every other state - finished, failed,
+# stopped, canceled, created or unknown - means the task is no longer in
+# flight, so the task is omitted.
+_RQ_LISTABLE_JOB_STATUSES = frozenset(
+    {
+        JobStatus.QUEUED.value,
+        JobStatus.DEFERRED.value,
+        JobStatus.SCHEDULED.value,
+        JobStatus.STARTED.value,
+    }
+)
+
+
+def _decode_stored_task(data: dict[str, Any], *, allow_external_plugins: bool) -> Task:
+    """Decode stored RQ metadata JSON into a Task.
+
+    Pure shared decoder for both the legacy loader and the listing loader:
+    applies processing-meta defaults, the legacy target fallback, and plugin
+    validation. Callers own I/O and their exception boundaries.
+    """
+    meta = data.get("processing_meta") or {}
+    meta.setdefault("num_docs", 0)
+    meta.setdefault("num_processed", 0)
+    meta.setdefault("num_succeeded", 0)
+    meta.setdefault("num_partially_succeeded", 0)
+    meta.setdefault("num_failed", 0)
+
+    task_kwargs: dict[str, Any] = {
+        "task_id": data["task_id"],
+        "task_type": data["task_type"],
+        "task_status": TaskStatus(data["task_status"]),
+        "processing_meta": meta,
+        "error_message": data.get("error_message"),
+    }
+    for field_name in (
+        "created_at",
+        "started_at",
+        "finished_at",
+        "last_update_at",
+        "target",
+        "targets",
+        "sources",
+        "convert_options",
+        "chunking_options",
+        "chunking_export_options",
+        "callbacks",
+        "metadata",
+        "target_document_version",
+    ):
+        if data.get(field_name) is not None:
+            task_kwargs[field_name] = data[field_name]
+    # Backwards compat: tasks stored before the multi-target migration
+    # have neither 'target' nor 'targets'. Default to InBodyTarget so
+    # the validator does not reject legacy Redis entries.
+    if "target" not in task_kwargs and "targets" not in task_kwargs:
+        task_kwargs["targets"] = [InBodyTarget().model_dump()]
+    return validate_task(
+        task_kwargs,
+        allow_external_plugins=allow_external_plugins,
+    )
 
 
 def _encode_document_stream(source: "DocumentStream") -> str:
@@ -151,6 +263,7 @@ class RQOrchestrator(BaseOrchestrator):
         )
         self._task_result_keys: dict[str, str] = {}
         self._rq_job_function = "docling_jobkit.orchestrators.rq.worker.docling_task"
+        self._index_namespace = index_namespace(_INDEX_BACKEND, config.queue_name)
         _log.info(
             f"RQ async Redis connection pool initialized with max_connections="
             f"{config.redis_max_connections}"
@@ -233,6 +346,457 @@ class RQOrchestrator(BaseOrchestrator):
 
     async def queue_size(self) -> int:
         return self._rq_queue.count
+
+    async def list_tasks(
+        self,
+        *,
+        tenant_id: str,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> ActiveTaskPage:
+        """List a page of the tenant's in-flight tasks from shared RQ state.
+
+        With the listing enabled the page comes from the tenant's index: one
+        ordered window read plus a page-sized batch of compact records and
+        native job statuses. A cold index is built once from the queue and the
+        started registry; until the build succeeded the original scan path
+        answers the request, so a task that predates the index is never
+        omitted and a failed build never advertises a partial index.
+        """
+        if not self.config.enable_task_listing:
+            raise NotImplementedError(
+                "Active task listing is disabled for the RQ backend; "
+                "enable it with RQOrchestratorConfig(enable_task_listing=True)"
+            )
+        validate_page_window(limit, offset)
+        requested_tenant = resolve_tenant_id(tenant_id)
+
+        async with self._redis_gate.acquire(self.config.redis_gate_wait_timeout):
+            if await is_index_ready(self._async_redis_conn, self._index_namespace):
+                return await self._list_tasks_from_index(
+                    requested_tenant, limit, offset
+                )
+            if await self._build_listing_index():
+                return await self._list_tasks_from_index(
+                    requested_tenant, limit, offset
+                )
+            return await self._list_tasks_by_scan(requested_tenant, limit, offset)
+
+    async def _list_tasks_from_index(
+        self, tenant_id: str, limit: int, offset: int
+    ) -> ActiveTaskPage:
+        """Serve one page from the tenant's index."""
+        window = await self._read_index_window(tenant_id, limit=limit, offset=offset)
+        return ActiveTaskPage(items=window[:limit], has_more=len(window) > limit)
+
+    async def _read_index_window(
+        self, tenant_id: str, *, limit: int, offset: int
+    ) -> list[ActiveTaskItem]:
+        """Read the requested window of the tenant's index in listing order.
+
+        ``offset`` counts valid active rows, not raw index members, so a stale
+        prefix never consumes a client's offset. The walk collects
+        ``offset + limit + 1`` valid rows in bounded chunks and removes the
+        stale members it met. A healthy first page still reads only its own
+        window; a nonzero offset reads the compact rows before it, which is the
+        priced cost of deep paging rather than a page-sized read.
+        """
+        index_key = self._tenant_index_key(tenant_id)
+        target = offset + limit + 1
+        valid: list[ActiveTaskItem] = []
+        stale: list[str] = []
+        rank = 0
+        while len(valid) < target:
+            chunk_size = min(target - len(valid), LISTING_CHUNK_SIZE)
+            raw_members = await self._async_redis_conn.zrange(
+                index_key, rank, rank + chunk_size - 1
+            )
+            if not raw_members:
+                break
+            # Stale members are removed only after the walk, so they cannot
+            # shift the rank of a row that has not been read yet.
+            rank += len(raw_members)
+            members = [
+                member
+                for member in (decode_optional_text(raw) for raw in raw_members)
+                if member is not None
+            ]
+            if members:
+                for member, item in await self._resolve_indexed_members(
+                    members, tenant_id
+                ):
+                    if item is None:
+                        stale.append(member)
+                    else:
+                        valid.append(item)
+            if len(raw_members) < chunk_size:
+                break
+        if stale:
+            await self._remove_stale_members_guarded(tenant_id, stale)
+        return valid[offset : offset + limit + 1]
+
+    async def _remove_stale_members_guarded(
+        self, tenant_id: str, members: list[str]
+    ) -> None:
+        """Remove stale members only while they are still stale.
+
+        The compact record and native status are watched and re-read inside the
+        removal transaction. A concurrent successful store that republishes a
+        valid active row aborts the removal, so a repair can never delete a
+        freshly written membership; the member is simply re-examined on the
+        next query instead.
+        """
+        index_key = self._tenant_index_key(tenant_id)
+        for member in members:
+            record_key = self._task_record_key(member)
+            status_key = Job.key_for(member)
+            pipe = self._async_redis_conn.pipeline(transaction=True)
+            async with pipe:
+                for _ in range(_INDEX_CONTENTION_ATTEMPTS):
+                    try:
+                        await pipe.watch(record_key, status_key)
+                        fields = await pipe.hmget(record_key, *COMPACT_TASK_FIELDS)
+                        native = decode_optional_text(
+                            await pipe.hget(status_key, "status")
+                        )
+                        record = CompactTask.from_redis_mapping(
+                            dict(zip(COMPACT_TASK_FIELDS, fields or ()))
+                        )
+                        still_stale = (
+                            record is None
+                            or record.tenant_id != tenant_id
+                            or self._indexed_status(record, native) is None
+                        )
+                        if not still_stale:
+                            break
+                        pipe.multi()
+                        pipe.zrem(index_key, member)
+                        await pipe.execute()
+                        break
+                    except WatchError:
+                        continue
+
+    async def _resolve_indexed_members(
+        self, members: list[str], tenant_id: str
+    ) -> list[tuple[str, Optional[ActiveTaskItem]]]:
+        """Resolve index members into listing items with one pipelined read.
+
+        The compact record and the native job status are read together, so a
+        page costs one batched read instead of a job fetch and a metadata read
+        per task.
+        """
+        pipe = self._async_redis_conn.pipeline(transaction=False)
+        for member in members:
+            pipe.hmget(self._task_record_key(member), *COMPACT_TASK_FIELDS)
+            pipe.hget(Job.key_for(member), "status")
+        rows = await pipe.execute()
+
+        resolved: list[tuple[str, Optional[ActiveTaskItem]]] = []
+        for index, member in enumerate(members):
+            fields = rows[2 * index]
+            native = decode_optional_text(rows[2 * index + 1])
+            record = CompactTask.from_redis_mapping(
+                dict(zip(COMPACT_TASK_FIELDS, fields or ()))
+            )
+            item = None
+            if record is not None and record.tenant_id == tenant_id:
+                status = self._indexed_status(record, native)
+                if status is not None:
+                    item = ActiveTaskItem(
+                        task_id=record.task_id,
+                        task_type=record.task_type,
+                        task_status=status,
+                        created_at=record.created_at,
+                    )
+            resolved.append((member, item))
+        return resolved
+
+    def _indexed_status(
+        self, record: CompactTask, native: Optional[str]
+    ) -> Optional[TaskStatus]:
+        """Resolve the listed status from the durable record and the native job.
+
+        A terminal durable status or a job that is no longer in flight omits
+        the task. Otherwise a started task stays started - even when the job
+        reports it as queued again - and everything else is pending.
+        """
+        if record.task_status not in ACTIVE_TASK_STATUSES:
+            return None
+        if native is None or native not in _RQ_LISTABLE_JOB_STATUSES:
+            return None
+        if (
+            record.task_status == TaskStatus.STARTED
+            or native == JobStatus.STARTED.value
+        ):
+            return TaskStatus.STARTED
+        return TaskStatus.PENDING
+
+    async def _build_listing_index(self) -> bool:
+        """Build the listing index from the current queue and started registry.
+
+        The build is single-flight: the first caller owns it and the other
+        callers fall back to the scan path until the index is ready. Only a
+        completed build sets the readiness flag, so a failed build leaves the
+        index unadvertised and the next read rebuilds it.
+        """
+        token = uuid.uuid4().hex
+        acquired = await acquire_build_lock(
+            self._async_redis_conn, self._index_namespace, token
+        )
+        if not acquired:
+            return False
+        try:
+            # Fence readiness to the generation observed before enumerating.
+            # A writer that fails and invalidates during this build advances the
+            # generation, so the publication below cannot resurrect readiness.
+            expected_generation = await ready_generation(
+                self._async_redis_conn, generation_key(self._index_namespace)
+            )
+            candidate_ids = await self._collect_active_task_ids()
+            for chunk in iter_chunks(candidate_ids):
+                await self._index_candidate_chunk(chunk)
+            return await mark_index_ready(
+                self._async_redis_conn,
+                self._index_namespace,
+                expected_generation,
+            )
+        except Exception as exc:
+            _log.warning(f"Building the active task index failed: {exc}")
+            await self._invalidate_listing_index()
+            return False
+        finally:
+            try:
+                await release_build_lock(
+                    self._async_redis_conn, self._index_namespace, token
+                )
+            except Exception as exc:
+                _log.warning(f"Releasing the index build lock failed: {exc}")
+
+    async def _index_candidate_chunk(self, task_ids: list[str]) -> None:
+        """Project one chunk of candidate tasks from the current source state.
+
+        The primary metadata and native-status keys are watched before they are
+        read, so a terminal or newer write that lands between the snapshot and
+        the commit aborts the transaction instead of being overwritten by an
+        older pending projection. A contended chunk is retried from the
+        then-current state, never marked complete from a stale snapshot.
+        """
+        if not task_ids:
+            return
+        metadata_keys = [self._task_metadata_key(task_id) for task_id in task_ids]
+        status_keys = [Job.key_for(task_id) for task_id in task_ids]
+
+        pipe = self._async_redis_conn.pipeline(transaction=True)
+        async with pipe:
+            for _ in range(_INDEX_CONTENTION_ATTEMPTS):
+                try:
+                    await pipe.watch(*metadata_keys, *status_keys)
+                    payloads = [await pipe.get(key) for key in metadata_keys]
+                    natives = [
+                        decode_optional_text(await pipe.hget(key, "status"))
+                        for key in status_keys
+                    ]
+                    records = [
+                        self._candidate_record(task_id, raw, native)
+                        for task_id, raw, native in zip(task_ids, payloads, natives)
+                    ]
+                    pipe.multi()
+                    for task_id, record in zip(task_ids, records):
+                        if record is None:
+                            continue
+                        pipe.hset(
+                            self._task_record_key(task_id),
+                            mapping=record.to_redis_mapping(),
+                        )
+                        pipe.expire(
+                            self._task_record_key(task_id), self.config.results_ttl
+                        )
+                        pipe.zadd(
+                            self._tenant_index_key(record.tenant_id),
+                            {task_id: index_score(record.created_at)},
+                        )
+                    await pipe.execute()
+                    return
+                except WatchError:
+                    continue
+        raise RuntimeError(
+            "Active task index projection stayed contended for "
+            f"{_INDEX_CONTENTION_ATTEMPTS} attempts; falling back to the scan"
+        )
+
+    def _candidate_record(
+        self, task_id: str, raw: Optional[bytes], native: Optional[str]
+    ) -> Optional[CompactTask]:
+        """Decode one watched candidate, or None when it is not listable."""
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            task = _decode_stored_task(
+                data,
+                allow_external_plugins=self.config.allow_external_plugins,
+            )
+        except Exception as exc:
+            _log.warning(f"Skipping corrupt listing metadata for task {task_id}: {exc}")
+            return None
+        record = CompactTask.from_task(task)
+        if self._indexed_status(record, native) is None:
+            return None
+        return record
+
+    async def _list_tasks_by_scan(
+        self, tenant_id: str, limit: int, offset: int
+    ) -> ActiveTaskPage:
+        """List a page by scanning the shared RQ state.
+
+        This is the original, correct enumeration: it reads the queue and the
+        started registry and resolves every candidate from its full metadata.
+        It is the fallback for a cold or failed index, never the steady state.
+        """
+        candidate_ids = await self._collect_active_task_ids()
+        statuses = await asyncio.to_thread(
+            self._resolve_active_job_statuses, candidate_ids
+        )
+        items: list[ActiveTaskItem] = []
+        for chunk in iter_chunks(candidate_ids):
+            resolved = await asyncio.gather(
+                *(
+                    self._active_listing_item(task_id, statuses[task_id], tenant_id)
+                    for task_id in chunk
+                    if task_id in statuses
+                )
+            )
+            items.extend(item for item in resolved if item is not None)
+
+        return build_active_task_page(items, limit=limit, offset=offset)
+
+    def _tenant_index_key(self, tenant_id: str) -> str:
+        """Sorted set that holds the tenant's active task ids."""
+        return tenant_index_key(self._index_namespace, tenant_id)
+
+    def _task_record_key(self, task_id: str) -> str:
+        """Compact hash that holds the fields a listing item needs."""
+        return task_record_key(self._index_namespace, task_id)
+
+    def _task_metadata_key(self, task_id: str) -> str:
+        """Key of the full task metadata."""
+        return f"{_TASK_METADATA_PREFIX}{task_id}:metadata"
+
+    async def _invalidate_listing_index(self) -> None:
+        """Advance the generation and drop readiness so the next read rebuilds."""
+        try:
+            await invalidate_index(self._async_redis_conn, self._index_namespace)
+        except Exception as exc:
+            _log.warning(f"Invalidating the active task index failed: {exc}")
+
+    async def _invalidate_listing_index_if_present(self) -> None:
+        """Invalidate readiness only if this scope ever had index bookkeeping."""
+        try:
+            await queue_invalidate_ready_if_present(
+                self._async_redis_conn,
+                generation_key(self._index_namespace),
+                ready_key(self._index_namespace),
+            )
+        except Exception as exc:
+            _log.warning(f"Invalidating the active task index failed: {exc}")
+
+    async def _indexed_tenant(self, task_id: str) -> Optional[str]:
+        """Read the tenant a task was indexed for."""
+        row = await self._async_redis_conn.hgetall(self._task_record_key(task_id))
+        record = CompactTask.from_redis_mapping(row)
+        return record.tenant_id if record is not None else None
+
+    async def _remove_index_entry(self, task_id: str) -> None:
+        """Drop a task from the listing index, or invalidate old readiness."""
+        if not self.config.enable_task_listing:
+            # A disabled delete/fetch cannot surgically update the index, so any
+            # previously trusted index must be rebuilt on the next enabled read.
+            await self._invalidate_listing_index_if_present()
+            return
+        try:
+            tenant_id = await self._indexed_tenant(task_id)
+            pipe = self._async_redis_conn.pipeline(transaction=True)
+            if tenant_id is not None:
+                pipe.zrem(self._tenant_index_key(tenant_id), task_id)
+            pipe.delete(self._task_record_key(task_id))
+            await pipe.execute()
+        except Exception as exc:
+            _log.warning(f"Removing task {task_id} from the index failed: {exc}")
+
+    async def _collect_active_task_ids(self) -> list[str]:
+        """Union the queued and started job ids, each source read in chunks.
+
+        Both sources are exhausted — in bounded reads — because a page is
+        ordered across every active task, not just the first chunk of either.
+        """
+        task_ids: list[str] = []
+        seen: set[str] = set()
+
+        def _extend(chunk: list[str]) -> int:
+            for task_id in chunk:
+                if task_id not in seen:
+                    seen.add(task_id)
+                    task_ids.append(task_id)
+            return len(chunk)
+
+        offset = 0
+        while True:
+            chunk = await asyncio.to_thread(
+                self._rq_queue.get_job_ids, offset, LISTING_CHUNK_SIZE
+            )
+            if _extend(chunk) < LISTING_CHUNK_SIZE:
+                break
+            offset += len(chunk)
+
+        registry = StartedJobRegistry(queue=self._rq_queue, connection=self._redis_conn)
+        start = 0
+        while True:
+            end = start + LISTING_CHUNK_SIZE - 1
+            chunk = await asyncio.to_thread(registry.get_job_ids, start, end)
+            if _extend(chunk) < LISTING_CHUNK_SIZE:
+                break
+            start = end + 1
+
+        return task_ids
+
+    def _resolve_active_job_statuses(
+        self, task_ids: list[str]
+    ) -> dict[str, TaskStatus]:
+        """Resolve each candidate job's current status, dropping non-active ones.
+
+        A deleted or TTL-expired job is stale state and is omitted; a genuine
+        Redis failure propagates instead of surfacing as a falsely empty page.
+        """
+        statuses: dict[str, TaskStatus] = {}
+        for task_id in task_ids:
+            try:
+                job_status = Job.fetch(
+                    task_id, connection=self._redis_conn
+                ).get_status()
+            except NoSuchJobError:
+                continue
+            status = _RQ_ACTIVE_JOB_STATUSES.get(job_status)
+            if status is not None:
+                statuses[task_id] = status
+        return statuses
+
+    async def _active_listing_item(
+        self, task_id: str, status: TaskStatus, tenant_id: str
+    ) -> Optional[ActiveTaskItem]:
+        """Build one listing entry from the stored metadata, or None to omit it."""
+        task = await self._get_listing_task_from_redis(task_id)
+        if task is None:
+            return None
+        if task.task_status not in ACTIVE_TASK_STATUSES:
+            return None
+        if tenant_of(task.metadata) != tenant_id:
+            return None
+        return ActiveTaskItem(
+            task_id=task.task_id,
+            task_type=task.task_type,
+            task_status=status,
+            created_at=task.created_at,
+        )
 
     async def _refresh_task_from_rq(self, task_id: str) -> None:
         task = await self.get_raw_task(task_id=task_id)
@@ -388,54 +952,40 @@ class RQOrchestrator(BaseOrchestrator):
     async def _get_task_from_redis(self, task_id: str) -> Task | None:
         try:
             task_data = await self._async_redis_conn.get(
-                f"{_TASK_METADATA_PREFIX}{task_id}:metadata"
+                self._task_metadata_key(task_id)
             )
             if not task_data:
                 return None
 
             data: dict[str, Any] = json.loads(task_data)
-            meta = data.get("processing_meta") or {}
-            meta.setdefault("num_docs", 0)
-            meta.setdefault("num_processed", 0)
-            meta.setdefault("num_succeeded", 0)
-            meta.setdefault("num_partially_succeeded", 0)
-            meta.setdefault("num_failed", 0)
-
-            task_kwargs: dict[str, Any] = {
-                "task_id": data["task_id"],
-                "task_type": data["task_type"],
-                "task_status": TaskStatus(data["task_status"]),
-                "processing_meta": meta,
-                "error_message": data.get("error_message"),
-            }
-            for field_name in (
-                "created_at",
-                "started_at",
-                "finished_at",
-                "last_update_at",
-                "target",
-                "targets",
-                "sources",
-                "convert_options",
-                "chunking_options",
-                "chunking_export_options",
-                "callbacks",
-                "metadata",
-                "target_document_version",
-            ):
-                if data.get(field_name) is not None:
-                    task_kwargs[field_name] = data[field_name]
-            # Backwards compat: tasks stored before the multi-target migration
-            # have neither 'target' nor 'targets'. Default to InBodyTarget so
-            # the validator does not reject legacy Redis entries.
-            if "target" not in task_kwargs and "targets" not in task_kwargs:
-                task_kwargs["targets"] = [InBodyTarget().model_dump()]
-            return validate_task(
-                task_kwargs,
+            return _decode_stored_task(
+                data,
                 allow_external_plugins=self.config.allow_external_plugins,
             )
         except Exception as exc:
             _log.error(f"Redis get task {task_id}: {exc}")
+            return None
+
+    async def _get_listing_task_from_redis(self, task_id: str) -> Task | None:
+        """Strict metadata read for active-task listing.
+
+        Transport/backend failures propagate instead of surfacing as a falsely
+        empty page; only absent/expired rows (None) and corrupt rows (bad JSON
+        or failed validation) are omitted. Lifecycle loaders keep their
+        existing catch-all behavior and are untouched here.
+        """
+        task_data = await self._async_redis_conn.get(self._task_metadata_key(task_id))
+        if not task_data:
+            return None
+
+        try:
+            data: dict[str, Any] = json.loads(task_data)
+            return _decode_stored_task(
+                data,
+                allow_external_plugins=self.config.allow_external_plugins,
+            )
+        except Exception as exc:
+            _log.warning(f"Skipping corrupt listing metadata for task {task_id}: {exc}")
             return None
 
     async def _get_task_from_rq_direct(self, task_id: str) -> Task | _RQJobGone | None:
@@ -515,13 +1065,64 @@ class RQOrchestrator(BaseOrchestrator):
             data = task.model_dump(mode="json", serialize_as_any=True)
             data["task_status"] = task.task_status.value
             data["processing_meta"] = meta
-            await self._async_redis_conn.set(
-                f"{_TASK_METADATA_PREFIX}{task.task_id}:metadata",
-                json.dumps(data),
+            payload = json.dumps(data)
+            if self.config.enable_task_listing:
+                await self._store_task_and_index(task, payload)
+                return
+            # A disabled producer still owns the metadata write. Invalidate any
+            # previously trusted index in the same transaction, but only when
+            # this scope ever had index bookkeeping.
+            pipe = self._async_redis_conn.pipeline(transaction=True)
+            pipe.set(
+                self._task_metadata_key(task.task_id),
+                payload,
                 ex=self.config.results_ttl,
             )
+            queue_invalidate_ready_if_present(
+                pipe,
+                generation_key(self._index_namespace),
+                ready_key(self._index_namespace),
+            )
+            await pipe.execute()
         except Exception as exc:
             _log.error(f"Store task {task.task_id}: {exc}")
+            if self.config.enable_task_listing:
+                # The metadata did not reach Redis, so the task must not be
+                # listed either, and the index cannot be trusted any more.
+                await self._remove_index_entry(task.task_id)
+                await self._invalidate_listing_index()
+            else:
+                await self._invalidate_listing_index_if_present()
+
+    async def _store_task_and_index(self, task: Task, payload: str) -> None:
+        """Store the task metadata and its listing projection in one transaction.
+
+        The metadata, the compact projection and the membership of the tenant's
+        sorted set are written together, so a listing never shows a task whose
+        metadata is missing and never misses a task whose metadata is there.
+        A task that reached a terminal state leaves the index.
+        """
+        record = CompactTask.from_task(task)
+        pipe = self._async_redis_conn.pipeline(transaction=True)
+        pipe.set(
+            self._task_metadata_key(task.task_id),
+            payload,
+            ex=self.config.results_ttl,
+        )
+        if task.task_status in ACTIVE_TASK_STATUSES:
+            pipe.hset(
+                self._task_record_key(task.task_id),
+                mapping=record.to_redis_mapping(),
+            )
+            pipe.expire(self._task_record_key(task.task_id), self.config.results_ttl)
+            pipe.zadd(
+                self._tenant_index_key(record.tenant_id),
+                {task.task_id: index_score(task.created_at)},
+            )
+        else:
+            pipe.zrem(self._tenant_index_key(record.tenant_id), task.task_id)
+            pipe.delete(self._task_record_key(task.task_id))
+        await pipe.execute()
 
     async def _reap_zombie_tasks(self) -> None:
         while True:
@@ -796,6 +1397,7 @@ class RQOrchestrator(BaseOrchestrator):
             _log.debug(f"Could not delete RQ job {task_id=}: {e}")
 
         await super().delete_task(task_id)
+        await self._remove_index_entry(task_id)
 
     async def on_result_fetched(self, task_id: str) -> None:
         """Set Redis EXPIRE on the result key instead of deleting immediately.
@@ -820,6 +1422,7 @@ class RQOrchestrator(BaseOrchestrator):
         except Exception as e:
             _log.debug(f"Could not delete RQ job {task_id=}: {e}")
         await super().delete_task(task_id)
+        await self._remove_index_entry(task_id)
 
     async def warm_up_caches(self):
         pass

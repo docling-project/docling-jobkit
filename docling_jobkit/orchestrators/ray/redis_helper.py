@@ -6,6 +6,8 @@ import inspect
 import json
 import logging
 import math
+import uuid
+from collections.abc import Sequence
 from typing import Optional
 
 import msgpack
@@ -26,6 +28,15 @@ from docling_jobkit.datamodel.stored_outcome import (
     stored_task_outcome_adapter,
 )
 from docling_jobkit.datamodel.task import Task, validate_task_json
+from docling_jobkit.datamodel.task_listing import (
+    ACTIVE_TASK_STATUSES,
+    LISTING_CHUNK_SIZE,
+    ActiveTaskItem,
+    CompactTask,
+    iter_chunks,
+    resolve_tenant_id,
+    validate_page_window,
+)
 from docling_jobkit.datamodel.task_meta import TaskStatus
 from docling_jobkit.orchestrators.ray.models import (
     RedisTaskMetadata,
@@ -35,6 +46,22 @@ from docling_jobkit.orchestrators.ray.models import (
     TenantSnapshot,
     TenantStats,
     TenantTaskCounters,
+)
+from docling_jobkit.orchestrators.redis_task_index import (
+    acquire_lock,
+    decode_optional_text,
+    index_namespace,
+    index_score,
+    invalidate_ready_generation,
+    is_ready_at_generation,
+    mark_ready_if_generation,
+    queue_invalidate_ready_if_present,
+    ready_generation,
+    release_lock,
+    tenant_build_lock_key,
+    tenant_generation_key,
+    tenant_index_key,
+    tenant_ready_key,
 )
 from docling_jobkit.orchestrators.serialization import (
     dump_model_with_secrets,
@@ -118,6 +145,25 @@ _REGISTRY_KEY_SUFFIXES = ("tasks", "active_tasks", "task_counters")
 # Tenants per pipeline when reading per-tenant values in bulk.
 _SNAPSHOT_CHUNK_SIZE = 200
 
+# Backend name of the listing index; it keeps Ray's index apart from every
+# other backend's one.
+_INDEX_BACKEND = "ray"
+
+# A contended repair transaction is retried at most this often. After that the
+# stale row is left for the next query instead of deleting possibly valid work.
+_INDEX_CONTENTION_ATTEMPTS = 3
+
+# Fields of the existing task:{id} hash a listing item needs, read with one
+# bounded HMGET per page member. The full queued Task JSON is never read on a
+# ready page.
+_LISTING_HASH_FIELDS = (
+    "task_id",
+    "tenant_id",
+    "status",
+    "task_type",
+    "created_at",
+)
+
 
 class InvalidQueuedTaskError(Exception):
     """A queued task payload no longer validates against the ``Task`` model.
@@ -149,6 +195,31 @@ class InvalidQueuedTaskError(Exception):
         )
 
 
+def _queued_task_id(
+    row: object, *, allow_external_plugins: bool = False
+) -> Optional[str]:
+    """Read the task id out of one queued task payload.
+
+    The queue stores full Task JSON, so the row is validated as a Task using
+    the existing external-plugin policy before its id is used: tenant, status
+    and timestamps are still resolved from the authoritative ``task:{id}``
+    metadata, but a row that is not a valid Task is corrupt and skipped rather
+    than surfacing as a listed id with valid metadata.
+    """
+    if not isinstance(row, (str, bytes)):
+        return None
+    try:
+        task = validate_task_json(
+            row,
+            allow_external_plugins=allow_external_plugins,
+        )
+    except Exception:
+        return None
+    if task.task_id:
+        return task.task_id
+    return None
+
+
 class RedisStateManager:
     """Manages Redis state for Ray orchestrator.
 
@@ -177,6 +248,7 @@ class RedisStateManager:
         dispatcher_interval: float = 2.0,
         log_level: str = "INFO",
         allow_external_plugins: bool = False,
+        enable_task_listing: bool = False,
     ):
         """Initialize Redis state manager.
 
@@ -196,6 +268,8 @@ class RedisStateManager:
             task_timeout: Max expected task runtime in seconds
             dispatcher_interval: Dispatcher loop interval in seconds
             log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
+            allow_external_plugins: Allow external plugin source/target kinds
+            enable_task_listing: Publish the listing index on enqueue
         """
         self.redis_url = redis_url
         self.results_ttl = results_ttl
@@ -204,6 +278,8 @@ class RedisStateManager:
         self.sub_channel = sub_channel
         self.log_level = log_level
         self.allow_external_plugins = allow_external_plugins
+        self.enable_task_listing = enable_task_listing
+        self._index_namespace = index_namespace(_INDEX_BACKEND)
 
         # Configure logging level for Redis helper
         _log.setLevel(log_level.upper())
@@ -315,6 +391,24 @@ class RedisStateManager:
             pipe.rpush(queue_key, task_json)
             pipe.hincrby(task_counters_key, "tasks_enqueued_total", 1)
             pipe.sadd(TENANT_REGISTRY_KEY, tenant_id)
+            index_tenant = resolve_tenant_id(tenant_id)
+            if self.enable_task_listing:
+                # The listing membership is published in the same transaction
+                # as the queue write, so a task whose enqueue failed never
+                # appears in the listing.
+                pipe.zadd(
+                    self._task_index_key(index_tenant),
+                    {task.task_id: index_score(task.created_at)},
+                )
+            else:
+                # A disabled producer invalidates any previously trusted index
+                # in the same transaction. It is a no-op in a deployment that
+                # never enabled the index.
+                queue_invalidate_ready_if_present(
+                    pipe,
+                    self._task_index_generation_key(index_tenant),
+                    self._task_index_ready_key(index_tenant),
+                )
             await pipe.execute()
 
         # Update tenant limits
@@ -495,6 +589,44 @@ class RedisStateManager:
                 getattr(pipe, command)(f"tenant:{tenant_id}:{suffix}")
             return [int(v) for v in await pipe.execute()]
 
+    async def get_tenant_queued_task_ids(self, tenant_id: str) -> list[str]:
+        """Return the queued task ids of one tenant, read in bounded chunks.
+
+        Only this tenant's queue key is read, so a listing never scans across
+        tenants, and the chunked LRANGE keeps a deep queue from turning into one
+        unbounded read.
+        """
+        if not self.redis:
+            await self.connect()
+
+        queue_key = f"tenant:{tenant_id}:tasks"
+        redis = self._ensure_redis()
+        task_ids: list[str] = []
+        seen: set[str] = set()
+        start = 0
+        while True:
+            pending_rows = redis.lrange(
+                queue_key, start, start + LISTING_CHUNK_SIZE - 1
+            )
+            if isinstance(pending_rows, list):
+                rows = pending_rows
+            else:
+                rows = await pending_rows
+            if not rows:
+                break
+            for row in rows:
+                task_id = _queued_task_id(
+                    row, allow_external_plugins=self.allow_external_plugins
+                )
+                if task_id is not None and task_id not in seen:
+                    seen.add(task_id)
+                    task_ids.append(task_id)
+            if len(rows) < LISTING_CHUNK_SIZE:
+                break
+            start += len(rows)
+
+        return task_ids
+
     async def get_tenant_queue_size(self, tenant_id: str) -> int:
         """Get number of tasks in tenant's queue.
 
@@ -617,6 +749,7 @@ class RedisStateManager:
         task_size: int,
         status: TaskStatus = TaskStatus.PENDING,
         target_document_version: Optional[str] = None,
+        created_at: Optional[datetime.datetime] = None,
     ) -> None:
         """Initialize task metadata.
 
@@ -625,14 +758,18 @@ class RedisStateManager:
             tenant_id: Tenant identifier
             task_type: Type of task
             task_size: Number of documents associated with the task
-            status: Initial task status
+            status: Initial status
             target_document_version: DoclingDocument version requested by the client
+            created_at: Creation instant the listing orders by; defaults to now
         """
         if not self.redis:
             await self.connect()
 
         task_key = f"task:{task_id}"
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        created_at_text = (
+            created_at.isoformat() if created_at is not None else timestamp
+        )
 
         metadata = {
             "task_id": task_id,
@@ -640,7 +777,7 @@ class RedisStateManager:
             "status": status.value,
             "task_type": task_type.value,
             "task_size": str(task_size),
-            "created_at": timestamp,
+            "created_at": created_at_text,
             "last_update_at": timestamp,
         }
         if target_document_version:
@@ -657,6 +794,330 @@ class RedisStateManager:
         if not metadata:
             return None
         return RedisTaskMetadata.from_redis_mapping(metadata)
+
+    async def get_task_metadata_models(
+        self, task_ids: Sequence[str]
+    ) -> list[RedisTaskMetadata]:
+        """Get typed metadata for several tasks in one pipelined round trip.
+
+        Tasks whose metadata is absent (expired or never written) or corrupt
+        are omitted from the result rather than failing the whole read.
+        """
+        if not self.redis:
+            await self.connect()
+        if not task_ids:
+            return []
+
+        redis = self._ensure_redis()
+        async with redis.pipeline(transaction=False) as pipe:
+            for task_id in task_ids:
+                pipe.hgetall(f"task:{task_id}")
+            rows = await pipe.execute()
+
+        models: list[RedisTaskMetadata] = []
+        for task_id, row in zip(task_ids, rows):
+            if not row:
+                continue
+            try:
+                decoded = {k.decode("utf-8"): v.decode("utf-8") for k, v in row.items()}
+                # A missing or empty tenant in durable metadata belongs to the
+                # default tenant, matching the serving layer and the other
+                # backends; only other missing/corrupt fields omit the entry.
+                if not decoded.get("tenant_id"):
+                    decoded["tenant_id"] = resolve_tenant_id(decoded.get("tenant_id"))
+                model = RedisTaskMetadata.from_redis_mapping(decoded)
+            except Exception as exc:
+                _log.warning("Skipping corrupt metadata for task %s: %s", task_id, exc)
+                continue
+            if model is not None:
+                models.append(model)
+        return models
+
+    # Active Task Listing Index
+    #
+    # The index is derived state: one sorted set per tenant holds the ids of
+    # that tenant's active tasks in listing order, and a page reads only the
+    # compact fields of the existing task:{id} hashes. Membership is published
+    # with a successful queue write and dropped by every terminal finalize and
+    # delete path, so every process - including the dispatcher and the Serve
+    # deployment - keeps the index coherent.
+
+    def _task_index_key(self, tenant_id: str) -> str:
+        """Sorted set that holds the tenant's active task ids."""
+        return tenant_index_key(self._index_namespace, tenant_id)
+
+    def _task_index_lock_key(self, tenant_id: str) -> str:
+        """Build lock of the tenant's listing index."""
+        return tenant_build_lock_key(self._index_namespace, tenant_id)
+
+    def _task_index_ready_key(self, tenant_id: str) -> str:
+        """Readiness flag of the tenant's listing index."""
+        return tenant_ready_key(self._index_namespace, tenant_id)
+
+    def _task_index_generation_key(self, tenant_id: str) -> str:
+        """Generation counter that fences this tenant's readiness publication."""
+        return tenant_generation_key(self._index_namespace, tenant_id)
+
+    async def is_task_index_ready(self, tenant_id: str) -> bool:
+        """Report whether the tenant's index is ready for the current generation."""
+        if not self.redis:
+            await self.connect()
+        return await is_ready_at_generation(
+            self._ensure_redis(),
+            self._task_index_generation_key(tenant_id),
+            self._task_index_ready_key(tenant_id),
+        )
+
+    async def invalidate_task_index(self, tenant_id: str) -> None:
+        """Advance the tenant's generation and drop readiness atomically."""
+        try:
+            await invalidate_ready_generation(
+                self._ensure_redis(),
+                self._task_index_generation_key(tenant_id),
+                self._task_index_ready_key(tenant_id),
+            )
+        except Exception as exc:
+            _log.warning(
+                "Invalidating the task listing index for %s failed: %s",
+                tenant_id,
+                exc,
+            )
+
+    async def read_task_listing_page(
+        self, tenant_id: str, *, limit: int, offset: int
+    ) -> list[ActiveTaskItem]:
+        """Read the requested window of the tenant's index in listing order.
+
+        ``offset`` counts valid active rows, not raw index members, so a stale
+        prefix never consumes a client's offset. The walk collects
+        ``offset + limit + 1`` valid rows in bounded chunks and removes the
+        stale members it met. A healthy first page still reads only its own
+        window; a nonzero offset reads the compact rows before it, which is the
+        priced cost of deep paging rather than a page-sized read. Only this
+        tenant's index and its task hashes are read.
+        """
+        if not self.redis:
+            await self.connect()
+        validate_page_window(limit, offset)
+
+        tenant = resolve_tenant_id(tenant_id)
+        index_key = self._task_index_key(tenant)
+        redis = self._ensure_redis()
+
+        target = offset + limit + 1
+        valid: list[ActiveTaskItem] = []
+        stale: list[str] = []
+        rank = 0
+        while len(valid) < target:
+            chunk_size = min(target - len(valid), LISTING_CHUNK_SIZE)
+            raw_members = await redis.zrange(index_key, rank, rank + chunk_size - 1)
+            if not raw_members:
+                break
+            # Stale members are removed only after the walk, so they cannot
+            # shift the rank of a row that has not been read yet.
+            rank += len(raw_members)
+            members = [
+                member
+                for member in (decode_optional_text(raw) for raw in raw_members)
+                if member is not None
+            ]
+            if members:
+                records = await self.get_task_listing_records(members)
+                for member, record in zip(members, records):
+                    item = self._indexed_item(record, tenant)
+                    if item is None:
+                        stale.append(member)
+                    else:
+                        valid.append(item)
+            if len(raw_members) < chunk_size:
+                break
+        if stale:
+            await self._remove_stale_index_members_guarded(tenant, stale)
+        return valid[offset : offset + limit + 1]
+
+    async def _remove_stale_index_members_guarded(
+        self, tenant_id: str, members: list[str]
+    ) -> None:
+        """Remove stale members only while they are still stale.
+
+        The task hash is watched and re-read inside the removal transaction. A
+        concurrent lifecycle write that republishes a valid active row aborts
+        the removal, so repair can never delete a freshly written membership;
+        the member is re-examined on the next query instead.
+        """
+        index_key = self._task_index_key(tenant_id)
+        redis = self._ensure_redis()
+        for member in members:
+            task_key = f"task:{member}"
+            pipe = redis.pipeline(transaction=True)
+            async with pipe:
+                for _ in range(_INDEX_CONTENTION_ATTEMPTS):
+                    try:
+                        await pipe.watch(task_key)
+                        row = await pipe.hmget(task_key, *_LISTING_HASH_FIELDS)
+                        if self._indexed_item(self._listing_record(row), tenant_id):
+                            break
+                        pipe.multi()
+                        pipe.zrem(index_key, member)
+                        await pipe.execute()
+                        break
+                    except WatchError:
+                        continue
+
+    async def get_task_listing_records(
+        self, task_ids: Sequence[str]
+    ) -> list[Optional[CompactTask]]:
+        """Read the listing projection of several tasks in one pipelined read.
+
+        Only the compact fields are read from each existing ``task:{id}`` hash,
+        never the queued Task JSON or the full metadata hash. A row whose hash
+        is gone or corrupt is returned as ``None`` so the caller can treat the
+        corresponding index member as stale.
+        """
+        if not task_ids:
+            return []
+        if not self.redis:
+            await self.connect()
+
+        redis = self._ensure_redis()
+        async with redis.pipeline(transaction=False) as pipe:
+            for task_id in task_ids:
+                pipe.hmget(f"task:{task_id}", *_LISTING_HASH_FIELDS)
+            rows = await pipe.execute()
+        return [self._listing_record(row) for row in rows]
+
+    @staticmethod
+    def _listing_record(row: Sequence[object]) -> Optional[CompactTask]:
+        """Decode one compact hash read, or None when the row is unusable.
+
+        A row missing its type predates the typed metadata field, so it keeps
+        the same conversion default the lifecycle loader applies.
+        """
+        task_id, tenant_id, status, task_type, created_at = (
+            decode_optional_text(value) for value in row
+        )
+        if task_id is None or status is None or created_at is None:
+            return None
+        try:
+            return CompactTask(
+                task_id=task_id,
+                task_type=TaskType(task_type or TaskType.CONVERT.value),
+                task_status=TaskStatus(status),
+                created_at=datetime.datetime.fromisoformat(created_at),
+                tenant_id=resolve_tenant_id(tenant_id),
+            )
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _indexed_item(
+        record: Optional[CompactTask], tenant_id: str
+    ) -> Optional[ActiveTaskItem]:
+        """Map one stored record to a listing item, or None to omit it."""
+        if record is None or record.tenant_id != tenant_id:
+            return None
+        if record.task_status not in ACTIVE_TASK_STATUSES:
+            return None
+        return ActiveTaskItem(
+            task_id=record.task_id,
+            task_type=record.task_type,
+            task_status=record.task_status,
+            created_at=record.created_at,
+        )
+
+    async def build_task_index(self, tenant_id: str) -> bool:
+        """Build the tenant's listing index from its queue and active set.
+
+        The build is single-flight per tenant: the first caller owns it and
+        the others fall back to the scan path until the index is ready. Only a
+        completed build sets the readiness flag, so a failed build leaves the
+        index unadvertised and the next read rebuilds it. The full queued Task
+        JSON is validated here, and only here, to migrate legacy payloads.
+        """
+        if not self.redis:
+            await self.connect()
+
+        tenant = resolve_tenant_id(tenant_id)
+        redis = self._ensure_redis()
+        token = uuid.uuid4().hex
+        lock_key = self._task_index_lock_key(tenant)
+        if not await acquire_lock(redis, lock_key, token):
+            return False
+        try:
+            # Fence this tenant's readiness to the generation observed before
+            # enumeration, so an invalidation during the build wins.
+            expected_generation = await ready_generation(
+                redis, self._task_index_generation_key(tenant)
+            )
+            task_ids: list[str] = []
+            seen: set[str] = set()
+            for task_id in await self.get_tenant_queued_task_ids(tenant):
+                if task_id not in seen:
+                    seen.add(task_id)
+                    task_ids.append(task_id)
+            for task_id in await self.get_tenant_active_task_ids(tenant):
+                if task_id not in seen:
+                    seen.add(task_id)
+                    task_ids.append(task_id)
+            for chunk in iter_chunks(task_ids, LISTING_CHUNK_SIZE):
+                await self._project_listing_chunk(tenant, chunk)
+            return await mark_ready_if_generation(
+                redis,
+                self._task_index_generation_key(tenant),
+                self._task_index_ready_key(tenant),
+                expected_generation,
+            )
+        except Exception as exc:
+            _log.warning(
+                "Building the task listing index for %s failed: %s", tenant, exc
+            )
+            await self.invalidate_task_index(tenant)
+            return False
+        finally:
+            try:
+                await release_lock(redis, lock_key, token)
+            except Exception as exc:
+                _log.warning(
+                    "Releasing the task listing index lock for %s failed: %s",
+                    tenant,
+                    exc,
+                )
+
+    async def _project_listing_chunk(
+        self, tenant_id: str, task_ids: Sequence[str]
+    ) -> None:
+        """Project one chunk of candidate tasks into the tenant's index."""
+        records = await self.get_task_listing_records(task_ids)
+        redis = self._ensure_redis()
+        projected = 0
+        async with redis.pipeline(transaction=True) as pipe:
+            for task_id, record in zip(task_ids, records):
+                if record is None or record.tenant_id != tenant_id:
+                    continue
+                if record.task_status not in ACTIVE_TASK_STATUSES:
+                    continue
+                pipe.zadd(
+                    self._task_index_key(tenant_id),
+                    {task_id: index_score(record.created_at)},
+                )
+                projected += 1
+            if projected:
+                await pipe.execute()
+
+    async def remove_task_index_entry(self, task_id: str, tenant_id: str) -> None:
+        """Remove a task from the tenant's listing index."""
+        if not self.redis:
+            await self.connect()
+        try:
+            await self._ensure_redis().zrem(
+                self._task_index_key(resolve_tenant_id(tenant_id)), task_id
+            )
+        except Exception as exc:
+            _log.warning(
+                "Removing task %s from the task listing index failed: %s",
+                task_id,
+                exc,
+            )
 
     # Task Results Operations
 
@@ -1261,6 +1722,12 @@ class RedisStateManager:
                     if held_units > 0:
                         pipe.hincrby(limits_key, "converter_units", -held_units)
                     pipe.delete(dispatch_key, execution_key)
+                    # Terminal membership leaves the listing index in the same
+                    # transaction, so no finalize path (replica, dispatcher,
+                    # reconciliation) can leave a member behind.
+                    pipe.zrem(
+                        self._task_index_key(resolve_tenant_id(tenant_id)), task_id
+                    )
                     # Finished task hashes would otherwise pile up forever.
                     if self.task_metadata_ttl:
                         pipe.expire(

@@ -412,6 +412,9 @@ class _TerminalizationPipeline:
     def srem(self, key: str, value: str) -> None:
         self.ops.append(("srem", key, value))
 
+    def zrem(self, key: str, *members: str) -> None:
+        self.ops.append(("zrem", key, members))
+
     def expire(self, key: str, ttl: int) -> None:
         self.ops.append(("expire", key, ttl))
 
@@ -454,6 +457,19 @@ class _TerminalizationPipeline:
                 removed = 1 if op[2] in active_members else 0
                 if removed:
                     active_members.remove(op[2])
+                results.append(removed)
+            elif op[0] == "zrem":
+                # ZREM removes each named member from the sorted set and
+                # reports how many it actually removed.
+                index_members = self.state.setdefault("index_members", {})
+                assert isinstance(index_members, dict)
+                members = index_members.setdefault(op[1], set())
+                assert isinstance(members, set)
+                removed = 0
+                for member in op[2]:
+                    if member in members:
+                        removed += 1
+                        members.remove(member)
                 results.append(removed)
             elif op[0] == "hincrby":
                 limits[op[2]] = int(limits.get(op[2], 0)) + op[3]
@@ -579,6 +595,7 @@ async def test_finalize_task_success_atomic_is_idempotent() -> None:
         redis_url="redis://localhost:6379/",
         max_documents=10,
     )
+    index_key = "docling:taskindex:ray:v1:tenant:tenant-a:tasks"
     state: dict[str, object] = {
         "task_fields": {
             "status": TaskStatus.STARTED.value,
@@ -588,6 +605,7 @@ async def test_finalize_task_success_atomic_is_idempotent() -> None:
         "limits": {"active_tasks": 1, "active_documents": 2},
         "deleted_keys": [],
         "result_store": {},
+        "index_members": {index_key: {"task-1"}},
     }
     manager.redis = _FakeTerminalRedis(state)  # type: ignore[assignment]
 
@@ -630,6 +648,12 @@ async def test_finalize_task_success_atomic_is_idempotent() -> None:
     assert deleted_keys.count("task:task-1:dispatch") == 2
     assert "docling:ray:results:task:task-1:result" in result_store
 
+    index_members = state["index_members"]
+    assert isinstance(index_members, dict)
+    # The terminal transaction removes the listing membership exactly like
+    # ZREM does, and a repeated finalize stays a no-op for it.
+    assert "task-1" not in index_members[index_key]
+
 
 @pytest.mark.asyncio
 async def test_finalize_task_failure_atomic_preserves_existing_success() -> None:
@@ -637,6 +661,7 @@ async def test_finalize_task_failure_atomic_preserves_existing_success() -> None
         redis_url="redis://localhost:6379/",
         max_documents=10,
     )
+    index_key = "docling:taskindex:ray:v1:tenant:tenant-a:tasks"
     state: dict[str, object] = {
         "task_fields": {
             "status": TaskStatus.SUCCESS.value,
@@ -645,6 +670,7 @@ async def test_finalize_task_failure_atomic_preserves_existing_success() -> None
         "limits": {"active_tasks": 1, "active_documents": 2},
         "deleted_keys": [],
         "result_store": {},
+        "index_members": {index_key: {"task-1"}},
     }
     manager.redis = _FakeTerminalRedis(state)  # type: ignore[assignment]
 
@@ -675,6 +701,10 @@ async def test_finalize_task_failure_atomic_preserves_existing_success() -> None
     assert limits["active_tasks"] == 0
     assert limits["active_documents"] == 0
     assert "task-1" not in active_members
+
+    index_members = state["index_members"]
+    assert isinstance(index_members, dict)
+    assert "task-1" not in index_members[index_key]
 
 
 def test_config_rejects_non_positive_heartbeat_interval() -> None:
