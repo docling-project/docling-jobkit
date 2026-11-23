@@ -10,6 +10,7 @@ from docling.datamodel.pipeline_options import (
     CodeFormulaVlmOptions,
     PictureDescriptionVlmEngineOptions,
 )
+from docling.pipeline.vlm_pipeline import VlmPipeline
 
 from docling_jobkit.convert.manager import (
     DoclingConverterManager,
@@ -204,6 +205,49 @@ class TestPresetValidation:
                 manager.chart_extraction_preset_registry,
                 "Chart extraction",
             )
+
+
+class TestPipelineControl:
+    """Test the default and allowed pipeline configuration."""
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{"allowed_pipelines": ["standard", "asr"]}, {"default_pipeline": "legacy"}],
+    )
+    def test_unsupported_pipeline_rejected(self, kwargs):
+        with pytest.raises(ValueError, match="not supported"):
+            DoclingConverterManagerConfig(**kwargs)
+
+    def test_default_pipeline_must_be_allowed(self):
+        with pytest.raises(
+            ValueError, match="default_pipeline 'standard' is not in allowed_pipelines"
+        ):
+            DoclingConverterManagerConfig(allowed_pipelines=["vlm"])
+
+    @pytest.mark.skipif(
+        ConvertDocumentsOptions.model_fields["pipeline"].default is not None,
+        reason="requires a docling version where `pipeline` can be omitted",
+    )
+    def test_omitted_pipeline_uses_default(self):
+        manager = DoclingConverterManager(
+            DoclingConverterManagerConfig(
+                default_pipeline="vlm", allowed_pipelines=["vlm"]
+            )
+        )
+
+        pdf_format_option = manager.get_pdf_pipeline_opts(ConvertDocumentsOptions())
+
+        assert pdf_format_option.pipeline_cls is VlmPipeline
+
+    def test_disallowed_pipeline_rejected(self):
+        manager = DoclingConverterManager(
+            DoclingConverterManagerConfig(
+                default_pipeline="vlm", allowed_pipelines=["vlm"]
+            )
+        )
+
+        with pytest.raises(ValueError, match="Pipeline 'standard' is not allowed"):
+            manager.get_pdf_pipeline_opts(ConvertDocumentsOptions(pipeline="standard"))
 
 
 class TestCustomConfigValidation:
