@@ -13,12 +13,16 @@ from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
 from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.pipeline_options import (
+    AsrPipelineOptions,
     PdfBackend,
     PdfPipelineOptions,
     ProcessingPipeline,
+    VideoPipelineOptions,
     VlmPipelineOptions,
 )
+from docling.datamodel.pipeline_options_asr_model import ApiAsrOptions
 from docling.document_converter import (
+    AudioFormatOption,
     EpubFormatOption,
     ExcelFormatOption,
     HTMLFormatOption,
@@ -26,6 +30,7 @@ from docling.document_converter import (
     OdsFormatOption,
     OdtFormatOption,
     PowerpointFormatOption,
+    VideoFormatOption,
     WordFormatOption,
 )
 from docling.pipeline.vlm_pipeline import VlmPipeline
@@ -537,3 +542,71 @@ def test_epub_picture_outside_the_archive_keeps_the_document(tmp_path):
     assert "Text." in doc.export_to_markdown()
     assert len(doc.pictures) == 1
     assert doc.pictures[0].image is None
+
+
+def _audio_video_pipeline_options(
+    m: DoclingConverterManager, opts: ConvertDocumentsOptions
+) -> dict:
+    converter = m.get_converter(m.get_pdf_pipeline_opts(opts))
+    audio_option = converter.format_to_options[InputFormat.AUDIO]
+    video_option = converter.format_to_options[InputFormat.VIDEO]
+    assert isinstance(audio_option, AudioFormatOption)
+    assert isinstance(audio_option.pipeline_options, AsrPipelineOptions)
+    assert isinstance(video_option, VideoFormatOption)
+    assert isinstance(video_option.pipeline_options, VideoPipelineOptions)
+    return {
+        InputFormat.AUDIO: audio_option.pipeline_options,
+        InputFormat.VIDEO: video_option.pipeline_options,
+    }
+
+
+def test_audio_and_video_get_artifacts_path_and_request_options(tmp_path):
+    """Audio and video always get explicit options carrying artifacts_path, so
+    pre-downloaded ASR weights are found, and the request's settings.
+    """
+    m = DoclingConverterManager(
+        config=DoclingConverterManagerConfig(artifacts_path=tmp_path)
+    )
+    opts = ConvertDocumentsOptions(document_timeout=42.0)
+    pdf_pipeline_options = m.get_pdf_pipeline_opts(opts).pipeline_options
+
+    for input_format, options in _audio_video_pipeline_options(m, opts).items():
+        assert options.artifacts_path == tmp_path, input_format
+        assert options.document_timeout == 42.0
+        assert options.enable_remote_services is False
+        assert options.accelerator_options == pdf_pipeline_options.accelerator_options
+        assert options.asr_options == AsrPipelineOptions().asr_options
+
+
+def test_remote_asr_preset_reaches_audio_and_video():
+    """A remote ASR server configured as the default preset is used for audio
+    and video, instead of Docling's in-process Whisper model.
+    """
+    m = DoclingConverterManager(
+        config=DoclingConverterManagerConfig(
+            enable_remote_services=True,
+            default_asr_preset="parakeet",
+            custom_asr_presets={
+                "parakeet": {
+                    "kind": "api_model_options",
+                    "url": "http://host.docker.internal:5002/v1/audio/transcriptions",
+                    "model": "parakeet-tdt-0.6b-v3",
+                    "headers": {"Authorization": "Bearer test"},
+                    "language": "en",
+                }
+            },
+        )
+    )
+
+    for input_format, options in _audio_video_pipeline_options(
+        m, ConvertDocumentsOptions()
+    ).items():
+        assert isinstance(options.asr_options, ApiAsrOptions), input_format
+        assert (
+            str(options.asr_options.url)
+            == "http://host.docker.internal:5002/v1/audio/transcriptions"
+        )
+        assert options.asr_options.model == "parakeet-tdt-0.6b-v3"
+        assert options.asr_options.headers == {"Authorization": "Bearer test"}
+        assert options.asr_options.language == "en"
+        assert options.enable_remote_services is True

@@ -26,6 +26,7 @@ from docling.datamodel.picture_classification_options import (
     DocumentPictureClassifierOptions,
 )
 from docling.datamodel.pipeline_options import (
+    AsrPipelineOptions,
     CodeFormulaVlmOptions,
     OcrOptions,
     PdfBackend,
@@ -36,9 +37,19 @@ from docling.datamodel.pipeline_options import (
     ProcessingPipeline,
     TableFormerMode,
     TableStructureOptions,
+    VideoPipelineOptions,
     VlmConvertOptions,
     VlmPipelineOptions,
     normalize_pdf_backend,
+)
+from docling.datamodel.pipeline_options_asr_model import (
+    ApiAsrOptions,
+    InferenceAsrFramework,
+    InlineAsrMlxWhisperOptions,
+    InlineAsrNativeWhisperOptions,
+    InlineAsrOptions,
+    InlineAsrTransformersOptions,
+    InlineAsrWhisperS2TOptions,
 )
 from docling.datamodel.pipeline_options_vlm_model import ApiVlmOptions, InlineVlmOptions
 from docling.datamodel.service.chunking import (
@@ -56,6 +67,7 @@ from docling.datamodel.vlm_engine_options import (
     VllmVlmEngineOptions,
 )
 from docling.document_converter import (
+    AudioFormatOption,
     DocumentConverter,
     EpubFormatOption,
     ExcelFormatOption,
@@ -67,6 +79,7 @@ from docling.document_converter import (
     OdtFormatOption,
     PdfFormatOption,
     PowerpointFormatOption,
+    VideoFormatOption,
     WordFormatOption,
 )
 from docling.models.factories import (
@@ -143,6 +156,13 @@ class ChartExtractionCustomPresetInfo(TypedDict):
     options: ChartExtractionVlmEngineOptions
 
 
+class AsrCustomPresetInfo(TypedDict):
+    """Info for a custom ASR preset."""
+
+    source: Literal["custom"]
+    options: Union[InlineAsrOptions, ApiAsrOptions]
+
+
 class ChunkingCustomPresetInfo(TypedDict):
     """Info for a custom chunking preset."""
 
@@ -157,6 +177,7 @@ PictureDescriptionPresetInfo = Union[
 ]
 CodeFormulaPresetInfo = Union[DoclingPresetInfo, CodeFormulaCustomPresetInfo]
 ChartExtractionPresetInfo = Union[DoclingPresetInfo, ChartExtractionCustomPresetInfo]
+AsrPresetInfo = Union[DoclingPresetInfo, AsrCustomPresetInfo]
 
 
 class LayoutCustomPresetInfo(TypedDict):
@@ -204,6 +225,7 @@ AnyPresetInfo = Union[
     PictureDescriptionPresetInfo,
     CodeFormulaPresetInfo,
     ChartExtractionPresetInfo,
+    AsrPresetInfo,
     ChunkingPresetInfo,
     LayoutPresetInfo,
     PictureClassificationPresetInfo,
@@ -336,6 +358,27 @@ class DoclingConverterManagerConfig(BaseModel):
     allow_custom_chart_extraction_config: bool = Field(
         default=False,
         description="Whether users can specify custom chart extraction configurations.",
+    )
+
+    # ASR Control (audio and video inputs)
+    default_asr_preset: str = Field(
+        default="default",
+        description=(
+            'Default ASR preset to use when user specifies "default". '
+            "Unless it names a custom preset, Docling's default ASR model is used."
+        ),
+    )
+    allowed_asr_presets: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed ASR preset IDs. None means all are allowed.",
+    )
+    custom_asr_presets: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Custom ASR presets. Maps preset ID to InlineAsrOptions or ApiAsrOptions.",
+    )
+    allow_custom_asr_config: bool = Field(
+        default=False,
+        description="Whether users can specify custom ASR configurations.",
     )
 
     # === NEW: Kind Selection Control ===
@@ -656,6 +699,26 @@ class DoclingConverterManager:
                     enable_local_fetch=include_images,
                 ),
             )
+            # Audio and video always get explicit options, so that they use the
+            # server's ASR preset and the request's settings, including the
+            # artifacts_path holding pre-downloaded ASR model weights.
+            asr_options = self._parse_asr_options()
+            asr_settings: dict[str, Any] = {
+                "artifacts_path": office_pipeline_options.artifacts_path,
+                "enable_remote_services": office_pipeline_options.enable_remote_services,
+                "document_timeout": office_pipeline_options.document_timeout,
+                "accelerator_options": office_pipeline_options.accelerator_options,
+            }
+            format_options[InputFormat.AUDIO] = AudioFormatOption(
+                pipeline_options=AsrPipelineOptions(
+                    asr_options=asr_options, **asr_settings
+                )
+            )
+            format_options[InputFormat.VIDEO] = VideoFormatOption(
+                pipeline_options=VideoPipelineOptions(
+                    asr_options=asr_options, **asr_settings
+                )
+            )
 
             return DocumentConverter(format_options=format_options)
 
@@ -834,6 +897,38 @@ class DoclingConverterManager:
             preset_options,
         ) in self.config.custom_chart_extraction_presets.items():
             self.chart_extraction_preset_registry[preset_id] = {
+                "source": "custom",
+                "options": preset_options,
+            }
+
+        # ASR Registry
+        self.asr_preset_registry: dict[str, AsrPresetInfo] = {}
+
+        if self.config.default_asr_preset in self.config.custom_asr_presets:
+            self.asr_preset_registry["default"] = {
+                "source": "custom",
+                "options": self.config.custom_asr_presets[
+                    self.config.default_asr_preset
+                ],
+            }
+        else:
+            self.asr_preset_registry["default"] = {
+                "source": "docling",
+                "preset_id": self.config.default_asr_preset,
+            }
+
+        # Docling has no ASR preset registry yet (no list_preset_ids()), so
+        # without an allow list no other built-in preset is added.
+        for preset_id in self.config.allowed_asr_presets or []:
+            if preset_id != "default":
+                self.asr_preset_registry[preset_id] = {
+                    "source": "docling",
+                    "preset_id": preset_id,
+                }
+
+        # Add custom presets
+        for preset_id, preset_options in self.config.custom_asr_presets.items():
+            self.asr_preset_registry[preset_id] = {
                 "source": "custom",
                 "options": preset_options,
             }
@@ -1130,6 +1225,11 @@ class DoclingConverterManager:
         ):
             raise ValueError(
                 "Custom chart extraction configuration is not allowed. "
+                "Please use a preset or contact your administrator."
+            )
+        elif config_type == "asr" and not self.config.allow_custom_asr_config:
+            raise ValueError(
+                "Custom ASR configuration is not allowed. "
                 "Please use a preset or contact your administrator."
             )
 
@@ -1505,6 +1605,86 @@ class DoclingConverterManager:
             )
 
         return None
+
+    @staticmethod
+    def _asr_options_from_preset(
+        preset_id: str,
+    ) -> Union[InlineAsrOptions, ApiAsrOptions]:
+        """Get the options of a Docling built-in ASR preset.
+
+        Docling has no ASR preset registry yet, so its default ASR options are
+        the only built-in preset.
+        """
+        if preset_id != "default":
+            raise ValueError(
+                f"ASR preset '{preset_id}' is not a custom preset, and Docling "
+                "has no built-in ASR presets other than 'default'."
+            )
+        return AsrPipelineOptions().asr_options
+
+    def _instantiate_asr_options(
+        self, asr_options_dict: dict
+    ) -> Union[InlineAsrOptions, ApiAsrOptions]:
+        """Instantiate the correct ASR options class based on kind.
+
+        Pydantic doesn't discriminate the InlineAsrOptions subclasses, and the
+        ASR model is chosen by the subclass, so inline options are instantiated
+        based on inference_framework.
+        """
+        kind = asr_options_dict.get("kind")
+
+        if kind == "api_model_options":
+            return ApiAsrOptions.model_validate(asr_options_dict)
+
+        if kind != "inline_model_options":
+            raise ValueError(
+                "ASR options must contain a 'kind' field, "
+                "'inline_model_options' or 'api_model_options'"
+            )
+
+        inference_framework = asr_options_dict.get("inference_framework")
+        if not inference_framework:
+            raise ValueError(
+                "Inline ASR options must contain an 'inference_framework' field"
+            )
+
+        # Map inference_framework to the correct class
+        options_class_map: dict[InferenceAsrFramework, Type[InlineAsrOptions]] = {
+            InferenceAsrFramework.WHISPER: InlineAsrNativeWhisperOptions,
+            InferenceAsrFramework.WHISPER_S2T: InlineAsrWhisperS2TOptions,
+            InferenceAsrFramework.TRANSFORMERS: InlineAsrTransformersOptions,
+            InferenceAsrFramework.MLX: InlineAsrMlxWhisperOptions,
+        }
+
+        try:
+            inference_framework = InferenceAsrFramework(inference_framework)
+        except ValueError:
+            raise ValueError(f"Invalid inference_framework: {inference_framework}")
+
+        options_class = options_class_map.get(inference_framework)
+        if not options_class:
+            raise ValueError(f"Unsupported inference_framework: {inference_framework}")
+
+        return options_class.model_validate(asr_options_dict)
+
+    def _parse_asr_options(
+        self, preset_id: str = "default"
+    ) -> Union[InlineAsrOptions, ApiAsrOptions]:
+        """Parse ASR options from preset.
+
+        Requests cannot choose an ASR preset or custom config yet, so audio and
+        video inputs use the server's default ASR preset.
+        """
+        options = self._get_options_from_preset(
+            preset_id,
+            self.asr_preset_registry,
+            "ASR",
+            None,
+            self._asr_options_from_preset,
+        )
+        if isinstance(options, dict):
+            options = self._instantiate_asr_options(options)
+        return options
 
     def parse_chunking_options(
         self, request: ConvertDocumentsOptions

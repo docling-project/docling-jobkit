@@ -7,8 +7,13 @@ from docling.datamodel.picture_classification_options import (
     DocumentPictureClassifierOptions,
 )
 from docling.datamodel.pipeline_options import (
+    AsrPipelineOptions,
     CodeFormulaVlmOptions,
     PictureDescriptionVlmEngineOptions,
+)
+from docling.datamodel.pipeline_options_asr_model import (
+    ApiAsrOptions,
+    InlineAsrNativeWhisperOptions,
 )
 from docling.pipeline.vlm_pipeline import VlmPipeline
 
@@ -304,6 +309,7 @@ class TestCustomConfigValidation:
             ),
             ("ocr", "allow_custom_ocr_config"),
             ("chart_extraction", "allow_custom_chart_extraction_config"),
+            ("asr", "allow_custom_asr_config"),
         ],
     )
     def test_stage_custom_config_not_allowed(self, config_type, config_field):
@@ -325,6 +331,7 @@ class TestCustomConfigValidation:
             ),
             ("ocr", "allow_custom_ocr_config"),
             ("chart_extraction", "allow_custom_chart_extraction_config"),
+            ("asr", "allow_custom_asr_config"),
         ],
     )
     def test_stage_custom_config_allowed(self, config_type, config_field):
@@ -1043,6 +1050,87 @@ class TestChartExtraction:
         assert isinstance(
             pipeline_opts.chart_extraction_options, ChartExtractionVlmEngineOptions
         )
+
+
+def _raw_api_asr_options() -> dict:
+    return {
+        "kind": "api_model_options",
+        "url": "http://localhost:8000/v1/audio/transcriptions",
+        "model": "whisper-large-v3-turbo",
+    }
+
+
+class TestAsrPresets:
+    """ASR presets are server-side only: audio and video use the default."""
+
+    def test_default_preset_is_docling_default(self):
+        """Without configuration, "default" is Docling's default ASR options."""
+        manager = DoclingConverterManager(DoclingConverterManagerConfig())
+
+        assert manager.asr_preset_registry["default"]["source"] == "docling"
+        assert manager._parse_asr_options() == AsrPipelineOptions().asr_options
+
+    def test_custom_inline_preset(self):
+        """A raw inline preset is validated into its InlineAsrOptions subclass."""
+        config = DoclingConverterManagerConfig(
+            custom_asr_presets={
+                "whisper_turbo": {
+                    "kind": "inline_model_options",
+                    "inference_framework": "whisper",
+                    "repo_id": "turbo",
+                }
+            },
+        )
+        manager = DoclingConverterManager(config)
+
+        options = manager._parse_asr_options("whisper_turbo")
+
+        assert isinstance(options, InlineAsrNativeWhisperOptions)
+        assert options.repo_id == "turbo"
+        assert manager._parse_asr_options() == AsrPipelineOptions().asr_options
+
+    def test_custom_remote_preset_as_default(self):
+        """When default_asr_preset is a custom preset, "default" resolves to it."""
+        config = DoclingConverterManagerConfig(
+            default_asr_preset="remote_whisper",
+            custom_asr_presets={"remote_whisper": _raw_api_asr_options()},
+        )
+        manager = DoclingConverterManager(config)
+
+        options = manager._parse_asr_options()
+
+        assert isinstance(options, ApiAsrOptions)
+        assert str(options.url) == "http://localhost:8000/v1/audio/transcriptions"
+        assert options.model == "whisper-large-v3-turbo"
+        assert manager._parse_asr_options("remote_whisper") == options
+
+    def test_disallowed_preset_rejected(self):
+        config = DoclingConverterManagerConfig(
+            custom_asr_presets={"remote_whisper": _raw_api_asr_options()},
+        )
+        manager = DoclingConverterManager(config)
+
+        with pytest.raises(ValueError, match="not allowed"):
+            manager._parse_asr_options("whisper_large")
+
+    def test_allowed_preset_without_docling_registry_rejected(self):
+        """Docling has no built-in ASR presets yet, so an allowed id must be custom."""
+        config = DoclingConverterManagerConfig(allowed_asr_presets=["whisper_large"])
+        manager = DoclingConverterManager(config)
+
+        with pytest.raises(ValueError, match="no built-in ASR presets"):
+            manager._parse_asr_options("whisper_large")
+
+    def test_raw_preset_without_kind_rejected(self):
+        raw_options = _raw_api_asr_options()
+        del raw_options["kind"]
+        config = DoclingConverterManagerConfig(
+            custom_asr_presets={"remote_whisper": raw_options},
+        )
+        manager = DoclingConverterManager(config)
+
+        with pytest.raises(ValueError, match="'kind'"):
+            manager._parse_asr_options("remote_whisper")
 
 
 class TestConvertDocumentsSetupFailureTagging:
