@@ -1,4 +1,4 @@
-"""Terminal task callbacks shared by Ray lifecycle owners."""
+"""Terminal task callbacks shared by Local, RQ and Ray lifecycle owners."""
 
 import logging
 from typing import Literal
@@ -14,7 +14,7 @@ _log = logging.getLogger(__name__)
 
 def emit_task_completed_callback(
     task: Task,
-    task_status: Literal["success", "failure"],
+    task_status: Literal["success", "failure", "cancelled"],
     failure: PublicFailureInfo | None = None,
 ) -> None:
     """Schedule the terminal task event after durable terminalization."""
