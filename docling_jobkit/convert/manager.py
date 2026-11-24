@@ -18,7 +18,12 @@ from docling.backend.docling_parse_backend import (
 from docling.backend.pdf_backend import PdfDocumentBackend
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel import vlm_model_specs
-from docling.datamodel.backend_options import EpubBackendOptions, HTMLBackendOptions
+from docling.datamodel.backend_options import (
+    EpubBackendOptions,
+    HTMLBackendOptions,
+    MsExcelBackendOptions,
+    OdsBackendOptions,
+)
 from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.chart_extraction_options import ChartExtractionVlmEngineOptions
 from docling.datamodel.document import ConversionResult
@@ -547,6 +552,22 @@ def _hash_pdf_format_option(pdf_format_option: PdfFormatOption) -> bytes:
     return options_hash
 
 
+def _parse_spreadsheet_options(
+    request: ConvertDocumentsOptions,
+) -> Optional[dict[str, Any]]:
+    """Spreadsheet backend options set in the request, or None if none are set."""
+    # getattr: released docling-slim versions do not have these request fields
+    # yet. Use attribute access when the docling-slim requirement includes them.
+    options = {
+        "gap_tolerance": getattr(request, "spreadsheet_gap_tolerance", None),
+        "treat_singleton_as_text": getattr(
+            request, "spreadsheet_treat_singleton_as_text", None
+        ),
+    }
+    options = {key: value for key, value in options.items() if value is not None}
+    return options or None
+
+
 def _to_list_of_strings(input_value: Union[str, list[str]]) -> list[str]:
     def split_and_strip(value: str) -> list[str]:
         if re.search(r"[;,]", value):
@@ -582,7 +603,9 @@ class DoclingConverterManager:
             allow_external_plugins=self.config.allow_external_plugins
         )
 
-        self._options_map: dict[bytes, PdfFormatOption] = {}
+        self._options_map: dict[
+            bytes, tuple[PdfFormatOption, Optional[dict[str, Any]]]
+        ] = {}
         self._get_converter_from_hash = self._create_converter_cache_from_hash(
             cache_size=self.config.options_cache_size
         )
@@ -600,7 +623,7 @@ class DoclingConverterManager:
     ) -> Callable[[bytes], DocumentConverter]:
         @lru_cache(maxsize=cache_size)
         def _get_converter_from_hash(options_hash: bytes) -> DocumentConverter:
-            pdf_format_option = self._options_map[options_hash]
+            pdf_format_option, spreadsheet_options = self._options_map[options_hash]
             image_format_option: FormatOption = pdf_format_option
             if isinstance(pdf_format_option.pipeline_cls, type) and issubclass(
                 pdf_format_option.pipeline_cls, VlmPipeline
@@ -629,8 +652,19 @@ class DoclingConverterManager:
             format_options[InputFormat.PPTX] = PowerpointFormatOption(
                 pipeline_options=office_pipeline_options
             )
+            excel_backend_options = None
+            ods_backend_options = None
+            if spreadsheet_options:
+                excel_backend_options = MsExcelBackendOptions(**spreadsheet_options)
+                ods_backend_options = OdsBackendOptions(**spreadsheet_options)
             format_options[InputFormat.XLSX] = ExcelFormatOption(
-                pipeline_options=office_pipeline_options
+                pipeline_options=office_pipeline_options,
+                backend_options=excel_backend_options,
+            )
+            # XLS is converted to XLSX and read by the same backend. It keeps
+            # the default pipeline options.
+            format_options[InputFormat.XLS] = ExcelFormatOption(
+                backend_options=excel_backend_options
             )
             # Remote and local fetching are off, so only inline data: images are read.
             format_options[InputFormat.HTML] = HTMLFormatOption(
@@ -641,7 +675,8 @@ class DoclingConverterManager:
                 pipeline_options=office_pipeline_options
             )
             format_options[InputFormat.ODS] = OdsFormatOption(
-                pipeline_options=office_pipeline_options
+                pipeline_options=office_pipeline_options,
+                backend_options=ods_backend_options,
             )
             format_options[InputFormat.ODP] = OdpFormatOption(
                 pipeline_options=office_pipeline_options
@@ -1892,10 +1927,22 @@ class DoclingConverterManager:
             force_full_page_ocr=request.force_ocr,
         )
 
-    def get_converter(self, pdf_format_option: PdfFormatOption) -> DocumentConverter:
+    def get_converter(
+        self,
+        pdf_format_option: PdfFormatOption,
+        spreadsheet_options: Optional[dict[str, Any]] = None,
+    ) -> DocumentConverter:
         with self._cache_lock:
             options_hash = _hash_pdf_format_option(pdf_format_option)
-            self._options_map[options_hash] = pdf_format_option
+            if spreadsheet_options:
+                # The spreadsheet options change the converter, so they are
+                # part of its cache key.
+                options_hash = hashlib.sha1(
+                    options_hash
+                    + json.dumps(spreadsheet_options, sort_keys=True).encode(),
+                    usedforsecurity=False,
+                ).digest()
+            self._options_map[options_hash] = (pdf_format_option, spreadsheet_options)
             converter = self._get_converter_from_hash(options_hash)
         return converter
 
@@ -2204,7 +2251,9 @@ class DoclingConverterManager:
         try:
             self.parse_chunking_options(options)
             pdf_format_option = self.get_pdf_pipeline_opts(options)
-            converter = self.get_converter(pdf_format_option)
+            converter = self.get_converter(
+                pdf_format_option, _parse_spreadsheet_options(options)
+            )
             with self._cache_lock:
                 converter.initialize_pipeline(format=InputFormat.PDF)
         except Exception as exc:

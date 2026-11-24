@@ -35,6 +35,7 @@ from docling_jobkit.convert.manager import (
     DoclingConverterManager,
     DoclingConverterManagerConfig,
     _hash_pdf_format_option,
+    _parse_spreadsheet_options,
     _to_list_of_strings,
 )
 from docling_jobkit.datamodel.convert import (
@@ -537,3 +538,70 @@ def test_epub_picture_outside_the_archive_keeps_the_document(tmp_path):
     assert "Text." in doc.export_to_markdown()
     assert len(doc.pictures) == 1
     assert doc.pictures[0].image is None
+
+
+def _write_xlsx_with_gap(path: Path) -> Path:
+    """A sheet with a 3x2 table, then two empty rows, then a total row."""
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    for row in (("Item", "Amount"), ("a", 1), ("b", 2)):
+        sheet.append(row)
+    sheet["A6"] = "Total"
+    sheet["B6"] = 3
+    workbook.save(path)
+    return path
+
+
+@pytest.mark.parametrize(
+    ("spreadsheet_options", "num_tables"),
+    [(None, 2), ({"gap_tolerance": 2}, 1)],
+)
+def test_spreadsheet_options_reach_the_spreadsheet_backends(
+    tmp_path, spreadsheet_options, num_tables
+):
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+    pipeline_opts = m.get_pdf_pipeline_opts(ConvertDocumentsOptions())
+    converter = m.get_converter(pipeline_opts, spreadsheet_options)
+
+    doc = converter.convert(_write_xlsx_with_gap(tmp_path / "sheet.xlsx")).document
+
+    assert len(doc.tables) == num_tables
+    for input_format in (InputFormat.XLSX, InputFormat.XLS, InputFormat.ODS):
+        backend_options = converter.format_to_options[input_format].backend_options
+        if spreadsheet_options is None:
+            assert backend_options is None
+        else:
+            assert backend_options.gap_tolerance == 2
+
+
+def test_spreadsheet_options_are_part_of_the_converter_cache_key():
+    m = DoclingConverterManager(config=DoclingConverterManagerConfig())
+    pipeline_opts = m.get_pdf_pipeline_opts(ConvertDocumentsOptions())
+    gap = {"gap_tolerance": 25}
+
+    default_converter = m.get_converter(pipeline_opts)
+    gap_converter = m.get_converter(pipeline_opts, gap)
+
+    assert gap_converter is not default_converter
+    assert m.get_converter(pipeline_opts) is default_converter
+    assert m.get_converter(pipeline_opts, {"gap_tolerance": 25}) is gap_converter
+    assert m.get_converter(pipeline_opts, {"gap_tolerance": 2}) is not gap_converter
+    assert (
+        m.get_converter(pipeline_opts, {**gap, "treat_singleton_as_text": True})
+        is not gap_converter
+    )
+
+
+@pytest.mark.skipif(
+    "spreadsheet_gap_tolerance" not in ConvertDocumentsOptions.model_fields,
+    reason="docling-slim does not have the spreadsheet request options",
+)
+def test_spreadsheet_request_options_are_parsed():
+    assert _parse_spreadsheet_options(ConvertDocumentsOptions()) is None
+    assert _parse_spreadsheet_options(
+        ConvertDocumentsOptions(
+            spreadsheet_gap_tolerance=0, spreadsheet_treat_singleton_as_text=True
+        )
+    ) == {"gap_tolerance": 0, "treat_singleton_as_text": True}

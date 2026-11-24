@@ -1081,7 +1081,9 @@ class TestConvertDocumentsSetupFailureTagging:
 
         monkeypatch.setattr(manager, "parse_chunking_options", lambda options: None)
         monkeypatch.setattr(manager, "get_pdf_pipeline_opts", lambda options: object())
-        monkeypatch.setattr(manager, "get_converter", lambda opts: _BadConverter())
+        monkeypatch.setattr(
+            manager, "get_converter", lambda opts, spreadsheet_options: _BadConverter()
+        )
         with pytest.raises(PipelineInitializationError):
             list(
                 manager.convert_documents(sources=[], options=ConvertDocumentsOptions())
