@@ -47,6 +47,7 @@ from docling_core.types.doc.document import DoclingDocument, ImageRefMode
 from docling_jobkit.convert.results import (
     _build_document_completed_item,
     _export_document_as_content,
+    single_document_zip_filename,
 )
 from docling_jobkit.datamodel.exportable_document import ExportableDocument
 from docling_jobkit.datamodel.result import (
@@ -496,6 +497,7 @@ def process_chunkable_results(
                     image_mode=conversion_options.image_export_mode,
                     md_page_break_placeholder=conversion_options.md_page_break_placeholder,
                     md_compact_tables=conversion_options.md_compact_tables,
+                    artifacts_dir=work_dir / "artifacts",
                 )
             elif output_dir is not None:
                 doc_content = _export_document_for_chunking(
@@ -576,7 +578,10 @@ def process_chunkable_results(
                 _log.error("Failed to upload zip to target URL", exc_info=exc)
                 raise TargetWriteError("Failed to upload to target URL") from exc
         else:
-            task_result = ZipArchiveResult(content=file_path.read_bytes())
+            task_result = ZipArchiveResult(
+                content=file_path.read_bytes(),
+                filename=single_document_zip_filename([doc.source for doc in docs]),
+            )
 
     return DoclingTaskResult(
         result=task_result,

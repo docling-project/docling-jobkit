@@ -412,6 +412,9 @@ class _TerminalizationPipeline:
     def srem(self, key: str, value: str) -> None:
         self.ops.append(("srem", key, value))
 
+    def expire(self, key: str, ttl: int) -> None:
+        self.ops.append(("expire", key, ttl))
+
     def hincrby(self, key: str, field: str, amount: int) -> None:
         self.ops.append(("hincrby", key, field, amount))
 
@@ -444,6 +447,8 @@ class _TerminalizationPipeline:
                 results.append(removed)
             elif op[0] == "delete":
                 deleted_keys.append(op[1])
+                results.append(1)
+            elif op[0] == "expire":
                 results.append(1)
             elif op[0] == "srem":
                 removed = 1 if op[2] in active_members else 0

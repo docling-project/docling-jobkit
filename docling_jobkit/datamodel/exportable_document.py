@@ -1,5 +1,5 @@
 from pathlib import PurePath
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,6 +21,41 @@ from docling.datamodel.service.sources import (
 )
 from docling.utils.profiling import ProfilingItem
 from docling_core.types.doc.document import DoclingDocument
+
+
+def project_document_dict(
+    document: DoclingDocument, target_version: Optional[str]
+) -> Optional[dict[str, Any]]:
+    """JSON dict of ``document`` down-projected to ``target_version``.
+
+    Returns None when no projection is needed (no target, or a target at or
+    above ``document.version``). Lower targets use ``project_to``, including its
+    hard-fail below the floor.
+
+    Returns a plain dict on purpose: the ``DoclingDocument`` from ``project_to``
+    is still a current-schema object, so dumping it re-adds newer fields and
+    validating it again (e.g. after a Redis round-trip) resets its version.
+    Call this only where the JSON leaves the system.
+    """
+    if not target_version:
+        return None
+
+    target_parts = target_version.split(".")
+    document_parts = document.version.split(".")
+    if (
+        len(target_parts) == len(document_parts) == 3
+        and all(part.isdigit() for part in target_parts + document_parts)
+        and tuple(map(int, target_parts)) >= tuple(map(int, document_parts))
+    ):
+        return None
+
+    from docling_core.compat import project_to
+
+    # Drop fields the current model re-adds as defaults but the target schema
+    # lacks: None defaults (e.g. `meta`) and non-None ones from future schemas.
+    return project_to(document, target_version).model_dump(
+        mode="json", by_alias=True, exclude_none=True, exclude_unset=True
+    )
 
 
 def source_to_public_uri(source: object) -> str | None:
@@ -85,6 +120,10 @@ class ExportableDocument(BaseModel):
     slice_index: Optional[int] = Field(
         default=None, description="Ascending slice index for a sliced child document"
     )
+    target_document_version: Optional[str] = Field(
+        default=None,
+        description="DoclingDocument version JSON exports are down-projected to",
+    )
 
     @classmethod
     def from_conversion_result(
@@ -95,6 +134,7 @@ class ExportableDocument(BaseModel):
         source_uri: Optional[str] = None,
         page_range: Optional[tuple[int, int]] = None,
         slice_index: Optional[int] = None,
+        target_document_version: Optional[str] = None,
     ) -> "ExportableDocument":
         document: Optional[DoclingDocument] = conversion_result.document
         confidence: Optional[ConfidenceScores] = None
@@ -119,4 +159,5 @@ class ExportableDocument(BaseModel):
             source_uri=source_uri,
             page_range=page_range,
             slice_index=slice_index,
+            target_document_version=target_document_version,
         )

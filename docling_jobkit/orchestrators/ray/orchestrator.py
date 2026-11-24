@@ -138,6 +138,7 @@ class RayOrchestrator(BaseOrchestrator):
         self.redis_manager = RedisStateManager(
             redis_url=config.redis_url,
             results_ttl=config.results_ttl,
+            task_metadata_ttl=config.task_metadata_ttl,
             results_prefix=config.results_prefix,
             sub_channel=config.sub_channel,
             max_connections=config.redis_max_connections,
@@ -645,6 +646,7 @@ class RayOrchestrator(BaseOrchestrator):
         targets: list[TaskTarget] | None = None,
         extract_options: ExtractDocumentsOptions | None = None,
         extract_target: ExtractionTarget | None = None,
+        target_document_version: str | None = None,
     ) -> Task:
         """Enqueue a task for processing.
 
@@ -659,6 +661,7 @@ class RayOrchestrator(BaseOrchestrator):
             chunking_export_options: Chunking export options
             callbacks: List of callback specifications
             metadata: Optional metadata dict (e.g., {"tenant_id": "tenant123"})
+            target_document_version: DoclingDocument version to project JSON output to
 
         Returns:
             Created task
@@ -721,6 +724,7 @@ class RayOrchestrator(BaseOrchestrator):
                     "chunking_export_options": chunking_export_options,
                     "callbacks": callbacks or [],
                     "metadata": metadata or {},
+                    "target_document_version": target_document_version,
                 },
                 allow_external_plugins=allow_external_plugins,
             )
@@ -764,6 +768,7 @@ class RayOrchestrator(BaseOrchestrator):
                 task_type=task_type,
                 task_size=len(sources),
                 status=TaskStatus.PENDING,
+                target_document_version=task.target_document_version,
             )
             await self.redis_manager.enqueue_task(tenant_id, task)
             await self.init_task_tracking(task)

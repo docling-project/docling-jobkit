@@ -92,6 +92,26 @@ class TenantTaskCounters(BaseModel):
     tasks_failed_total: int = Field(default=0, description="Tasks failed")
 
 
+class TenantSnapshot(BaseModel):
+    """All per-tenant values the metrics collector reads, fetched in one pipeline.
+
+    Attributes:
+        tenant_id: Tenant identifier
+        counters: Monotonic lifecycle counters
+        stats: Cumulative document statistics
+        queue_size: Number of tasks waiting in the tenant queue
+        active_count: Number of tasks in the active set (dispatched or running)
+        limits: Limits and cached usage counters
+    """
+
+    tenant_id: str
+    counters: TenantTaskCounters
+    stats: TenantStats
+    queue_size: int
+    active_count: int
+    limits: TenantLimits
+
+
 class TaskUpdate(BaseModel):
     """Internal task status update message for pub/sub communication.
 
@@ -157,6 +177,9 @@ class RedisTaskMetadata(BaseModel):
     retry_count: int = Field(
         default=0, description="Recorded retry counter for recovery bookkeeping"
     )
+    target_document_version: Optional[str] = Field(
+        default=None, description="DoclingDocument version requested by the client"
+    )
 
     @classmethod
     def _parse_optional_datetime(
@@ -203,6 +226,7 @@ class RedisTaskMetadata(BaseModel):
             started_at=cls._parse_optional_datetime(redis_mapping.get("started_at")),
             finished_at=cls._parse_optional_datetime(redis_mapping.get("finished_at")),
             retry_count=int(redis_mapping.get("retry_count", "0")),
+            target_document_version=redis_mapping.get("target_document_version"),
         )
 
     def to_task(self) -> Task:
@@ -212,6 +236,7 @@ class RedisTaskMetadata(BaseModel):
             task_status=self.status,
             sources=[],
             metadata={"tenant_id": self.tenant_id},
+            target_document_version=self.target_document_version,
             error_message=self.error_message,
             failure=self.failure,
             created_at=self.created_at,

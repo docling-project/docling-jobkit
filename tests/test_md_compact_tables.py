@@ -67,6 +67,7 @@ def _export_content(md_compact_tables: bool) -> str:
         image_mode=ImageRefMode.PLACEHOLDER,
         md_page_break_placeholder="",
         md_compact_tables=md_compact_tables,
+        artifacts_dir=Path("artifacts"),
     )
     assert response.md_content is not None
     return response.md_content

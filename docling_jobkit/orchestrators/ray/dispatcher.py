@@ -29,7 +29,10 @@ from docling_jobkit.orchestrators.ray.models import (
     RedisTaskMetadata,
     TaskUpdate,
 )
-from docling_jobkit.orchestrators.ray.redis_helper import RedisStateManager
+from docling_jobkit.orchestrators.ray.redis_helper import (
+    InvalidQueuedTaskError,
+    RedisStateManager,
+)
 from docling_jobkit.public_errors import (
     classify_public_task_failure,
     is_client_actionable_failure,
@@ -74,6 +77,7 @@ class RayTaskDispatcher:
         self.redis_manager = RedisStateManager(
             redis_url=config.redis_url,
             results_ttl=config.results_ttl,
+            task_metadata_ttl=config.task_metadata_ttl,
             results_prefix=config.results_prefix,
             sub_channel=config.sub_channel,
             max_connections=config.redis_max_connections,
@@ -99,6 +103,8 @@ class RayTaskDispatcher:
         self._active_tenant_order: deque[str] = deque()
         self._last_reconcile: float = 0.0
         self._reconcile_interval: float = 30.0
+        self._last_registry_reconcile: float = 0.0
+        self._registry_reconcile_interval: float = 3600.0
 
         _log.setLevel(self.config.log_level.upper())
         _log.info("RayTaskDispatcher initialized")
@@ -173,8 +179,15 @@ class RayTaskDispatcher:
             self._active_tenant_order.append(tenant_id)
         self._wake_event.set()
 
+    async def _reconcile_tenant_registry(self) -> None:
+        """Re-add tenants missing from the registry (e.g. enqueued by an older version)."""
+        try:
+            await self.redis_manager.reconcile_tenant_registry()
+        except Exception as exc:
+            _log.warning("Tenant registry reconcile failed: %s", exc)
+
     async def _resync_active_tenants(self) -> None:
-        """Rebuild the in-memory ordered tenant ring from Redis (one SCAN)."""
+        """Rebuild the in-memory ordered tenant ring from the tenant registry."""
         tenants = await self.redis_manager.get_all_tenants_with_tasks()
         for t in tenants:
             if t not in self._active_tenant_ids:
@@ -195,6 +208,7 @@ class RayTaskDispatcher:
         self._active_tenant_ids.clear()
         self._active_tenant_order.clear()
         self._last_reconcile = 0.0
+        self._last_registry_reconcile = 0.0
         self._dispatch_loop_task = asyncio.create_task(self._run_dispatch_loop())
         _log.info("Started Ray dispatcher background loop")
 
@@ -231,6 +245,12 @@ class RayTaskDispatcher:
                     if self.config.enable_heartbeat:
                         await self.redis_manager.update_dispatcher_heartbeat()
                     self._last_reconcile = now
+                    if (
+                        now - self._last_registry_reconcile
+                        >= self._registry_reconcile_interval
+                    ):
+                        await self._reconcile_tenant_registry()
+                        self._last_registry_reconcile = now
                     # Consume any capacity freed by reconciliation without waiting
                     # for the next wakeup event.
                     await self._dispatch_round()
@@ -369,7 +389,14 @@ class RayTaskDispatcher:
         Returns:
             True if a task was dispatched, False otherwise.
         """
-        task = await self.redis_manager.peek_task(tenant_id)
+        while True:
+            try:
+                task = await self.redis_manager.peek_task(tenant_id)
+                break
+            except InvalidQueuedTaskError as exc:
+                # Drop the poisoned head so the tasks behind it keep flowing.
+                await self._reject_invalid_queued_task(exc)
+
         if task is None:
             _log.debug("[DISPATCH] Tenant %s: no tasks in queue", tenant_id)
             self._active_tenant_ids.discard(tenant_id)
@@ -408,6 +435,58 @@ class RayTaskDispatcher:
             task_size,
         )
         return True
+
+    async def _reject_invalid_queued_task(self, exc: InvalidQueuedTaskError) -> None:
+        """Remove a queued payload that fails validation and mark it failed.
+
+        Completion callbacks are not emitted: they live on the unparsable task.
+        """
+        tenant_id = exc.tenant_id
+        task_id = exc.task_id
+        _log.error(
+            "[DISPATCH] Tenant %s: dropping invalid queued task %s: %s",
+            tenant_id,
+            task_id or "<unknown>",
+            exc.cause,
+        )
+
+        removed = await self.redis_manager.remove_queued_task_payload(
+            tenant_id, exc.payload
+        )
+        if not removed or task_id is None:
+            return
+
+        failure = classify_public_task_failure(
+            exc,
+            task_id=task_id,
+            phase=FailurePhase.ORCHESTRATION,
+            details={"task_size": str(exc.task_size)},
+        )
+        terminalization = await self.redis_manager.finalize_task_failure_atomic(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            task_size=exc.task_size,
+            error_message=failure.message,
+            failure=failure,
+        )
+        if (
+            terminalization.status_changed
+            and terminalization.final_status == TaskStatus.FAILURE
+        ):
+            await self.redis_manager.publish_update(
+                TaskUpdate(
+                    task_id=task_id,
+                    task_status=TaskStatus.FAILURE,
+                    error_message=failure.message,
+                    failure=failure,
+                )
+            )
+            await self.redis_manager.update_tenant_stats(
+                tenant_id,
+                delta_total_tasks=1,
+                delta_total_documents=exc.task_size,
+                delta_failed_documents=exc.task_size,
+            )
 
     async def _process_task_async(self, task: Task, tenant_id: str) -> None:
         """Process a dispatched task while keeping status durable in Redis.

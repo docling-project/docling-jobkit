@@ -1,12 +1,13 @@
 import logging
+import re
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, Optional
 
 from docling.datamodel.base_models import InputFormat, OutputFormat
@@ -78,6 +79,35 @@ class CallbackMode(str, Enum):
 
     FULL = "full"
     CHILD_ONLY = "child_only"
+
+
+_UNSAFE_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f"*/:<>?\\|]')
+
+
+def single_document_zip_filename(
+    sources: Sequence[PurePath | str],
+) -> Optional[str]:
+    """Return a download name for a zip that holds exactly one source document.
+
+    Multi-document tasks return ``None`` so downstream keeps the generic name.
+    The source name is user-supplied, so path components, control characters,
+    quotes and other characters unsafe in filenames or HTTP headers are dropped
+    or replaced. A stem that ends up empty also returns ``None``.
+    """
+    if len(sources) != 1:
+        return None
+    # Keep only the last path component, whatever the separator style.
+    name = str(sources[0]).replace("\\", "/").rsplit("/", 1)[-1]
+    # Drop the last extension by hand, treating leading dots as part of the
+    # name: PurePath.stem disagrees across Python versions on names like "..pdf".
+    core = name.lstrip(".")
+    stem, dot, _ = core.rpartition(".")
+    if not dot:
+        stem = core
+    stem = _UNSAFE_FILENAME_CHARS.sub("_", stem).strip(" .")
+    if not stem:
+        return None
+    return f"{stem}.zip"
 
 
 def _count_document_statuses(
@@ -225,6 +255,7 @@ def _export_document_as_content(
     image_mode: ImageRefMode,
     md_page_break_placeholder: str,
     md_compact_tables: bool,
+    artifacts_dir: Path,
 ) -> ExportDocumentResponse:
     document = ExportDocumentResponse(filename=exportable_document.file.name)
 
@@ -233,7 +264,7 @@ def _export_document_as_content(
         and exportable_document.document is not None
     ):
         new_doc = exportable_document.document._make_copy_with_refmode(
-            Path(), image_mode, page_no=None
+            artifacts_dir, image_mode, page_no=None, reference_path=artifacts_dir
         )
 
         # Create the different formats
@@ -1057,6 +1088,7 @@ def _process_exportable_results_internal(
             image_mode=conversion_options.image_export_mode,
             md_page_break_placeholder=conversion_options.md_page_break_placeholder,
             md_compact_tables=conversion_options.md_compact_tables,
+            artifacts_dir=work_dir / "artifacts",
         )
         if chunks_in_formats:
             _log.debug(
@@ -1125,7 +1157,12 @@ def _process_exportable_results_internal(
                 target_processor.upload_archive(file_path)
             task_result = RemoteTargetResult()
         else:
-            task_result = ZipArchiveResult(content=file_path.read_bytes())
+            task_result = ZipArchiveResult(
+                content=file_path.read_bytes(),
+                filename=single_document_zip_filename(
+                    [doc.file for doc in finalized_documents]
+                ),
+            )
 
     processing_time = time.monotonic() - start_time
     _log.info(

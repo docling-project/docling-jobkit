@@ -24,11 +24,14 @@ from typing import TYPE_CHECKING
 from docling.datamodel.base_models import OutputFormat
 from docling.datamodel.document import ConversionStatus
 from docling.datamodel.service.chunking import BaseChunkerOptions
-from docling_core.types.doc import ImageRefMode
+from docling_core.types.doc import DoclingDocument, ImageRefMode
 
 from docling_jobkit.connectors.artifact_paths import ArtifactType
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
-from docling_jobkit.datamodel.exportable_document import ExportableDocument
+from docling_jobkit.datamodel.exportable_document import (
+    ExportableDocument,
+    project_document_dict,
+)
 from docling_jobkit.datamodel.target_field_slots import OUTPUT_FORMAT_MIME
 
 if TYPE_CHECKING:
@@ -267,6 +270,14 @@ def _materialize_document_exports(
             image_mode=image_export_mode,
             artifacts_dir=artifacts_dir,
         )
+        if exportable_document.target_document_version:
+            # Project the written file so image refs match what save_as_json produced.
+            projected = project_document_dict(
+                DoclingDocument.load_from_json(fname),
+                exportable_document.target_document_version,
+            )
+            if projected is not None:
+                fname.write_text(json.dumps(projected, indent=2), encoding="utf-8")
         generated.append(
             _ExportedArtifactFile(
                 artifact_type="json",

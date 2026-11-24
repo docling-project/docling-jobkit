@@ -77,6 +77,7 @@ from docling_jobkit.convert.source_expansion import (
     expand_task_sources,
     expand_task_sources_with_identities,
 )
+from docling_jobkit.datamodel.convert import normalize_page_range
 from docling_jobkit.datamodel.exportable_document import (
     ExportableDocument,
     source_to_public_uri,
@@ -270,12 +271,14 @@ def _to_exportable_documents(
                 if idx < len(task.sources)
                 else str(conv_res.input.file)
             ),
+            target_document_version=task.target_document_version,
         )
         for idx, conv_res in enumerate(conv_results)
     ]
 
 
 def _to_exportable_documents_from_chunk(
+    task: Task,
     chunk: DocumentChunk[Any, Any],
     conv_results: list[ConversionResult],
 ) -> list[ExportableDocument]:
@@ -289,6 +292,7 @@ def _to_exportable_documents_from_chunk(
                 source_uri=(
                     ref.source_uri if ref is not None else str(conv_res.input.file)
                 ),
+                target_document_version=task.target_document_version,
             )
         )
     return exportable
@@ -617,6 +621,7 @@ def _build_slice_plan(
     requested_page_range: tuple[int, int],
     max_page_slice_size: int,
 ) -> SlicePlan:
+    requested_page_range = normalize_page_range(requested_page_range)
     start_page, end_page = requested_page_range
     if start_page > total_pages:
         raise ValueError(
@@ -752,6 +757,7 @@ def _finalize_slice_results(
     # heap, and it runs inside the slice_finalization_semaphore guard.
     slice_results: list[ExportableDocument] = ray.get(slice_refs)
     merged_document = _assemble_slice_results(slice_results)
+    merged_document.target_document_version = task.target_document_version
 
     task_result = process_exportable_results(
         task=task,
@@ -1002,7 +1008,7 @@ class DoclingProcessorConverterDeployment:
                     metrics_recorder.emit_failure_metrics(tenant_id=tenant_id)
                 return conv_results
             exportable = _to_exportable_documents_from_chunk(
-                request.chunk, conv_results
+                request.task, request.chunk, conv_results
             )
             metrics_recorder = self._get_metrics()
             if metrics_recorder is not None:
@@ -1397,6 +1403,7 @@ class DoclingProcessorCoordinatorDeployment:
         self.redis_manager = RedisStateManager(
             redis_url=redis_url,
             results_ttl=config.results_ttl,
+            task_metadata_ttl=config.task_metadata_ttl,
             task_timeout=config.task_timeout,
             dispatcher_interval=config.dispatcher_interval,
             log_level=config.log_level,

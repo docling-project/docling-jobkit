@@ -165,6 +165,7 @@ def _run_docling_task(
                     if idx < len(task.sources)
                     else str(conv_res.input.file)
                 ),
+                target_document_version=task.target_document_version,
             )
             for idx, conv_res in enumerate(conv_results)
         )
@@ -287,7 +288,17 @@ class CustomRQWorker(SimpleWorker):
             # Write immediately so the key exists before the first watchdog scan.
             conn.set(key, "1", ex=_HEARTBEAT_TTL)
             while not stop_event.wait(timeout=_HEARTBEAT_INTERVAL):
-                conn.set(key, "1", ex=_HEARTBEAT_TTL)
+                try:
+                    conn.set(key, "1", ex=_HEARTBEAT_TTL)
+                except Exception as e:
+                    _log.error(
+                        f"Heartbeat write failed for {job_id}: {e}; reconnecting"
+                    )
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = sync_redis.Redis.from_url(self.orchestrator_config.redis_url)
         except Exception as e:
             _log.error(f"Heartbeat thread error for {job_id}: {e}")
         finally:

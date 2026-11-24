@@ -76,6 +76,7 @@ class LocalOrchestrator(BaseOrchestrator):
         targets: list[TaskTarget] | None = None,
         extract_options: ExtractDocumentsOptions | None = None,
         extract_target: ExtractionTarget | None = None,
+        target_document_version: str | None = None,
     ) -> Task:
         if options is not None and convert_options is None:
             convert_options = options
@@ -101,6 +102,7 @@ class LocalOrchestrator(BaseOrchestrator):
                 "chunking_export_options": chunking_export_options,
                 "targets": resolved_targets,
                 "callbacks": callbacks or [],
+                "target_document_version": target_document_version,
             },
             allow_external_plugins=self.cm.config.allow_external_plugins,
         )
@@ -145,8 +147,10 @@ class LocalOrchestrator(BaseOrchestrator):
         _log.debug("All workers completed.")
 
     async def warm_up_caches(self):
-        # Converter with default options
-        pdf_format_option = self.cm.get_pdf_pipeline_opts(ConvertDocumentsOptions())
+        # Converter with default options, on the configured default pipeline
+        pdf_format_option = self.cm.get_pdf_pipeline_opts(
+            ConvertDocumentsOptions(pipeline=self.cm.config.default_pipeline)
+        )
         converter = self.cm.get_converter(pdf_format_option)
         converter.initialize_pipeline(InputFormat.PDF)
 

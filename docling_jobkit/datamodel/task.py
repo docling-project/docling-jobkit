@@ -10,6 +10,7 @@ from pydantic import (
     ConfigDict,
     Field,
     SerializeAsAny,
+    StringConstraints,
     ValidationInfo,
     model_validator,
 )
@@ -29,6 +30,7 @@ from docling_jobkit.datamodel.chunking import (
     ChunkingExportOptions,
     ChunkingOptionType,
 )
+from docling_jobkit.datamodel.convert import normalize_page_range
 from docling_jobkit.datamodel.task_meta import TaskStatus
 
 
@@ -114,6 +116,12 @@ class Task(BaseModel):
     # scratch_dir: Optional[Path] = None
     processing_meta: Optional[TaskProcessingMeta] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # DoclingDocument schema version the client can read. JSON files written to
+    # targets are down-projected to it; in-body JSON is projected by the API layer
+    # (project_document_dict) because results pass through Redis. None = native.
+    target_document_version: Optional[
+        Annotated[str, StringConstraints(pattern=r"^\d{1,9}\.\d{1,9}\.\d{1,9}$")]
+    ] = None
     error_message: Optional[str] = None
     failure: Optional[PublicFailureInfo] = None
     created_at: datetime.datetime = Field(
@@ -152,6 +160,17 @@ class Task(BaseModel):
             # Neither target nor targets was provided — apply the same default
             # that existed before the multi-target refactor: a single InBodyTarget.
             self.targets = [InBodyTarget()]
+        return self
+
+    @model_validator(mode="after")
+    def normalize_convert_options(self):
+        """Clamp convert_options page_range to safe integer limits."""
+        if self.convert_options is not None and self.convert_options.page_range:
+            safe_range = normalize_page_range(self.convert_options.page_range)
+            if safe_range != self.convert_options.page_range:
+                self.convert_options = self.convert_options.model_copy(
+                    update={"page_range": safe_range}
+                )
         return self
 
     def set_status(self, status: TaskStatus):

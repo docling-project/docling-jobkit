@@ -1,3 +1,36 @@
+## [v3.10.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.10.0) - 2026-11-23
+
+### Feature
+
+* Name single-document zip results after the source ([#283](https://github.com/docling-project/docling-jobkit/issues/283)) ([`dd1b295`](https://github.com/docling-project/docling-jobkit/commit/dd1b295d39bf9c1fc45f8e395409da9eb6b522a7))
+* **service:** Let the server choose the default pipeline ([#272](https://github.com/docling-project/docling-jobkit/issues/272)) ([`4e3d337`](https://github.com/docling-project/docling-jobkit/commit/4e3d3375a1fb477f0504566200173336497523a3))
+
+### Fix
+
+* **manager:** Keep the inline images of HTML inputs ([#290](https://github.com/docling-project/docling-jobkit/issues/290)) ([`a67355c`](https://github.com/docling-project/docling-jobkit/commit/a67355c58d9f3c89ecde86832a09995459a3f0ff))
+* Keep in-body referenced images inside the task work directory ([#289](https://github.com/docling-project/docling-jobkit/issues/289)) ([`9dbea9e`](https://github.com/docling-project/docling-jobkit/commit/9dbea9e22dd9a71f6b5ccbe7f89bfb64c0d5d8fc))
+* Normalize and clamp page_range options to safe integer bounds ([#282](https://github.com/docling-project/docling-jobkit/issues/282)) ([`f547ec6`](https://github.com/docling-project/docling-jobkit/commit/f547ec663403833f64347f5870f845e3ae9164df))
+* Keep RQ enqueue from blocking the API event loop ([#280](https://github.com/docling-project/docling-jobkit/issues/280)) ([`5c70c16`](https://github.com/docling-project/docling-jobkit/commit/5c70c165b112989754bd3041eb73b254d74ca080))
+
+## [v3.9.1](https://github.com/docling-project/docling-jobkit/releases/tag/v3.9.1) - 2026-10-22
+
+### Fix
+
+* **manager:** Apply request options to EPUB conversions ([#276](https://github.com/docling-project/docling-jobkit/issues/276)) ([`d7d44ed`](https://github.com/docling-project/docling-jobkit/commit/d7d44ed8f721647810f984263fe425c440572916))
+* Reconnect the RQ worker heartbeat after a failed write ([#279](https://github.com/docling-project/docling-jobkit/issues/279)) ([`f409197`](https://github.com/docling-project/docling-jobkit/commit/f409197915b8b7d3681274f5ddd05a34320acda8))
+* Revalidate idle Redis connections in RQ pools ([#278](https://github.com/docling-project/docling-jobkit/issues/278)) ([`1e667b3`](https://github.com/docling-project/docling-jobkit/commit/1e667b3fb699b4477196098c5fdb207761590048))
+
+## [v3.9.0](https://github.com/docling-project/docling-jobkit/releases/tag/v3.9.0) - 2026-10-20
+
+### Feature
+
+* Down-project produced DoclingDocument to client-requested version ([#224](https://github.com/docling-project/docling-jobkit/issues/224)) ([`fefffce`](https://github.com/docling-project/docling-jobkit/commit/fefffcee93ad19c714e02d26d6e0f8257dacdaa1))
+
+### Fix
+
+* **ray:** Make tenant discovery and metrics reads independent of keyspace size ([#271](https://github.com/docling-project/docling-jobkit/issues/271)) ([`92d96bc`](https://github.com/docling-project/docling-jobkit/commit/92d96bcddcb363798a4f92f526f3e43562635f4a))
+* **ray:** Drop invalid queued tasks instead of blocking the tenant queue ([#270](https://github.com/docling-project/docling-jobkit/issues/270)) ([`13972ca`](https://github.com/docling-project/docling-jobkit/commit/13972caa839939cd8fd9f9baa73c94f2619cb8a4))
+
 ## [v3.8.2](https://github.com/docling-project/docling-jobkit/releases/tag/v3.8.2) - 2026-10-13
 
 ### Fix

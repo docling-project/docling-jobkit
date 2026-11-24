@@ -118,6 +118,7 @@ class BaseOrchestrator(ABC):
         targets: list[TaskTarget] | None = None,
         extract_options: ExtractDocumentsOptions | None = None,
         extract_target: ExtractionTarget | None = None,
+        target_document_version: str | None = None,
     ) -> Task:
         pass
 
