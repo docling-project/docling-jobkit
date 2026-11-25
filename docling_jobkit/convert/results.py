@@ -32,6 +32,7 @@ from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.connectors.target_processor_factory import get_target_processor
 from docling_jobkit.convert.export import (
     _cleanup_document_output_dir,
+    _export_markdown,
     _is_exportable_status,
     _materialize_document_exports,
     _processor_requires_chunks,
@@ -275,7 +276,8 @@ def _export_document_as_content(
         if export_txt:
             document.text_content = new_doc.export_to_text()
         if export_md:
-            document.md_content = new_doc.export_to_markdown(
+            document.md_content = _export_markdown(
+                new_doc,
                 image_mode=image_mode,
                 page_break_placeholder=md_page_break_placeholder or None,
                 compact_tables=md_compact_tables,
