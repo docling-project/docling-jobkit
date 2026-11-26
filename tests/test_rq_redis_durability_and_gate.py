@@ -23,6 +23,7 @@ from docling_jobkit.orchestrators.rq.orchestrator import (
     _RQ_JOB_GONE,
     RQOrchestrator,
     RQOrchestratorConfig,
+    _read_stored_task_status,
     _RQJobGone,
     _TaskUpdate,
 )
@@ -143,6 +144,34 @@ def _make_pubsub(messages):
 def _make_pubsub_message(task_id: str, status: TaskStatus) -> dict:
     update = _TaskUpdate(task_id=task_id, task_status=status)
     return {"type": "message", "data": update.model_dump_json()}
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        pytest.param(None, (False, None), id="absent"),
+        pytest.param(
+            b'{"task_status": "pending"}',
+            (True, TaskStatus.PENDING),
+            id="valid-bytes",
+        ),
+        pytest.param(
+            '{"task_status": "success"}',
+            (True, TaskStatus.SUCCESS),
+            id="valid-string",
+        ),
+        pytest.param(b"\xff\xfe", (True, None), id="invalid-utf8"),
+        pytest.param(b"not-json", (True, None), id="invalid-json"),
+        pytest.param(b"[]", (True, None), id="non-object-json"),
+        pytest.param(b"{}", (True, None), id="missing-status"),
+        pytest.param(b'{"task_status": 1}', (True, None), id="non-string-status"),
+        pytest.param(b'{"task_status": "unknown"}', (True, None), id="unknown-status"),
+    ],
+)
+def test_read_stored_task_status(
+    payload: bytes | str | None, expected: tuple[bool, TaskStatus | None]
+) -> None:
+    assert _read_stored_task_status(payload) == expected
 
 
 class TestRQDurableStatus:
