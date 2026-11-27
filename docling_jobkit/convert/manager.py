@@ -22,6 +22,7 @@ from docling.datamodel.backend_options import EpubBackendOptions, HTMLBackendOpt
 from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.chart_extraction_options import ChartExtractionVlmEngineOptions
 from docling.datamodel.document import ConversionResult
+from docling.datamodel.extraction_options import ExtractionVlmOptions
 from docling.datamodel.picture_classification_options import (
     DocumentPictureClassifierOptions,
 )
@@ -481,6 +482,45 @@ class DoclingConverterManagerConfig(BaseModel):
     allow_custom_ocr_config: bool = Field(
         default=False,
         description="Whether users can specify custom OCR configurations.",
+    )
+
+    # === Extraction model gating (/extract endpoint) ===
+    # Read by DocumentExtractionManager; the operator decides which extraction
+    # model(s) a client may run against (mirrors the per-stage gates above).
+    default_extraction_preset: str = Field(
+        default="nuextract_2b",
+        description="Default extraction preset served when a client sends only a template.",
+    )
+    allowed_extraction_presets: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Allow-list of built-in and custom extraction preset IDs. "
+            "None allows any configured preset."
+        ),
+    )
+    custom_extraction_presets: dict[str, ExtractionVlmOptions] = Field(
+        default_factory=dict,
+        description="Custom extraction presets defined by the server operator.",
+    )
+    allow_custom_extraction_config: bool = Field(
+        default=False,
+        description="Whether clients may send a raw extraction model spec (custom config).",
+    )
+    allowed_extraction_engines: Optional[list[str]] = Field(
+        default=None,
+        description="List of allowed extraction VLM engine types. None allows all.",
+    )
+    allowed_extraction_formats: Optional[list[InputFormat]] = Field(
+        default=None,
+        description="Input formats enabled for extraction. None uses Docling defaults.",
+    )
+    strip_extraction_schema_annotations: bool = Field(
+        default=False,
+        description=(
+            "Remove title, description, examples, default and $comment from the "
+            "schema text in generic chat extraction prompts. The validation still "
+            "uses the full schema."
+        ),
     )
 
     @model_validator(mode="after")
