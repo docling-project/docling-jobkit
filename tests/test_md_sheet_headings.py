@@ -107,6 +107,28 @@ def test_markdown_file_has_sheet_headings(tmp_path: Path):
     _assert_sheet_headings((tmp_path / "workbook.md").read_text(encoding="utf-8"))
 
 
+def test_markdown_file_has_sheet_headings_with_referenced_images(tmp_path: Path):
+    # REFERENCED mode must create the artifacts dir, like save_as_markdown.
+    artifacts = _materialize_document_exports(
+        _exportable(_workbook()),
+        tmp_path,
+        export_json=False,
+        export_html=False,
+        export_md=True,
+        export_txt=False,
+        export_doctags=False,
+        export_doclang=False,
+        export_dclx=False,
+        image_export_mode=ImageRefMode.REFERENCED,
+        md_page_break_placeholder="",
+        md_compact_tables=False,
+        bundle_resources=False,
+    )
+    assert len(artifacts) == 1
+    assert (tmp_path / "artifacts").is_dir()
+    _assert_sheet_headings((tmp_path / "workbook.md").read_text(encoding="utf-8"))
+
+
 def test_sheet_export_matches_plain_export_apart_from_headings():
     # Guards that the sheet-aware path keeps every other export_to_markdown option.
     doc = _workbook()
