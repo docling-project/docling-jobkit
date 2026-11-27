@@ -1196,6 +1196,9 @@ class DoclingProcessorConverterDeployment:
                     allow_custom_extraction_config=config.allow_custom_extraction_config,
                     allowed_extraction_engines=config.allowed_extraction_engines,
                     allowed_formats=config.allowed_extraction_formats,
+                    strip_extraction_schema_annotations=(
+                        config.strip_extraction_schema_annotations
+                    ),
                 )
             )
             self.ecm = manager

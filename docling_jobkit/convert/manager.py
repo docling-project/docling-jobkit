@@ -514,6 +514,14 @@ class DoclingConverterManagerConfig(BaseModel):
         default=None,
         description="Input formats enabled for extraction. None uses Docling defaults.",
     )
+    strip_extraction_schema_annotations: bool = Field(
+        default=False,
+        description=(
+            "Remove title, description, examples, default and $comment from the "
+            "schema text in generic chat extraction prompts. The validation still "
+            "uses the full schema."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_pipelines(self) -> "DoclingConverterManagerConfig":
