@@ -246,6 +246,7 @@ def test_cached_extractor_isolates_targets_and_stable_configuration(monkeypatch)
         )
     )
     assert len(initialized) == 1
+    assert initialized[0].strip_schema_annotations is False
     assert initialized[0].vlm_options.output_mode == "prompt_only"
     assert initialized[0].input_channels == ChannelSelection.TEXT
     assert custom.output_mode == "schema_constrained"
@@ -271,6 +272,9 @@ def test_cached_extractor_isolates_targets_and_stable_configuration(monkeypatch)
         )
     assert len(initialized) == 3
     assert initialized[1].vlm_options.output_mode == "schema_constrained"
+    ecm.config.strip_extraction_schema_annotations = True
+    list(ecm.extract_documents([], extraction_spec=target1, options=options))
+    assert initialized[-1].strip_schema_annotations is True
 
 
 def test_constrained_mode_rejects_local_engine():

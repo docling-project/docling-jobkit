@@ -60,6 +60,10 @@ class DocumentExtractionManagerConfig(BaseModel):
     allow_custom_extraction_config: bool = False
     allowed_extraction_engines: Optional[list[str]] = None
 
+    # Remove free-text annotations from the schema text in generic chat
+    # prompts. The validation still uses the full schema.
+    strip_extraction_schema_annotations: bool = False
+
 
 class DocumentExtractionManager:
     def __init__(self, config: DocumentExtractionManagerConfig):
@@ -172,6 +176,7 @@ class DocumentExtractionManager:
         pipe_opts = VlmExtractionPipelineOptions(
             vlm_options=vlm_options,
             input_channels=options.extraction_input_channels or ChannelSelection.AUTO,
+            strip_schema_annotations=self.config.strip_extraction_schema_annotations,
             enable_remote_services=self.config.enable_remote_services,
             artifacts_path=self.config.artifacts_path,
         )
