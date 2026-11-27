@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Type, TypedDict, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny, model_validator
 
 from docling.backend.docling_parse_backend import (
     DoclingParseDocumentBackend,
@@ -17,7 +17,8 @@ from docling.backend.docling_parse_backend import (
 )
 from docling.backend.pdf_backend import PdfDocumentBackend
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
-from docling.datamodel import vlm_model_specs
+from docling.datamodel import pipeline_options_asr_model, vlm_model_specs
+from docling.datamodel.accelerator_options import AcceleratorOptions
 from docling.datamodel.backend_options import EpubBackendOptions, HTMLBackendOptions
 from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.chart_extraction_options import ChartExtractionVlmEngineOptions
@@ -97,6 +98,11 @@ from docling_jobkit.datamodel.convert import normalize_page_range
 from docling_jobkit.public_errors import PipelineInitializationError
 
 _log = logging.getLogger(__name__)
+
+# The mlx-audio ASR engine is in docling-slim 2.149 and later.
+InlineAsrMlxAudioOptions: Optional[Type[InlineAsrOptions]] = getattr(
+    pipeline_options_asr_model, "InlineAsrMlxAudioOptions", None
+)
 
 # Chunking presets defined in jobkit
 CHUNKING_PRESET_GRANITE_EMBEDDING_278M = "granite_embedding_278m"
@@ -365,7 +371,8 @@ class DoclingConverterManagerConfig(BaseModel):
         default="default",
         description=(
             'Default ASR preset to use when user specifies "default". '
-            "Unless it names a custom preset, Docling's default ASR model is used."
+            "It can name a Docling ASR preset or a custom preset. It is resolved "
+            "at startup, so a wrong value stops the server with an error."
         ),
     )
     allowed_asr_presets: Optional[list[str]] = Field(
@@ -590,6 +597,37 @@ def _hash_pdf_format_option(pdf_format_option: PdfFormatOption) -> bytes:
     return options_hash
 
 
+class ConverterOptions(BaseModel):
+    """Everything that defines a converter, hashed as the converter cache key.
+
+    ``asr_options`` set to None means the server's default ASR preset.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    pdf_format_option: PdfFormatOption
+    asr_options: Optional[SerializeAsAny[Union[InlineAsrOptions, ApiAsrOptions]]] = None
+
+
+def _hash_converter_options(converter_options: ConverterOptions) -> bytes:
+    data: dict[str, Any] = {
+        "pdf_format_option": _hash_pdf_format_option(
+            converter_options.pdf_format_option
+        ).hex(),
+        "asr_options": None,
+    }
+    asr_options = converter_options.asr_options
+    if asr_options is not None:
+        # The subclass selects the ASR engine, so it is part of the key.
+        data["asr_options"] = {
+            "type": f"{asr_options.__class__.__module__}."
+            f"{asr_options.__class__.__qualname__}",
+            "options": asr_options.model_dump(mode="json"),
+        }
+    serialized_data = json.dumps(data, sort_keys=True)
+    return hashlib.sha1(serialized_data.encode(), usedforsecurity=False).digest()
+
+
 def _to_list_of_strings(input_value: Union[str, list[str]]) -> list[str]:
     def split_and_strip(value: str) -> list[str]:
         if re.search(r"[;,]", value):
@@ -625,7 +663,7 @@ class DoclingConverterManager:
             allow_external_plugins=self.config.allow_external_plugins
         )
 
-        self._options_map: dict[bytes, PdfFormatOption] = {}
+        self._options_map: dict[bytes, ConverterOptions] = {}
         self._get_converter_from_hash = self._create_converter_cache_from_hash(
             cache_size=self.config.options_cache_size
         )
@@ -635,6 +673,16 @@ class DoclingConverterManager:
         # Build preset registries
         self._build_preset_registries()
 
+        # Resolve the default ASR preset once, so a wrong configuration fails at
+        # startup instead of failing every conversion.
+        self._asr_device = AcceleratorOptions().device
+        try:
+            self._default_asr_options = self._resolve_asr_preset("default")
+        except (KeyError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid default ASR preset '{self.config.default_asr_preset}': {exc}"
+            ) from exc
+
         # Build kind registries
         self._build_kind_registries()
 
@@ -643,7 +691,8 @@ class DoclingConverterManager:
     ) -> Callable[[bytes], DocumentConverter]:
         @lru_cache(maxsize=cache_size)
         def _get_converter_from_hash(options_hash: bytes) -> DocumentConverter:
-            pdf_format_option = self._options_map[options_hash]
+            converter_options = self._options_map[options_hash]
+            pdf_format_option = converter_options.pdf_format_option
             image_format_option: FormatOption = pdf_format_option
             if isinstance(pdf_format_option.pipeline_cls, type) and issubclass(
                 pdf_format_option.pipeline_cls, VlmPipeline
@@ -700,9 +749,9 @@ class DoclingConverterManager:
                 ),
             )
             # Audio and video always get explicit options, so that they use the
-            # server's ASR preset and the request's settings, including the
+            # resolved ASR preset and the request's settings, including the
             # artifacts_path holding pre-downloaded ASR model weights.
-            asr_options = self._parse_asr_options()
+            asr_options = converter_options.asr_options or self._default_asr_options
             asr_settings: dict[str, Any] = {
                 "artifacts_path": office_pipeline_options.artifacts_path,
                 "enable_remote_services": office_pipeline_options.enable_remote_services,
@@ -917,9 +966,15 @@ class DoclingConverterManager:
                 "preset_id": self.config.default_asr_preset,
             }
 
-        # Docling has no ASR preset registry yet (no list_preset_ids()), so
-        # without an allow list no other built-in preset is added.
-        for preset_id in self.config.allowed_asr_presets or []:
+        # Add Docling built-in presets (if allowed). Docling releases before
+        # the ASR preset registry have no list_preset_ids().
+        if self.config.allowed_asr_presets is not None:
+            docling_asr_presets = self.config.allowed_asr_presets
+        elif hasattr(InlineAsrOptions, "list_preset_ids"):
+            docling_asr_presets = InlineAsrOptions.list_preset_ids()
+        else:
+            docling_asr_presets = []
+        for preset_id in docling_asr_presets:
             if preset_id != "default":
                 self.asr_preset_registry[preset_id] = {
                     "source": "docling",
@@ -1606,21 +1661,21 @@ class DoclingConverterManager:
 
         return None
 
-    @staticmethod
     def _asr_options_from_preset(
-        preset_id: str,
+        self, preset_id: str
     ) -> Union[InlineAsrOptions, ApiAsrOptions]:
-        """Get the options of a Docling built-in ASR preset.
+        """Get the options of a Docling built-in ASR preset for this device.
 
-        Docling has no ASR preset registry yet, so its default ASR options are
-        the only built-in preset.
+        "default" is Docling's default ASR options.
         """
-        if preset_id != "default":
+        if preset_id == "default":
+            return AsrPipelineOptions().asr_options
+        if not hasattr(InlineAsrOptions, "from_preset"):
             raise ValueError(
-                f"ASR preset '{preset_id}' is not a custom preset, and Docling "
-                "has no built-in ASR presets other than 'default'."
+                f"ASR preset '{preset_id}' is not a custom preset, and this "
+                "Docling version has no built-in ASR presets other than 'default'."
             )
-        return AsrPipelineOptions().asr_options
+        return InlineAsrOptions.from_preset(preset_id, device=self._asr_device)
 
     def _instantiate_asr_options(
         self, asr_options_dict: dict
@@ -1654,7 +1709,12 @@ class DoclingConverterManager:
             InferenceAsrFramework.WHISPER_S2T: InlineAsrWhisperS2TOptions,
             InferenceAsrFramework.TRANSFORMERS: InlineAsrTransformersOptions,
             InferenceAsrFramework.MLX: InlineAsrMlxWhisperOptions,
+            InferenceAsrFramework.MLX_WHISPER: InlineAsrMlxWhisperOptions,
         }
+        if InlineAsrMlxAudioOptions is not None:
+            options_class_map[InferenceAsrFramework.MLX_AUDIO] = (
+                InlineAsrMlxAudioOptions
+            )
 
         try:
             inference_framework = InferenceAsrFramework(inference_framework)
@@ -1667,14 +1727,10 @@ class DoclingConverterManager:
 
         return options_class.model_validate(asr_options_dict)
 
-    def _parse_asr_options(
-        self, preset_id: str = "default"
+    def _resolve_asr_preset(
+        self, preset_id: str
     ) -> Union[InlineAsrOptions, ApiAsrOptions]:
-        """Parse ASR options from preset.
-
-        Requests cannot choose an ASR preset or custom config yet, so audio and
-        video inputs use the server's default ASR preset.
-        """
+        """Resolve an allowed ASR preset to its options."""
         options = self._get_options_from_preset(
             preset_id,
             self.asr_preset_registry,
@@ -1685,6 +1741,31 @@ class DoclingConverterManager:
         if isinstance(options, dict):
             options = self._instantiate_asr_options(options)
         return options
+
+    def _parse_asr_options(
+        self, request: ConvertDocumentsOptions
+    ) -> Optional[Union[InlineAsrOptions, ApiAsrOptions]]:
+        """Parse ASR options from preset OR custom config.
+
+        Returns None for the server's default ASR preset. Docling releases
+        before the ASR request fields have neither field.
+        """
+        preset_id = getattr(request, "asr_preset", None)
+        custom_config = getattr(request, "asr_custom_config", None)
+
+        # Option 1: Preset
+        if preset_id and preset_id != "default":
+            return self._resolve_asr_preset(preset_id)
+
+        # Option 2: Custom config (if allowed)
+        if custom_config is not None:
+            self._validate_custom_config_allowed("asr")
+            if isinstance(custom_config, dict):
+                return self._instantiate_asr_options(custom_config)
+            return custom_config
+
+        # Option 3: The server's default ASR preset
+        return None
 
     def parse_chunking_options(
         self, request: ConvertDocumentsOptions
@@ -2072,10 +2153,23 @@ class DoclingConverterManager:
             force_full_page_ocr=request.force_ocr,
         )
 
-    def get_converter(self, pdf_format_option: PdfFormatOption) -> DocumentConverter:
+    def get_converter_options(
+        self, request: ConvertDocumentsOptions
+    ) -> ConverterOptions:
+        """Get everything that defines the converter for a request."""
+        return ConverterOptions(
+            pdf_format_option=self.get_pdf_pipeline_opts(request),
+            asr_options=self._parse_asr_options(request),
+        )
+
+    def get_converter(
+        self, options: Union[ConverterOptions, PdfFormatOption]
+    ) -> DocumentConverter:
+        if isinstance(options, PdfFormatOption):
+            options = ConverterOptions(pdf_format_option=options)
         with self._cache_lock:
-            options_hash = _hash_pdf_format_option(pdf_format_option)
-            self._options_map[options_hash] = pdf_format_option
+            options_hash = _hash_converter_options(options)
+            self._options_map[options_hash] = options
             converter = self._get_converter_from_hash(options_hash)
         return converter
 
@@ -2383,8 +2477,7 @@ class DoclingConverterManager:
         # owners classify it structurally instead of sniffing the error text.
         try:
             self.parse_chunking_options(options)
-            pdf_format_option = self.get_pdf_pipeline_opts(options)
-            converter = self.get_converter(pdf_format_option)
+            converter = self.get_converter(self.get_converter_options(options))
             with self._cache_lock:
                 converter.initialize_pipeline(format=InputFormat.PDF)
         except Exception as exc:
