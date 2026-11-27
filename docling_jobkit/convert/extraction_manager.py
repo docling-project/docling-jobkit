@@ -20,7 +20,7 @@ from typing import Optional, Union
 from pydantic import BaseModel, Field
 
 from docling.datamodel.base_models import DocumentStream, InputFormat
-from docling.datamodel.extraction import DocumentExtractionResult, ExtractionTarget
+from docling.datamodel.extraction import DocumentExtractionResult, ExtractionSpec
 from docling.datamodel.extraction_options import (
     ChannelSelection,
     ExtractionVlmOptions,
@@ -155,7 +155,7 @@ class DocumentExtractionManager:
         return ExtractionVlmOptions.model_validate(
             {
                 **resolved.model_dump(),
-                "output_mode": options.output_mode
+                "output_mode": options.extraction_output_mode
                 if options is not None
                 else "prompt_only",
             }
@@ -164,14 +164,14 @@ class DocumentExtractionManager:
     def extract_documents(
         self,
         sources: Iterable[Union[Path, str, DocumentStream]],
-        extraction_target: ExtractionTarget,
+        extraction_spec: ExtractionSpec,
         options: ExtractDocumentsOptions,
         headers: Optional[dict[str, str]] = None,
     ) -> Iterable[DocumentExtractionResult]:
         vlm_options = self.resolve_extraction_model(options)
         pipe_opts = VlmExtractionPipelineOptions(
             vlm_options=vlm_options,
-            input_channels=options.input_channels or ChannelSelection.AUTO,
+            input_channels=options.extraction_input_channels or ChannelSelection.AUTO,
             enable_remote_services=self.config.enable_remote_services,
             artifacts_path=self.config.artifacts_path,
         )
@@ -185,7 +185,7 @@ class DocumentExtractionManager:
         # on each DocumentExtractionResult rather than aborting the whole task.
         return extractor.extract_all(
             sources,
-            target=extraction_target,
+            spec=extraction_spec,
             page_range=options.page_range,
             max_num_pages=self.config.max_num_pages,
             max_file_size=self.config.max_file_size,

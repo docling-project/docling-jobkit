@@ -1,6 +1,6 @@
 # Extraction execution finalization
 
-Updated 2026-10-01. Implementation is complete on `cau/extract-endpoint` ([PR #249](https://github.com/docling-project/docling-jobkit/pull/249)). The current Docling service contract is top-level `extraction_target`, operational `options`, and a separate output `target`.
+Updated 2026-10-01. Implementation is complete on `cau/extract-endpoint` ([PR #249](https://github.com/docling-project/docling-jobkit/pull/249)). The current Docling service contract is top-level `extraction_spec`, operational `options`, and a separate output `target`.
 
 ## Done
 

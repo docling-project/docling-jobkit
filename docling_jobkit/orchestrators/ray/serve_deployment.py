@@ -887,9 +887,9 @@ class DoclingProcessorConverterDeployment:
             extract_options = request.task.extract_options
             if extract_options is None:
                 raise RuntimeError("Extraction task is missing extract_options.")
-            extract_target = request.task.extract_target
-            if extract_target is None:
-                raise RuntimeError("Extraction task is missing extract_target.")
+            extract_spec = request.task.extract_spec
+            if extract_spec is None:
+                raise RuntimeError("Extraction task is missing extract_spec.")
             expanded = await self._run_with_retry(
                 request.task.task_id,
                 lambda: expand_task_sources_with_identities(
@@ -916,7 +916,7 @@ class DoclingProcessorConverterDeployment:
                 lambda: list(
                     self._get_extraction_manager().extract_documents(
                         sources=extract_sources,
-                        extraction_target=extract_target,
+                        extraction_spec=extract_spec,
                         options=extract_options,
                         headers=headers,
                     )

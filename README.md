@@ -79,35 +79,42 @@ See `dev/configs/run_local_folder_example.yaml` for a complete example.
 ### Extraction jobs
 
 Extraction execution uses the Ray orchestrator. Local/RQ workers do not execute
-extraction tasks. Pass `ExtractDocumentsOptions.target` as extraction guidance;
-the task's `target` independently selects in-body results or JSON artifact storage.
+extraction tasks. The task's `extract_spec` (an `ExtractionSpec`) says what to
+extract, `extract_options` (`ExtractDocumentsOptions`) is operational, and the
+task's `target` independently selects in-body results or JSON artifact storage.
 
 ```python
-from docling.datamodel.extraction import ExtractionTarget, ExtractionTemplate
+from docling.datamodel.extraction import ExtractionSpec
 from docling.datamodel.service.options import ExtractDocumentsOptions
 
+spec = ExtractionSpec(
+    json_schema={"type": "object", "properties": {"total": {"type": "number"}}},
+    native_template={"total": "number"},
+    instructions="Extract the invoice total.",
+)
 options = ExtractDocumentsOptions(
-    target=ExtractionTarget(
-        template=ExtractionTemplate(format="nuextract", value={"total": "number"}),
-        instructions="Extract the invoice total.",
-    ),
     extraction_preset="nuextract_2b",
-    output_mode="prompt_only",
+    extraction_output_mode="prompt_only",
     page_range=(5, 8),
 )
 ```
 
-Generic models use tagged `example_json` guidance or an explicit `output_schema`.
-`schema_constrained` requires a supported model and explicitly configured vLLM API
-engine. The service output mode overrides custom model configuration. Jobkit forwards
-targets to Docling and caches only stable model/engine/channel/mode configuration.
-Docling owns target preparation, automatic page/document requests and schema validation.
+`json_schema` validates the answer and, without `native_template`, is converted
+into the model input. `native_template` overrides the model input only (NuExtract
+presets). Generic chat presets reject it.
+`schema_constrained` requires a `json_schema`, a supported model and an explicitly
+configured vLLM API engine. The service output mode overrides custom model
+configuration. Jobkit forwards the spec to Docling and caches only stable
+model/engine/channel/mode configuration. Docling owns spec preparation, automatic
+page/document requests and schema validation.
 
 In-body `ExtractionTaskResult.documents` and JSON artifacts share the
 `ExtractionDocumentResult` envelope: original request `source_index`, expanded
 `source_uri`, filename, status/errors and canonical `items`. Each item retains
-absolute page or document scope, data/raw answer, validation status and inference
-metadata. The runtime input/backend is never serialized. Unreleased bare-template
+absolute page or document scope, data, validation status and inference metadata.
+`raw_text` is kept only for failed items unless `extract_options.extraction_raw_text`
+is `always`. Artifact storage writes one `<stem>.extraction.json` file per document
+with the artifact type `extraction`. The runtime input/backend is never serialized. Unreleased bare-template
 and service `pages` shapes were replaced directly; the legacy SDK stays compatible.
 
 This branch requires the updated Docling extraction service contract. Downstream

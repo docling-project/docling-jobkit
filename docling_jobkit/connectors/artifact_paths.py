@@ -14,6 +14,7 @@ ArtifactType = Literal[
     "dclx",
     "resource_bundle",
     "chunks",
+    "extraction",
 ]
 
 

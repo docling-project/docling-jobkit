@@ -5,10 +5,14 @@ import tempfile
 import time
 from contextlib import ExitStack
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable, Literal
 
 from docling.datamodel.base_models import ConversionStatus
-from docling.datamodel.extraction import DocumentExtractionResult, PageScope
+from docling.datamodel.extraction import (
+    DocumentExtractionResult,
+    ExtractionItem,
+    PageScope,
+)
 from docling.datamodel.service.callbacks import ProcessedDocsItem
 from docling.datamodel.service.responses import (
     DoclingTaskResult,
@@ -41,9 +45,39 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
+RawTextPolicy = Literal["on_failure", "always"]
+
+
+def _item_failed(item: ExtractionItem) -> bool:
+    return (
+        item.extracted_data is None
+        or bool(item.errors)
+        or item.validation_status == "failed"
+    )
+
+
+def _apply_raw_text_policy(
+    items: list[ExtractionItem], raw_text: RawTextPolicy
+) -> list[ExtractionItem]:
+    """Drop ``raw_text`` from successful items unless the caller asks for it.
+
+    On success ``raw_text`` repeats ``extracted_data`` as a string. It is only
+    useful when parsing or validation failed.
+    """
+    if raw_text == "always":
+        return items
+    return [
+        item
+        if item.raw_text is None or _item_failed(item)
+        else item.model_copy(update={"raw_text": None})
+        for item in items
+    ]
+
 
 def to_result_item(
-    result: DocumentExtractionResult, source: SourceIdentity
+    result: DocumentExtractionResult,
+    source: SourceIdentity,
+    raw_text: RawTextPolicy = "on_failure",
 ) -> ExtractionDocumentResult:
     return ExtractionDocumentResult(
         source_index=source.source_index,
@@ -51,7 +85,7 @@ def to_result_item(
         filename=result.input.file.name,
         status=result.status,
         errors=result.errors,
-        items=result.items,
+        items=_apply_raw_text_policy(result.items, raw_text),
     )
 
 
@@ -141,8 +175,13 @@ def process_extraction_results(
                     )
             except Exception as exc:
                 target_error = exc
+        raw_text: RawTextPolicy = (
+            task.extract_options.extraction_raw_text
+            if task.extract_options is not None
+            else "on_failure"
+        )
         for index, (result, source) in enumerate(zip(results, identities)):
-            item = to_result_item(result, source)
+            item = to_result_item(result, source, raw_text)
             callback_document = _callback_document(result, source)
             presigned_document = None
             if processor is not None or target_error is not None:
@@ -161,7 +200,7 @@ def process_extraction_results(
                         )
                         processor.upload_artifact_file(
                             source=source,
-                            artifact_type="json",
+                            artifact_type="extraction",
                             path=json_path,
                             target_filename=target_filename,
                             mime_type="application/json",

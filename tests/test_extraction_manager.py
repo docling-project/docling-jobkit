@@ -21,8 +21,7 @@ from docling.datamodel.base_models import (
 from docling.datamodel.extraction import (
     DocumentScope,
     ExtractionItem,
-    ExtractionTarget,
-    ExtractionTemplate,
+    ExtractionSpec,
     PageScope,
     VlmInferenceMetadata,
 )
@@ -73,9 +72,9 @@ def _item_error(message: str) -> ErrorItem:
 
 
 def _target(field="amount"):
-    return ExtractionTarget(
-        output_schema={"type": "object", "properties": {field: {"type": "number"}}},
-        template=ExtractionTemplate(format="nuextract", value={field: "number"}),
+    return ExtractionSpec(
+        json_schema={"type": "object", "properties": {field: {"type": "number"}}},
+        native_template={field: "number"},
         instructions=f"Extract {field} only.",
     )
 
@@ -229,35 +228,30 @@ def test_cached_extractor_isolates_targets_and_stable_configuration(monkeypatch)
     )
     options = ExtractDocumentsOptions(
         extraction_custom_config=custom,
-        input_channels=ChannelSelection.TEXT,
+        extraction_input_channels=ChannelSelection.TEXT,
         page_range=(5, 8),
     )
-    target1 = _target().model_copy(
-        update={
-            "template": ExtractionTemplate(format="example_json", value={"amount": 10})
-        }
-    )
-    target2 = _target("tax").model_copy(
-        update={"template": ExtractionTemplate(format="example_json", value={"tax": 2})}
-    )
+    # Lift has no native template format; the specs differ only in the schema.
+    target1 = _target().model_copy(update={"native_template": None})
+    target2 = _target("tax").model_copy(update={"native_template": None})
     headers = {"Authorization": "Bearer test"}
     list(
         ecm.extract_documents(
-            [], extraction_target=target1, options=options, headers=headers
+            [], extraction_spec=target1, options=options, headers=headers
         )
     )
     list(
         ecm.extract_documents(
-            [], extraction_target=target2, options=options, headers=headers
+            [], extraction_spec=target2, options=options, headers=headers
         )
     )
     assert len(initialized) == 1
     assert initialized[0].vlm_options.output_mode == "prompt_only"
     assert initialized[0].input_channels == ChannelSelection.TEXT
     assert custom.output_mode == "schema_constrained"
-    assert [call["target"] for call in calls] == [target1, target2]
+    assert [call["spec"] for call in calls] == [target1, target2]
     assert calls[0] == {
-        "target": target1,
+        "spec": target1,
         "page_range": (5, 8),
         "max_num_pages": 9,
         "max_file_size": 1000,
@@ -265,13 +259,13 @@ def test_cached_extractor_isolates_targets_and_stable_configuration(monkeypatch)
         "raises_on_error": False,
     }
     for changed in (
-        {"output_mode": "schema_constrained"},
-        {"input_channels": ChannelSelection.IMAGE},
+        {"extraction_output_mode": "schema_constrained"},
+        {"extraction_input_channels": ChannelSelection.IMAGE},
     ):
         list(
             ecm.extract_documents(
                 [],
-                extraction_target=target1,
+                extraction_spec=target1,
                 options=options.model_copy(update=changed),
             )
         )
@@ -283,7 +277,7 @@ def test_constrained_mode_rejects_local_engine():
     ecm = DocumentExtractionManager(DocumentExtractionManagerConfig())
     with pytest.raises(ValueError, match="vLLM API"):
         ecm.resolve_extraction_model(
-            ExtractDocumentsOptions(output_mode="schema_constrained")
+            ExtractDocumentsOptions(extraction_output_mode="schema_constrained")
         )
 
 
@@ -312,6 +306,78 @@ def test_to_result_item_bridges_items_identity_and_basename():
     assert item.items[0].scope == PageScope(page_no=5)
     assert (item.source_index, item.source_uri) == (3, "s3://in/doc1.pdf")
     assert "input" not in item.model_dump()
+
+
+@pytest.mark.parametrize(
+    "raw_text,expected",
+    [
+        ("on_failure", [None, "bad", "{", "partial"]),
+        ("always", ['{"k": "v"}', "bad", "{", "partial"]),
+    ],
+)
+def test_raw_text_is_kept_only_for_failed_items_by_default(raw_text, expected):
+    items = [
+        ExtractionItem(
+            scope=PageScope(page_no=1),
+            extracted_data={"k": "v"},
+            raw_text='{"k": "v"}',
+            validation_status="passed",
+        ),
+        ExtractionItem(
+            scope=PageScope(page_no=2),
+            extracted_data={"k": 1},
+            raw_text="bad",
+            validation_status="failed",
+        ),
+        # Parse failure: no extracted_data.
+        ExtractionItem(
+            scope=PageScope(page_no=3), raw_text="{", validation_status="not_run"
+        ),
+        # An item error keeps the raw answer for diagnosis.
+        ExtractionItem(
+            scope=PageScope(page_no=4),
+            extracted_data={"k": "v"},
+            raw_text="partial",
+            errors=[_item_error("truncated")],
+        ),
+    ]
+    item = to_result_item(
+        _facade_result("doc.pdf", ConversionStatus.PARTIAL_SUCCESS, items),
+        SourceIdentity(0, "https://example.com/doc.pdf", "doc"),
+        raw_text,
+    )
+    assert [i.raw_text for i in item.items] == expected
+    # The extraction result of the pipeline is not changed.
+    assert items[0].raw_text == '{"k": "v"}'
+
+
+def test_task_raw_text_option_reaches_the_result():
+    results = [
+        _facade_result(
+            "doc.pdf",
+            ConversionStatus.SUCCESS,
+            [
+                ExtractionItem(
+                    scope=PageScope(page_no=1),
+                    extracted_data={"a": 1},
+                    raw_text='{"a": 1}',
+                    validation_status="passed",
+                )
+            ],
+        )
+    ]
+    identities = [SourceIdentity(0, "https://example.com/doc.pdf", "doc")]
+    for option, expected in (("on_failure", None), ("always", '{"a": 1}')):
+        task = Task(
+            task_id="t1",
+            task_type=TaskType.EXTRACT,
+            sources=[],
+            target=InBodyTarget(),
+            extract_spec=_target(),
+            extract_options=ExtractDocumentsOptions(extraction_raw_text=option),
+        )
+        tr, _ = process_extraction_results(task, results, identities)
+        assert tr.result.documents[0].items[0].raw_text == expected
 
 
 def test_extraction_callbacks_keep_item_failure_reasons():
@@ -369,7 +435,7 @@ def test_in_body_result_envelope_counts_and_round_trips():
         sources=[],
         target=InBodyTarget(),
         callbacks=[CallbackSpec(url="https://example.com/callback")],
-        extract_target=_target(),
+        extract_spec=_target(),
         extract_options=ExtractDocumentsOptions(),
     )
     identities = [
@@ -407,7 +473,7 @@ def test_in_body_result_envelope_counts_and_round_trips():
     task_again = Task.model_validate_json(task.model_dump_json())
     assert task_again.task_type == TaskType.EXTRACT
     assert task_again.extract_options == task.extract_options
-    assert task_again.extract_target == task.extract_target
+    assert task_again.extract_spec == task.extract_spec
 
 
 def test_empty_extraction_is_an_error():
@@ -416,7 +482,7 @@ def test_empty_extraction_is_an_error():
         task_type=TaskType.EXTRACT,
         sources=[],
         target=InBodyTarget(),
-        extract_target=_target(),
+        extract_spec=_target(),
         extract_options=ExtractDocumentsOptions(),
     )
     with pytest.raises(RuntimeError, match="No documents"):
@@ -476,7 +542,7 @@ def test_storage_keys_do_not_collide_and_callbacks_report_every_document(monkeyp
             bucket="out",
         ),
         callbacks=[CallbackSpec(url="https://example.com/callback")],
-        extract_target=_target(),
+        extract_spec=_target(),
         extract_options=ExtractDocumentsOptions(),
     )
     results = [
@@ -558,6 +624,7 @@ def test_presigned_result_keeps_source_identity_and_artifact_metadata(monkeypatc
 
         def upload_artifact_file(self, **kwargs):
             assert kwargs["source"] == identity
+            assert kwargs["artifact_type"] == "extraction"
 
         def build_document_artifact_item(self, **kwargs):
             return DocumentArtifactItem(
@@ -567,7 +634,7 @@ def test_presigned_result_keeps_source_identity_and_artifact_metadata(monkeypatc
                 status=kwargs["status"],
                 artifacts=[
                     ArtifactRef(
-                        artifact_type="json",
+                        artifact_type="extraction",
                         mime_type="application/json",
                         uri="https://example.com/report.json",
                     )
@@ -587,7 +654,7 @@ def test_presigned_result_keeps_source_identity_and_artifact_metadata(monkeypatc
         task_type=TaskType.EXTRACT,
         sources=[],
         target=PresignedUrlTarget(),
-        extract_target=_target(),
+        extract_spec=_target(),
         extract_options=ExtractDocumentsOptions(),
     )
 
@@ -648,7 +715,7 @@ def test_source_expansion_preserves_public_uri_and_original_index(monkeypatch):
             ),
             DocumentStream(name="last.md", stream=BytesIO(b"text")),
         ],
-        extract_target=_target(),
+        extract_spec=_target(),
         extract_options=ExtractDocumentsOptions(),
     )
 
@@ -711,7 +778,7 @@ async def test_ray_extraction_emits_full_nonterminal_callback_sequence(
         sources=[source],
         target=InBodyTarget(),
         callbacks=[CallbackSpec(url="https://example.com/callback")],
-        extract_target=_target(),
+        extract_spec=_target(),
         extract_options=ExtractDocumentsOptions(),
     )
 
