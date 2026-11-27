@@ -1,5 +1,6 @@
 from typing import Iterator
 
+import requests
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import override
 
@@ -9,6 +10,11 @@ from docling.datamodel.service.requests import (
 )
 from docling.datamodel.service.sources import FileSource, HttpSource
 from docling_core.types.io import DocumentStream
+
+# docling-core has no public entry point for a guarded request other than the
+# full download in resolve_source_to_stream, so the HEAD probe below borrows its
+# private-address check and its address-pinning adapter directly.
+from docling_core.utils.file import _is_safe_url, _SafeConnectionAdapter
 
 from docling_jobkit.connectors.source_processor import (
     BaseSourceProcessor,
@@ -20,6 +26,8 @@ from docling_jobkit.convert.materialization import (
     _filename_for_http_source,
     normalize_max_file_size,
 )
+
+_HEAD_PROBE_TIMEOUT = 5.0
 
 
 class HttpFileIdentifier(BaseModel):
@@ -61,20 +69,33 @@ class HttpSourceProcessor(
         yield HttpFileIdentifier(source=self._source)
 
     def _try_head_request(self, source: HttpSource) -> tuple[int | None, str | None]:
-        try:
-            import httpx
+        """Best-effort size/etag probe, under the same address check as the fetch.
 
-            with httpx.Client(follow_redirects=True) as client:
-                response = client.head(
-                    str(source.url),
+        The URL comes from the client, so the probe refuses private addresses
+        exactly like the converter's download does (docling-core's check, subject
+        to ``DOCLINGCORE_ALLOWED_PRIVATE_IPS``). Redirects are not followed: a
+        redirecting URL reports an unknown size and the converter's own guarded
+        download enforces the limit instead.
+        """
+        url = str(source.url)
+        try:
+            if not _is_safe_url(url):
+                return None, None
+            with requests.Session() as session:
+                session.mount("https://", _SafeConnectionAdapter())
+                session.mount("http://", _SafeConnectionAdapter())
+                response = session.head(
+                    url,
                     headers=source.headers,
+                    allow_redirects=False,
+                    timeout=_HEAD_PROBE_TIMEOUT,
                 )
-                if not response.is_success:
-                    return None, None
-                content_length = response.headers.get("content-length")
-                size = int(content_length) if content_length is not None else None
-                return size, response.headers.get("etag")
-        except (ValueError, httpx.HTTPError):
+            if not 200 <= response.status_code < 300:
+                return None, None
+            content_length = response.headers.get("content-length")
+            size = int(content_length) if content_length is not None else None
+            return size, response.headers.get("etag")
+        except (ValueError, requests.RequestException):
             return None, None
 
     def _fetch_document_by_id(

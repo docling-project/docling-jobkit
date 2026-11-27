@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import sys
-from collections.abc import Mapping
 from io import BytesIO
 from pathlib import PurePath
 from urllib.parse import urlparse
 
-import httpx
+import requests
 from pydantic import BaseModel, ConfigDict, Field
 
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
@@ -14,6 +14,10 @@ from docling.datamodel.base_models import InputFormat
 from docling.datamodel.document import InputDocument
 from docling.datamodel.service.sources import FileSource, HttpSource
 from docling.datamodel.settings import DocumentLimits
+from docling_core.utils.file import (
+    FileSizeLimitExceededError,
+    resolve_source_to_stream,
+)
 
 
 # Admission-control parameters applied before any conversion work begins.
@@ -64,30 +68,6 @@ def normalize_max_file_size(max_file_size: int | None) -> int | None:
     return max_file_size
 
 
-def _check_content_length_limit(
-    *,
-    content_length: int | None,
-    max_file_size: int | None,
-    source_name: str,
-    error_cls: type[MaterializationError],
-) -> None:
-    limit = normalize_max_file_size(max_file_size)
-    if content_length is None or limit is None:
-        return
-    if content_length > limit:
-        raise error_cls(f"Source '{source_name}' exceeds max_file_size={limit} bytes")
-
-
-def _parse_content_length(headers: Mapping[str, str]) -> int | None:
-    raw_content_length = headers.get("content-length")
-    if raw_content_length is None:
-        return None
-    try:
-        return int(raw_content_length)
-    except (TypeError, ValueError):
-        return None
-
-
 def _filename_for_http_source(source: HttpSource) -> str:
     parsed = urlparse(str(source.url))
     filename = PurePath(parsed.path).name
@@ -100,59 +80,37 @@ async def fetch_http_source_bytes_async(
     max_file_size: int | None,
     error_cls: type[MaterializationError] = SourceLimitExceededError,
 ) -> bytes:
+    """Download an HTTP source through docling-core's guarded fetch.
+
+    ``resolve_source_to_stream`` is the call the converter itself uses for URL
+    sources. Going through it keeps this path under the same private-address
+    check (initial URL, every redirect, and the connect-time address, subject to
+    ``DOCLINGCORE_ALLOWED_PRIVATE_IPS``) and the same download size cap. Do not
+    fetch the URL with another HTTP client here.
+    """
     filename = _filename_for_http_source(source)
     limit = normalize_max_file_size(max_file_size)
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        try:
-            head_response = await client.head(
-                str(source.url),
-                headers=source.headers,
-            )
-            if head_response.is_success:
-                _check_content_length_limit(
-                    content_length=_parse_content_length(head_response.headers),
-                    max_file_size=max_file_size,
-                    source_name=filename,
-                    error_cls=error_cls,
-                )
-        except httpx.HTTPError:
-            pass
-
-        try:
-            async with client.stream(
-                "GET",
-                str(source.url),
-                headers=source.headers,
-            ) as response:
-                response.raise_for_status()
-                _check_content_length_limit(
-                    content_length=_parse_content_length(response.headers),
-                    max_file_size=max_file_size,
-                    source_name=filename,
-                    error_cls=error_cls,
-                )
-                buffer = BytesIO()
-                bytes_seen = 0
-                async for chunk in response.aiter_bytes():
-                    if chunk:
-                        bytes_seen += len(chunk)
-                        if limit is not None and bytes_seen > limit:
-                            raise error_cls(
-                                f"Source '{filename}' exceeds max_file_size={limit} bytes"
-                            )
-                        buffer.write(chunk)
-        except httpx.HTTPError as exc:
-            # Unreachable host, connection/timeout failure, or an error status
-            # (404/403/5xx) for an otherwise well-formed URL. Translate to a typed
-            # source error so the caller records a document-level FAILURE instead
-            # of bubbling up as a generic internal task error. httpx exceptions are
-            # not OSError subclasses, so they must be translated explicitly here.
-            # The size-limit error_cls raised above is not an httpx.HTTPError, so
-            # it intentionally passes through untouched.
-            raise SourceFetchError(
-                f"Source '{filename}' could not be downloaded: {exc}"
-            ) from exc
-    return buffer.getvalue()
+    try:
+        # The fetch is synchronous, so keep it off the event loop.
+        document_stream = await asyncio.to_thread(
+            resolve_source_to_stream,
+            str(source.url),
+            headers=source.headers,
+            max_file_size=limit,
+        )
+    except FileSizeLimitExceededError as exc:
+        raise error_cls(
+            f"Source '{filename}' exceeds max_file_size={limit} bytes"
+        ) from exc
+    except (ValueError, requests.RequestException) as exc:
+        # A refused address (ValueError), an unreachable host, a
+        # connection/timeout failure, or an error status (404/403/5xx).
+        # Translate to a typed source error so the caller records a
+        # document-level FAILURE instead of a generic internal task error.
+        raise SourceFetchError(
+            f"Source '{filename}' could not be downloaded: {exc}"
+        ) from exc
+    return document_stream.stream.getvalue()
 
 
 async def materialize_and_preflight(
