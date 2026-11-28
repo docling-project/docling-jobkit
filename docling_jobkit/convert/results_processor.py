@@ -29,6 +29,7 @@ from docling_core.types.doc.labels import DocItemLabel
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
 from docling_jobkit.convert.chunking import DocumentChunkerManager
 from docling_jobkit.convert.export import (
+    _export_markdown,
     _processor_requires_chunks,
     stream_chunks_for_document,
 )
@@ -159,7 +160,7 @@ class ResultsProcessor:
                 )
             if self.to_formats is None or (self.to_formats and "md" in self.to_formats):
                 target_key = f"md/{name_without_ext}.md"
-                data = conv_res.document.export_to_markdown()
+                data = _export_markdown(conv_res.document)
                 target_processor.upload_object(
                     obj=data,
                     target_filename=self._target_key(target_key),

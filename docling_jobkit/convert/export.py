@@ -24,7 +24,15 @@ from typing import TYPE_CHECKING
 from docling.datamodel.base_models import OutputFormat
 from docling.datamodel.document import ConversionStatus
 from docling.datamodel.service.chunking import BaseChunkerOptions
-from docling_core.types.doc import DoclingDocument, ImageRefMode
+from docling_core.transforms.serializer.markdown import MarkdownParams
+from docling_core.transforms.serializer.markdown_excel import (
+    MsExcelMarkdownDocSerializer,
+)
+from docling_core.types.doc import DoclingDocument, GroupLabel, ImageRefMode
+from docling_core.types.doc.document import (
+    DEFAULT_CONTENT_LAYERS,
+    DOCUMENT_TOKENS_EXPORT_LABELS,
+)
 
 from docling_jobkit.connectors.artifact_paths import ArtifactType
 from docling_jobkit.connectors.target_processor import BaseTargetProcessor
@@ -50,6 +58,40 @@ class _ExportedArtifactFile:
 
 def _is_exportable_status(status: ConversionStatus) -> bool:
     return status in (ConversionStatus.SUCCESS, ConversionStatus.PARTIAL_SUCCESS)
+
+
+def _export_markdown(
+    document: DoclingDocument,
+    *,
+    image_mode: ImageRefMode = ImageRefMode.PLACEHOLDER,
+    page_break_placeholder: str | None = None,
+    compact_tables: bool = False,
+) -> str:
+    """``export_to_markdown`` that also renders worksheet names as headings.
+
+    Spreadsheet backends put each worksheet in a ``GroupLabel.SHEET`` group, but
+    only docling-core's ``MsExcelMarkdownDocSerializer`` turns the group name into
+    a ``## <sheet>`` heading; plain ``export_to_markdown`` drops it. Documents
+    without sheet groups get the plain export unchanged.
+    """
+    if not any(group.label == GroupLabel.SHEET for group in document.groups):
+        return document.export_to_markdown(
+            image_mode=image_mode,
+            page_break_placeholder=page_break_placeholder,
+            compact_tables=compact_tables,
+        )
+    # labels and layers are the defaults export_to_markdown uses.
+    serializer = MsExcelMarkdownDocSerializer(
+        doc=document,
+        params=MarkdownParams(
+            labels=DOCUMENT_TOKENS_EXPORT_LABELS,
+            layers=DEFAULT_CONTENT_LAYERS,
+            image_mode=image_mode,
+            page_break_placeholder=page_break_placeholder,
+            compact_tables=compact_tables,
+        ),
+    )
+    return serializer.serialize().text
 
 
 def _processor_requires_chunks(p: BaseTargetProcessor) -> bool:
@@ -322,12 +364,27 @@ def _materialize_document_exports(
     if export_md:
         fname = output_dir / f"{doc_filename}.md"
         _log.info(f"writing Markdown output to {fname}")
-        exportable_document.document.save_as_markdown(
-            filename=fname,
-            artifacts_dir=artifacts_dir,
-            image_mode=image_export_mode,
-            page_break_placeholder=md_page_break_placeholder or None,
-            compact_tables=md_compact_tables,
+        # Same steps as DoclingDocument.save_as_markdown, with the sheet-aware export.
+        document = exportable_document.document
+        md_artifacts_dir, reference_path = document._get_output_paths(
+            fname, artifacts_dir
+        )
+        if image_export_mode == ImageRefMode.REFERENCED:
+            md_artifacts_dir.mkdir(parents=True, exist_ok=True)
+        md_document = document._make_copy_with_refmode(
+            md_artifacts_dir,
+            image_export_mode,
+            page_no=None,
+            reference_path=reference_path,
+        )
+        fname.write_text(
+            _export_markdown(
+                md_document,
+                image_mode=image_export_mode,
+                page_break_placeholder=md_page_break_placeholder or None,
+                compact_tables=md_compact_tables,
+            ),
+            encoding="utf-8",
         )
         generated.append(
             _ExportedArtifactFile(
